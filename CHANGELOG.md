@@ -97,6 +97,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Mail: removing an account from Mail while keeping it connected for Calendar no
   longer resurrects itself - the background sync used to re-import the messages the
   removal had just deleted.
+- Mail: Gmail's category tabs (Promotions, Social, Updates, Forums) are detected
+  again. They are saved searches rather than labels, so reading them from the
+  message labels never worked and every mail was filed as Primary; the category is
+  now resolved through Gmail's own search over IMAP.
+- Mail: a sender rule learned by relabelling a mail now also labels NEW mail from
+  that sender. Previously the rule only re-labelled existing mail, so the promise
+  that "future mail from this sender gets the same label" did not hold.
+- Mail: "Upgrade to IMAP" in the account panel now starts the sign-in directly
+  instead of reopening the setup wizard, works in the standalone mail window,
+  preselects the account being upgraded (so with several accounts the right one is
+  upgraded), and the panel refreshes by itself once access is granted.
+- Mail: accounts connected with a password or app password no longer show a
+  permanent "IMAP not ready" warning - they speak IMAP by definition.
+- Mail: opening a label or other non-inbox folder now fetches it on first open.
+  Those folders sync on demand by design, but nothing ever requested them, so they
+  stayed permanently empty.
 - The Logs page no longer dead-ends when debug logging is off. Three fixes
   from a live incident on a macOS install where a legacy config had
   `debug_logs_enabled: false`: the chain badge no longer claims "Chain

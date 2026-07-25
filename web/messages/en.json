@@ -1327,6 +1327,8 @@
     "accountAddLabel": "Add a label",
     "autoSync": "Auto-sync",
     "upgradeImap": "Upgrade to IMAP",
+    "upgradeFailed": "Could not start the IMAP re-consent. Try again from Settings.",
+    "upgradeWaiting": "Waiting for the sign-in you opened in your browser. This panel updates automatically once access is granted.",
     "verify": "Verify",
     "verifyOk": "Connected",
     "verifyFail": "Failed",

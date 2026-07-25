@@ -46,14 +46,14 @@ SPECIAL_USE_FALLBACK = {
     "\\Archive": ("Archive", "Archiv", "[Gmail]/All Mail"),
 }
 
-# Runtime strings carry ONE backslash (Gmail system labels over X-GM-LABELS,
-# e.g. \Category/Promotions) - review caught an unmatchable double-backslash.
-_GMAIL_CATEGORY_LABELS = {
-    "\\Category/Promotions": "promotions",
-    "CATEGORY_PROMOTIONS": "promotions",
-    "\\Category/Social": "social",
-    "CATEGORY_SOCIAL": "social",
-}
+# Gmail's inbox tabs are NOT labels and are NOT exposed through X-GM-LABELS: they
+# are saved searches over hidden system categories, so a message in Promotions
+# comes back from FETCH X-GM-LABELS with no category information at all. (The
+# earlier label mapping here could therefore never match - every ingested message
+# was stamped "primary", verified against a live mailbox.) X-GM-RAW runs Gmail's
+# own search syntax over IMAP, which is the one documented way to learn a
+# message's tab, so the category is resolved with one SEARCH per tab instead.
+_GMAIL_CATEGORIES = ("promotions", "social", "updates", "forums")
 
 
 def _b2s(v: Any) -> str:
@@ -80,6 +80,7 @@ class ImapSyncEngine:
         self.caps = caps
         self.is_gmail = "X-GM-EXT-1" in caps
         self.has_condstore = "CONDSTORE" in caps
+        self._sender_rules: Optional[List[Dict[str, str]]] = None  # loaded once per run
 
     # ── folders ─────────────────────────────────────────────────────────────
 
@@ -154,9 +155,10 @@ class ImapSyncEngine:
                                name, batch[0], e)
                 stats["errors"] += 1
                 break
+            categories = self._resolve_categories(name, [int(u) for u in fetched])
             for uid, item in sorted(fetched.items()):
                 try:
-                    self._ingest(fpk, int(uid), item, fetch_bodies)
+                    self._ingest(fpk, int(uid), item, fetch_bodies, categories)
                     stats["new"] += 1
                 except Exception as e:
                     # one broken message must never abort the folder sync
@@ -200,7 +202,51 @@ class ImapSyncEngine:
             items += ["X-GM-MSGID", "X-GM-THRID", "X-GM-LABELS"]
         return self.client.fetch(uids, items)
 
-    def _ingest(self, fpk: int, uid: int, item: Dict[Any, Any], fetched_body: bool) -> None:
+    def _resolve_categories(self, folder_name: str, uids: List[int]) -> Dict[int, str]:
+        """uid -> Gmail tab for the given new UIDs, via one X-GM-RAW search per tab.
+
+        Only meaningful on the inbox (the tabs ARE the inbox), and only on Gmail.
+        The search is narrowed to the UID range being ingested so the cost stays
+        proportional to the new mail, not to the mailbox. Any failure degrades to
+        "no category" rather than aborting the sync - a category is cosmetic, a
+        lost message is not."""
+        if not (self.is_gmail and uids) or folder_name.upper() != "INBOX":
+            return {}
+        lo, hi = min(uids), max(uids)
+        wanted = set(uids)
+        out: Dict[int, str] = {}
+        for cat in _GMAIL_CATEGORIES:
+            try:
+                hits = self.client.search(["UID", f"{lo}:{hi}", "X-GM-RAW", f"category:{cat}"])
+            except Exception as e:
+                logger.warning("gmail category search failed for %s: %s", cat, e)
+                continue
+            for uid in (hits or []):
+                u = int(uid)
+                if u in wanted:
+                    out[u] = cat
+        return out
+
+    def _apply_sender_rules(self, from_addr: str, category: str) -> str:
+        """Let a user's sender->category rule win over the provider's tab, exactly
+        as the legacy transport did at ingest. Without this a rule learned in the
+        client only ever relabels EXISTING mail and silently fails to catch new
+        arrivals - which is what label_mail promises the user. Rules are read once
+        per sync run; the matching itself stays in the config SSOT (Rule 2)."""
+        from vaf.core.email_accounts import apply_sender_rules_to_category, get_sender_rules
+        if self._sender_rules is None:
+            try:
+                self._sender_rules = get_sender_rules(None, user_scope_id=self.store.user_scope_id)
+            except Exception as e:
+                logger.warning("sender rules unavailable, keeping provider category: %s", e)
+                self._sender_rules = []
+        if not self._sender_rules:
+            return category
+        return apply_sender_rules_to_category(
+            from_addr or "", category or "primary", rules=self._sender_rules)
+
+    def _ingest(self, fpk: int, uid: int, item: Dict[Any, Any], fetched_body: bool,
+                categories: Optional[Dict[int, str]] = None) -> None:
         raw = item.get(b"BODY[]") or item.get("BODY[]")
         header = item.get(b"BODY[HEADER]") or item.get("BODY[HEADER]")
         blob = raw or header or b""
@@ -213,8 +259,13 @@ class ImapSyncEngine:
         gm_thrid = item.get(b"X-GM-THRID") or item.get("X-GM-THRID")
         category = ""
         if self.is_gmail:
-            labels = [_b2s(x) for x in (item.get(b"X-GM-LABELS") or item.get("X-GM-LABELS") or [])]
-            category = next((v for k, v in _GMAIL_CATEGORY_LABELS.items() if k in labels), "primary")
+            category = (categories or {}).get(int(uid), "primary")
+        # A learned sender rule overrides the provider tab (legacy ingest parity).
+        # Only adopt the rule's answer when it actually differs, so a non-Gmail
+        # message keeps its empty category instead of being rewritten to "primary".
+        ruled = self._apply_sender_rules(parsed.from_addr, category or "primary")
+        if ruled != (category or "primary"):
+            category = ruled
         self.store.ingest_message(
             self.account_pk, fpk, uid, parsed,
             raw=bytes(raw) if (raw and fetched_body) else None,

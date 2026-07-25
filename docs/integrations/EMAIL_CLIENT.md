@@ -163,9 +163,16 @@ synced-inbox viewer, not a full mail client.
   sent); `store.list_threads` exposes an `answered` count and the v2 client shows
   a reply marker on answered conversations and "Answered on {date}" in the reader,
   so a mail is not answered twice.
-- Gmail-style categories (P5.3): the sync maps Gmail's Promotions/Social system
-  labels to a per-message `category` (default `primary`); the v2 client shows a
-  category chip on non-primary conversations and a relabel picker in the reader.
+- Gmail-style categories (P5.3, mechanism corrected in P6.3): Gmail's inbox tabs
+  are NOT labels - they are saved searches over hidden system categories, so
+  `FETCH X-GM-LABELS` carries no tab at all and the original label mapping could
+  never match (verified against a live mailbox: every ingested message was stamped
+  `primary`). The category is therefore resolved with `SEARCH UID lo:hi X-GM-RAW
+  "category:<tab>"`, one search per tab (promotions/social/updates/forums), scoped
+  to the UID range being ingested and to the inbox, degrading to `primary` on any
+  error. The v2 client shows a category chip on non-primary conversations and a
+  relabel picker in the reader. Categories are applied on INSERT only, so a manual
+  relabel is never overwritten by a later sync.
 - Sender-rule learning on relabel (P5.4, owner decision = classic-dashboard
   parity): `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
   it relabels the one message, derives a sender pattern from its From header
@@ -177,7 +184,26 @@ synced-inbox viewer, not a full mail client.
   (count changed) so the client refreshes the list when the backfill touched more
   than the one mail. All of it is a LOCAL classification (nothing written to the
   mail server), normalized to lowercase/underscores/64-char cap, and gated by the
-  v2 flag only, NOT `mail_engine_write_enabled`.
+  v2 flag only, NOT `mail_engine_write_enabled`. The rule is ALSO applied at v2
+  ingest (`ImapSyncEngine._apply_sender_rules`, P6.3), where it overrides the
+  provider tab - without that a learned rule only ever relabelled EXISTING mail
+  and silently missed every new arrival, which is the opposite of what `label_mail`
+  promises. Rules are read once per sync run and the matching itself stays in the
+  config SSOT (`apply_sender_rules_to_category(..., rules=...)`).
+- IMAP re-consent from the client (P6.3): the account panel starts the upgrade
+  itself (`GET /api/email/oauth/start?provider=..&imap=true&account=<email>`), so
+  it works on the standalone `/mail` route where the setup wizard is not mounted at
+  all. `account` becomes the OAuth `login_hint`, without which a multi-account user
+  re-consents whichever mailbox the browser is signed in as (the identity comes back
+  from the token, not the request). Consent completes in the system browser, so the
+  panel polls and re-checks on window focus until the account reports IMAP-capable.
+  A password/app-password account is IMAP-capable by definition and never carries
+  `imap_ready`, so the UI gates that badge on the provider too.
+- Lazy folders (P6.3): `sync_account` covers the eager/headers tiers only; other
+  folders sync ON OPEN. Nothing was requesting them, so every label stayed
+  permanently empty - the client now issues a one-time
+  `POST /api/mail/sync/{account}?folder=<name>` when an opened folder comes back
+  empty, then re-reads.
 - Account list in the client (P6.0): `GET /api/mail/status` returns the UNION of the
   engine store's accounts and the configured mail accounts, with config-only entries
   marked `synced: false`. The client renders those with a "needs IMAP re-consent"

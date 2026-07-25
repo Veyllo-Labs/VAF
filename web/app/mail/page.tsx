@@ -309,6 +309,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
     const [showAccounts, setShowAccounts] = useState(false);
+    const syncedFolders = useRef<Set<string>>(new Set());  // on-open folder sync, once each
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
     const [sel, setSel] = useState<{ account: string | null; folder: string }>({ account: null, folder: 'INBOX' });
     const [threads, setThreads] = useState<ThreadRow[]>([]);
@@ -346,7 +347,20 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
             const params = new URLSearchParams({ folder: sel.folder, limit: '50' });
             if (sel.account) params.set('account_id', sel.account);
             const data = await jfetch(`api/mail/threads?${params}`);
-            setThreads(data.threads || []);
+            let rows: ThreadRow[] = data.threads || [];
+            // Non-inbox folders sync on OPEN by design (the account sweep covers
+            // the eager/headers tiers only), and nothing was ever asking for them -
+            // so every label stayed permanently empty. Fetch this one folder once,
+            // then re-read. Guarded per folder so an genuinely empty folder does not
+            // re-sync on every visit.
+            if (!rows.length && sel.account && !syncedFolders.current.has(`${sel.account}:${sel.folder}`)) {
+                syncedFolders.current.add(`${sel.account}:${sel.folder}`);
+                await jpost(`api/mail/sync/${encodeURIComponent(sel.account)}?folder=${encodeURIComponent(sel.folder)}`)
+                    .catch(() => undefined);
+                const again = await jfetch(`api/mail/threads?${params}`).catch(() => null);
+                rows = (again?.threads as ThreadRow[]) || rows;
+            }
+            setThreads(rows);
             setError('');
         } catch { setError(t('loadError')); }
         finally { setListLoading(false); }

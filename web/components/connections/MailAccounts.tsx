@@ -43,6 +43,14 @@ function providerName(p: string): string {
     return m[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : 'IMAP');
 }
 
+/** Password/app-password accounts speak IMAP by definition and never carry the
+ *  imap_ready flag (it only marks an OAuth token that gained IMAP scope), so
+ *  reading the flag alone showed a permanent "not ready" warning on healthy
+ *  accounts - with no action the user could take. */
+function isImapCapable(a: Acct): boolean {
+    return a.imap_ready || (a.provider || 'imap').toLowerCase() === 'imap';
+}
+
 export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onAddOAuth?: () => void }) {
     const t = useTranslations('mailV2');
     const [accounts, setAccounts] = useState<Acct[]>([]);
@@ -53,6 +61,7 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
     const [editLabel, setEditLabel] = useState<Record<string, string>>({});
     const [confirmDel, setConfirmDel] = useState<string | null>(null);
     const [showAdd, setShowAdd] = useState(false);
+    const [upgrading, setUpgrading] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -65,6 +74,25 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
     }, [t]);
 
     useEffect(() => { load(); }, [load]);
+
+    // The consent screen runs in the system browser, so nothing in the app knows
+    // when it finished. Poll while an upgrade is outstanding and re-check when the
+    // window regains focus, otherwise the account keeps showing "not ready" after
+    // the user has already granted access.
+    useEffect(() => {
+        if (!upgrading) return;
+        const done = accounts.find(a => a.account_id === upgrading);
+        if (done && isImapCapable(done)) { setUpgrading(null); return; }
+        const timer = setInterval(load, 4000);
+        const onFocus = () => load();
+        window.addEventListener('focus', onFocus);
+        const giveUp = setTimeout(() => setUpgrading(null), 5 * 60_000);
+        return () => {
+            clearInterval(timer);
+            clearTimeout(giveUp);
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [upgrading, accounts, load]);
 
     const doVerify = async (a: Acct) => {
         setVerify(v => ({ ...v, [a.account_id]: 'checking' }));
@@ -94,6 +122,29 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
             setAccounts(prev => prev.map(x => x.account_id === a.account_id ? { ...x, auto_sync_enabled: !next } : x));
             setError(t('accountsSaveFailed'));
         }
+    };
+
+    const upgrade = async (a: Acct) => {
+        // Start the IMAP re-consent directly instead of re-opening the setup
+        // wizard: the wizard is being removed with the legacy UI, and on the
+        // standalone /mail route it is not mounted at all, which left the only
+        // path onto the engine unreachable. `account` becomes login_hint so a
+        // multi-account user cannot upgrade whichever mailbox the browser is
+        // signed in as.
+        setBusy(a.account_id);
+        setError(null);
+        try {
+            const q = `provider=${encodeURIComponent(a.provider)}&imap=true`
+                + `&account=${encodeURIComponent(a.email || a.account_id)}`;
+            const d = await jfetch(`api/email/oauth/start?${q}`);
+            if (d.authorization_url && typeof window !== 'undefined') {
+                window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
+                setUpgrading(a.account_id);   // consent finishes in the browser; poll for the result
+            } else {
+                setError(t('upgradeFailed'));
+            }
+        } catch { setError(t('upgradeFailed')); }
+        finally { setBusy(null); }
     };
 
     const doRemove = async (a: Acct) => {
@@ -126,6 +177,12 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                     </div>
                 )}
 
+                {upgrading && (
+                    <div className="px-3 py-2 rounded-lg bg-[#1b2430] border border-[#2b3b4a] text-[#8fb8dd] text-[13px] flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
+                        <span className="flex-1">{t('upgradeWaiting')}</span>
+                    </div>
+                )}
                 {loading ? (
                     <div className="py-10 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>
                 ) : accounts.length === 0 ? (
@@ -142,7 +199,7 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                                         <span className="px-1.5 rounded-md bg-[#262626] text-[11px] text-[#9a9a9a] flex-shrink-0">
                                             {providerName(a.provider)}
                                         </span>
-                                        {a.imap_ready
+                                        {isImapCapable(a)
                                             ? <span className="px-1.5 rounded-md bg-[#17301f] text-[11px] text-[#7bbf7b] flex-shrink-0">{t('imapReady')}</span>
                                             : <span className="px-1.5 rounded-md bg-[#2b2417] text-[11px] text-[#d4a24e] flex-shrink-0">{t('imapNotReady')}</span>}
                                     </div>
@@ -171,9 +228,10 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                                     {t('autoSync')}
                                 </label>
                                 <div className="flex-1" />
-                                {!a.imap_ready && (a.provider === 'gmail' || a.provider === 'microsoft') && onAddOAuth && (
-                                    <button type="button" onClick={onAddOAuth}
-                                        className="text-xs px-2 py-1 rounded-md bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                                {!isImapCapable(a) && (a.provider === 'gmail' || a.provider === 'microsoft') && (
+                                    <button type="button" onClick={() => upgrade(a)} disabled={busy === a.account_id}
+                                        className="text-xs px-2 py-1 rounded-md bg-[#2b6cb0] hover:bg-[#2f7bc7] text-white flex items-center gap-1">
+                                        {busy === a.account_id ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
                                         {t('upgradeImap')}
                                     </button>
                                 )}

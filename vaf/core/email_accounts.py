@@ -144,10 +144,16 @@ def apply_sender_rules_to_category(
     current_category: str,
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
+    rules: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """If any rule's pattern is contained in from_str (case-insensitive), return
-    that category; else current_category. Used on sync and on backfill."""
-    rules = get_sender_rules(username, user_scope_id=user_scope_id)
+    that category; else current_category. Used on sync and on backfill.
+
+    `rules` lets a caller pass a pre-loaded rule list so a per-message loop does
+    not re-read the config for every message; the matching itself stays here so
+    there is only ever one implementation of it (Rule 2)."""
+    if rules is None:
+        rules = get_sender_rules(username, user_scope_id=user_scope_id)
     from_lower = (from_str or "").lower()
     for r in rules:
         pattern = (r.get("pattern") or "").lower()

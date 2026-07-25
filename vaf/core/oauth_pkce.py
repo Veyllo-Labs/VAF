@@ -313,11 +313,17 @@ def get_state_user(state: str) -> Tuple[Optional[str], Optional[str]]:
 
 def get_authorization_url(
     provider: str, redirect_uri: str, username: Optional[str] = None, user_scope_id: Optional[str] = None,
-    imap: bool = False,
+    imap: bool = False, login_hint: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Build OAuth authorization URL with PKCE and store state/code_verifier.
     Returns (authorization_url, state). Raises ValueError if provider or client_id missing.
+
+    login_hint preselects WHICH mailbox the consent screen offers. Without it a
+    user upgrading account B while signed in to the provider as A silently
+    re-consents A - the identity comes back from the token, not from the request,
+    so the wrong account is upgraded (or a second account row appears) with no
+    feedback. Both Google and Microsoft honour the parameter.
     """
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown provider: {provider}")
@@ -342,6 +348,8 @@ def get_authorization_url(
     }
     if provider == "microsoft":
         params.setdefault("response_mode", "query")
+    if login_hint and str(login_hint).strip():
+        params["login_hint"] = str(login_hint).strip()
     auth_url = conf["auth_url"] + "?" + urlencode(params)
     states = _load_states()
     states[state] = {

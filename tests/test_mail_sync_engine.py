@@ -40,9 +40,10 @@ class FakeImap:
         self.folders = {"INBOX": {"uidvalidity": 100, "messages": {}}}
         self.fail_flag_windows = False
 
-    def add(self, folder, uid, raw, flags=("\\Seen",), gm=None):
+    def add(self, folder, uid, raw, flags=("\\Seen",), gm=None, category=None):
         self.folders.setdefault(folder, {"uidvalidity": 100, "messages": {}})
-        self.folders[folder]["messages"][uid] = {"raw": raw, "flags": list(flags), "gm": gm or {}}
+        self.folders[folder]["messages"][uid] = {"raw": raw, "flags": list(flags),
+                                                 "gm": gm or {}, "category": category}
 
     def capabilities(self):
         return self._caps
@@ -59,8 +60,22 @@ class FakeImap:
 
     def search(self, criteria):
         uids = sorted(self.folders[self._selected]["messages"].keys())
-        if isinstance(criteria, (list, tuple)) and criteria and criteria[0] == "UID":
-            start = int(str(criteria[1]).split(":")[0])
+        msgs = self.folders[self._selected]["messages"]
+        crit = list(criteria) if isinstance(criteria, (list, tuple)) else [criteria]
+        # Gmail tab lookup: SEARCH UID lo:hi X-GM-RAW "category:<tab>". Gmail
+        # answers from its own search index - the tab is NOT in X-GM-LABELS - so
+        # the fake models it with a per-message 'category' attribute.
+        if "X-GM-RAW" in crit:
+            raw = str(crit[crit.index("X-GM-RAW") + 1])
+            want = raw.split("category:")[-1].strip() if "category:" in raw else None
+            hits = [u for u in uids if want and msgs[u].get("category") == want]
+            if "UID" in crit:
+                lo, _, hi = str(crit[crit.index("UID") + 1]).partition(":")
+                hi_i = max(uids) if hi == "*" else int(hi)
+                hits = [u for u in hits if int(lo) <= u <= hi_i]
+            return hits
+        if crit and crit[0] == "UID":
+            start = int(str(crit[1]).split(":")[0])
             hits = [u for u in uids if u >= start]
             return hits or (uids[-1:] if uids else [])  # IMAP m:* quirk
         return uids
@@ -188,12 +203,14 @@ def test_failed_flag_window_never_expunges(store):
 
 
 def test_gmail_extensions_thread_and_category(store):
+    """Tabs come from X-GM-RAW, not X-GM-LABELS: Gmail's categories are saved
+    searches, so FETCH X-GM-LABELS carries no tab at all (the earlier label
+    mapping stamped every message 'primary' against a real mailbox)."""
     fake = FakeImap(caps=("IMAP4REV1", "X-GM-EXT-1"))
     gm1 = {"X-GM-MSGID": 111, "X-GM-THRID": 900, "X-GM-LABELS": [b"\\\\Inbox"]}
-    gm2 = {"X-GM-MSGID": 112, "X-GM-THRID": 900,
-           "X-GM-LABELS": [b"CATEGORY_PROMOTIONS"]}
+    gm2 = {"X-GM-MSGID": 112, "X-GM-THRID": 900, "X-GM-LABELS": [b"\\\\Inbox"]}
     fake.add("INBOX", 1, _raw("g1@x", "Deal"), gm=gm1)
-    fake.add("INBOX", 2, _raw("g2@x", "Unrelated subject"), gm=gm2)
+    fake.add("INBOX", 2, _raw("g2@x", "Unrelated subject"), gm=gm2, category="promotions")
     eng = _engine(store, fake)
     assert eng.is_gmail is True
     eng.sync_folder("INBOX")
@@ -201,6 +218,39 @@ def test_gmail_extensions_thread_and_category(store):
     assert msgs[1]["thread_id"] == msgs[2]["thread_id"]  # X-GM-THRID join
     assert msgs[2]["category"] == "promotions"
     assert msgs[1]["category"] == "primary"
+
+
+def test_gmail_category_search_failure_does_not_break_the_sync(store, monkeypatch):
+    """A category is cosmetic; a lost message is not. A failing X-GM-RAW search
+    must degrade to 'primary', never abort the folder."""
+    fake = FakeImap(caps=("IMAP4REV1", "X-GM-EXT-1"))
+    fake.add("INBOX", 1, _raw("g1@x", "Deal"), category="promotions")
+    eng = _engine(store, fake)
+
+    def _boom(criteria):
+        if isinstance(criteria, (list, tuple)) and "X-GM-RAW" in criteria:
+            raise OSError("SEARCH not supported here")
+        return sorted(fake.folders["INBOX"]["messages"])
+
+    monkeypatch.setattr(fake, "search", _boom)
+    eng.sync_folder("INBOX")
+    rows = store.list_messages()
+    assert len(rows) == 1 and rows[0]["category"] == "primary"
+
+
+def test_sender_rule_wins_over_the_gmail_tab_at_ingest(store, monkeypatch):
+    """label_mail promises that future mail from a sender gets the same label.
+    That only holds if the rule is applied at INGEST - the v2 engine did not do
+    it, so a learned rule silently missed every new arrival."""
+    import vaf.core.email_accounts as ea
+    monkeypatch.setattr(ea, "get_sender_rules",
+                        lambda u=None, user_scope_id=None: [
+                            {"pattern": "a@example.com", "category": "social"}])
+    fake = FakeImap(caps=("IMAP4REV1", "X-GM-EXT-1"))
+    fake.add("INBOX", 1, _raw("g1@x", "Deal"), category="promotions")  # From: a@example.com
+    eng = _engine(store, fake)
+    eng.sync_folder("INBOX")
+    assert store.list_messages()[0]["category"] == "social"  # rule beats the tab
 
 
 def test_folder_discovery_special_use_and_localized_fallback(store):

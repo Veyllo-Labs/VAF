@@ -216,8 +216,12 @@ async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str
     redirect_uri = f"{base_url}/api/email/oauth/callback"
     _username = _user.get("username")
     _user_scope_id = _user.get("user_scope_id")
+    # ?account=<email> preselects the mailbox on the consent screen, so upgrading
+    # one of several accounts cannot silently re-consent whichever one the browser
+    # happens to be signed in as.
+    login_hint = (request.query_params.get("account") or "").strip() or None
     try:
-        auth_url, state = get_authorization_url(provider, redirect_uri, username=_username, user_scope_id=_user_scope_id, imap=imap_lane)
+        auth_url, state = get_authorization_url(provider, redirect_uri, username=_username, user_scope_id=_user_scope_id, imap=imap_lane, login_hint=login_hint)
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

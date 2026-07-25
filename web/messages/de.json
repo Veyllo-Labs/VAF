@@ -1327,6 +1327,8 @@
     "accountAddLabel": "Bezeichnung hinzufügen",
     "autoSync": "Auto-Sync",
     "upgradeImap": "Auf IMAP erweitern",
+    "upgradeFailed": "IMAP-Freigabe konnte nicht gestartet werden. Bitte in den Einstellungen erneut versuchen.",
+    "upgradeWaiting": "Warte auf die im Browser geöffnete Anmeldung. Dieses Panel aktualisiert sich automatisch, sobald der Zugriff erteilt ist.",
     "verify": "Prüfen",
     "verifyOk": "Verbunden",
     "verifyFail": "Fehlgeschlagen",

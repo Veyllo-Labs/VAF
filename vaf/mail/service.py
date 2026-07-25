@@ -38,8 +38,19 @@ _ALLOWED_ATTRS = {
     "col": {"span"},
 }
 _REMOTE_URL = re.compile(r"^\s*(https?:)?//", re.IGNORECASE)
-# backslash catches CSS escapes like u\72 l( that dodge the literal patterns
-_STYLE_URL = re.compile(r"url\s*\(|expression\s*\(|@import|\\\\", re.IGNORECASE)
+# Any inline style that can reference an external resource. Three lessons are
+# baked in here, each of them a hole this filter had:
+#   1. `image-set()` / `-webkit-image-set()` / `src()` fetch a URL with no `url(`
+#      token at all, so matching only `url(` misses them entirely.
+#   2. A SINGLE backslash is a CSS escape (`u\72 l(` renders as `url(`), so the
+#      backslash alternative must be `\\` (one literal backslash). It used to be
+#      `\\\\`, which requires TWO - the escape the comment claimed to catch
+#      sailed straight through.
+#   3. Anything matched here is dropped AND counted, so the reader sees the
+#      "external content blocked" banner instead of a silently gutted mail.
+_STYLE_URL = re.compile(
+    r"url\s*\(|image-set\s*\(|src\s*\(|expression\s*\(|@import|\\",
+    re.IGNORECASE)
 
 
 def _agent_row(m: Dict[str, Any]) -> Dict[str, Any]:
@@ -264,8 +275,17 @@ class MailService:
 
         def _attr_filter(element: str, attribute: str, value: str):
             if attribute == "style":
-                # inline styles may not reference external resources
-                return None if _STYLE_URL.search(value or "") else value
+                # Inline styles may not reference external resources. Counting the
+                # drop matters: a mail whose only tracker sits in CSS used to come
+                # back with blocked_remote == 0, so the client showed no banner and
+                # the reader had no idea anything had been removed. There is no
+                # opt-in path for CSS URLs (allow_remote only rewrites img@src), so
+                # this count can legitimately stay > 0 after loading images - the
+                # client already tolerates a residual count.
+                if _STYLE_URL.search(value or ""):
+                    blocked["n"] += 1
+                    return None
+                return value
             if element == "img" and attribute == "src":
                 v = (value or "").strip()
                 if v.lower().startswith("cid:"):
@@ -285,9 +305,17 @@ class MailService:
                         blocked["n"] += 1
                         return None
                     if allow_remote:
-                        # explicit opt-in: remote images ride the server-side
-                        # proxy (SSRF-guarded, image-only) so the sender never
-                        # sees the reader's IP and trackers die at the proxy
+                        # Explicit opt-in: remote images ride the server-side proxy
+                        # (SSRF-guarded, image-only), which strips the reader's
+                        # browser identity - no Referer, cookies, User-Agent or
+                        # Accept-Language reach the sender.
+                        # It does NOT make the load anonymous, and this comment
+                        # used to claim it did. The backend runs on the reader's
+                        # own machine, so the sender sees the same egress IP it
+                        # would have seen from the browser; and the tracking URL is
+                        # forwarded verbatim, so a per-recipient token still
+                        # reports "this person opened it, now". See the tracking
+                        # section in docs/integrations/EMAIL_CLIENT.md.
                         from urllib.parse import quote
                         u = v if v.lower().startswith("http") else f"https:{v}"
                         return f"/api/mail/image-proxy?url={quote(u, safe='')}"

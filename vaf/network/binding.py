@@ -170,6 +170,51 @@ def resolve_pinned_target(host: str, port: int, *, allow_private: bool = False) 
     return ips[0]
 
 
+def system_proxy_for(scheme: str, host: str) -> Optional[str]:
+    """The site egress proxy to use for `scheme://host`, or None for a direct
+    connect.
+
+    Managed networks (the case this exists for) forbid direct outbound traffic and
+    publish a proxy through the conventional environment variables. VAF used to
+    ignore them and connect directly, which in such a network means the request
+    simply fails - and, worse, means the operator cannot see or filter what the
+    mail renderer fetches from the internet.
+
+    Deliberately narrow: lowercase `http_proxy` is honoured only for http targets
+    (the uppercase form is unsafe by convention - CGI turns a `Proxy:` request
+    header into `HTTP_PROXY`), NO_PROXY is matched by suffix with a `*` wildcard,
+    and a proxy value that is not http(s) is ignored rather than half-applied.
+    Reading the environment on every call is intentional: no import-time snapshot
+    to go stale, and a test can monkeypatch os.environ.
+    """
+    import os
+
+    h = (host or "").strip().lower().rstrip(".")
+    if not h:
+        return None
+
+    no_proxy = (os.environ.get("no_proxy") or os.environ.get("NO_PROXY") or "").strip()
+    for entry in (e.strip().lower().lstrip(".") for e in no_proxy.split(",")):
+        if not entry:
+            continue
+        if entry in ("*", h) or h.endswith("." + entry):
+            return None
+
+    if (scheme or "").lower() == "https":
+        raw = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+    else:
+        # HTTP_PROXY from the environment is attacker-influenced in CGI-style
+        # deployments; the lowercase form is the one every client trusts.
+        raw = os.environ.get("http_proxy")
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if not raw.lower().startswith(("http://", "https://")):
+        logger.warning("Ignoring unsupported proxy scheme in environment: %r", raw[:24])
+        return None
+    return raw
+
+
 def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optional[int]:
     """Return the first port from [preferred, fallback] that `host` can ACTUALLY bind, or None if
     neither is bindable. A privileged port (<1024, e.g. 443) raises PermissionError for a non-root

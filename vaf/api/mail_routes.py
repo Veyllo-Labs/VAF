@@ -486,9 +486,20 @@ async def discard_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_us
 
 @router.get("/image-proxy")
 async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_user)):
-    """Remote-image proxy for explicit opt-in loading (tracking protection:
-    the reader's IP/cookies never reach the sender's server). SSRF-guarded,
-    image-only, size-capped, no redirects followed off-host.
+    """Remote-image proxy for explicit opt-in loading. SSRF-guarded, image-only,
+    size-capped, no redirects followed.
+
+    What it protects, precisely - the wording matters because this route is what a
+    compliance review reads. The reader's BROWSER IDENTITY never reaches the
+    sender: no cookies, no Referer, no real User-Agent, no Accept-Language, no DNT
+    (the handler takes no Request object, so it cannot forward one by accident).
+    What it does NOT do, and an earlier version of this docstring wrongly claimed
+    it did: hide the reader's IP, or stop tracking. The backend runs on the
+    reader's own machine, so the sender's host observes the same egress address a
+    direct browser fetch would have used, and the tracking URL (including a
+    per-recipient token) is forwarded verbatim - an open is still reported, with a
+    read timestamp that is MORE accurate than an auto-loading client's, because
+    the fetch happens when the user clicks.
 
     DNS-rebinding hardening: the host is resolved ONCE and the socket is pinned to
     that validated IP (assert_ip_safe rejects private/loopback/metadata), while the
@@ -505,33 +516,60 @@ async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_use
         raise HTTPException(status_code=400, detail="only standard web ports are allowed")
 
     def _fetch():
+        import socket
+
         import urllib3
         import requests as _rq
-        from vaf.network.binding import resolve_pinned_target
-        try:
-            # mail image URLs are attacker-controlled: resolve ONCE, validate, pin.
-            pinned_ip = resolve_pinned_target(hostname, port, allow_private=False)
-        except ValueError:
-            return ("blocked", None)          # resolved to a non-routable address
-        except OSError:
-            return ("error", None)            # host does not resolve
+        from vaf.network.binding import (assert_ip_safe, resolve_pinned_target,
+                                         system_proxy_for)
 
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
         headers = {"Host": hostname, "User-Agent": "VAF-Mail-ImageProxy", "Accept": "image/*"}
         timeout = urllib3.Timeout(connect=5, read=10)
-        if parsed.scheme == "https":
-            pool = urllib3.HTTPSConnectionPool(
-                pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout,
-                cert_reqs="CERT_REQUIRED", ca_certs=_rq.certs.where(),
-                # connect to the pinned IP but verify the cert against the hostname
-                server_hostname=hostname, assert_hostname=hostname)
+        proxy_url = system_proxy_for(parsed.scheme, hostname)
+
+        if proxy_url:
+            # Managed network: the site proxy performs egress control AND name
+            # resolution, so pinning an IP here is impossible (CONNECT carries the
+            # hostname) and pointless - the proxy, not this process, decides what
+            # is reachable. Defense in depth is kept where it still works: if the
+            # host resolves locally to a non-public address we refuse before
+            # handing it over, and only split-horizon names the resolver does not
+            # know are passed through unchecked.
+            try:
+                for info in socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP):
+                    assert_ip_safe(info[4][0], allow_private=False)
+            except ValueError:
+                return ("blocked", None)
+            except OSError:
+                pass                          # proxy-only DNS: let the proxy judge
+            pool = urllib3.ProxyManager(proxy_url, maxsize=1, retries=False,
+                                        timeout=timeout, ca_certs=_rq.certs.where())
+            target = f"{parsed.scheme}://{hostname}:{port}{parsed.path or '/'}"
+            if parsed.query:
+                target = f"{target}?{parsed.query}"
         else:
-            pool = urllib3.HTTPConnectionPool(
-                pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout)
+            try:
+                # mail image URLs are attacker-controlled: resolve ONCE, validate, pin.
+                pinned_ip = resolve_pinned_target(hostname, port, allow_private=False)
+            except ValueError:
+                return ("blocked", None)      # resolved to a non-routable address
+            except OSError:
+                return ("error", None)        # host does not resolve
+
+            target = parsed.path or "/"
+            if parsed.query:
+                target = f"{target}?{parsed.query}"
+            if parsed.scheme == "https":
+                pool = urllib3.HTTPSConnectionPool(
+                    pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout,
+                    cert_reqs="CERT_REQUIRED", ca_certs=_rq.certs.where(),
+                    # connect to the pinned IP but verify the cert against the hostname
+                    server_hostname=hostname, assert_hostname=hostname)
+            else:
+                pool = urllib3.HTTPConnectionPool(
+                    pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout)
         try:
-            r = pool.request("GET", path, headers=headers, redirect=False,
+            r = pool.request("GET", target, headers=headers, redirect=False,
                              preload_content=False, decode_content=False)
             ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if r.status != 200 or not ctype.startswith("image/") or ctype == "image/svg+xml":

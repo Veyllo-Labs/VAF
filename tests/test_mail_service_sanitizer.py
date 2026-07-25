@@ -101,6 +101,37 @@ def test_style_url_exfiltration_neutralized(svc):
     assert 'style="color:#333"' in body["html"].replace("'", '"')
 
 
+@pytest.mark.parametrize("style", [
+    # A CSS escape renders as url(: "u\72 l(" IS "url(". The filter's backslash
+    # alternative used to be \\\\ (two literal backslashes), so a single-backslash
+    # escape - the only kind CSS actually uses - went straight through.
+    r"background:u\72 l(https://t.example.com/x.gif)",
+    # These fetch a URL with no url( token at all, so a filter that only looks for
+    # url( never sees them.
+    "background-image:image-set('https://t.example.com/x.gif' 1x)",
+    "background:-webkit-image-set(url('https://t.example.com/x.gif') 1x)",
+    "src:src('https://t.example.com/f.woff2')",
+])
+def test_style_remote_refs_that_dodge_a_naive_url_match(svc, style):
+    """Every one of these reached the browser with the third-party URL intact AND
+    left blocked_remote at 0, so no banner warned the reader. The iframe CSP
+    refused the fetch, but the sanitizer is the trust boundary - a second consumer
+    of it (agent tool, export, a future mobile view) has no CSP behind it."""
+    pk = _ingest_html(svc, f'<div style="{style}">A</div>')
+    body = svc.get_body(pk)
+    assert "t.example.com" not in body["html"]
+    assert body["blocked_remote"] == 1, "a dropped remote style must be counted"
+
+
+def test_blocked_style_is_counted_so_the_reader_is_told(svc):
+    """A mail whose only tracker sits in CSS must not report 'nothing blocked'."""
+    pk = _ingest_html(svc, '<div style="background:url(https://t.example.com/p.gif)">A</div>'
+                           '<p style="color:#333">plain styles stay uncounted</p>')
+    body = svc.get_body(pk)
+    assert body["blocked_remote"] == 1
+    assert 'style="color:#333"' in body["html"].replace("'", '"')
+
+
 def test_attachment_by_cid_and_uncached_body(svc):
     pk = _ingest_html(svc, "<p>x</p>")
     att = svc.get_attachment(pk, "logo1")

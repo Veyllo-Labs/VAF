@@ -117,6 +117,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   spinning briefly and saying nothing.
 - Mail: a new Gmail or Microsoft account can be connected straight from the mail
   window's account panel.
+- Mail: three kinds of hidden tracker in HTML mail are now caught and reported.
+  A CSS-escaped `url(`, `image-set(...)` and `src(...)` inside an inline style
+  slipped past the filter with the third-party address intact, and the mail was
+  shown as if nothing had been blocked. The browser's own rules stopped the actual
+  request, so no address was ever contacted, but the warning was missing. Blocked
+  styles are now counted, so the "external content blocked" notice is honest.
+- Mail: image loading now uses the network proxy configured for the machine
+  (`https_proxy`/`http_proxy`, honouring `no_proxy`). In managed networks that
+  forbid direct internet access, loading images previously just failed, and the
+  organisation could not see or filter what the mail view fetched.
 
 ### Removed
 - The old mail dashboard and the separate email setup wizard are gone. Everything
@@ -203,6 +213,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   appear in a logged URL.
 
 ### Changed
+- The wording around mail image loading was corrected in the documentation. It
+  protects the reader's browser identity (no cookies, referrer or browser
+  fingerprint reach the sender) but it does NOT hide the reader's IP address, and
+  it does not stop open-tracking: a tracking pixel's address is unique per
+  recipient, so loading it still tells the sender the message was opened and when.
+  Blocking images by default is the protection. `docs/integrations/EMAIL_CLIENT.md`
+  now states both halves for privacy reviews.
 - Server-side mailbox changes (read/unread, archive and delete replayed to the
   mail server) stay behind `mail_engine_write_enabled`, still off by default. Note
   that SENDING is deliberately NOT gated by it: a queued mail must be able to

@@ -167,11 +167,11 @@ Deliberately deferred, listed so nobody looks for them in the code:
   `tests/test_email_routes_surface.py` pins the surviving path set as data.
 - HTML rendering: sanitized server-side with nh3 at the trust boundary (scripts,
   handlers and dangerous URL schemes stripped, `cid:` parts resolved from the
-  store), rendered into a sandboxed `srcdoc` iframe with CSP `script-src 'none'`.
-  Remote images are blocked by default; an explicit opt-in loads them through the
-  SSRF-guarded, image-only `/api/mail/image-proxy` (resolve once, pin the IP,
-  ports 80/443 only). Blocked hosts and high-risk sends are logged to the security
-  event log.
+  store), rendered into a sandboxed `srcdoc` iframe whose CSP is
+  `default-src 'none'; img-src data: <origin>; style-src 'unsafe-inline'`. Remote
+  content is blocked by default. See "Remote content and tracking" below for what
+  the opt-in proxy does and does not protect - the summary version is not enough
+  for a privacy review.
 - WebSocket deltas (designed, not wired - see "Not built yet"): a per-account
   monotonic `state` counter with `email_state` + `email_delta` events, a client
   that detects a gap resyncing via REST, events scoped at the EMIT site
@@ -232,6 +232,84 @@ Calendar resolves accounts by that provider; the entry survives with
 `mail_enabled=False` so it disappears from the mail list while the calendar keeps
 working. Deleting a user removes the scope directory and all credential keys.
 
+## Remote content and tracking
+
+Written for a privacy or enterprise review. It states the limits as plainly as the
+protections, because the code comments here previously overstated both and that is
+the kind of error a reviewer is entitled to catch rather than inherit.
+
+### Two layers, and which one is the trust boundary
+
+1. **The sanitizer** (`MailService._sanitize_html`) is the trust boundary. Tag and
+   attribute allowlists kill every classic remote vector - `srcset`,
+   `picture`/`source`, `video poster`, `iframe`, `object`/`embed`, `link rel`,
+   `@font-face`, `form action`, `base href`, `meta refresh`, external SVG refs,
+   `background=` - and `img@src` is dropped unless it is `cid:` or a small
+   `data:image/*`. Inline `style` is dropped whole if it can reference an external
+   resource: `url(`, `image-set(`, `src(`, `expression(`, `@import`, or ANY
+   backslash (a single backslash is a CSS escape, so `u\72 l(` renders as `url(`).
+   Every drop increments `blocked_remote`, so the reader is told.
+2. **The iframe CSP** is the second layer, not the first. It exists because a
+   sanitizer bug must not become a leak - and it earned its keep: three style
+   payloads (`u\72 l(`, `image-set()`, `src()`) did reach the frame with a
+   third-party URL intact while reporting `blocked_remote == 0`. The CSP refused
+   the fetch, so nothing leaked, but nothing warned either. Both holes are closed
+   and pinned by `tests/test_mail_service_sanitizer.py`. The lesson stands: any
+   OTHER consumer of `_sanitize_html` (an agent tool, an export, a future mobile
+   view) has no CSP behind it, so the sanitizer must be correct on its own.
+
+### What loading images actually does
+
+Clicking "Load images" re-fetches the body with `allow_remote=true`; the sanitizer
+then rewrites each `img@src` to `/api/mail/image-proxy?url=<original>`. The browser
+requests it from VAF's own origin, and the backend fetches the image.
+
+**Protected:** the reader's browser identity. Exactly three headers go out (`Host`,
+`User-Agent: VAF-Mail-ImageProxy`, `Accept: image/*`) - no cookies, no Referer, no
+real User-Agent, no Accept-Language, no DNT. The handler takes no `Request` object,
+so it cannot forward one by accident. Also: SSRF-guarded (resolve once, pin the IP,
+ports 80/443 only, private and metadata addresses refused), redirects not followed,
+`Content-Type` must be `image/*`, SVG refused, 5 MB cap, `nosniff` on the response.
+
+**NOT protected, and this is structural rather than a gap to be fixed:**
+
+- **The reader's IP is not hidden.** VAF's backend runs on the reader's own machine
+  (uvicorn binds `127.0.0.1`), so the sender's host observes the same public or NAT
+  egress address a direct browser fetch would have used. What the proxy removes is
+  the fingerprint, not the address. Only a deployment where the backend runs
+  elsewhere changes this - and there the observed address identifies the
+  ORGANISATION, which under some threat models is worse than one workstation.
+- **Tracking still works.** A tracking pixel's payload is not the image bytes, it
+  is the retrieval of a per-recipient URL. That URL is forwarded verbatim including
+  its query, there is no server-side cache, and there are no tracker or 1x1
+  heuristics. On a click the sender learns that this recipient opened this message,
+  and when - with a MORE accurate read timestamp than an auto-loading client would
+  give, because the fetch happens on the click rather than on delivery. Blocking by
+  default is the protection; the proxy is not an anti-tracking device.
+- **DNS is not private.** The hostname is resolved before the SSRF verdict, so the
+  resolver (and transitively the sender's authoritative nameserver) sees the lookup
+  even when the fetch is then refused. No DoH/DoT.
+
+### Managed networks
+
+`system_proxy_for` (`vaf/network/binding.py`) makes the image proxy honour the
+conventional egress-proxy variables, so an organisation that forbids direct
+outbound traffic can see and filter what the mail renderer fetches - and so image
+loading works there at all. `https_proxy`/`HTTPS_PROXY` for https targets,
+lowercase `http_proxy` only for http (the uppercase form is attacker-influenced in
+CGI-style deployments), `no_proxy`/`NO_PROXY` matched by exact host, dot-suffix or
+`*`, and a non-http proxy value ignored rather than half-applied.
+
+There is deliberately no config key: the environment variable IS the operator's
+control, and a second switch to override the first would only create drift. With no
+variable set nothing changes.
+
+Behind a proxy the guarantees shift, and the shift is the point: pinning an IP is
+impossible through CONNECT, so the proxy performs egress control and name
+resolution. VAF keeps the check that still works - a host that resolves LOCALLY to
+a private or metadata address is refused before the URL is handed over - and passes
+through only split-horizon names the local resolver does not know.
+
 ## Safety layers (must survive any rebuild)
 
 - TLS enforced and not disableable: `ssl.create_default_context()` for IMAPS /
@@ -251,8 +329,21 @@ working. Deleting a user removes the scope directory and all credential keys.
   response (threads, thread detail, messages, search); the reader renders a
   warning banner and the conversation list a warning badge. Config keys
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
-  `_trusted_sender_domains` (all admin-only). Note: scoring sees only
-  subject/snippet/sender today; making it body-aware remains open.
+  `_trusted_sender_domains` (all admin-only).
+
+  Know the reach of this filter before relying on it, because it is narrower than
+  "the agent is protected from mail": it runs at the two LIST call sites
+  (`mail_inbox`, `find_mail`) and drops whole messages there. `read_mail` does not
+  run it and returns the raw body. The scorer never looks at body text at all, so a
+  message whose sole content is an instruction to the model scores zero. Nothing
+  wraps or marks mail as untrusted before it enters the prompt - tool results are
+  appended verbatim as `role: "tool"`. Once mail text is in the MAIN agent's
+  context there is no allow-list in front of the tools (the front-office list only
+  covers contact-initiated turns), so an injected instruction can reach shell,
+  filesystem, mail-send and messenger tools; only a few of those confirm.
+  Consequence for anything NEW that feeds mail to a model: containment has to be
+  structural - no tools on that call - rather than a filter that a crafted body can
+  talk its way past.
 - Answered indicator: the store tracks `answered_at` (set when a reply is
   sent); `store.list_threads` exposes an `answered` count and the v2 client shows
   a reply marker on answered conversations and "Answered on {date}" in the reader,

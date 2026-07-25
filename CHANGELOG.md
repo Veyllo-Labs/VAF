@@ -12,7 +12,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
-- New built-in mail client engine (v2, opt-in via `mail_engine_v2_enabled`,
+- New built-in mail client engine (v2, enabled by default via
+  `mail_engine_v2_enabled`,
   design doc `docs/integrations/EMAIL_CLIENT.md`): a real per-user mail store
   (SQLite with full-text search over subject/sender/recipients/BODY, threaded
   conversations, encrypted-at-rest cached bodies, configurable retention with
@@ -75,24 +76,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an account that also powers your Calendar keeps it connected for Calendar. Adding
   or upgrading a Gmail/Microsoft account still uses the existing sign-in wizard.
 
-### Fixed
-- Mail: an account the new mail engine does not sync yet (a Gmail or Microsoft
-  account that has not completed the IMAP re-consent) is no longer reported as an
-  empty mailbox with the engine enabled. Its mail keeps being served from the
-  existing lane, and the account stays visible in the mail client with a
-  "needs IMAP re-consent" hint instead of silently disappearing from the list.
-- Mail: turning a per-account "Auto-sync" toggle off now actually stops that
-  account from being polled by the new engine. It previously kept syncing (in fact
-  more often than before), so the switch did the opposite of what it said.
-- Mail: removing an account from Mail while keeping it connected for Calendar no
-  longer resurrects itself - the background sync used to re-import the messages the
-  removal had just deleted.
-
-### Security
-- Mail: a request carrying a user name but no user scope could be served from the
-  local administrator's mailbox by the new mail engine (read and write). Such
-  callers now stay on their own mail store, matching the isolation rule the other
-  two layers already enforced.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.
@@ -103,6 +86,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   modes and the coder's sandbox need the full product's services.
 
 ### Fixed
+- Mail: an account the new mail engine does not sync yet (a Gmail or Microsoft
+  account that has not completed the IMAP re-consent) is no longer reported as an
+  empty mailbox. Its mail keeps being served from the existing lane, and the
+  account stays visible in the mail client with a "needs IMAP re-consent" hint
+  instead of silently disappearing from the account list.
+- Mail: turning a per-account "Auto-sync" toggle off now actually stops that
+  account from being polled by the new engine. It previously kept syncing (in fact
+  more often than before), so the switch did the opposite of what it said.
+- Mail: removing an account from Mail while keeping it connected for Calendar no
+  longer resurrects itself - the background sync used to re-import the messages the
+  removal had just deleted.
 - The Logs page no longer dead-ends when debug logging is off. Three fixes
   from a live incident on a macOS install where a legacy config had
   `debug_logs_enabled: false`: the chain badge no longer claims "Chain
@@ -116,6 +110,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `run_async`.
 
 ### Security
+- Mail: a request carrying a user name but no user scope could be served from the
+  local administrator's mailbox by the new mail engine (read and write). Such
+  callers now stay on their own mail store, matching the isolation rule the other
+  two layers already enforced.
 - Outgoing email attachments now resolve their file paths under the same
   per-user filesystem jail that already protects librarian and file-write
   operations: in network mode a non-admin user's agent can no longer attach
@@ -153,6 +151,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   appear in a logged URL.
 
 ### Changed
+- The built-in mail client is now the default mail surface: the new engine
+  (`mail_engine_v2_enabled`) is on out of the box, so mail is served from the local
+  mail store with full-text search over message bodies, threaded conversations,
+  offline reading and push updates. Existing Gmail/Microsoft accounts keep working
+  and are still served the previous way until you complete the one-time
+  "Upgrade to IMAP" re-consent in the mail window's account panel; the mail client
+  shows which accounts still need it. Set `mail_engine_v2_enabled` to `False` to
+  fall back to the previous mail stack. Server-side mailbox changes (read/unread,
+  archive, delete replayed to the server) remain behind the separate
+  `mail_engine_write_enabled`, still off by default; note that SENDING a queued mail
+  is governed by the engine flag alone, so the agent's `reply_mail` /
+  `forward_mail` verbs are live once the engine is on (each still passes the
+  high-risk send gate).
 - Removed the dead Apple OAuth lane (provider entry, config keys
   `email_oauth_apple_client_id`/`_secret`, admin settings inputs and their
   locale strings, a dead sign-in URL branch in the setup wizard): Apple

@@ -585,7 +585,7 @@ class Config:
         "email_agent_trusted_sender_domains": None,  # list[str] of From-domains that bypass the filter
         # Mail engine v2 (vaf/mail/, docs/integrations/EMAIL_CLIENT.md). Flags and
         # retention are instance-wide resource/rollout policy: admin-only.
-        "mail_engine_v2_enabled": False,  # serve mail from the v2 store/engine
+        "mail_engine_v2_enabled": True,  # serve mail from the v2 store/engine (default lane; kill switch until the legacy teardown)
         "mail_engine_write_enabled": False,  # allow server-side writes (flags/move/append) - separate switch by design
         "mail_body_retention_days": 365,  # cached-body retention (headers are kept forever)
         "mail_store_encryption_key": "",  # AES key (Base64) for mail.db body blobs; auto-generated (PROTECTED)

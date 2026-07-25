@@ -360,7 +360,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `email_agent_phishing_filter_enabled` | `True` | Hide suspicious (phishing-like) mail from the agent's mail tools while the Web UI still shows it with a warning (prompt-injection defense). Admin-only. |
 | `email_agent_phishing_score_threshold` | `3` | Risk score (1-10) at/above which a message is hidden from the agent. Admin-only. |
 | `email_agent_trusted_sender_domains` | `None` | List of sender From-domains that bypass the phishing filter. Note: the From header is not authenticated; use sparingly. Admin-only. |
-| `mail_engine_v2_enabled` | `False` | Serve mail from the v2 engine/store (`vaf/mail/`, see [EMAIL_CLIENT.md](../integrations/EMAIL_CLIENT.md)). Rollout flag. Admin-only. |
+| `mail_engine_v2_enabled` | `True` | Serve mail from the v2 engine/store (`vaf/mail/`, see [EMAIL_CLIENT.md](../integrations/EMAIL_CLIENT.md)). This is the default mail lane; set it to `False` as a kill switch back to the legacy stack until that stack is removed. Admin-only. |
 | `mail_engine_write_enabled` | `False` | Allow the v2 engine to perform server-side writes (flags/move/append). Separate from the read flag by design: the engine stays read-only against mailboxes until this is set. Admin-only. |
 | `mail_body_retention_days` | `365` | How long cached message bodies are kept in the per-user mail store. Headers/envelopes are kept forever. Admin-only. |
 | `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; auto-generated on first use. Protected (never overwritten from the UI) and redacted for non-admins. |

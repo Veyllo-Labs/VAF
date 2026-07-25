@@ -151,9 +151,11 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `list_email_accounts` | read | List connected email accounts. |
 
 `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` require the v2
-mail engine (`mail_engine_v2_enabled`); their mailbox writes apply locally first
-and replay through the durable op queue once `mail_engine_write_enabled` is on.
-All four are excluded from the front-office contact lane by design.
+mail engine (`mail_engine_v2_enabled`), which is ON by default, so these are live
+agent verbs. Their mailbox writes apply locally first and replay through the
+durable op queue only once `mail_engine_write_enabled` is on (still off by
+default); sending, however, is gated by the engine flag alone. All four are
+excluded from the front-office contact lane by design.
 
 ## Messaging
 

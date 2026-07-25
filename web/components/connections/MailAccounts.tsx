@@ -8,9 +8,10 @@
 // Builds entirely on the native /api/mail/accounts endpoints (P4.3): list, add an
 // IMAP account (test + save), verify a saved account, edit its label, toggle
 // auto-sync, and calendar-safe remove. OAuth sign-in (Gmail/Microsoft) stays on
-// the shared /api/email hub: reconnecting an account starts that flow from here,
-// while adding a brand-new OAuth account still goes through the wizard
-// (onAddOAuth) until the wizard itself is replaced.
+// the shared /api/email hub, but the panel drives it itself: connecting a new
+// account and reconnecting an existing one are the SAME call, differing only in
+// the login_hint, so no setup wizard is involved. `onAddOAuth` is a leftover of
+// that hand-off and is removed with the wizard.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -125,30 +126,34 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
         }
     };
 
-    const reconnect = async (a: Acct) => {
-        // NOT an "upgrade" flow: this is the same sign-in that connecting an
-        // account runs, which now always requests the mail-engine scopes. An
-        // account predating that just needs connecting once more, so it gets the
-        // ordinary Reconnect action rather than a migration-only button that would
-        // outlive the migration. Started here rather than through the setup wizard,
-        // which is not mounted on the standalone /mail route. `account` becomes
-        // login_hint so a multi-account user cannot reconnect whichever mailbox the
-        // browser happens to be signed in as.
-        setBusy(a.account_id);
+    /** Start the shared OAuth sign-in. With `account` it reconnects that mailbox
+     *  (login_hint), without it connects a new one - the SAME flow either way,
+     *  which is why the panel no longer needs the setup wizard for OAuth at all. */
+    const startOAuth = async (provider: string, account?: string) => {
+        setBusy(account || provider);
         setError(null);
         try {
-            const q = `provider=${encodeURIComponent(a.provider)}&imap=true`
-                + `&account=${encodeURIComponent(a.email || a.account_id)}`;
+            const q = `provider=${encodeURIComponent(provider)}&imap=true`
+                + (account ? `&account=${encodeURIComponent(account)}` : '');
             const d = await jfetch(`api/email/oauth/start?${q}`);
             if (d.authorization_url && typeof window !== 'undefined') {
                 window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
-                setConnecting(a.account_id);   // consent finishes in the browser; poll for the result
+                setConnecting(account || provider);
             } else {
                 setError(t('reconnectFailed'));
             }
-        } catch { setError(t('reconnectFailed')); }
-        finally { setBusy(null); }
+        } catch {
+            // 400 here usually means the provider has no client id configured
+            // (VAF ships one for Google only), so name that instead of a generic fail.
+            setError(provider.startsWith('microsoft') ? t('oauthNotConfigured') : t('reconnectFailed'));
+        } finally { setBusy(null); }
     };
+
+    // NOT an "upgrade" flow: the same sign-in that connecting an account runs,
+    // which always requests the mail-engine scopes. An account predating that just
+    // needs connecting once more. login_hint stops a multi-account user from
+    // reconnecting whichever mailbox the browser happens to be signed in as.
+    const reconnect = (a: Acct) => startOAuth(a.provider, a.email || a.account_id);
 
     const doRemove = async (a: Acct) => {
         setBusy(a.account_id);
@@ -265,12 +270,21 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
 
                 <AddImapForm onAdded={() => { setShowAdd(false); load(); }} open={showAdd} setOpen={setShowAdd} />
 
-                {onAddOAuth && (
-                    <button type="button" onClick={onAddOAuth}
-                        className="w-full text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
-                        <Plus className="w-4 h-4" /> {t('addOAuthAccount')}
+                {/* Connecting a new OAuth account is the same sign-in as reconnecting
+                    one, so the panel starts it itself instead of handing off to the
+                    setup wizard (which the legacy teardown removes). */}
+                <div className="flex gap-2">
+                    <button type="button" onClick={() => startOAuth('gmail')} disabled={busy === 'gmail'}
+                        className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
+                        {busy === 'gmail' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        {t('addGmail')}
                     </button>
-                )}
+                    <button type="button" onClick={() => startOAuth('microsoft')} disabled={busy === 'microsoft'}
+                        className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
+                        {busy === 'microsoft' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        {t('addMicrosoft')}
+                    </button>
+                </div>
             </div>
         </div>
     );

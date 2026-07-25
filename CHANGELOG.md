@@ -129,6 +129,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   message and syncing all left them stale.
 - Mail: pressing Sync now reports when an account could not be synced, instead of
   spinning briefly and saying nothing.
+- Mail: a new Gmail or Microsoft account can be connected straight from the mail
+  window's account panel, without going through the separate setup wizard.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

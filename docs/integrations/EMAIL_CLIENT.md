@@ -9,8 +9,7 @@ get_account, sender-category rules),
 `label_mail.py` / `mark_mail_answered.py` / `list_email_accounts.py`,
 `web/app/mail/page.tsx` (three-pane `MailClientView`),
 `web/components/connections/MailClient.tsx` (window modal),
-`web/components/connections/MailAccounts.tsx` (in-client account panel),
-`web/components/connections/MailDashboard.tsx`, `EmailSetupWizard.tsx`).
+`web/components/connections/MailAccounts.tsx` (in-client account panel)).
 
 Related docs: [CONNECTIONS.md](CONNECTIONS.md) (connection/channel model,
 email account setup), [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (email keys),
@@ -33,8 +32,8 @@ rendered as an in-app WINDOW MODAL (`MailClient.tsx`, same 95vw x 90vh chrome as
 the other connection dashboards) opened from the Connections "Email" tile; the
 `/mail` route renders the same `MailClientView` full-height as a direct-URL
 fallback -, and the legacy-shape bridge (tool_bridge.py) that switches the
-seven agent tools, the legacy /api/email message routes and MailDashboard to
-the v2 store with the same flag.
+seven agent tools and the legacy /api/email message routes to the v2 store
+with the same flag.
 Phase 2 SHIPPED (write path): local-first verbs (read/unread, star, archive,
 trash-only delete) with a durable op queue (store.py ops table, writeback.py
 executor: STORE/MOVE with COPY+EXPUNGE fallback/APPEND, attempts-capped),
@@ -129,14 +128,15 @@ synced-inbox viewer, not a full mail client.
   teardown. A guard (`tests/test_mail_tools_import_guard.py`) asserts no tool imports
   the FastAPI route module `email_routes`; `tests/test_mail_tools_v2.py` locks both
   properties above.
-- Web UI: `MailDashboard.tsx` (INBOX list, category chips, subject/sender search,
-  plain-text detail view) and `EmailSetupWizard.tsx` (OAuth/IMAP connect wizard).
-  With the v2 client shipped, the Connections "Email" tile now opens the v2
-  `MailClient` window, whose gear opens the native in-client account panel
-  (`MailAccounts.tsx`, P5.5). `MailDashboard` is no longer on the mail flow and is
-  removed in P7.1; `EmailSetupWizard` stays reachable for OAuth sign-in until the
-  callback move in P7.2. All requests ride the Next.js catch-all proxy with
-  cookie/authorization forwarding.
+- Web UI: the Connections "Email" tile opens the `MailClient` window, whose gear
+  opens the in-client account panel (`MailAccounts.tsx`). That panel owns the whole
+  account surface - list, add IMAP (with host/port overrides for both IMAP and
+  SMTP), connect/reconnect Gmail or Microsoft through the shared OAuth hub (the
+  provider buttons are disabled when no client id is configured, which
+  `GET /api/email/oauth-status` reports), verify, label, auto-sync, calendar-safe
+  remove. The legacy `MailDashboard.tsx` and `EmailSetupWizard.tsx` were removed in
+  P7.1. All requests ride the Next.js catch-all proxy with cookie/authorization
+  forwarding.
 
 ### Safety layers (must survive any rebuild)
 
@@ -262,8 +262,8 @@ synced-inbox viewer, not a full mail client.
   IMAP-ready state, add an IMAP account (test then save), verify a saved account,
   edit its label, toggle auto-sync, and calendar-safe remove. OAuth sign-in
   (Gmail/Microsoft add, or "Upgrade to IMAP" re-consent) stays on the shared
-  `/api/email` hub, so those actions delegate to `EmailSetupWizard` via the panel's
-  `onAddOAuth` callback (passed down as `MailClientView`'s `onManageAccounts`).
+  `/api/email` hub, and the account panel drives that flow itself (P7.1 removed the
+  setup wizard, so there is no hand-off left).
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in
@@ -422,8 +422,7 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   as the other dashboards, NOT a standalone full-screen route (the `/mail` URL is
   only a direct-access fallback rendering the same `MailClientView`). Desktop and
   mobile per [WEB_UI.md](../web-ui/WEB_UI.md) / [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
-  MailDashboard remains as the account-management surface until account CRUD is
-  ported into the client, then is removed.
+  The in-client account panel is the account-management surface.
 
 ### Agent tools contract
 

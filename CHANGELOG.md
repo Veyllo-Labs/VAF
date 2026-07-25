@@ -131,6 +131,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   spinning briefly and saying nothing.
 - Mail: a new Gmail or Microsoft account can be connected straight from the mail
   window's account panel, without going through the separate setup wizard.
+
+### Removed
+- The old mail dashboard and the separate email setup wizard are gone. Everything
+  they did is in the mail window: reading mail, and the account panel behind its
+  gear for connecting, reconnecting, testing, renaming, auto-sync and removing
+  accounts (including the IMAP and SMTP server overrides the wizard offered, and
+  the same hiding of sign-in buttons for providers an admin has not configured).
+  The Overview security page reads its mail data from the new engine now.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

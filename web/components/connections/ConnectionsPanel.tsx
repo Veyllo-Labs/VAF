@@ -45,11 +45,10 @@ interface ConnectionsPanelProps {
     onOpenWhatsAppDashboard?: () => void;
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
-    onOpenEmailWizard?: () => void;
     onOpenCloudDashboard?: () => void;
     onOpenCloudWizard?: (provider?: string) => void;
     onOpenContactsDashboard?: () => void;
-    /** Open calendar setup wizard (reuses Email OAuth). When provided, Connect on Google/Outlook calendar uses this; otherwise falls back to onOpenEmailWizard. */
+    /** Open the calendar setup wizard (it mints its consent through the shared OAuth hub). */
     onOpenCalendarWizard?: (provider?: 'google_calendar' | 'outlook_calendar') => void;
     /** Open calendar dashboard (accounts left, events in the middle). When provided and calendar is configured, Settings opens this. */
     onOpenCalendarDashboard?: () => void;
@@ -435,7 +434,7 @@ export const CATEGORIES = [
 /** Use relative /api/ so Next.js rewrites to backend. */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenEmailWizard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
     const t = useTranslations('settings.connectionsPanel');
     const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
@@ -1021,14 +1020,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                                 else onOpenTelegramWizard();
                                                             }
                                                             if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
-                                                            if (app.id === 'email') {
-                                                                if (onOpenEmailDashboard) onOpenEmailDashboard();
-                                                                else if (onOpenEmailWizard) onOpenEmailWizard();
-                                                            }
+                                                            if (app.id === 'email') onOpenEmailDashboard?.();
                                                             if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
                                                                 if (onOpenCalendarDashboard && configured) onOpenCalendarDashboard();
-                                                                else if (onOpenCalendarWizard) onOpenCalendarWizard(app.id);
-                                                                else onOpenEmailWizard?.();
+                                                                else onOpenCalendarWizard?.(app.id);
                                                             }
                                                             if (isCloudApp(app.id)) {
                                                                 if (onOpenCloudDashboard && configured) onOpenCloudDashboard();
@@ -1070,13 +1065,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
                                                         if (app.id === 'whatsapp') onOpenWhatsAppWizard?.();
-                                                        if (app.id === 'email') {
-                                                            if (onOpenEmailDashboard) onOpenEmailDashboard();
-                                                            else if (onOpenEmailWizard) onOpenEmailWizard();
-                                                        }
+                                                        if (app.id === 'email') onOpenEmailDashboard?.();
                                                         if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
-                                                            if (onOpenCalendarWizard) onOpenCalendarWizard(app.id);
-                                                            else onOpenEmailWizard?.();
+                                                            onOpenCalendarWizard?.(app.id);
                                                         }
                                                         if (isCloudApp(app.id) && onOpenCloudWizard) onOpenCloudWizard(app.id);
                                                         if (app.id === 'github') {

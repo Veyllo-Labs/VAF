@@ -304,7 +304,7 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
     );
 }
 
-export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => void; onManageAccounts?: () => void }) {
+export function MailClientView({ onClose }: { onClose?: () => void }) {
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
@@ -812,9 +812,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                 </div>
             )}
             {showAccounts && (
-                <MailAccounts
-                    onClose={() => { setShowAccounts(false); loadStatus(); }}
-                    onAddOAuth={onManageAccounts} />
+                <MailAccounts onClose={() => { setShowAccounts(false); loadStatus(); }} />
             )}
         </div>
     );
@@ -822,7 +820,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
 
 // Standalone route wrapper: the client normally opens as an in-app modal
 // (MailClient.tsx), but the /mail URL still renders it full-height for direct
-// access. The modal supplies onClose/onManageAccounts; the route does not.
+// access. The modal supplies onClose; the route does not.
 export default function MailPage() {
     return <div className="h-screen"><MailClientView /></div>;
 }

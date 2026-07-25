@@ -235,15 +235,26 @@ type MemoryHealth = {
   memory_enabled?: boolean;
 };
 
+// Shape of the v2 mail store rows (GET /api/mail/messages). The legacy
+// /api/email/messages lane this used to read is removed with the old mail stack;
+// the v2 rows name the sender `from_addr` and carry epoch seconds rather than a
+// preformatted date string.
 type MailMessage = {
-  from: string;
+  from_addr: string;
   subject: string;
-  date: string;
-  message_date_iso?: string | null;
+  date_ts?: number | null;
+  internaldate_ts?: number | null;
   suspicious_for_agent?: boolean;
   suspicious_reasons?: string[];
   suspicious_score?: number;
 };
+
+/** Epoch seconds -> the "YYYY-MM-DD HH:MM" form this panel renders. */
+function mailWhen(m: MailMessage): string {
+  const ts = m.date_ts || m.internaldate_ts;
+  if (!ts) return '';
+  return new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
 
 export interface NotificationsModalProps {
   isOpen: boolean;
@@ -2270,12 +2281,12 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                         <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovPhNone')}</div>
                       ) : (
                         (mailFlagged ?? []).map((m, i) => (
-                          <div key={`${m.date}-${i}`} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                          <div key={`${m.date_ts || m.internaldate_ts}-${i}`} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                               <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>
-                                {(m.message_date_iso || m.date || '').slice(0, 16).replace('T', ' ')}
+                                {mailWhen(m)}
                               </span>
-                              <span style={{ fontSize: 11, color: C.textMid, fontFamily: 'monospace', flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.from}</span>
+                              <span style={{ fontSize: 11, color: C.textMid, fontFamily: 'monospace', flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.from_addr}</span>
                               <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.subject || '(–)'}</span>
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, paddingLeft: 2 }}>
@@ -2561,7 +2572,9 @@ export default function NotificationsModal({
       .then(r => (r.ok ? r.json() : null))
       .then(d => setMemoryHealth(d && typeof d === 'object' ? d : null))
       .catch(() => setMemoryHealth(null));
-    fetch(`${getApiBase()}/api/email/messages?limit=100`, { credentials: 'include' })
+    // folder=INBOX explicitly: the v2 route defaults to every folder, which would
+    // fold Sent/Trash/Archive into the "scanned" count.
+    fetch(`${getApiBase()}/api/mail/messages?limit=100&folder=INBOX`, { credentials: 'include' })
       .then(r => (r.ok ? r.json() : null))
       .then(d => setMailMessages(Array.isArray(d?.messages) ? d.messages : null))
       .catch(() => setMailMessages(null));

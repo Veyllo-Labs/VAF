@@ -128,7 +128,7 @@ import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import TrainingDashboard from './TrainingDashboard';
@@ -688,9 +688,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
-    const [showMailDashboard, setShowMailDashboard] = useState(false);
     const [showMailClient, setShowMailClient] = useState(false);
-    const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [showCloudWizard, setShowCloudWizard] = useState(false);
     const [showCloudDashboard, setShowCloudDashboard] = useState(false);
     const [cloudDashboardRefresh, setCloudDashboardRefresh] = useState(0);
@@ -701,7 +699,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showGitHubWizard, setShowGitHubWizard] = useState(false);
     const [showGitHubDashboard, setShowGitHubDashboard] = useState(false);
     const [gitHubDashboardRefresh, setGitHubDashboardRefresh] = useState(0);
-    const [mailDashboardRefresh, setMailDashboardRefresh] = useState(0);
     const [showCreateAutomationModal, setShowCreateAutomationModal] = useState(false);
     const [editingAutomation, setEditingAutomation] = useState<EditAutomationTask | null>(null);
 
@@ -925,7 +922,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     }, [isOpen, initialTabProp, currentUser?.role]);
 
-    // OAuth callback: auto-open Cloud or Email wizard when returning from OAuth with success
+    // OAuth callback: on return from a successful consent, open the surface that
+    // consent belongs to. The account itself is already persisted by the callback,
+    // so this is confirmation UI - mail lands on the mail client (whose account
+    // panel shows the freshly connected account), cloud on the cloud wizard.
     useEffect(() => {
         if (!isOpen || activeTab !== 'connections') return;
         const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -934,7 +934,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             setCloudWizardProvider(params.get('provider') || 'google_drive');
             setShowCloudWizard(true);
         } else if (params.get('email_oauth') === 'success') {
-            setShowEmailWizard(true);
+            setShowMailClient(true);
         }
     }, [isOpen, activeTab]);
 
@@ -3231,7 +3231,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenWhatsAppDashboard={() => setShowWhatsAppDashboard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                                 onOpenEmailDashboard={() => setShowMailClient(true)}
-                                onOpenEmailWizard={() => setShowEmailWizard(true)}
                                 onOpenCloudDashboard={() => setShowCloudDashboard(true)}
                                 onOpenCloudWizard={(provider?: string) => {
                                     setCloudWizardProvider(provider);
@@ -6460,44 +6459,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onConfigChange={handleChange}
             />
 
-            {/* v2 mail client (the three-pane window opened from the Email tile).
-                Its "Accounts" gear opens the account WIZARD directly (add/connect),
-                NOT the old mail dashboard - the wizard is the account surface until a
-                native account panel is built into the client. */}
+            {/* The mail client (three-pane window opened from the Email tile). Its
+                gear opens the in-client account panel, which owns account add /
+                connect / remove; there is no separate mail dashboard or setup
+                wizard any more. Closing it bumps cloudDashboardRefresh so the
+                Connections tile re-reads the account list - that bump used to come
+                from the wizard's callbacks. */}
             <MailClient
                 isOpen={showMailClient}
-                onClose={() => setShowMailClient(false)}
-                onManageAccounts={() => setShowEmailWizard(true)}
-            />
-
-            {/* Legacy Mail Dashboard: no longer opened from the mail flow (Phase 7
-                removes it); kept mounted only for the account-remove path until the
-                client gets a native account panel. */}
-            <MailDashboard
-                isOpen={showMailDashboard}
                 onClose={() => {
-                    setShowMailDashboard(false);
+                    setShowMailClient(false);
                     setCloudDashboardRefresh(r => r + 1);
                 }}
-                onOpenAddWizard={() => setShowEmailWizard(true)}
-                refreshTrigger={mailDashboardRefresh}
-            />
-
-            {/* Email Setup Wizard (opened from Mail Dashboard "Add account") */}
-            <EmailSetupWizard
-                isOpen={showEmailWizard}
-                onClose={() => {
-                    setShowEmailWizard(false);
-                    setMailDashboardRefresh(r => r + 1);
-                    setCloudDashboardRefresh(r => r + 1);
-                }}
-                onComplete={() => {
-                    setShowEmailWizard(false);
-                    setMailDashboardRefresh(r => r + 1);
-                    setCloudDashboardRefresh(r => r + 1);
-                }}
-                existingAccounts={localConfig?.email_config?.accounts || []}
-                currentUser={currentUser}
             />
 
             {/* Calendar Setup Wizard (reuses Email OAuth; opened from Connections Calendar cards) */}
@@ -6523,9 +6496,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     setShowCalendarDashboard(false);
                     setCloudDashboardRefresh(r => r + 1);
                 }}
-                onOpenAddWizard={() => {
+                onOpenAddWizard={(provider) => {
+                    // Adding a CALENDAR account belongs in the calendar wizard. This
+                    // used to open the mail dashboard (and dropped the provider on the
+                    // way), which is why the calendar path showed up in a mail teardown.
                     setShowCalendarDashboard(false);
-                    setShowMailDashboard(true);
+                    setCalendarWizardProvider(provider);
+                    setShowCalendarWizard(true);
                 }}
                 refreshTrigger={cloudDashboardRefresh}
             />

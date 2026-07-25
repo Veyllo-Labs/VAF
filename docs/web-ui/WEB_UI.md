@@ -172,7 +172,7 @@ The Overview is an antivirus-style protection dashboard summarising VAF's securi
 - **Recent supervised activity** - the newest supervised actions of the selected day, derived frontend-side from the already-loaded audit-chain events (no extra request) and attributed per user via the isolation scope map.
 - **Supervised units** - currently running sub-agent units from `GET /api/supervisor/status`, with per-user attribution and a stale marker.
 
-Module data comes from the admin-only `GET /api/security/overview` aggregator plus the reused `GET /api/thinking/status`, `GET /api/supervisor/status`, `GET /api/memory/health`, and `GET /api/email/messages` endpoints, refreshed every 30 s while the Overview is open. Fetch failures (non-admin 403, backend down) leave the affected rows grey (not measured), never green. The backend design (module collectors, event-log contract, skill lifecycle) is documented in [Security Dashboard](../security/SECURITY_DASHBOARD.md).
+Module data comes from the admin-only `GET /api/security/overview` aggregator plus the reused `GET /api/thinking/status`, `GET /api/supervisor/status`, `GET /api/memory/health`, and `GET /api/mail/messages` endpoints, refreshed every 30 s while the Overview is open. Fetch failures (non-admin 403, backend down) leave the affected rows grey (not measured), never green. The backend design (module collectors, event-log contract, skill lifecycle) is documented in [Security Dashboard](../security/SECURITY_DASHBOARD.md).
 
 #### Timeline view
 
@@ -256,7 +256,7 @@ All timeline, log, and security endpoints require the `admin` role:
 | `POST` | `/api/security/skills/{id}/delete`, `.../isolate` | Skill resolution (plain admin action) |
 | `POST` | `/api/security/skills/{id}/acknowledge`, `.../restore` | Skill resolution (admin plus TOTP `code` in the body) |
 
-The security lane is gated via `require_admin` (`vaf/api/security_routes.py`). The Overview additionally reuses the existing `/api/thinking/status`, `/api/supervisor/status`, `/api/memory/health`, and `/api/email/messages` endpoints rather than duplicating their logic.
+The security lane is gated via `require_admin` (`vaf/api/security_routes.py`). The Overview additionally reuses the existing `/api/thinking/status`, `/api/supervisor/status`, `/api/memory/health`, and `/api/mail/messages` endpoints rather than duplicating their logic.
 
 The `merge=true` parameter (default) pairs `tool_start` + `tool_end` events by `call_id` into a single merged record. Still-running tools (no matching `tool_end`) appear with `status: "running"`.
 

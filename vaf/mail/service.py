@@ -100,6 +100,9 @@ class MailService:
         for r, a in zip(rows, annotate_messages_with_agent_visibility(shimmed)):
             r["suspicious_for_agent"] = a.get("suspicious_for_agent", False)
             r["suspicious_reasons"] = a.get("suspicious_reasons", [])
+            # the score is what the Overview security panel ranks by; the scorer
+            # produces it, so pass it through rather than let that panel guess
+            r["suspicious_score"] = a.get("suspicious_score", 0)
         return rows
 
     def counts(self, **kw) -> Dict[str, int]:

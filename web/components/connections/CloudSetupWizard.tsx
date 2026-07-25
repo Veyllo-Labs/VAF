@@ -190,7 +190,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 if (url && typeof window !== 'undefined') {
                     // Open in the SYSTEM browser, not the embedded desktop (Qt) webview: Google blocks
                     // OAuth inside embedded webviews ("this browser may not be secure"), and the desktop
-                    // window cannot load the https callback (self-signed cert). Mirrors EmailSetupWizard.
+                    // window cannot load the https callback (self-signed cert).
                     // Losing the new tab's session cookie is fine — the loopback callback is authorized
                     // via the signed, single-use OAuth state (see oauth_session_binding loopback path).
                     window.open(url, '_blank', 'noopener,noreferrer');

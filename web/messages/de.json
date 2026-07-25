@@ -1346,6 +1346,7 @@
     "passwordPlaceholder": "Passwort oder App-Passwort",
     "advanced": "Erweitert (Server-Einstellungen)",
     "imapHostPlaceholder": "IMAP-Host (z. B. imap.example.com)",
+    "smtpHostPlaceholder": "SMTP-Host (z. B. smtp.example.com)",
     "test": "Testen",
     "testOk": "Verbindung funktioniert",
     "testFail": "Verbindung fehlgeschlagen",

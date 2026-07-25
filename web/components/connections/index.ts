@@ -9,8 +9,6 @@ export { default as TelegramSetupWizard } from './TelegramSetupWizard';
 export type { TelegramConfig } from './TelegramSetupWizard';
 export { default as TelegramDashboard } from './TelegramDashboard';
 export { default as DiscordDashboard } from './DiscordDashboard';
-export { default as EmailSetupWizard } from './EmailSetupWizard';
-export { default as MailDashboard } from './MailDashboard';
 export { MailClient } from './MailClient';
 export { MailAccounts } from './MailAccounts';
 export { default as CloudDashboard } from './CloudDashboard';

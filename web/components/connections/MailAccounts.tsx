@@ -10,8 +10,7 @@
 // auto-sync, and calendar-safe remove. OAuth sign-in (Gmail/Microsoft) stays on
 // the shared /api/email hub, but the panel drives it itself: connecting a new
 // account and reconnecting an existing one are the SAME call, differing only in
-// the login_hint, so no setup wizard is involved. `onAddOAuth` is a leftover of
-// that hand-off and is removed with the wizard.
+// the login_hint, so no setup wizard is involved.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -53,7 +52,7 @@ function isImapCapable(a: Acct): boolean {
     return a.imap_ready || (a.provider || 'imap').toLowerCase() === 'imap';
 }
 
-export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onAddOAuth?: () => void }) {
+export function MailAccounts({ onClose }: { onClose: () => void }) {
     const t = useTranslations('mailV2');
     const [accounts, setAccounts] = useState<Acct[]>([]);
     const [loading, setLoading] = useState(true);
@@ -64,6 +63,19 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
     const [confirmDel, setConfirmDel] = useState<string | null>(null);
     const [showAdd, setShowAdd] = useState(false);
     const [connecting, setConnecting] = useState<string | null>(null);
+    // Which OAuth providers an admin has actually configured. VAF ships a client
+    // id for Google only, so Microsoft is unusable on most instances - the wizard
+    // hid the button entirely; without this the button would just 400.
+    const [oauthReady, setOauthReady] = useState<{ google: boolean; microsoft: boolean }>(
+        { google: true, microsoft: true });
+    useEffect(() => {
+        jfetch('api/email/oauth-status')
+            .then(d => setOauthReady({
+                google: !!(d.oauth_google_configured ?? true),
+                microsoft: !!(d.oauth_microsoft_configured ?? true),
+            }))
+            .catch(() => undefined);   // unreachable status must not hide the buttons
+    }, []);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -274,16 +286,16 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                     one, so the panel starts it itself instead of handing off to the
                     setup wizard (which the legacy teardown removes). */}
                 <div className="flex gap-2">
-                    <button type="button" onClick={() => startOAuth('gmail')} disabled={busy === 'gmail'}
-                        className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
-                        {busy === 'gmail' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                        {t('addGmail')}
-                    </button>
-                    <button type="button" onClick={() => startOAuth('microsoft')} disabled={busy === 'microsoft'}
-                        className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] flex items-center justify-center gap-2">
-                        {busy === 'microsoft' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                        {t('addMicrosoft')}
-                    </button>
+                    {([['gmail', oauthReady.google, t('addGmail')],
+                       ['microsoft', oauthReady.microsoft, t('addMicrosoft')]] as const).map(([p, ready, label]) => (
+                        <button key={p} type="button" onClick={() => startOAuth(p)}
+                            disabled={busy === p || !ready}
+                            title={ready ? undefined : t('oauthNotConfigured')}
+                            className="flex-1 text-sm px-3 py-2 rounded-xl border border-dashed border-[#2e2e2e] text-[#9a9a9a] hover:border-[#444] hover:text-[#c8c8c8] disabled:opacity-40 disabled:hover:border-[#2e2e2e] flex items-center justify-center gap-2">
+                            {busy === p ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                            {label}
+                        </button>
+                    ))}
                 </div>
             </div>
         </div>
@@ -298,6 +310,8 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
     const [advanced, setAdvanced] = useState(false);
     const [imapHost, setImapHost] = useState('');
     const [imapPort, setImapPort] = useState('');
+    const [smtpHost, setSmtpHost] = useState('');
+    const [smtpPort, setSmtpPort] = useState('');
     const [state, setState] = useState<'idle' | 'testing' | 'saving'>('idle');
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
@@ -305,6 +319,10 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
         email: email.trim(), password,
         ...(advanced && imapHost.trim() ? { imap_host: imapHost.trim() } : {}),
         ...(advanced && imapPort.trim() ? { imap_port: Number(imapPort) } : {}),
+        // SMTP too: a self-hosted server that is not in IMAP_SMTP_DEFAULTS has no
+        // send host otherwise, and the account would receive but never send.
+        ...(advanced && smtpHost.trim() ? { smtp_host: smtpHost.trim() } : {}),
+        ...(advanced && smtpPort.trim() ? { smtp_port: Number(smtpPort) } : {}),
     });
 
     const test = async () => {
@@ -351,11 +369,19 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
                 <ChevronDown className={`w-3 h-3 transition-transform ${advanced ? 'rotate-180' : ''}`} /> {t('advanced')}
             </button>
             {advanced && (
-                <div className="flex gap-2">
-                    <input value={imapHost} onChange={e => setImapHost(e.target.value)} placeholder={t('imapHostPlaceholder')}
-                        className="flex-1 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
-                    <input value={imapPort} onChange={e => setImapPort(e.target.value)} placeholder="993" inputMode="numeric"
-                        className="w-20 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                <div className="space-y-2">
+                    <div className="flex gap-2">
+                        <input value={imapHost} onChange={e => setImapHost(e.target.value)} placeholder={t('imapHostPlaceholder')}
+                            className="flex-1 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                        <input value={imapPort} onChange={e => setImapPort(e.target.value)} placeholder="993" inputMode="numeric"
+                            className="w-20 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                    </div>
+                    <div className="flex gap-2">
+                        <input value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder={t('smtpHostPlaceholder')}
+                            className="flex-1 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                        <input value={smtpPort} onChange={e => setSmtpPort(e.target.value)} placeholder="587" inputMode="numeric"
+                            className="w-20 bg-[#262626] border border-[#2e2e2e] rounded-md text-sm px-2.5 py-1.5 text-white focus:outline-none focus:border-[#444]" />
+                    </div>
                 </div>
             )}
             {msg && (

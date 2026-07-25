@@ -4,7 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 //
 // In-app window for the v2 mail client. It reuses the exact modal chrome of the
-// other connection dashboards (MailDashboard/Calendar/Cloud): a centered,
+// other connection dashboards (Calendar/Cloud): a centered,
 // windowed 95vw x 90vh rounded panel over a dimmed backdrop, full-screen on
 // mobile. The three-pane UI itself lives in MailClientView (app/mail/page.tsx),
 // which also backs the standalone /mail route.
@@ -12,10 +12,9 @@
 import React from 'react';
 import { MailClientView } from '@/app/mail/page';
 
-export function MailClient({ isOpen, onClose, onManageAccounts }: {
+export function MailClient({ isOpen, onClose }: {
     isOpen: boolean;
     onClose: () => void;
-    onManageAccounts?: () => void;
 }) {
     if (!isOpen) return null;
     return (
@@ -27,7 +26,7 @@ export function MailClient({ isOpen, onClose, onManageAccounts }: {
                 className="relative bg-[#181818] w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-[#2e2e2e] flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
                 onClick={e => e.stopPropagation()}
             >
-                <MailClientView onClose={onClose} onManageAccounts={onManageAccounts} />
+                <MailClientView onClose={onClose} />
             </div>
         </div>
     );

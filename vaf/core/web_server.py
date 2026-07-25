@@ -895,28 +895,10 @@ async def startup_event():
     except Exception as e:
         log("WebServer", f"Garbage collector start warning: {e}")
     
-    # Email auto-sync: run every 30 min for accounts with "Auto sync every 30 min" enabled
-    async def _email_auto_sync_loop():
-        from vaf.api.email_routes import run_auto_sync_all_accounts, EMAIL_AUTO_SYNC_INTERVAL_SEC
-        await asyncio.sleep(60)  # Delay first run so server is fully up
-        while True:
-            try:
-                result = await run_auto_sync_all_accounts(max_messages=100)
-                if result["synced"] or result["failed"]:
-                    log("WebServer", f"Email auto-sync: {result['synced']} ok, {result['failed']} failed")
-                if result["errors"]:
-                    for err in result["errors"][:3]:
-                        log("WebServer", f"Email auto-sync error: {err}")
-            except Exception as e:
-                log("WebServer", f"Email auto-sync loop error: {e}")
-            await asyncio.sleep(EMAIL_AUTO_SYNC_INTERVAL_SEC)
-
-    asyncio.create_task(_email_auto_sync_loop())
-
-    # Mail engine v2 supervisor (EMAIL_CLIENT.md): started unconditionally; it
-    # re-reads mail_engine_v2_enabled every cycle and no-ops while the flag is
-    # off, so enabling the engine needs no restart. Legacy auto-sync above
-    # keeps covering Gmail-API/Graph accounts until the phase-3 migration.
+    # Mail sync (EMAIL_CLIENT.md): the engine supervisor is the ONLY mail sync
+    # lane. It is started unconditionally and re-reads mail_engine_v2_enabled every
+    # cycle, so enabling the engine needs no restart. The 30-minute legacy
+    # auto-sync loop that used to run beside it was removed with the legacy stack.
     try:
         from vaf.mail.supervisor import MailSyncSupervisor
         asyncio.create_task(MailSyncSupervisor().run())

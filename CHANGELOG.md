@@ -139,6 +139,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   accounts (including the IMAP and SMTP server overrides the wizard offered, and
   the same hiding of sign-in buttons for providers an admin has not configured).
   The Overview security page reads its mail data from the new engine now.
+- The old mail REST endpoints under `/api/email` are gone (message list, search,
+  body, categories, category change, sender-rule backfill and the per-account
+  sync). Mail is served from `/api/mail`. Sign-in and account management under
+  `/api/email` are unchanged, because Calendar and the Connections page use them.
+- The 30-minute background mail sync was removed. The mail engine's own sync
+  (continuous, with push updates) is now the only one, so every mailbox was being
+  fetched twice.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

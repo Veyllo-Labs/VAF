@@ -21,7 +21,6 @@ from fastapi import HTTPException
 from vaf.core.config import Config
 from vaf.core.email_transport import _decode_mail_header, normalize_recipients
 from vaf.network.binding import assert_safe_remote_host
-import vaf.api.email_routes as er
 import vaf.api.oauth_session_binding as ob
 
 
@@ -116,39 +115,6 @@ def test_ssrf_guard_override_allows_private_but_never_link_local():
         assert_safe_remote_host("169.254.169.254", allow_private=True)
 
 
-# --- B.9: auto-sync must include UUID-scoped network users ------------------------
-
-def test_collect_auto_sync_includes_per_scope(monkeypatch):
-    cfg = {
-        "email_config": {"accounts": [{"account_id": "admin@x.com", "auto_sync_enabled": True}]},
-        "email_config_by_user": {"bob": {"accounts": [{"account_id": "bob@x.com", "auto_sync_enabled": True}]}},
-        "email_config_by_scope": {
-            "scope-alice": {"accounts": [{"account_id": "alice@x.com", "auto_sync_enabled": True}]},
-            "scope-carol": {"accounts": [{"account_id": "carol@x.com", "auto_sync_enabled": False}]},
-            "local-admin-scope": {"accounts": [{"account_id": "dup@x.com", "auto_sync_enabled": True}]},
-        },
-    }
-    monkeypatch.setattr(er.Config, "get", lambda key, default=None: cfg.get(key, default))
-    monkeypatch.setattr(er, "get_local_admin_username", lambda: "admin")
-    monkeypatch.setattr(er, "get_local_admin_scope_id", lambda: "local-admin-scope")
-
-    items = er._collect_auto_sync_accounts()
-    accounts = {a.get("account_id") for (_u, a, _ec, _s) in items}
-    scopes = {s for (_u, _a, _ec, s) in items}
-
-    assert "admin@x.com" in accounts   # legacy/local admin
-    assert "bob@x.com" in accounts     # per-username
-    assert "alice@x.com" in accounts   # per-scope (the fix)
-    assert "carol@x.com" not in accounts  # auto_sync disabled
-    assert "dup@x.com" not in accounts    # local-admin scope skipped (covered by legacy)
-    assert "scope-alice" in scopes
-
-    # per-scope entry carries its scope id and no username; legacy carries username and no scope
-    for cfg_user, acc, _ec, scope in items:
-        if acc.get("account_id") == "alice@x.com":
-            assert scope == "scope-alice" and cfg_user is None
-        if acc.get("account_id") == "admin@x.com":
-            assert scope is None
 
 
 # --- OAuth callback binding: loopback (desktop) vs LAN vs spoofing -----------------

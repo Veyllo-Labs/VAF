@@ -84,13 +84,17 @@ synced-inbox viewer, not a full mail client.
   `email_messages` (envelope fields + 4 KB `body_snippet`, PK
   `(username, account_id, folder, message_id)`), WAL mode, 90-day retention
   delete on every sync. Search is `LIKE` over subject/from only.
-- `vaf/api/email_routes.py`: REST under `/api/email` (OAuth start/callback,
-  account CRUD/test/verify, per-account sync capped at 200 messages, message
-  list/search/body, categories + sender rules). Every data endpoint depends on
-  `_get_current_user`; store access goes through
-  `store_candidates_for_mail` which returns exactly ONE (username, scope)
-  candidate (no cross-user fallback). A 30-minute server loop auto-syncs
-  INBOX for accounts with `auto_sync_enabled` (`web_server.py`).
+- `vaf/api/email_routes.py`: the shared OAuth + accounts hub under `/api/email`
+  (oauth start/callback/status, account CRUD/test/verify). NOT mail-specific -
+  Calendar mints its consent through the same `/oauth/start`, and the Connections
+  tile and Calendar dashboard read `/accounts` - which is why the module survives
+  the teardown while everything mail-shaped in it does not. P7.2 deleted the
+  message viewer (list/search/body/categories/PATCH category/apply-sender-rules),
+  the per-account legacy sync and the 30-minute auto-sync loop in `web_server.py`;
+  mail data is served by `/api/mail` alone and the engine supervisor is the only
+  sync lane. `tests/test_email_routes_surface.py` pins the surviving path set,
+  because a rename of the Google/Azure-registered `/api/email/oauth/callback`
+  breaks sign-in for mail, calendar and cloud at once.
 - `vaf/core/oauth_pkce.py`: Authorization Code + PKCE (S256) for Google and
   Microsoft. Single-use state file (0600, 10-min TTL) carrying the
   code_verifier and initiating user; callback actor binding in network mode
@@ -346,11 +350,9 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   no restart); one crash-isolated worker per account (synchronous IMAPClient driven
   via asyncio.to_thread), restartable individually so one broken account never
   stalls others. It does NOT replace the legacy 30-minute auto-sync loop: both run
-  while the flag is on, because the legacy loop keeps covering Gmail-API/Graph
-  accounts that are not `imap_ready` yet. The legacy loop is deleted in P7.2, once
-  the P6 re-consent has made every account `imap_ready`. The two loops write to
-  separate stores (`email_sync.db` vs the per-scope `mail.db`), so the overlap costs
-  duplicate fetches, not consistency. CLI-only mode runs no workers (on-demand sync
+  It is the ONLY mail sync lane: the 30-minute legacy loop that used to run beside
+  it (fetching every INBOX a second time into `email_sync.db`) was removed in P7.2,
+  gated on the runtime proof that every configured account is engine-capable. CLI-only mode runs no workers (on-demand sync
   remains). Account selection (P6.0): the sweep and the IDLE watchers poll only
   accounts passing `_wants_sync` - `enabled` AND `mail_enabled` (a calendar-safe
   mail delete clears it, and re-syncing would resurrect the messages the delete just

@@ -8,8 +8,9 @@
 // Builds entirely on the native /api/mail/accounts endpoints (P4.3): list, add an
 // IMAP account (test + save), verify a saved account, edit its label, toggle
 // auto-sync, and calendar-safe remove. OAuth sign-in (Gmail/Microsoft) stays on
-// the shared /api/email hub, so adding or upgrading an OAuth account delegates to
-// the existing wizard via onAddOAuth.
+// the shared /api/email hub: reconnecting an account starts that flow from here,
+// while adding a brand-new OAuth account still goes through the wizard
+// (onAddOAuth) until the wizard itself is replaced.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -61,7 +62,7 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
     const [editLabel, setEditLabel] = useState<Record<string, string>>({});
     const [confirmDel, setConfirmDel] = useState<string | null>(null);
     const [showAdd, setShowAdd] = useState(false);
-    const [upgrading, setUpgrading] = useState<string | null>(null);
+    const [connecting, setConnecting] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -76,23 +77,23 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
     useEffect(() => { load(); }, [load]);
 
     // The consent screen runs in the system browser, so nothing in the app knows
-    // when it finished. Poll while an upgrade is outstanding and re-check when the
+    // when it finished. Poll while a reconnect is outstanding and re-check when the
     // window regains focus, otherwise the account keeps showing "not ready" after
     // the user has already granted access.
     useEffect(() => {
-        if (!upgrading) return;
-        const done = accounts.find(a => a.account_id === upgrading);
-        if (done && isImapCapable(done)) { setUpgrading(null); return; }
+        if (!connecting) return;
+        const done = accounts.find(a => a.account_id === connecting);
+        if (done && isImapCapable(done)) { setConnecting(null); return; }
         const timer = setInterval(load, 4000);
         const onFocus = () => load();
         window.addEventListener('focus', onFocus);
-        const giveUp = setTimeout(() => setUpgrading(null), 5 * 60_000);
+        const giveUp = setTimeout(() => setConnecting(null), 5 * 60_000);
         return () => {
             clearInterval(timer);
             clearTimeout(giveUp);
             window.removeEventListener('focus', onFocus);
         };
-    }, [upgrading, accounts, load]);
+    }, [connecting, accounts, load]);
 
     const doVerify = async (a: Acct) => {
         setVerify(v => ({ ...v, [a.account_id]: 'checking' }));
@@ -124,13 +125,15 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
         }
     };
 
-    const upgrade = async (a: Acct) => {
-        // Start the IMAP re-consent directly instead of re-opening the setup
-        // wizard: the wizard is being removed with the legacy UI, and on the
-        // standalone /mail route it is not mounted at all, which left the only
-        // path onto the engine unreachable. `account` becomes login_hint so a
-        // multi-account user cannot upgrade whichever mailbox the browser is
-        // signed in as.
+    const reconnect = async (a: Acct) => {
+        // NOT an "upgrade" flow: this is the same sign-in that connecting an
+        // account runs, which now always requests the mail-engine scopes. An
+        // account predating that just needs connecting once more, so it gets the
+        // ordinary Reconnect action rather than a migration-only button that would
+        // outlive the migration. Started here rather than through the setup wizard,
+        // which is not mounted on the standalone /mail route. `account` becomes
+        // login_hint so a multi-account user cannot reconnect whichever mailbox the
+        // browser happens to be signed in as.
         setBusy(a.account_id);
         setError(null);
         try {
@@ -139,11 +142,11 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
             const d = await jfetch(`api/email/oauth/start?${q}`);
             if (d.authorization_url && typeof window !== 'undefined') {
                 window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
-                setUpgrading(a.account_id);   // consent finishes in the browser; poll for the result
+                setConnecting(a.account_id);   // consent finishes in the browser; poll for the result
             } else {
-                setError(t('upgradeFailed'));
+                setError(t('reconnectFailed'));
             }
-        } catch { setError(t('upgradeFailed')); }
+        } catch { setError(t('reconnectFailed')); }
         finally { setBusy(null); }
     };
 
@@ -177,10 +180,10 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                     </div>
                 )}
 
-                {upgrading && (
+                {connecting && (
                     <div className="px-3 py-2 rounded-lg bg-[#1b2430] border border-[#2b3b4a] text-[#8fb8dd] text-[13px] flex items-center gap-2">
                         <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
-                        <span className="flex-1">{t('upgradeWaiting')}</span>
+                        <span className="flex-1">{t('reconnectWaiting')}</span>
                     </div>
                 )}
                 {loading ? (
@@ -229,10 +232,10 @@ export function MailAccounts({ onClose, onAddOAuth }: { onClose: () => void; onA
                                 </label>
                                 <div className="flex-1" />
                                 {!isImapCapable(a) && (a.provider === 'gmail' || a.provider === 'microsoft') && (
-                                    <button type="button" onClick={() => upgrade(a)} disabled={busy === a.account_id}
+                                    <button type="button" onClick={() => reconnect(a)} disabled={busy === a.account_id}
                                         className="text-xs px-2 py-1 rounded-md bg-[#2b6cb0] hover:bg-[#2f7bc7] text-white flex items-center gap-1">
                                         {busy === a.account_id ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                                        {t('upgradeImap')}
+                                        {t('reconnect')}
                                     </button>
                                 )}
                                 <button type="button" onClick={() => doVerify(a)} disabled={vs === 'checking'}

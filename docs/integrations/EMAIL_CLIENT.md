@@ -190,14 +190,25 @@ synced-inbox viewer, not a full mail client.
   and silently missed every new arrival, which is the opposite of what `label_mail`
   promises. Rules are read once per sync run and the matching itself stays in the
   config SSOT (`apply_sender_rules_to_category(..., rules=...)`).
-- IMAP re-consent from the client (P6.3): the account panel starts the upgrade
-  itself (`GET /api/email/oauth/start?provider=..&imap=true&account=<email>`), so
-  it works on the standalone `/mail` route where the setup wizard is not mounted at
-  all. `account` becomes the OAuth `login_hint`, without which a multi-account user
-  re-consents whichever mailbox the browser is signed in as (the identity comes back
-  from the token, not the request). Consent completes in the system browser, so the
-  panel polls and re-checks on window focus until the account reports IMAP-capable.
-  A password/app-password account is IMAP-capable by definition and never carries
+- Connecting mail requests engine-capable scopes up front (P6.4). For Google the
+  mail connect passes `imap=true`, so ONE consent yields an account the engine can
+  serve; the IMAP scope set is a union that still contains calendar, so the shared
+  token keeps Calendar working. Without this every newly connected Google account
+  was born unable to use the DEFAULT mail engine and needed a second consent round
+  forever - a permanent state, not a migration step. Microsoft is different BY
+  CONSTRUCTION: IMAP/SMTP tokens live on the outlook.office.com resource and cannot
+  be combined with Graph scopes in one token, and `calendar_client` reads the Graph
+  record - so the Microsoft mail connect keeps minting Graph first and the mail
+  token is a second, unavoidable consent. There is therefore no "upgrade" concept
+  in the UI: an account that cannot serve the engine offers the ordinary
+  **Reconnect** action, which runs the same sign-in as connecting
+  (`GET /api/email/oauth/start?provider=..&imap=true&account=<email>`). The account
+  panel starts it itself so it works on the standalone `/mail` route where the setup
+  wizard is not mounted. `account` becomes the OAuth `login_hint`, without which a
+  multi-account user reconnects whichever mailbox the browser is signed in as (the
+  identity comes back from the token, not the request). Consent completes in the
+  system browser, so the panel polls and re-checks on window focus. A
+  password/app-password account is IMAP-capable by definition and never carries
   `imap_ready`, so the UI gates that badge on the provider too.
 - Lazy folders (P6.3): `sync_account` covers the eager/headers tiers only; other
   folders sync ON OPEN. Nothing was requesting them, so every label stayed

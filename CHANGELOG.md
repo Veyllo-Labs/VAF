@@ -104,10 +104,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Mail: a sender rule learned by relabelling a mail now also labels NEW mail from
   that sender. Previously the rule only re-labelled existing mail, so the promise
   that "future mail from this sender gets the same label" did not hold.
-- Mail: "Upgrade to IMAP" in the account panel now starts the sign-in directly
-  instead of reopening the setup wizard, works in the standalone mail window,
-  preselects the account being upgraded (so with several accounts the right one is
-  upgraded), and the panel refreshes by itself once access is granted.
+- Mail: connecting a Google account now grants everything the mail client needs in
+  ONE sign-in. Previously a freshly connected account could not be used by the mail
+  client at all and always needed a second, separate "Upgrade to IMAP" step. That
+  separate step is gone: an older account that still needs it simply offers
+  "Reconnect", the same sign-in as connecting. It preselects the account in
+  question (so with several accounts the right one is reconnected), works in the
+  standalone mail window, and the panel refreshes by itself once access is granted.
+  Microsoft still needs a second sign-in for mail, because Microsoft issues mail and
+  calendar access as two separate tokens that cannot be combined.
 - Mail: accounts connected with a password or app password no longer show a
   permanent "IMAP not ready" warning - they speak IMAP by definition.
 - Mail: opening a label or other non-inbox folder now fetches it on first open.

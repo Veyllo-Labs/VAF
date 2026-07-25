@@ -167,7 +167,17 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
             return;
         }
         setLoading(true);
-        fetch(api(`api/email/oauth/start?provider=${id}`), { credentials: 'include' })
+        // Google: connecting mail requests the mail-engine scopes straight away.
+        // They are a UNION that still contains calendar, so one consent yields an
+        // account that works with the engine immediately - without this the account
+        // was born unable to serve the DEFAULT mail engine and needed a second
+        // consent round forever, which is a permanent state rather than a migration.
+        // Microsoft is different by construction: IMAP/SMTP tokens live on the
+        // outlook.office.com resource and cannot be combined with Graph in one
+        // token, and the calendar reads the Graph record - so mail there stays a
+        // second, unavoidable consent offered as "Reconnect".
+        const wantsImap = id === 'gmail' ? '&imap=true' : '';
+        fetch(api(`api/email/oauth/start?provider=${id}${wantsImap}`), { credentials: 'include' })
             .then(r => {
                 if (!r.ok) throw new Error(r.status === 400 ? 'Sign-in could not be started. Restart VAF and try again.' : `Request failed: ${r.status}`);
                 return r.json();
@@ -678,22 +688,11 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                                         )}
                                                         {(a.provider === 'gmail' || a.provider === 'microsoft') && !(a as any).imap_ready && (
                                                             <button
-                                                                onClick={async () => {
-                                                                    // v2 engine re-consent: request IMAP-capable OAuth scopes
-                                                                    // (Google keeps calendar via scope union; Microsoft gets a
-                                                                    // separate mail token). See EMAIL_CLIENT.md.
-                                                                    try {
-                                                                        const r = await fetch(api(`api/email/oauth/start?provider=${a.provider}&imap=true`), { credentials: 'include' });
-                                                                        const d = await r.json();
-                                                                        if (d.authorization_url && typeof window !== 'undefined') {
-                                                                            window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
-                                                                        }
-                                                                    } catch { /* surfaced via the account list refresh */ }
-                                                                }}
+                                                                onClick={() => handleChooseProvider(a.provider)}
                                                                 className="text-sm text-amber-600 hover:text-amber-700"
-                                                                title="Grant IMAP access for the v2 mail engine"
+                                                                title="Sign in again so this account can use the mail engine"
                                                             >
-                                                                Upgrade (IMAP)
+                                                                Reconnect
                                                             </button>
                                                         )}
                                                         <button onClick={() => handleRemoveAccount(id)} className="text-sm text-red-600 hover:text-red-700">Remove</button>

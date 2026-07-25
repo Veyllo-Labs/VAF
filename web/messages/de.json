@@ -1376,7 +1376,8 @@
       "cancel": "Abbrechen",
       "sending": "Wird gesendet...",
       "sendFailed": "Senden fehlgeschlagen.",
-      "discardConfirm": "Nachricht verwerfen?"
+      "discardConfirm": "Nachricht verwerfen?",
+      "paperToggle": "Heller Modus"
     },
     "undoSent": "Nachricht wird gesendet",
     "undo": "Rückgängig",
@@ -1392,6 +1393,28 @@
       "archive": "Archiv",
       "all": "Alle Nachrichten"
     },
-    "loadImages": "Bilder laden (über Privacy-Proxy)"
+    "loadImages": "Bilder laden (über Privacy-Proxy)",
+    "composer": {
+      "draft": "Entwurf schreiben",
+      "rewrite": "Text überarbeiten",
+      "stop": "Stopp",
+      "undo": "Rückgängig",
+      "instruction": "Was soll drinstehen? (optional)",
+      "needsThread": "Öffne eine Konversation, um daraus einen Entwurf zu schreiben",
+      "failed": "Der Entwurf konnte nicht erstellt werden.",
+      "refusedSuspicious": "Für diese Nachricht wird kein Entwurf geschrieben: sie ist als möglicher Phishing-Versuch markiert.",
+      "reviewHint": "Vorschlag eingefügt. Bitte lies ihn durch, bevor du sendest.",
+      "localUnavailable": "Das lokale Modell konnte nicht geladen werden. Versuch es gleich noch einmal.",
+      "localLoading": "Das lokale Modell wird geladen ...",
+      "panelTitle": "Mail Composer",
+      "panelHint": "Schreibt einen Vorschlag in das Textfeld. Gesendet wird nichts - das machst du selbst.",
+      "readCount": "Gelesen: {used} von {total} Nachrichten des Verlaufs.",
+      "hidSuspicious": "{n} als verdaechtig markierte ausgelassen.",
+      "shortened": "Aeltere Teile wurden gekuerzt.",
+      "newChat": "Neu",
+      "followUp": "Noch etwas aendern?",
+      "inserted": "Entwurf ins Textfeld eingefuegt.",
+      "working": "schreibt ..."
+    }
   }
 }

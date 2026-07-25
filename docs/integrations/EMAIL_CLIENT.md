@@ -219,6 +219,113 @@ lands on a scope-keyed config. Guards: `tests/test_mail_tools_import_guard.py`
 dual-write, and the latter's merge keeps an account the engine does not sync
 readable rather than blanking its mailbox.
 
+### Mail Composer
+
+The drafting assistant in the compose box (`vaf/mail/composer.py`,
+`POST /api/mail/composer`, the button row in `ComposeModal`). It writes a reply
+from the thread, or rewrites text the user already typed. It writes INTO the
+textarea and stops there: the user reads it and presses Send. There is no
+auto-send, no draft persistence and no new agent tool.
+
+Do not confuse it with `vaf/mail/compose.py`, which builds the RFC 822 message
+that goes on the wire. The Composer never produces or sends a message.
+
+**UI.** The compose window is two columns. Left: the message, with a larger editor
+and a light-mode toggle so a draft can be proof-read the way the recipient will see
+it. Right: a CHAT with the Composer - the exchange scrolls above, the input sits
+below, and Enter starts a turn. The footer carries Cancel and Send on the left and
+the two Composer actions (Draft, Rewrite) on the right.
+
+Assistant turns in the chat show a short result line, not the draft text: the draft
+is already on the left in full, and repeating it would push the actual exchange off
+screen. Each assistant turn also states how much of the thread was read, which is
+not decoration - a draft written from 3 of 11 messages is a different artifact than
+one written from all of them, and only the assembler knows which happened.
+
+Follow-ups ("shorter", "now more formal") replay the exchange, so the model refines
+what it just wrote instead of starting over from the thread. Prior assistant turns
+are previous drafts, and a draft was written from mail text, so they are neutralized
+on the way back in: otherwise a payload that survived into draft one could break the
+fence for draft two. The replay is capped at 8 turns of 2000 characters each - every
+assistant turn is a whole draft, and the thread is the part of the prompt that must
+not get squeezed out.
+
+**Containment is structural, not textual.** Mail bodies are attacker-controlled,
+and the phishing filter does not read bodies (see the phishing bullet under Safety
+layers). So the Composer makes exactly ONE model call with `tools=None` and
+`tool_choice="none"`. An injected instruction in a mail can therefore change what
+the draft SAYS, which the user is about to read anyway, and nothing else: there is
+no tool to call, no op enqueued, nothing sent. Prompt hygiene sits on top of that,
+not instead of it:
+
+- Three messages, always: system rules, then the untrusted fence, then the trusted
+  operator turn. Everything the user typed is in the LAST message; everything an
+  attacker wrote is inside `<untrusted_email_thread>` in the middle one.
+- `neutralize()` defuses the fence tags in body text, subjects and sender names.
+  Without it a mail containing the closing tag ends the untrusted region early and
+  the rest reads as operator input - the cheapest injection there is, so it has its
+  own test.
+- A flagged anchor refuses the request (409). Other flagged messages collapse to a
+  placeholder line, keeping the thread shape without the payload.
+- `tests/test_mail_composer_guards.py` pins the no-tools, no-op property so a later
+  refactor cannot quietly hand this lane a tool.
+
+**The user's own knowledge.** With `mail_composer_memory_enabled` the Composer
+consults the user's long-term memory while drafting, and two structural rules keep
+that from becoming an exfiltration path. The retrieval query is built from the
+USER's instruction ONLY, never from mail text, so a message cannot steer which of
+the user's notes the model sees; and with no instruction there is no retrieval at
+all, so the plain "write a draft" case carries no extra exposure. Results ride in
+the TRUSTED operator turn, never inside the fence. The residual risk is stated
+rather than hidden: notes and mail share one context, so an injection can still try
+to get the model to write those notes INTO the draft. The prompt forbids it and the
+user reads the draft before sending, but a user who sends unread can be walked into
+disclosing their own material - which is why the key exists and is admin-only. A
+memory outage degrades to "no notes", never to "no draft".
+
+**Older mail from other threads** (`mail_composer_mailbox_search_enabled`, OFF by
+default) quotes what the user asked about from the rest of the mailbox, using the
+FTS5 index the store already keeps - no vector lane, no second copy of anyone's
+mail. Same query rule as the memory lookup, for the same reason: the query is the
+user's instruction, never mail text. The extra rules exist because these are the
+LEAST verified messages in the prompt (the user never opened them): hits run
+through the phishing scorer and flagged ones are dropped entirely rather than
+placeholdered, the open thread is excluded, snippets are capped at 4 x 500
+characters, rewrite mode never searches at all, and the result goes INSIDE the
+fence - it is other people's correspondence, which is precisely what the fence is
+for. Off by default because it widens what untrusted mail can reach a prompt from
+"the thread you have open" to "anything matching a word you typed".
+
+**Local model.** A cold local model is LOADED, not reported. The route asks the
+running agent (`agent.load_model()`, the same call automations, thinking runs and
+the headless runner make), then waits for `/health` for up to 90 s, and only
+reports a failure if the model genuinely does not come up. It emits a notice frame
+first so the panel can say why nothing is happening - a silent minute of
+"writing ..." while a multi-GB GGUF maps from disk is indistinguishable from a
+hang. Telling the user to go start the model themselves is not an answer the chat
+lane gives either.
+
+**Budget.** Characters, not tokens: there is no real tokenizer on this path (the
+repo has two different chars-per-token heuristics and a tokenizer only for the
+local GGUF lane). 12000 chars total, 4000 per message, 8 messages, clamped to
+2000-40000. That is roughly 3.5-4.5k tokens, well inside the 32768 `n_ctx` floor.
+Allocation is newest-first because a reply answers the latest message; the anchor
+keeps a 2000-char floor even when the budget is smaller, since a reply written
+without the message being replied to is useless. Quote tails and signatures are
+stripped first - the biggest win and lossless, because a quoted block IS an earlier
+message of the thread and is included separately. What still does not fit becomes a
+one-line summary, and anything beyond that is COUNTED and stated in the prompt;
+a silent drop would let the model answer confidently about a thread it half saw.
+
+**Why no RAG lane** (asked for, deliberately not built): a thread is 2-10 messages
+and assembles from the local store in single-digit milliseconds. The repo already
+made this call once - `headless_runner` inlines documents under 24000 chars in FULL
+because top-k retrieval "silently drops pages the query does not semantically
+match", and for a reply the dropped line is the price or the deadline. A lane would
+also copy mail bodies into pgvector (a second at-rest location with its own
+deletion cascade) and inherit the RAG memory charter. If threads that exceed the
+budget become common, retrieval is the right fallback THEN, and additive.
+
 ### Fail-closed scoping
 
 Every service call takes an explicit `user_scope_id`; `MailService` raises without
@@ -474,7 +581,14 @@ Any mail change that adds tools, config keys, or events must update ALL of:
    key-count line (guarded by `tests/test_mail_config_and_jail_guards.py` and
    `tests/test_speech_config_schema_sync.py`).
 7. `web/app/page.tsx` WebSocket field forwarding for every new mail event.
-8. [CONNECTIONS.md](CONNECTIONS.md) email section and this document.
+8. `mailV2` strings in BOTH `web/messages/de.json` and `web/messages/en.json`
+   (de is the master and the fallback; no CI guard compares the two catalogs).
+9. [CONNECTIONS.md](CONNECTIONS.md) email section and this document.
+
+Not every item applies to every change, and saying so beats leaving a reader to
+guess: the Mail Composer touched 6, 8 and 9 only. It adds no tool, so the tool
+tuples, the front-office list, `_SENT_TOOLS` and the pruning allow-list are N/A;
+it adds no WebSocket event, so item 7 is N/A.
 
 ## License ledger (pattern sources; never copy code)
 

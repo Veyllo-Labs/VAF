@@ -1376,7 +1376,8 @@
       "cancel": "Cancel",
       "sending": "Sending...",
       "sendFailed": "Send failed.",
-      "discardConfirm": "Discard this message?"
+      "discardConfirm": "Discard this message?",
+      "paperToggle": "Light mode"
     },
     "undoSent": "Message queued",
     "undo": "Undo",
@@ -1392,6 +1393,28 @@
       "archive": "Archive",
       "all": "All mail"
     },
-    "loadImages": "Load images (via privacy proxy)"
+    "loadImages": "Load images (via privacy proxy)",
+    "composer": {
+      "draft": "Write a draft",
+      "rewrite": "Rewrite my text",
+      "stop": "Stop",
+      "undo": "Undo",
+      "instruction": "What should it say? (optional)",
+      "needsThread": "Open a conversation to draft a reply from it",
+      "failed": "The draft could not be created.",
+      "refusedSuspicious": "No draft for this message: it is flagged as a possible phishing attempt.",
+      "reviewHint": "Suggestion inserted. Please read it before sending.",
+      "localUnavailable": "The local model could not be loaded. Try again in a moment.",
+      "localLoading": "Loading the local model ...",
+      "panelTitle": "Mail Composer",
+      "panelHint": "Puts a suggestion in the text field. Nothing is sent - you do that yourself.",
+      "readCount": "Read {used} of {total} messages in this thread.",
+      "hidSuspicious": "{n} flagged as suspicious were left out.",
+      "shortened": "Older parts were shortened.",
+      "newChat": "New",
+      "followUp": "Change anything else?",
+      "inserted": "Draft inserted into the text field.",
+      "working": "writing ..."
+    }
   }
 }

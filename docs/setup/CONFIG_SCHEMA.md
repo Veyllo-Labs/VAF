@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (279 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (286 keys).
 
 ## How configuration is set
 
@@ -363,6 +363,13 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `mail_engine_write_enabled` | `False` | Allow the mail engine to perform server-side writes (flags/move/append). The standalone safety valve for mailbox writes: the engine stays read-only against mailboxes until this is set. Admin-only. |
 | `mail_body_retention_days` | `365` | How long cached message bodies are kept in the per-user mail store. Headers/envelopes are kept forever. Admin-only. |
 | `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; auto-generated on first use. Protected (never overwritten from the UI) and redacted for non-admins. |
+| `mail_composer_enabled` | `True` | Offer the Mail Composer (draft / rewrite buttons) in the mail window's compose box. The lane is inert until a user clicks it, makes exactly one model call with NO tools, and only ever fills the textarea - it can never send. Admin-only. |
+| `mail_composer_max_context_chars` | `12000` | Total budget for thread text handed to the Mail Composer, in characters (clamped to 2000-40000). Characters rather than tokens because no real tokenizer exists on this path; at the repo's 2.5-3.6 chars-per-token estimates this is roughly 3.5-4.5k tokens, well inside the 32768 `n_ctx` floor. Bounds how much attacker-controlled mail text reaches a prompt, so admin-only. |
+| `mail_composer_max_message_chars` | `4000` | Per-message cap inside that budget; the message being replied to keeps at least 2000 characters regardless. Admin-only. |
+| `mail_composer_max_messages` | `8` | Hard cap on how many thread messages are included in full. What does not fit degrades to a one-line summary rather than vanishing. Admin-only. |
+| `mail_composer_max_output_tokens` | `800` | Output cap for the Mail Composer's single model call. Admin-only. |
+| `mail_composer_memory_enabled` | `True` | Let the Mail Composer consult the user's own long-term memory when drafting. Retrieval is keyed on the user's instruction ONLY, never on mail content, so a message cannot steer what is retrieved; with no instruction nothing is retrieved. Set false where a drafted reply must never be able to repeat stored notes. Admin-only. |
+| `mail_composer_mailbox_search_enabled` | `False` | Let the Mail Composer quote older mail from OTHER conversations when drafting, found by keyword over the local full-text index (no vector store, no second copy of the mailbox). Off by default because it widens what untrusted correspondence can reach a prompt from "the open thread" to "anything matching a word the user typed"; hits are phishing-filtered, capped at 4 snippets, and placed in the untrusted section of the prompt. The query is the user's instruction ONLY, never mail text. Admin-only. |
 | `cloud_config` / `cloud_config_by_user` | `None` / `{}` | Cloud storage config. |
 | `cloud_oauth_*_client_id` | (shipped) / `""` | Cloud OAuth client IDs (Google Drive / OneDrive / Dropbox). Google Drive falls back to the email Google client. |
 | `cloud_oauth_callback_base_url` | `""` | Override for the cloud OAuth redirect_uri base. Empty = derive automatically (effective HTTPS proxy port in network+TLS mode, else the local backend), same logic as email. |

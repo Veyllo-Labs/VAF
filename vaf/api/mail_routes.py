@@ -14,6 +14,7 @@ Rules:
 """
 import asyncio
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
@@ -59,6 +60,7 @@ async def status(_user: Dict[str, Any] = Depends(_get_current_user)) -> Dict[str
     synced = await asyncio.to_thread(svc.store.list_accounts)
     return {
         "write_enabled": bool(Config.get("mail_engine_write_enabled", False)),
+        "composer_enabled": bool(Config.get("mail_composer_enabled", True)),
         "counts": await asyncio.to_thread(svc.counts),
         "accounts": await asyncio.to_thread(_union_config_accounts, synced, _user),
     }
@@ -735,3 +737,355 @@ async def accounts_delete(account_id: str, _user: Dict[str, Any] = Depends(_get_
     res = await asyncio.to_thread(lambda: delete_mail_account(
         account_id, username=username, cred_username=cred_username, user_scope_id=scope))
     return {"ok": True, **res}
+
+
+# ── Mail Composer: draft / rewrite into the compose box ────────────────────────
+#
+# ONE model call, NO TOOLS. That is the containment, not the prompt wording: mail
+# bodies are attacker-controlled and the phishing scorer never reads them, so an
+# injected instruction must be unable to DO anything. With tools=None the worst it
+# can achieve is a bad draft, which the user reads before sending. Anything added
+# here that hands this lane a tool, an op, or a send breaks that property - guarded
+# by tests/test_mail_composer_guards.py.
+
+#: Strong refs to in-flight generation tasks (same GC hazard as the send lane).
+_INFLIGHT_COMPOSER_TASKS: set = set()
+
+
+#: How long to wait for a cold local model before giving up. A several-GB GGUF
+#: maps from disk in tens of seconds on a cold cache; failing at 10s would just be
+#: the old "not running" message with extra steps.
+_LOCAL_MODEL_WAIT_S = 90
+
+
+class LocalModelUnavailable(RuntimeError):
+    """The local llama server could not be brought up for this request. Only raised
+    after actually trying to load it - the client message is a last resort, not the
+    first response to a cold model."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _local_model_is_cold() -> bool:
+    """True when this request will have to wait for a local model to load. Purely
+    for telling the user WHY nothing is happening: a silent 90-second "writing ..."
+    is indistinguishable from a hang."""
+    if (Config.get("provider", "local") or "local").strip() != "local":
+        return False
+    try:
+        import requests as _rq
+        return _rq.get(f"{Config.get_llama_server_url()}/health", timeout=2).status_code != 200
+    except Exception:
+        return True
+
+
+def _ensure_local_model() -> None:
+    """Ask the running agent to load the local model, the way every other
+    non-chat lane does (`agent.load_model()` in automations, thinking runs and the
+    headless runner). Best effort: if there is no agent instance (CLI-only, or the
+    web app is still starting) we fall through to the health wait, which is also
+    what happens when someone else is already loading it."""
+    try:
+        from vaf.core.web_interface import get_web_interface
+        agent = getattr(get_web_interface(), "agent_instance", None)
+        if agent is None or getattr(agent, "provider", "local") != "local":
+            return
+        logger.info("mail composer: local model not ready, requesting load")
+        agent.load_model(skip_download_check=True)
+    except Exception as e:  # pragma: no cover - never let this break the request
+        logger.warning("mail composer: could not request a model load: %s", e)
+
+
+def _composer_settings() -> Dict[str, Any]:
+    from vaf.mail import composer
+    return {
+        "enabled": bool(Config.get("mail_composer_enabled", True)),
+        "budget": composer.clamp_budget(Config.get("mail_composer_max_context_chars", 12000), 12000),
+        "per_msg": max(200, int(Config.get("mail_composer_max_message_chars", 4000) or 4000)),
+        "max_messages": max(1, int(Config.get("mail_composer_max_messages", 8) or 8)),
+        "max_tokens": max(64, int(Config.get("mail_composer_max_output_tokens", 800) or 800)),
+        "memory": bool(Config.get("mail_composer_memory_enabled", True)),
+        "mailbox": bool(Config.get("mail_composer_mailbox_search_enabled", False)),
+    }
+
+
+def _composer_related(svc, instruction: str, thread_id: Optional[int]) -> str:
+    """Older mail from OTHER threads that matches what the user asked for.
+
+    Uses the FTS5 index the store already maintains (subject/from/to/body) - no
+    vector lane, no second copy of anyone's mail. The same rule as the memory
+    lookup applies and for the same reason: the query is the USER's instruction,
+    never mail text, so a message cannot decide which of the user's older mail is
+    pulled into the prompt.
+
+    Everything found here is attacker-controlled correspondence the user did NOT
+    open, so it is the least verified input in the prompt: hits run through the
+    phishing scorer and flagged ones are dropped entirely (not placeholdered - an
+    unopened keyword hit is not worth a line), the current thread is excluded, and
+    the caller places the result inside the untrusted fence.
+    """
+    from vaf.mail import composer
+
+    q = (instruction or "").strip()
+    if len(q) < 3:
+        return ""
+    try:
+        rows = svc.search(q, limit=12) or []
+    except Exception as e:  # pragma: no cover - search must never break drafting
+        logger.info("mail composer: mailbox search unavailable: %s", e)
+        return ""
+    rows = [r for r in rows if r.get("thread_id") != thread_id]
+    rows = [r for r in svc.annotate_visibility(rows) if not r.get("suspicious_for_agent")]
+    return composer.format_related(rows)
+
+
+def _composer_knowledge(user: Dict[str, Any], instruction: str) -> str:
+    """The user's own long-term memory, retrieved for THIS instruction.
+
+    Two rules make this safe enough to enable by default, and both are structural:
+
+    1. The query is built from the USER's instruction ONLY - never from mail text.
+       A mail cannot steer what gets retrieved, which is the difference between
+       "the model may mention my day rate" and "a stranger picks what of mine the
+       model sees".
+    2. No instruction, no retrieval. A bare "write a draft" pulls nothing, so the
+       common case carries no extra exposure at all.
+
+    Residual risk, stated rather than hidden: the retrieved text and the mail sit in
+    the same context, so an injection can still try to get the model to WRITE that
+    text into the draft. The prompt forbids it and the user reads the draft before
+    sending, but a user who sends without reading can be walked into disclosing
+    their own notes. That is why this is admin-switchable.
+    """
+    q = (instruction or "").strip()
+    if len(q) < 3:
+        return ""
+    scope = (user.get("user_scope_id") or "").strip() or get_local_admin_scope_id()
+    if not scope:
+        return ""
+    try:
+        from uuid import UUID
+
+        from vaf.memory.rag import run_memory_search_sync
+        return run_memory_search_sync(query=q, k=4, user_scope_id=UUID(str(scope)),
+                                      caller="mail_composer") or ""
+    except Exception as e:  # pragma: no cover - memory is optional infrastructure
+        logger.info("mail composer: memory lookup unavailable: %s", e)
+        return ""
+
+
+def _composer_stream(messages, max_tokens: int, temperature: float):
+    """Yield text chunks from one tool-less completion.
+
+    Provider resolution mirrors the tool lane (vaf/tools/base.py query_llm) rather
+    than inventing a second rule: provider from config, provider-specific model
+    with a fallback to the generic one. Local mode streams from the single llama
+    server - the same one everything else uses, never a second inference.
+    """
+    provider = (Config.get("provider", "local") or "local").strip()
+    if provider != "local":
+        model = Config.get(f"api_model_{provider}", "") or Config.get("model", "")
+        from vaf.core.api_backend import APIBackendManager
+        backend = APIBackendManager(provider)
+        for chunk in backend.chat_completion(
+                messages=messages, temperature=temperature, max_tokens=max_tokens,
+                stream=True, model=model, tools=None, tool_choice=None):
+            s = chunk if isinstance(chunk, str) else ""
+            # metadata frames carry no prose; keep everything else verbatim
+            if s.strip().startswith("{") and ("tool_calls" in s or "finish_reason" in s):
+                continue
+            if s:
+                yield s
+        return
+
+    import json as _json
+
+    import requests as _rq
+
+    # Local mode: the single llama server may be down, or up but still mapping a
+    # multi-GB model. Telling the user to go start it is not an answer - the chat
+    # lane does not do that either, it just loads the model (automations, thinking
+    # runs and the headless runner all call agent.load_model()). So: try to bring it
+    # up ourselves, wait for /health, and only report a failure if that does not
+    # work. The load is idempotent and reuses a healthy server.
+    base = Config.get_llama_server_url()
+
+    def _healthy() -> bool:
+        try:
+            return _rq.get(f"{base}/health", timeout=3).status_code == 200
+        except _rq.RequestException:
+            return False
+
+    if not _healthy():
+        _ensure_local_model()
+        # Weights map from disk; a cold start of a several-GB GGUF takes a while,
+        # and answering "not running" ten seconds in would be the same unhelpful
+        # message with extra steps.
+        deadline = time.monotonic() + _LOCAL_MODEL_WAIT_S
+        while time.monotonic() < deadline:
+            if _healthy():
+                break
+            time.sleep(1.5)
+        else:
+            raise LocalModelUnavailable("local_unavailable")
+
+    payload = {
+        "model": Config.get("model", ""), "messages": messages,
+        "max_tokens": max_tokens, "temperature": temperature, "stream": True,
+        # Qwen-class local models otherwise spend the whole budget on reasoning
+        # and return empty content (same fix as the tool and voice lanes).
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    with _rq.post(f"{base}/v1/chat/completions", json=payload,
+                  stream=True, timeout=(10, 300)) as res:
+        if res.status_code == 503:
+            raise LocalModelUnavailable("local_loading")
+        res.raise_for_status()
+        # requests defaults text/* without an explicit charset to ISO-8859-1, which
+        # turns every umlaut into mojibake ("moechte" arriving as two bytes shown as
+        # "mA¶chte"). llama-server streams UTF-8; say so before decoding.
+        res.encoding = "utf-8"
+        for line in res.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                delta = _json.loads(data)["choices"][0].get("delta") or {}
+            except (ValueError, KeyError, IndexError):
+                continue
+            piece = delta.get("content") or ""
+            if piece:
+                yield piece
+
+
+@router.post("/composer")
+async def composer_draft(body: Dict[str, Any] = Body(...),
+                         _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Draft a reply from a thread, or rewrite the user's own text.
+
+    Streams plain text as SSE into the compose textarea. It NEVER sends: the
+    response is text for the user to read, edit and send themselves.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from vaf.mail import composer
+
+    cfg = _composer_settings()
+    if not cfg["enabled"]:
+        raise HTTPException(status_code=403, detail="mail composer is disabled")
+
+    mode = (body.get("mode") or "draft").strip().lower()
+    if mode not in ("draft", "rewrite"):
+        raise HTTPException(status_code=422, detail="mode must be draft or rewrite")
+    draft_text = str(body.get("draft") or "")
+    if mode == "rewrite" and not draft_text.strip():
+        raise HTTPException(status_code=422, detail="nothing to rewrite")
+
+    svc = _service(_user)          # fail-closed scoping: 403 without a scope
+    thread_id = body.get("thread_id")
+    anchor_pk = body.get("anchor_pk")
+
+    def _assemble():
+        rows = svc.thread_messages(int(thread_id)) if thread_id is not None else []
+        if thread_id is not None and not rows:
+            return None                        # foreign or unknown id: 404, never leak
+        rows = svc.annotate_visibility(rows)
+        anchor = next((r for r in rows if r.get("id") == anchor_pk), rows[-1] if rows else None)
+        if anchor is not None and anchor.get("suspicious_for_agent"):
+            return "flagged"
+        bodies: Dict[int, str] = {}
+        if mode == "draft":
+            # rewrite works on the user's own text, so it deliberately reads no
+            # bodies at all: smallest context, smallest injection surface.
+            for r in rows:
+                if r.get("suspicious_for_agent"):
+                    continue
+                b = svc.get_body(int(r["id"]))
+                if b and b.get("cached"):
+                    bodies[int(r["id"])] = b.get("text") or ""
+        return composer.build_thread_context(
+            rows, bodies, anchor_pk=int(anchor_pk) if anchor_pk is not None else -1,
+            budget_chars=cfg["budget"], per_msg_chars=cfg["per_msg"],
+            max_messages=cfg["max_messages"])
+
+    ctx = await asyncio.to_thread(_assemble)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    if ctx == "flagged":
+        raise HTTPException(status_code=409, detail="this message is flagged as possible phishing")
+
+    instruction = str(body.get("instruction") or "")
+    knowledge = ""
+    if cfg["memory"]:
+        knowledge = await asyncio.to_thread(_composer_knowledge, _user, instruction)
+    related = ""
+    if cfg["mailbox"] and mode == "draft":
+        # rewrite works on the user's own text and deliberately reads no mail at all
+        related = await asyncio.to_thread(
+            _composer_related, svc, instruction,
+            int(thread_id) if thread_id is not None else None)
+    raw_turns = body.get("turns")
+    turns = [t for t in raw_turns if isinstance(t, dict)] if isinstance(raw_turns, list) else []
+    messages = composer.build_prompt(
+        ctx, mode=mode, instruction=instruction,
+        draft=draft_text, tone=str(body.get("tone") or ""),
+        language=str(body.get("language") or ""), knowledge=knowledge,
+        related=related, turns=turns)
+    temperature = 0.2 if mode == "rewrite" else 0.3
+
+    async def _events():
+        import json as _json
+        meta = {"included": ctx.included, "total": ctx.total, "truncated": ctx.truncated,
+                "hidden_suspicious": ctx.hidden_suspicious, "dropped": ctx.dropped}
+        yield f"event: meta\ndata: {_json.dumps(meta)}\n\n"
+        if await asyncio.to_thread(_local_model_is_cold):
+            yield f"event: notice\ndata: {_json.dumps('local_loading')}\n\n"
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _pump():
+            try:
+                for piece in _composer_stream(messages, cfg["max_tokens"], temperature):
+                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", piece))
+            except LocalModelUnavailable as e:
+                logger.info("mail composer: local model not ready (%s)", e.code)
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", e.code))
+            except Exception as e:                       # noqa: BLE001 - reported to the client
+                logger.warning("mail composer: generation failed: %s", e)
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", "failed"))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", ""))
+
+        # blocking provider IO belongs in a worker thread, never on the event loop
+        task = asyncio.create_task(asyncio.to_thread(_pump))
+        _INFLIGHT_COMPOSER_TASKS.add(task)
+        task.add_done_callback(_INFLIGHT_COMPOSER_TASKS.discard)
+        buffered = ""
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "done":
+                    break
+                if kind == "error":
+                    yield f"event: error\ndata: {_json.dumps(payload)}\n\n"
+                    break
+                buffered += payload
+                # Each frame carries the FULL text so far, not a delta, and the
+                # client replaces rather than appends. Deltas cannot work here:
+                # clean_output has to see the whole buffer (a <think> block closes
+                # mid-stream, a code fence is only recognisable once its opening
+                # line is complete), so a delta would leak the scratchpad into the
+                # user's textarea and then try to take it back.
+                cleaned = composer.clean_output(buffered)
+                if cleaned:
+                    yield f"data: {_json.dumps(cleaned)}\n\n"
+        finally:
+            task.cancel()
+        yield "event: end\ndata: {}\n\n"
+
+    return StreamingResponse(_events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no"})

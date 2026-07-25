@@ -588,6 +588,25 @@ class Config:
         "mail_engine_write_enabled": False,  # allow server-side writes (flags/move/append) - separate switch by design
         "mail_body_retention_days": 365,  # cached-body retention (headers are kept forever)
         "mail_store_encryption_key": "",  # AES key (Base64) for mail.db body blobs; auto-generated (PROTECTED)
+        # Mail Composer (vaf/mail/composer.py): drafts and rewrites text in the mail
+        # window's compose box. Draft only - it never sends. The budget keys bound how
+        # much attacker-controlled thread text reaches a prompt, so they are policy,
+        # not preference: admin-only via GLOBAL_CONFIG_KEYS.
+        "mail_composer_enabled": True,
+        "mail_composer_max_context_chars": 12000,  # total thread budget (clamped 2000-40000)
+        "mail_composer_max_message_chars": 4000,   # per-message cap inside that budget
+        "mail_composer_max_messages": 8,           # hard message-count cap
+        "mail_composer_max_output_tokens": 800,    # output cap for the single call
+        # Let the Composer consult the user's own long-term memory. Retrieval is keyed
+        # on the USER's instruction only (never on mail text), so a mail cannot steer
+        # what is pulled; the residual risk is disclosure INTO a draft the user then
+        # sends, hence a switch. See _composer_knowledge in mail_routes.py.
+        "mail_composer_memory_enabled": True,
+        # Let the Composer quote older mail from OTHER threads, found by keyword over
+        # the local FTS index. Default OFF: it widens what untrusted correspondence can
+        # reach a prompt from "the thread you have open" to "anything matching a word
+        # you typed", so it stays a deliberate choice. See _composer_related.
+        "mail_composer_mailbox_search_enabled": False,
         # OAuth2: callback base URL must point to this backend (default http://127.0.0.1:8001). Set if behind proxy or different port.
         "email_oauth_callback_base_url": "",
         # OAuth2 client IDs (register app in Google Cloud Console / Azure; redirect_uri = {email_oauth_callback_base_url or http://127.0.0.1:PORT}/api/email/oauth/callback)
@@ -744,6 +763,16 @@ class Config:
         # Mail engine write flag + retention: instance-wide policy.
         "mail_engine_write_enabled",
         "mail_body_retention_days",
+        # Mail Composer: the budget keys decide how much untrusted mail text reaches
+        # a model prompt, and the enable flag decides whether that happens at all -
+        # a per-user write would let a LAN user raise both for the instance.
+        "mail_composer_enabled",
+        "mail_composer_max_context_chars",
+        "mail_composer_max_message_chars",
+        "mail_composer_max_messages",
+        "mail_composer_max_output_tokens",
+        "mail_composer_memory_enabled",
+        "mail_composer_mailbox_search_enabled",
     ])
 
     @classmethod

@@ -3,18 +3,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 //
-// Mail client page (engine v2). Design: EMAIL_CLIENT.md. Three-pane layout,
-// conversation view, sanitized HTML in a sandboxed iframe (CSP script-src
-// 'none'), remote images blocked with an explicit banner, local-first write
-// actions (read/star/archive/trash) that replay to the server via the op
-// queue, compose with reply/reply-all/forward prefill and undo-send.
+// Mail client page. Design: EMAIL_CLIENT.md. Three-pane layout, conversation
+// view, sanitized HTML in a sandboxed iframe (CSP default-src 'none' with
+// img-src pinned to this origin), remote content blocked with an explicit
+// banner, local-first write actions (read/star/archive/trash) that replay to
+// the server via the op queue, compose with reply/reply-all/forward prefill,
+// undo-send, and the Mail Composer (drafts into the box, never sends).
 // Strings come from the mailV2 next-intl catalog.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
     AlertTriangle, Archive, ChevronRight, CornerUpLeft, CornerUpRight, Inbox, Loader2, Mail,
-    MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings, ShieldCheck, Star,
+    MailOpen, Moon, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings,
+    ShieldCheck, Sparkles, Star, Sun,
     Tag, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
@@ -54,6 +56,11 @@ interface Body {
     html: string | null; text: string; blocked_remote: number; cached: boolean;
     attachments: { id: number; part_id: string; filename?: string; content_type?: string; size_bytes?: number; is_inline: number }[];
 }
+/** What the composer read, so the panel can say so rather than imply it saw everything. */
+interface ComposerMeta { included: number; total: number; truncated: boolean; hidden_suspicious: number; dropped: number }
+/** One exchange with the Mail Composer. Assistant turns hold the draft they
+ *  produced, so a follow-up ("shorter") refines it instead of starting over. */
+interface ComposerTurn { role: 'user' | 'assistant'; content: string }
 interface Prefill { account_id: string; to: string; cc: string; subject: string; body: string; in_reply_to: string; references: string }
 
 const SPECIAL_KEYS: Record<string, string> = {
@@ -102,9 +109,10 @@ function fmtSize(n?: number): string {
     return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
-/** Sanitized HTML in a sandboxed iframe: content is nh3-cleaned server-side,
- * the iframe adds sandbox + CSP script-src 'none' (defense in layers,
- * Close.com pattern). allow-same-origin only for height measurement. */
+/** Sanitized HTML in a sandboxed iframe: content is nh3-cleaned server-side and
+ * the iframe adds sandbox + a CSP that also pins img-src to this origin, so a
+ * sanitizer miss cannot become a network request (it has already caught three).
+ * allow-same-origin only for height measurement. */
 function BodyFrame({ html }: { html: string }) {
     const ref = useRef<HTMLIFrameElement>(null);
     const [height, setHeight] = useState(320);
@@ -128,8 +136,20 @@ function BodyFrame({ html }: { html: string }) {
     );
 }
 
-function ComposeModal({ prefill, accounts, onClose, onQueued }: {
+/** Split a compose body into the part the user is writing and the quoted tail.
+ *  The Mail Composer only ever rewrites the head: the quoted block is the record
+ *  of what was actually said, and silently rewording someone else's words inside
+ *  a reply would be worse than useless. */
+function splitDraft(body: string): [string, string] {
+    const lines = body.split('\n');
+    const idx = lines.findIndex(l => l.startsWith('>') || /^On .+ wrote:$/.test(l.trim()));
+    if (idx < 0) return [body, ''];
+    return [lines.slice(0, idx).join('\n'), lines.slice(idx).join('\n')];
+}
+
+function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, onClose, onQueued }: {
     prefill: Partial<Prefill> | null; accounts: Account[];
+    threadId: number | null; anchorPk: number | null; composerEnabled: boolean;
     onClose: () => void; onQueued: (opId: number, undoSeconds: number) => void;
 }) {
     const t = useTranslations('mailV2');
@@ -140,6 +160,106 @@ function ComposeModal({ prefill, accounts, onClose, onQueued }: {
     const [body, setBody] = useState(prefill?.body || '');
     const [sending, setSending] = useState(false);
     const [error, setError] = useState('');
+    // Mail Composer: fills the textarea, never sends. `beforeAssist` backs the
+    // Undo button, so one click always restores exactly what the user had.
+    const [assistBusy, setAssistBusy] = useState(false);
+    const [assistNote, setAssistNote] = useState('');
+    const [assistInstruction, setAssistInstruction] = useState('');
+    const [beforeAssist, setBeforeAssist] = useState<string | null>(null);
+    const [assistMeta, setAssistMeta] = useState<ComposerMeta | null>(null);
+    const [turns, setTurns] = useState<ComposerTurn[]>([]);
+    const [paper, setPaper] = useState(false);
+    const abortRef = useRef<AbortController | null>(null);
+    const chatEndRef = useRef<HTMLDivElement>(null);
+    useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'end' }); }, [turns, assistBusy]);
+
+    const runComposer = useCallback(async (mode: 'draft' | 'rewrite') => {
+        const [head, tail] = splitDraft(body);
+        const said = assistInstruction.trim();
+        // The conversation sent to the server is what happened BEFORE this turn;
+        // the current instruction travels separately as the operator turn.
+        const priorTurns = turns.map(x => ({ role: x.role, content: x.content }));
+        setTurns(t => [...t, { role: 'user', content: said || (mode === 'draft' ? '\u2726' : '\u21bb') }]);
+        setAssistInstruction('');
+        setBeforeAssist(body);
+        setAssistBusy(true);
+        setAssistNote('');
+        setAssistMeta(null);
+        let produced = '';
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+        try {
+            const res = await fetch(api('api/mail/composer'), {
+                method: 'POST', credentials: 'include', signal: ctrl.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode, thread_id: threadId, anchor_pk: anchorPk,
+                    instruction: said, draft: mode === 'rewrite' ? head : '',
+                    turns: priorTurns,
+                }),
+            });
+            if (!res.ok || !res.body) {
+                setAssistNote(res.status === 409 ? t('composer.refusedSuspicious') : t('composer.failed'));
+                return;
+            }
+            // SSE: each data frame carries the FULL text so far (see the route),
+            // so we replace rather than append and never show a partial <think>.
+            const reader = res.body.getReader();
+            const dec = new TextDecoder();
+            let buf = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                const frames = buf.split('\n\n');
+                buf = frames.pop() || '';
+                for (const frame of frames) {
+                    if (frame.startsWith('event: notice')) {
+                        // Why nothing is happening yet. A silent minute of
+                        // "writing ..." while a multi-GB model maps from disk is
+                        // indistinguishable from a hang.
+                        setAssistNote(t('composer.localLoading'));
+                        continue;
+                    }
+                    if (frame.startsWith('event: error')) {
+                        // The route names WHY: "start the model" and "wait, it is
+                        // loading" are different instructions, and a single generic
+                        // failure message is what made this look like a dead button.
+                        const l = frame.split('\n').find(x => x.startsWith('data: '));
+                        let code = 'failed';
+                        try { code = JSON.parse(l ? l.slice(6) : '""') || 'failed'; } catch { /* keep default */ }
+                        setAssistNote(t(code === 'local_unavailable' ? 'composer.localUnavailable'
+                            : code === 'local_loading' ? 'composer.localLoading' : 'composer.failed'));
+                        continue;
+                    }
+                    const line = frame.split('\n').find(l => l.startsWith('data: '));
+                    if (!line) continue;
+                    if (frame.startsWith('event: meta')) {
+                        try { setAssistMeta(JSON.parse(line.slice(6))); } catch { /* ignore */ }
+                        continue;
+                    }
+                    if (frame.startsWith('event: end')) continue;
+                    try {
+                        const text = JSON.parse(line.slice(6));
+                        if (typeof text === 'string') {
+                            setAssistNote('');       // tokens arrive: the wait is over
+                            produced = text;
+                            setBody(tail ? `${text}\n${tail}` : text);
+                        }
+                    } catch { /* partial frame: the next read completes it */ }
+                }
+            }
+        } catch (e) {
+            if ((e as Error)?.name !== 'AbortError') setAssistNote(t('composer.failed'));
+        } finally {
+            // The assistant's turn IS the draft: replaying it lets the next
+            // instruction ("shorter") refine what it just wrote instead of
+            // starting over from the thread.
+            if (produced) setTurns(x => [...x, { role: 'assistant', content: produced }]);
+            setAssistBusy(false);
+            abortRef.current = null;
+        }
+    }, [body, threadId, anchorPk, assistInstruction, turns, t]);
     const send = useCallback(async () => {
         setSending(true);
         setError('');
@@ -160,37 +280,143 @@ function ComposeModal({ prefill, accounts, onClose, onQueued }: {
         if ((to.trim() || body.trim()) && !window.confirm(t('compose.discardConfirm'))) return;
         onClose();
     }, [to, body, onClose, t]);
+    const field = "w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]";
     return (
         <div className="fixed inset-0 z-50 bg-black/50 grid place-items-center p-4">
-            <div className="w-full max-w-2xl bg-[#1f1f1f] border border-[#2e2e2e] rounded-xl shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="w-full max-w-5xl bg-[#1f1f1f] border border-[#2e2e2e] rounded-xl shadow-2xl flex flex-col max-h-[92vh]">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[#2e2e2e]">
                     <h2 className="font-semibold text-[15px]">{t('compose.title')}</h2>
-                    <button type="button" onClick={requestClose} className="text-[#9a9a9a] hover:text-white"><X className="w-4 h-4" /></button>
+                    <div className="flex items-center gap-1">
+                        {/* Read the draft the way the recipient will: mail is a light
+                            medium, and a quoted thread on a dark editor is hard to
+                            proof-read against what actually lands in their inbox. */}
+                        <button type="button" onClick={() => setPaper(p => !p)} title={t('compose.paperToggle')}
+                            className={cn("p-1.5 rounded-lg text-[#9a9a9a] hover:text-white",
+                                paper && "bg-[#2e2e2e] text-white")}>
+                            {paper ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                        </button>
+                        <button type="button" onClick={requestClose} className="p-1.5 text-[#9a9a9a] hover:text-white"><X className="w-4 h-4" /></button>
+                    </div>
                 </div>
-                <div className="p-4 space-y-2.5 overflow-y-auto">
-                    {accounts.length > 1 && (
-                        <select value={account} onChange={e => setAccount(e.target.value)}
-                            className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm">
-                            {accounts.map(a => <option key={a.account_id} value={a.account_id}>{a.email}</option>)}
-                        </select>
+
+                <div className="flex flex-col md:flex-row min-h-0 flex-1">
+                    {/* ── the message ─────────────────────────────────────────── */}
+                    <div className="p-4 space-y-2.5 overflow-y-auto flex-1 min-w-0 flex flex-col">
+                        {accounts.length > 1 && (
+                            <select value={account} onChange={e => setAccount(e.target.value)} className={field}>
+                                {accounts.map(a => <option key={a.account_id} value={a.account_id}>{a.email}</option>)}
+                            </select>
+                        )}
+                        <input value={to} onChange={e => setTo(e.target.value)} placeholder={t('compose.to')} className={field} />
+                        <input value={cc} onChange={e => setCc(e.target.value)} placeholder={t('compose.cc')} className={field} />
+                        <input value={subject} onChange={e => setSubject(e.target.value)} placeholder={t('compose.subject')} className={field} />
+                        {/* The editor drives the window height - header, address fields
+                            and footer are fixed - so min-h here is the knob for how tall
+                            the whole compose box is. */}
+                        <textarea value={body} onChange={e => setBody(e.target.value)} placeholder={t('compose.body')}
+                            readOnly={assistBusy}
+                            className={cn("w-full flex-1 min-h-[27.5rem] border rounded-lg px-3 py-2 text-sm outline-none font-mono resize-none",
+                                paper
+                                    ? "bg-white text-[#222] border-[#d8d8d8] placeholder-[#999] focus:border-[#b0b0b0]"
+                                    : "bg-[#262626] text-inherit border-[#2e2e2e] focus:border-[#444]")} />
+                        {error && <div className="text-[#e08c8c] text-sm">{error}</div>}
+                    </div>
+
+                    {/* ── the Mail Composer ───────────────────────────────────── */}
+                    {composerEnabled && (
+                        <aside className="md:w-80 shrink-0 border-t md:border-t-0 md:border-l border-[#2e2e2e] p-4 flex flex-col gap-3 overflow-y-auto">
+                            <div className="flex items-center gap-2 text-[13px] font-semibold shrink-0">
+                                <Sparkles className="w-4 h-4 text-[#e05d44]" />{t('composer.panelTitle')}
+                                {turns.length > 0 && !assistBusy && (
+                                    <button type="button" onClick={() => { setTurns([]); setAssistMeta(null); }}
+                                        className="ml-auto text-[11px] font-normal text-[#7a7a7a] hover:text-white">
+                                        {t('composer.newChat')}
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* The conversation. Assistant turns are shown as a short
+                                result line, not the draft text: the draft is already
+                                on the left in full, and duplicating it here would push
+                                the actual exchange off screen. */}
+                            <div className="flex-1 min-h-[8rem] overflow-y-auto space-y-2 pr-0.5">
+                                {turns.length === 0 && !assistBusy && (
+                                    <p className="text-[#7a7a7a] text-xs leading-relaxed">{t('composer.panelHint')}</p>
+                                )}
+                                {turns.map((turn, i) => turn.role === 'user' ? (
+                                    <div key={i} className="ml-6 px-3 py-1.5 rounded-lg bg-[#2e2e2e] text-sm break-words">{turn.content}</div>
+                                ) : (
+                                    <div key={i} className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] leading-relaxed">
+                                        {t('composer.inserted')}
+                                    </div>
+                                ))}
+                                {assistBusy && (
+                                    <div className="mr-6 px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] text-xs text-[#9a9a9a] flex items-center gap-1.5">
+                                        <Loader2 className="w-3 h-3 animate-spin" />{t('composer.working')}
+                                    </div>
+                                )}
+                                {assistNote && <div className="text-[#e0b84c] text-xs leading-relaxed">{assistNote}</div>}
+                                {assistMeta && !assistNote && !assistBusy && (
+                                    <div className="text-[#7a7a7a] text-[11px] leading-relaxed">
+                                        {t('composer.readCount', { used: assistMeta.included, total: assistMeta.total })}
+                                        {assistMeta.hidden_suspicious > 0 &&
+                                            <> {t('composer.hidSuspicious', { n: assistMeta.hidden_suspicious })}</>}
+                                        {(assistMeta.truncated || assistMeta.dropped > 0) &&
+                                            <> {t('composer.shortened')}</>}
+                                    </div>
+                                )}
+                                <div ref={chatEndRef} />
+                            </div>
+
+                            <div className="shrink-0 space-y-2">
+                                <textarea value={assistInstruction} onChange={e => setAssistInstruction(e.target.value)}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter' && !e.shiftKey && !assistBusy) {
+                                            e.preventDefault();
+                                            runComposer(threadId !== null ? 'draft' : 'rewrite');
+                                        }
+                                    }}
+                                    placeholder={turns.length ? t('composer.followUp') : t('composer.instruction')}
+                                    disabled={assistBusy} rows={3}
+                                    className={cn(field, "resize-none")} />
+                                {assistBusy && (
+                                    <button type="button" onClick={() => abortRef.current?.abort()}
+                                        className="w-full px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] flex items-center justify-center gap-1.5">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />{t('composer.stop')}
+                                    </button>
+                                )}
+                                {beforeAssist !== null && beforeAssist !== body && !assistBusy && (
+                                    <button type="button" onClick={() => { setBody(beforeAssist); setBeforeAssist(null); }}
+                                        className="w-full px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white border border-[#2e2e2e]">
+                                        {t('composer.undo')}
+                                    </button>
+                                )}
+                            </div>
+                        </aside>
                     )}
-                    <input value={to} onChange={e => setTo(e.target.value)} placeholder={t('compose.to')}
-                        className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]" />
-                    <input value={cc} onChange={e => setCc(e.target.value)} placeholder={t('compose.cc')}
-                        className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]" />
-                    <input value={subject} onChange={e => setSubject(e.target.value)} placeholder={t('compose.subject')}
-                        className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#444]" />
-                    <textarea value={body} onChange={e => setBody(e.target.value)} placeholder={t('compose.body')} rows={12}
-                        className="w-full bg-[#262626] border border-[#2e2e2e] rounded-lg px-3 py-2 text-sm outline-none focus:border-[#444] font-mono" />
-                    {error && <div className="text-[#e08c8c] text-sm">{error}</div>}
                 </div>
-                <div className="flex justify-end gap-2 px-4 py-3 border-t border-[#2e2e2e]">
+
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-[#2e2e2e]">
                     <button type="button" onClick={requestClose}
                         className="px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white">{t('compose.cancel')}</button>
                     <button type="button" onClick={send} disabled={sending || !to.trim() || !account}
                         className="px-4 py-1.5 rounded-lg text-sm bg-[#e05d44] text-white disabled:opacity-50">
                         {sending ? t('compose.sending') : t('compose.send')}
                     </button>
+                    {composerEnabled && (
+                        <div className="ml-auto flex items-center gap-2">
+                            <button type="button" onClick={() => runComposer('draft')} disabled={assistBusy || threadId === null}
+                                title={threadId === null ? t('composer.needsThread') : undefined}
+                                className="px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] hover:border-[#444] disabled:opacity-40 flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5" />{t('composer.draft')}
+                            </button>
+                            <button type="button" onClick={() => runComposer('rewrite')}
+                                disabled={assistBusy || !splitDraft(body)[0].trim()}
+                                className="px-3 py-1.5 rounded-lg text-sm bg-[#262626] border border-[#2e2e2e] hover:border-[#444] disabled:opacity-40">
+                                {t('composer.rewrite')}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -307,7 +533,7 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
 export function MailClientView({ onClose }: { onClose?: () => void }) {
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
-    const [status, setStatus] = useState<{ accounts?: Account[] } | null>(null);
+    const [status, setStatus] = useState<{ accounts?: Account[]; composer_enabled?: boolean } | null>(null);
     const [statusFailed, setStatusFailed] = useState(false);
     const [showAccounts, setShowAccounts] = useState(false);
     const syncedFolders = useRef<Set<string>>(new Set());  // on-open folder sync, once each
@@ -803,6 +1029,8 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
 
             {compose !== false && (
                 <ComposeModal prefill={compose} accounts={status.accounts || []}
+                    threadId={activeThread} anchorPk={threadMsgs[threadMsgs.length - 1]?.id ?? null}
+                    composerEnabled={status.composer_enabled !== false}
                     onClose={() => setCompose(false)}
                     onQueued={(opId, seconds) => setUndoState({ opId, seconds })} />
             )}

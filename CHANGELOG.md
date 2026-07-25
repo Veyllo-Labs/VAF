@@ -56,6 +56,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   relabel picker in the reader. Relabeling also teaches the category - VAF
   remembers a rule for that sender and labels every other mail from them, past and
   future. All of it is local; nothing is changed on the mail server.
+- Mail Composer: the compose window can now write the reply for you, or rewrite
+  what you typed. The window is wider now, with the message on the left and the
+  Composer beside it on the right: a chat where you say what the reply should say,
+  ask for changes ("shorter", "now more formal") and it refines what it just wrote,
+  with Stop while it writes and an Undo that restores your text exactly. Draft and
+  Rewrite sit in the footer next to Send. It puts a suggestion in the text field and stops there, so nothing is
+  ever sent without you reading it and pressing Send, and it tells you how much of
+  the conversation it actually read. It refuses to draft from a message flagged as
+  possible phishing, and it can use what VAF remembers about you when you say what
+  the reply should be about. New: a light-mode button in compose, so you can read
+  the draft the way the recipient will. Admins can turn all of it off or change how
+  much of a thread it reads (`mail_composer_*` settings). If the local model is not
+  running yet, it is started for you instead of asking you to do it, with a note
+  while it loads. Admins can additionally allow the Composer to quote older mail
+  from other conversations (`mail_composer_mailbox_search_enabled`, off by default).
 - The mail window's gear opens a built-in account panel: see your mail accounts,
   connect a new Gmail/Microsoft or IMAP account (with a Test button), reconnect,
   verify a connection, rename an account, toggle auto-sync, and remove an account.

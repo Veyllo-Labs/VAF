@@ -12,69 +12,55 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
-- New built-in mail client engine (v2, enabled by default via
-  `mail_engine_v2_enabled`,
-  design doc `docs/integrations/EMAIL_CLIENT.md`): a real per-user mail store
-  (SQLite with full-text search over subject/sender/recipients/BODY, threaded
-  conversations, encrypted-at-rest cached bodies, configurable retention with
-  headers kept forever), an RFC 4549 incremental IMAP sync engine (UID-based,
-  UIDVALIDITY-safe, batched fetches, IMAP IDLE push on the inbox plus periodic
-  sweeps, Gmail thread/label capture), a new in-app mail client window (three-pane
-  layout, conversation view, HTML mail rendered sanitized in a sandboxed frame with
-  remote images blocked by default for tracking protection, attachment
-  download), and new `/api/mail` endpoints. With the flag on, the existing
-  agent mail tools and the Mail dashboard transparently serve from the new
-  store (search gains body search; opening messages works offline from the
-  local cache). The engine is strictly read-only against mailboxes in this
-  phase; server-side writes stay behind a separate `mail_engine_write_enabled`
-  flag (documented in the next entry). New permissive-licensed dependencies (in the `mail`
-  extra): IMAPClient (BSD-3-Clause), aiosmtplib (MIT), nh3 (MIT), zstandard
-  (BSD-3-Clause) - listed in `THIRD_PARTY.md` and the About tab's third-party
-  license list.
-- Mail client v2 write path (still behind the same opt-in flags): read/unread,
-  star, archive and trash directly in the new mail client window (trash-only delete
-  semantics - nothing is ever expunged), reply/reply-all/forward with proper
-  quoting and threading, compose with a 15-second undo window (the mail is
-  held locally and can be withdrawn before it leaves the machine), and
-  automatic filing of sent mail into the Sent folder for IMAP accounts.
+- A completely new built-in mail client, and it is now the only one
+  (design doc `docs/integrations/EMAIL_CLIENT.md`). VAF has a real mail engine:
+  a per-user local mail store (SQLite with full-text search over
+  subject/sender/recipients/BODY, threaded conversations, encrypted-at-rest
+  cached bodies, configurable retention with headers kept forever) and an
+  RFC 4549 incremental IMAP sync engine (UID-based, UIDVALIDITY-safe, batched
+  fetches, IMAP IDLE push on the inbox plus periodic sweeps, native Gmail
+  thread/label handling). The mail window is a three-pane client: folder sidebar
+  with unread counts and collapsible labels, conversation view, HTML mail
+  rendered sanitized in a sandboxed frame with remote images blocked by default
+  for tracking protection, attachment download, and search over message bodies.
+  Mail opens offline from the local store. New permissive-licensed dependencies
+  (in the `mail` extra): IMAPClient (BSD-3-Clause), aiosmtplib (MIT), nh3 (MIT),
+  zstandard (BSD-3-Clause), listed in `THIRD_PARTY.md` and the About tab's
+  third-party license list.
+- Mail can be acted on, not just read: read/unread, star, archive and trash in
+  the mail window (trash-only delete semantics, nothing is ever expunged),
+  reply/reply-all/forward with proper quoting and threading, compose with a
+  15-second undo window (the mail is held locally and can be withdrawn before it
+  leaves the machine), and automatic filing of sent mail into the Sent folder.
   Changes apply locally first and replay to the mail server through a durable
   operation queue once `mail_engine_write_enabled` is on. The agent gains
   `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` tools (all
   excluded from the front-office contact lane by design).
-- Mail accounts can now be upgraded to IMAP-capable OAuth for the v2 engine:
-  an "Upgrade (IMAP)" re-consent button in the email wizard requests the
-  needed scopes (Google keeps calendar working via a single union token;
-  Microsoft mail gets its own token while calendar stays on the existing
-  one). IMAP/SMTP server presets added for GMX, web.de, T-Online and
-  outlook.de addresses.
+- Outgoing mail is sent natively over SMTP (password or OAuth XOAUTH2), so it no
+  longer depends on the provider REST APIs; an ambiguous failure after the message
+  is handed to the server is parked, never re-sent, so a mail is never delivered
+  twice. IMAP/SMTP server presets added for GMX, web.de, T-Online and outlook.de
+  addresses.
 - Blocked remote images in mail can now be loaded on explicit opt-in through
   a privacy proxy: the sender's server never sees the reader's address, SVG
   and non-image responses are refused, and refused hosts are logged to the
   security event log.
-- The v2 mail engine gained a native SMTP send core (SMTP password and OAuth
-  XOAUTH2) so outgoing mail no longer depends on the provider REST/Graph APIs
-  for IMAP-capable accounts; an ambiguous failure after the message is handed to
-  the server is parked, never re-sent, so a mail is never delivered twice.
-- The v2 mail client now warns about suspicious (possible phishing) messages the
-  same way the classic dashboard did: the conversation list shows a warning badge
-  and the reader a warning banner on mails the agent's phishing filter would hide,
-  so nothing dangerous is silently surfaced only to the human.
-- The v2 mail client now shows which mail has already been answered: a reply
-  marker with the date in the reader and a marker on answered conversations in
-  the list, so a reply is not accidentally sent twice.
-- The v2 mail client now shows Gmail-style categories: a category chip on
-  Promotions/Social conversations and a relabel picker in the reader to move a
-  mail to another category. Relabeling is local only and changes nothing on the
-  mail server.
-- Relabeling a mail in the v2 client now also teaches the category: it remembers a
-  rule for that sender and re-labels every other mail from the same sender (past
-  and future), matching the classic mail dashboard. This stays local (nothing is
-  changed on the mail server).
-- The v2 mail window's gear now opens a built-in account panel instead of the setup
-  wizard: see your mail accounts, add an IMAP account (with a Test button), verify
-  a connection, rename an account, toggle auto-sync, and remove an account. Removing
-  an account that also powers your Calendar keeps it connected for Calendar. Adding
-  or upgrading a Gmail/Microsoft account still uses the existing sign-in wizard.
+- The mail client warns about suspicious (possible phishing) messages: the
+  conversation list shows a warning badge and the reader a warning banner on mails
+  the agent's phishing filter would hide, so nothing dangerous is silently
+  surfaced only to the human.
+- The mail client shows which mail has already been answered: a reply marker with
+  the date in the reader and a marker on answered conversations in the list, so a
+  reply is not accidentally sent twice.
+- Gmail-style categories: a category chip on Promotions/Social conversations and a
+  relabel picker in the reader. Relabeling also teaches the category - VAF
+  remembers a rule for that sender and labels every other mail from them, past and
+  future. All of it is local; nothing is changed on the mail server.
+- The mail window's gear opens a built-in account panel: see your mail accounts,
+  connect a new Gmail/Microsoft or IMAP account (with a Test button), reconnect,
+  verify a connection, rename an account, toggle auto-sync, and remove an account.
+  Removing an account that also powers your Calendar keeps it connected for
+  Calendar.
 
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
@@ -87,10 +73,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 - Mail: an account the new mail engine does not sync yet (a Gmail or Microsoft
-  account that has not completed the IMAP re-consent) is no longer reported as an
-  empty mailbox. Its mail keeps being served from the existing lane, and the
-  account stays visible in the mail client with a "needs IMAP re-consent" hint
-  instead of silently disappearing from the account list.
+  account that has not completed the IMAP sign-in) is no longer reported as an
+  empty mailbox. It stays visible in the mail client with a hint that it needs to
+  be reconnected, instead of silently disappearing from the account list and
+  reading as deleted.
 - Mail: turning a per-account "Auto-sync" toggle off now actually stops that
   account from being polled by the new engine. It previously kept syncing (in fact
   more often than before), so the switch did the opposite of what it said.
@@ -130,7 +116,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Mail: pressing Sync now reports when an account could not be synced, instead of
   spinning briefly and saying nothing.
 - Mail: a new Gmail or Microsoft account can be connected straight from the mail
-  window's account panel, without going through the separate setup wizard.
+  window's account panel.
 
 ### Removed
 - The old mail dashboard and the separate email setup wizard are gone. Everything
@@ -217,19 +203,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   appear in a logged URL.
 
 ### Changed
-- The built-in mail client is now the default mail surface: the new engine
-  (`mail_engine_v2_enabled`) is on out of the box, so mail is served from the local
-  mail store with full-text search over message bodies, threaded conversations,
-  offline reading and push updates. Existing Gmail/Microsoft accounts keep working
-  and are still served the previous way until you complete the one-time
-  "Upgrade to IMAP" re-consent in the mail window's account panel; the mail client
-  shows which accounts still need it. Set `mail_engine_v2_enabled` to `False` to
-  fall back to the previous mail stack. Server-side mailbox changes (read/unread,
-  archive, delete replayed to the server) remain behind the separate
-  `mail_engine_write_enabled`, still off by default; note that SENDING a queued mail
-  is governed by the engine flag alone, so the agent's `reply_mail` /
-  `forward_mail` verbs are live once the engine is on (each still passes the
-  high-risk send gate).
+- Server-side mailbox changes (read/unread, archive and delete replayed to the
+  mail server) stay behind `mail_engine_write_enabled`, still off by default. Note
+  that SENDING is deliberately NOT gated by it: a queued mail must be able to
+  leave, so the agent's `reply_mail` and `forward_mail` verbs are live regardless
+  (each still passes the high-risk send gate).
 - Removed the dead Apple OAuth lane (provider entry, config keys
   `email_oauth_apple_client_id`/`_secret`, admin settings inputs and their
   locale strings, a dead sign-in URL branch in the setup wizard): Apple
@@ -237,14 +215,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an app-specific password, unchanged.
 
 ### Fixed
-- Opening the Mail dashboard no longer freezes the whole backend while a sync
-  runs. The sync, message-body fetch, IMAP credential test/verify, and OAuth
-  token-exchange endpoints ran blocking network IO directly on the uvicorn
-  event loop, so the message list (and every other API request) hung until the
-  provider round-trips finished - worst right after a restart, when the first
-  auto-sync fires on dashboard open. All provider IO in the email routes now
-  runs in worker threads; the list loads instantly from the local store while
-  a sync proceeds in the background.
+- Testing or verifying a mail account no longer freezes the whole backend. The
+  IMAP credential test/verify and OAuth token-exchange endpoints ran blocking
+  network IO directly on the uvicorn event loop, so every other API request hung
+  until the provider round-trip finished. All provider IO in the email routes now
+  runs in worker threads.
 - The Logs window no longer crashes with a blank "This page couldn't load"
   after a rebuild. A calendar-follow effect had been placed after the modal's
   early return, so the number of React hooks changed when the window opened

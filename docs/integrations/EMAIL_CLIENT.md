@@ -1,147 +1,238 @@
 # Email Client Architecture
 
 Design doc for VAF's email subsystem. Read this BEFORE changing any mail-related
-file (`vaf/core/email_transport.py`, `vaf/core/email_sync_store.py`,
-`vaf/core/email_accounts.py` (route-independent account-config SSOT: get/save config,
-get_account, sender-category rules),
-`vaf/api/email_routes.py`, `vaf/core/oauth_pkce.py`, `vaf/core/credential_store.py`,
-`vaf/tools/mail_*.py` / `send_mail.py` / `read_mail.py` / `find_mail.py` /
-`label_mail.py` / `mark_mail_answered.py` / `list_email_accounts.py`,
+file: the engine package `vaf/mail/` (`store.py`, `sync.py`, `parser.py`,
+`imap_client.py`, `service.py`, `sender.py`, `compose.py`, `writeback.py`,
+`supervisor.py`, `tool_bridge.py`, `migrate.py`, `addressing.py`), the routes
+`vaf/api/mail_routes.py` and `vaf/api/email_routes.py` (the shared OAuth + accounts
+hub), `vaf/core/email_accounts.py` (route-independent account-config SSOT),
+`vaf/core/oauth_pkce.py`, `vaf/core/credential_store.py`, the agent tools
+(`vaf/tools/mail_*.py`, `send_mail.py`, `read_mail.py`, `find_mail.py`,
+`label_mail.py`, `mark_mail_answered.py`, `list_email_accounts.py`,
+`reply_mail.py`, `manage_mail.py`), and the web surfaces
 `web/app/mail/page.tsx` (three-pane `MailClientView`),
-`web/components/connections/MailClient.tsx` (window modal),
-`web/components/connections/MailAccounts.tsx` (in-client account panel)).
+`web/components/connections/MailClient.tsx` (window modal) and
+`MailAccounts.tsx` (in-client account panel).
 
 Related docs: [CONNECTIONS.md](CONNECTIONS.md) (connection/channel model,
 email account setup), [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (email keys),
 [USER_ISOLATION.md](../security/USER_ISOLATION.md) (scoping rules).
 
-Status: section "Current architecture" describes the v1 code. Section "Target
-architecture (v2)" records the decided design; this doc is updated as each
-phase ships. The engine is the ONLY mail lane: the rollout flag graduated in P7.4
-and no longer exists. Server-side mailbox writes remain behind
-`mail_engine_write_enabled`, still off by default. SHIPPED so far: the `vaf/mail/`
-engine core - per-scope store
-(store.py, schema v1 with FTS5 contentless-delete and encrypted zstd raw
-blobs), parser.py, RFC 4549 sync engine (sync.py) with Gmail X-GM capture,
-imap_client.py factory, service.py (nh3 sanitizer + attachment serving),
-supervisor.py (sweep + IDLE watchers + E3 new-mail hook + legacy artifact
-import via migrate.py), /api/mail routes (mail_routes.py), the three-pane mail
-client (conversation view, sandboxed-iframe HTML with remote-image blocking) -
-rendered as an in-app WINDOW MODAL (`MailClient.tsx`, same 95vw x 90vh chrome as
-the other connection dashboards) opened from the Connections "Email" tile; the
-`/mail` route renders the same `MailClientView` full-height as a direct-URL
-fallback -, and the legacy-shape bridge (tool_bridge.py) that switches the
-seven agent tools and the legacy /api/email message routes to the v2 store
-with the same flag.
-Phase 2 SHIPPED (write path): local-first verbs (read/unread, star, archive,
-trash-only delete) with a durable op queue (store.py ops table, writeback.py
-executor: STORE/MOVE with COPY+EXPUNGE fallback/APPEND, attempts-capped),
-compose.py (reply/reply-all/forward quoting, format=flowed, RFC 5322 threading
-headers), undo-send outbox (client-delay model, restart-safe via the
-supervisor sweep, fast-path delivery task in mail_routes), Sent-APPEND for
-plain IMAP accounts, write REST endpoints, compose UI with undo snackbar, and
-four new agent tools (reply_mail, forward_mail, archive_mail, delete_mail)
-with the full Rule-2 registry sweep (kwargs tuples, thinking _SENT_TOOLS,
-front-office exclusion) guarded by tests/test_mail_config_and_jail_guards.py.
-Mailbox writes replay only when mail_engine_write_enabled is on.
-Phase 3 SHIPPED (auth): IMAP-capable OAuth lanes - Google re-consent with the
-scope UNION (mail.google.com + calendar, one token, calendar survives),
-Microsoft via a separate "microsoft_imap" token record (outlook.office.com
-resource; the Graph token keeps serving calendar), /api/email/oauth/start
-accepts imap=true, successful re-consent stamps imap_ready on the account and
-the supervisor picks it up; German provider presets (GMX, web.de, T-Online,
-outlook.de) added to IMAP_SMTP_DEFAULTS.
-Phase 4 partially SHIPPED: remote-image opt-in via the SSRF-guarded,
-image-only /api/mail/image-proxy (per-view opt-in; per-sender persistence is
-future polish), security events (mail_high_risk_send_blocked,
-mail_image_proxy_blocked). STILL OPEN: WS delta events (UI polls 60s),
-Gmail X-GM-MSGID cross-folder dedup (All Mail stays lazy-tier until then),
-server-synced drafts, per-sender remote-image persistence, mobile UI pass
-per MOBILE_UI.md, and the legacy-stack teardown (possible only after
-existing accounts completed re-consent).
+## What this is
 
-## Current architecture (v1)
+ONE mail client. `vaf/mail/` is a real IMAP engine - per-scope local store,
+incremental UID sync, push via IDLE, offline bodies, threads, full-text search,
+HTML rendering, a durable write queue and native SMTP submission - and it is the
+only mail lane there is. The earlier integration (a header-poll viewer over three
+provider dialects, with its own store, routes and UI) was removed; so was the
+`mail_engine_v2_enabled` flag that used to switch between them. There is nothing
+left to toggle and no second implementation to keep in sync.
 
-The current integration is an account-connection layer plus a lightweight
-synced-inbox viewer, not a full mail client.
+`mail_engine_write_enabled` is the one remaining switch, and it is NOT a rollout
+flag: it gates writes back to the MAIL SERVER (flag/move/append replay). It
+defaults to off, so the engine stays read-only against mailboxes until an admin
+enables it. Local-first state (read marks, stars, archive, categories) always
+applies immediately; sending is never gated by it, because a queued mail must be
+able to leave.
 
-### Components
+Decisions that shaped this (owner-approved): the engine is IMAP-uniform (the
+Gmail-API/Graph transports are gone); email stays OUT of the messaging channel
+model (`KNOWN_CHANNELS`), so `send_to_user` cannot deliver via email; there is no
+new-mail automation trigger yet, but the sync engine emits internal new-mail events
+so one can be added; message bodies are encrypted at rest via the secure_store DEK;
+body-cache retention defaults to 12 months with headers kept indefinitely.
 
-- `vaf/core/email_transport.py`: three provider dialects dispatched by the
-  account's `provider` field: `imap` (imaplib IMAP4_SSL + smtplib SMTP),
-  `gmail` (Gmail REST API, OAuth2 Bearer), `microsoft` (Microsoft Graph,
-  OAuth2 Bearer). Fetch is a stateless header poll (IMAP sequence numbers, not
-  UIDs; no UIDVALIDITY tracking); folders are opened `readonly=True`; no flag
-  writeback, no IDLE, no received-attachment handling. Bodies are fetched live
-  per view and reduced to plain text (`_html_to_plain` regex strip); HTML is
-  never rendered. Send builds MIME with attachments/cc/bcc (Bcc envelope-only
-  for SMTP, header included for Gmail raw send) and In-Reply-To/References
-  threading headers.
-- `vaf/core/email_sync_store.py`: one SQLite file per user
-  (`data_dir/scopes/<user_scope_id>/email_sync.db` for network users, legacy
-  `users/<username>/`, root file for the local admin). Single table
-  `email_messages` (envelope fields + 4 KB `body_snippet`, PK
-  `(username, account_id, folder, message_id)`), WAL mode, 90-day retention
-  delete on every sync. Search is `LIKE` over subject/from only.
-- `vaf/api/email_routes.py`: the shared OAuth + accounts hub under `/api/email`
-  (oauth start/callback/status, account CRUD/test/verify). NOT mail-specific -
-  Calendar mints its consent through the same `/oauth/start`, and the Connections
-  tile and Calendar dashboard read `/accounts` - which is why the module survives
-  the teardown while everything mail-shaped in it does not. P7.2 deleted the
-  message viewer (list/search/body/categories/PATCH category/apply-sender-rules),
-  the per-account legacy sync and the 30-minute auto-sync loop in `web_server.py`;
-  mail data is served by `/api/mail` alone and the engine supervisor is the only
-  sync lane. `tests/test_email_routes_surface.py` pins the surviving path set,
-  because a rename of the Google/Azure-registered `/api/email/oauth/callback`
-  breaks sign-in for mail, calendar and cloud at once.
-- `vaf/core/oauth_pkce.py`: Authorization Code + PKCE (S256) for Google and
-  Microsoft. Single-use state file (0600, 10-min TTL) carrying the
-  code_verifier and initiating user; callback actor binding in network mode
-  (`oauth_session_binding.py`); token refresh with rotation support.
-  Scopes today are Gmail-API/Graph scopes (`gmail.readonly`, `gmail.send`,
-  `Mail.Read`, `Mail.Send`, plus calendar) - NOT IMAP scopes. Calendar shares
-  these tokens (see USER_ISOLATION.md).
-- `vaf/core/credential_store.py`: two-tier storage - OS keyring (service
-  `vaf-email`) preferred, AES-256-GCM envelope-encrypted fallback file via
-  `secure_store.py`. Key naming: `email:{provider}:{scope}:{account_id}`;
-  non-admin scopes never fall back to admin/legacy keys.
-- Agent tools (`vaf/tools/`): `mail_inbox`, `read_mail`, `find_mail`,
-  `send_mail`, `label_mail`, `mark_mail_answered`, `list_email_accounts`,
-  shared helpers in `mail_utils.py`. The agent stamps `username` +
-  `user_scope_id` into tool kwargs at dispatch (`agent.py`) and the workflow
-  engine does the same (`workflows/engine.py`); tools never trust
-  model-provided identity. Whether a caller is served from v2 is decided in ONE
-  place, `mail_utils.mail_v2_active(store_username, user_scope_id)` (P6.0): the
-  flag alone is not sufficient, because the v2 store is scope-keyed and a legacy
-  per-username caller (username set, no `user_scope_id`) has no store of its own -
-  resolving it to the local admin scope would commingle mailboxes. That caller
-  class stays on the legacy lane, matching the two layers that already refuse it
-  (`email_sync_store`'s `_legacy_user` branch and
-  `MailSyncSupervisor._collect_accounts`, which never syncs `email_config_by_user`
-  accounts). On the v2 path the verbs read through `MailService`, but the LIST and
-  SEARCH verbs go through `tool_bridge.list_messages_merged` /
-  `search_messages_merged`, and `read_mail`/`find_mail` fall through to the legacy
-  body fetch on a v2 miss: an account the engine does not sync (an OAuth account
-  still awaiting the IMAP re-consent) keeps its legacy rows, so turning the flag on
-  can never blank a mailbox. `mail_inbox` distinguishes the two empty cases via
-  `tool_bridge.v2_syncs_account` - "synced, genuinely empty" gets the background-sync
-  hint, "never covered" falls through to the live fetch instead of telling the user
-  to press a Sync that would fail for that account. The legacy
-  `email_sync_store`/`email_transport` path is kept behind the flag until the P7
-  teardown. A guard (`tests/test_mail_tools_import_guard.py`) asserts no tool imports
-  the FastAPI route module `email_routes`; `tests/test_mail_tools_v2.py` locks both
-  properties above.
-- Web UI: the Connections "Email" tile opens the `MailClient` window, whose gear
-  opens the in-client account panel (`MailAccounts.tsx`). That panel owns the whole
-  account surface - list, add IMAP (with host/port overrides for both IMAP and
-  SMTP), connect/reconnect Gmail or Microsoft through the shared OAuth hub (the
-  provider buttons are disabled when no client id is configured, which
-  `GET /api/email/oauth-status` reports), verify, label, auto-sync, calendar-safe
-  remove. The legacy `MailDashboard.tsx` and `EmailSetupWizard.tsx` were removed in
-  P7.1. All requests ride the Next.js catch-all proxy with cookie/authorization
-  forwarding.
+## Not built yet
 
-### Safety layers (must survive any rebuild)
+Deliberately deferred, listed so nobody looks for them in the code:
+
+- WebSocket delta events. The client polls every 60 s instead; the per-account
+  `state` counter and the `email_state`/`email_delta` event shapes are designed
+  (see "API and Web UI") but not wired.
+- Gmail X-GM-MSGID cross-folder dedup - until it lands, `[Gmail]/All Mail` stays
+  in the lazy sync tier.
+- Server-synced drafts (compose is local until sent).
+- Per-sender persistence of the remote-image opt-in (today it is per view).
+- Mobile pass per [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
+- Body-aware phishing scoring: the scorer still sees only subject, snippet and
+  sender, even though bodies are local now.
+- Attachment listing/reading agent tools.
+- Mailboxes where IMAP is administratively or contractually impossible (Microsoft
+  365 F3/Kiosk licences, tenants with IMAP disabled) are NOT supported. The engine
+  is IMAP-uniform by decision; such an account cannot be served.
+
+## Architecture
+
+### Engine (`vaf/mail/`)
+
+- Store: one SQLite DB per user scope (`data_dir/scopes/<uuid>/mail.db`, WAL).
+  Tables: `accounts`, `folders` (uidvalidity, uidnext, highestmodseq,
+  special_use), `messages` (DB-assigned primary key; IMAP coordinates
+  account/folder/UIDVALIDITY/UID stored as mutable server pointers, never as
+  identity; flags + `server_flags` shadow copy for conflict diffs; References/
+  In-Reply-To; thread id), `message_raw` (zstd-compressed RFC 822 blob up to
+  ~256 KB, encrypted at rest; larger bodies fetched on demand via partial
+  FETCH), `attachments` (metadata; payloads as files under the scope dir),
+  `threads`, `ops` (durable operation queue), FTS5 external-content index
+  (unicode61, remove_diacritics 2) populated in the same transaction as
+  ingest, plus a `schema_version` table (lazy migrate-on-open). Invariant:
+  every derived table (threads, FTS, counters) is rebuildable from raw
+  messages + the server; reindex is a cheap command.
+- Sync: RFC 4549 baseline (cache keyed on mailbox+UIDVALIDITY+UID;
+  UIDVALIDITY change wipes the folder cache; new mail via
+  `UID FETCH lastseen+1:*`; flag/expunge resync via windowed FLAGS fetches in
+  ~100-UID batches). CONDSTORE/QRESYNC only as capability-gated accelerators
+  (Office365, Yahoo, GMX/web.de, T-Online lack them; iCloud's QRESYNC is
+  buggy - use defensively). Gmail is modeled natively via X-GM-EXT-1
+  (X-GM-MSGID, X-GM-THRID threads, X-GM-LABELS, X-GM-RAW search);
+  Archive = remove INBOX label, Delete = MOVE to `[Gmail]/Trash`, never relying
+  on the account's auto-expunge setting. MOVE with a COPY+EXPUNGE fallback that
+  is UIDPLUS-gated (without UIDPLUS the op is parked rather than risking a plain
+  EXPUNGE); SPECIAL-USE folder discovery with a localized well-known-name
+  fallback table. New mail: one IDLE connection pinned to INBOX (re-issued
+  ~every 25 min; a dead socket means resync now; periodic NOOP safety net for
+  the Office365 IDLE bug) plus a periodic sweep of the other folders. Folder
+  tiering: INBOX eager (headers+bodies), Sent/Drafts/Archive headers eager with
+  bodies lazy, every other folder ON OPEN - the client issues a one-time
+  `POST /api/mail/sync/{account}?folder=<name>` when an opened folder comes back
+  empty.
+- Workers: a MailSyncSupervisor asyncio task in the web backend; one
+  crash-isolated worker per account (synchronous IMAPClient driven via
+  `asyncio.to_thread`), restartable individually so one broken account never
+  stalls the others. It is the ONLY sync lane. CLI-only mode runs no workers
+  (on-demand sync remains). Account selection: the sweep and the IDLE watchers
+  poll only accounts passing `_wants_sync` - `enabled` AND `mail_enabled` (a
+  calendar-safe mail delete clears it, and re-syncing would resurrect the
+  messages the delete just purged) AND `auto_sync_enabled` (the per-account
+  panel toggle; ignoring it would make switching auto-sync OFF *raise* the
+  polling rate). The send drain deliberately runs over the wider `enabled`-only
+  set, so a queued mail still leaves an account whose mailbox is no longer
+  polled. Writes go through the durable op queue: UI/tools write the local DB
+  immediately and enqueue idempotent operations (flag, move, append, delete)
+  replayed against the server using the `server_flags` diff, with an atomic
+  claim so two executors can never deliver the same send twice.
+- Native send (`vaf/mail/sender.py`): one delivery core for every account.
+  Dispatch by `(provider, imap_ready)`: `imap` -> SMTP password;
+  `gmail`/`microsoft` AND `imap_ready` -> SMTP SASL XOAUTH2 (Gmail union token,
+  Microsoft `microsoft_imap` token - the same lanes the IMAP client uses). An
+  OAuth account that is not `imap_ready` has NO delivery lane and `send()`
+  refuses PERMANENTLY with an error naming the fix (reconnect the account),
+  logging a distinct NO_DELIVERY_LANE line. Refusing beats falling through to
+  SMTP, which would attempt XOAUTH2 with a token that has no mail scope and turn
+  a clear instruction into an opaque auth error; and 'permanent' beats
+  'transient', which the outbox would retry five times and then park in silence.
+  Delivery uses stdlib `smtplib` (every caller is synchronous - agent tool run or
+  OpExecutor drain via `asyncio.to_thread` - so no event-loop bridge is needed and
+  the SMTP conversation is driven step by step for honest hand-off
+  classification). A `handed_off` flag flips at the DATA command: a failure before
+  it is transient/permanent, at or after it is ambiguous (parked, never re-sent).
+  The stored Sent bytes are sent verbatim, so the delivered Message-ID is
+  byte-identical to the local copy and replies join the same thread. Bcc is
+  stripped from the delivered wire and rides the SMTP envelope only;
+  `normalize_recipients` lives in `vaf/mail/addressing.py`. All four senders
+  (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
+- Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
+  submission, stdlib `email` with `policy.default` for parsing (per-message error
+  boundary: a malformed message must never abort a folder sync), nh3 (MIT) for
+  HTML sanitization, zstandard for blob compression. aioimaplib is rejected
+  (GPL-3.0). bleach is EOL - never adopt it.
+- Auth lanes: (1) password / app password (GMX, web.de, T-Online, iCloud, Yahoo,
+  consumer Gmail) with provider presets and help texts; (2) Google OAuth-IMAP via
+  XOAUTH2 (`https://mail.google.com/`, a restricted scope) - the mail connect
+  requests it up front as a UNION that still contains calendar, so ONE consent
+  yields a working account and the shared token keeps Calendar alive;
+  (3) Microsoft OAuth-IMAP via XOAUTH2
+  (`https://outlook.office.com/IMAP.AccessAsUser.All` + `SMTP.Send` +
+  `offline_access`; basic auth is retired). Microsoft needs TWO consents by
+  construction: its IMAP/SMTP tokens live on the outlook.office.com resource and
+  cannot be combined with Graph scopes in one token, and `calendar_client` reads
+  the Graph record. VAF ships a Google client id; Microsoft requires an
+  admin-configured one, and the account panel disables the button when it is
+  missing (`GET /api/email/oauth-status`).
+
+### API and Web UI
+
+- `/api/mail/*` serves all mail data: status, folders, threads, messages, bodies,
+  attachments, search, compose/send with undo, the op queue, the image proxy and
+  account CRUD. Object vocabulary follows JMAP (RFC 8621) naming for
+  Mailbox/Thread/Email shapes, but VAF does NOT implement the JMAP wire protocol
+  (deliberate no-overengineering decision).
+- `/api/email/*` is the shared OAuth + accounts hub ONLY: oauth start/callback/
+  status plus account CRUD/test/verify. It is not mail-specific - the Calendar
+  wizard mints its consent through the same `/oauth/start` (calendar_routes has no
+  OAuth endpoint of its own) and the Connections tile and Calendar dashboard read
+  `/accounts`, which is why the module outlived the mail teardown. The callback
+  path is registered verbatim at Google and Azure, so renaming it by one character
+  breaks sign-in for mail, calendar and cloud at once;
+  `tests/test_email_routes_surface.py` pins the surviving path set as data.
+- HTML rendering: sanitized server-side with nh3 at the trust boundary (scripts,
+  handlers and dangerous URL schemes stripped, `cid:` parts resolved from the
+  store), rendered into a sandboxed `srcdoc` iframe with CSP `script-src 'none'`.
+  Remote images are blocked by default; an explicit opt-in loads them through the
+  SSRF-guarded, image-only `/api/mail/image-proxy` (resolve once, pin the IP,
+  ports 80/443 only). Blocked hosts and high-risk sends are logged to the security
+  event log.
+- WebSocket deltas (designed, not wired - see "Not built yet"): a per-account
+  monotonic `state` counter with `email_state` + `email_delta` events, a client
+  that detects a gap resyncing via REST, events scoped at the EMIT site
+  (`push_update_to_user`) and never broadcast. Every new event field must be
+  forwarded explicitly in `web/app/page.tsx` (known dropped-field bug class) and
+  covered by a CI guard.
+- UI: the mail client is an in-app WINDOW MODAL (`MailClient.tsx`, same 95vw x
+  90vh chrome as the other connection dashboards) opened from the Connections
+  "Email" tile - NOT a standalone full-screen route; the `/mail` URL is only a
+  direct-access fallback rendering the same `MailClientView`. Three-pane layout:
+  folder sidebar (special-use folders with unread/total counts, collapsible
+  labels), conversation list, reader. The gear opens the in-client account panel
+  (`MailAccounts.tsx`), which owns the whole account surface: list with
+  IMAP-ready state, add an IMAP account (test then save, with host/port overrides
+  for IMAP *and* SMTP), connect or reconnect Gmail/Microsoft through the shared
+  OAuth hub, verify, label, auto-sync toggle, calendar-safe remove. Desktop and
+  mobile per [WEB_UI.md](../web-ui/WEB_UI.md) /
+  [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
+
+### Agent tools contract
+
+Eleven tools: `mail_inbox`, `read_mail`, `find_mail`, `send_mail`, `reply_mail`,
+`forward_mail`, `archive_mail`, `delete_mail`, `label_mail`,
+`mark_mail_answered`, `list_email_accounts`. They keep the row/body output shapes
+the earlier tools had and read the engine store internally. The destructive verbs
+are deliberately NOT on the front-office allow-list. `delete_mail` is trash-only:
+it MOVEs to the trash folder and never expunges.
+
+The agent stamps `username` + `user_scope_id` into tool kwargs at dispatch
+(`agent.py`) and the workflow engine does the same (`workflows/engine.py`); tools
+never trust model-provided identity. Whether a caller may be served at all is
+decided in ONE place, `mail_utils.mail_v2_active(store_username, user_scope_id)`:
+the store is scope-keyed with no username dimension, so a legacy per-username
+caller (username set, NO scope) has no store of its own and serving it would
+resolve through the local admin scope and hand that caller the ADMIN's mailbox,
+reads and writes. That caller is refused, matching the two layers that already
+refuse it (`email_sync_store`'s `_legacy_user` branch and
+`MailSyncSupervisor._collect_accounts`, which never syncs `email_config_by_user`
+accounts). Such an install heals itself: the user reconnects the account once and
+lands on a scope-keyed config. Guards: `tests/test_mail_tools_import_guard.py`
+(no tool imports the FastAPI route module) and `tests/test_mail_tools_v2.py`.
+
+`vaf/core/email_sync_store.py` and `vaf/mail/tool_bridge.py` survive on purpose:
+`label_mail` and `mark_mail_answered` reach the engine store through the former's
+dual-write, and the latter's merge keeps an account the engine does not sync
+readable rather than blanking its mailbox.
+
+### Fail-closed scoping
+
+Every service call takes an explicit `user_scope_id`; `MailService` raises without
+one and there is no silent fallback to the local admin. Account config resolves
+`email_config_by_scope[user_scope_id]` first and never falls back across scopes;
+`email_config` is the local admin's blob and `email_config_by_user` is a legacy
+layout that is never served from the engine store. Deletion is explicit: removing
+a mail account deletes its rows, blobs, FTS entries, queued ops and mail
+credentials - but a shared gmail/microsoft OAuth token is NEVER revoked, because
+Calendar resolves accounts by that provider; the entry survives with
+`mail_enabled=False` so it disappears from the mail list while the calendar keeps
+working. Deleting a user removes the scope directory and all credential keys.
+
+## Safety layers (must survive any rebuild)
 
 - TLS enforced and not disableable: `ssl.create_default_context()` for IMAPS /
   SMTPS / STARTTLS; port 465 implicit TLS, otherwise mandatory STARTTLS.
@@ -153,7 +244,7 @@ synced-inbox viewer, not a full mail client.
 - Phishing visibility split (inbound prompt-injection defense): suspicious
   messages are hidden from agent mail tools while the human mail client still
   shows them with a warning. The v2 client re-surfaces this via
-  `MailService.annotate_visibility` (P5.1), which shims the v2 row fields
+  `MailService.annotate_visibility`, which shims the v2 row fields
   (`from_addr`->`from`, `snippet`->`body_snippet`, `category`) into the SSOT
   scorer `mail_utils.annotate_messages_with_agent_visibility` and stamps
   `suspicious_for_agent` / `suspicious_reasons` onto every `/api/mail` read
@@ -162,11 +253,11 @@ synced-inbox viewer, not a full mail client.
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
   `_trusted_sender_domains` (all admin-only). Note: scoring sees only
   subject/snippet/sender today; making it body-aware remains open.
-- Answered indicator (P5.2): the store tracks `answered_at` (set when a reply is
+- Answered indicator: the store tracks `answered_at` (set when a reply is
   sent); `store.list_threads` exposes an `answered` count and the v2 client shows
   a reply marker on answered conversations and "Answered on {date}" in the reader,
   so a mail is not answered twice.
-- Gmail-style categories (P5.3, mechanism corrected in P6.3): Gmail's inbox tabs
+- Gmail-style categories: Gmail's inbox tabs
   are NOT labels - they are saved searches over hidden system categories, so
   `FETCH X-GM-LABELS` carries no tab at all and the original label mapping could
   never match (verified against a live mailbox: every ingested message was stamped
@@ -176,8 +267,8 @@ synced-inbox viewer, not a full mail client.
   error. The v2 client shows a category chip on non-primary conversations and a
   relabel picker in the reader. Categories are applied on INSERT only, so a manual
   relabel is never overwritten by a later sync.
-- Sender-rule learning on relabel (P5.4, owner decision = classic-dashboard
-  parity): `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
+- Sender-rule learning on relabel (owner decision: every relabel learns a rule):
+  `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
   it relabels the one message, derives a sender pattern from its From header
   (`email_accounts.pattern_from_from_addr`, the one SSOT copy re-exported by
   email_routes), upserts a `sender_category_rules` entry
@@ -186,14 +277,14 @@ synced-inbox viewer, not a full mail client.
   `POST /api/mail/messages/apply-sender-rules`). The response carries `updated`
   (count changed) so the client refreshes the list when the backfill touched more
   than the one mail. All of it is a LOCAL classification (nothing written to the
-  mail server), normalized to lowercase/underscores/64-char cap, and gated by the
-  a purely local classification, NOT gated by `mail_engine_write_enabled`. The rule is ALSO applied at v2
-  ingest (`ImapSyncEngine._apply_sender_rules`, P6.3), where it overrides the
+  mail server), normalized to lowercase/underscores/64-char cap, and NOT gated by
+  `mail_engine_write_enabled`. The rule is ALSO applied at
+  ingest (`ImapSyncEngine._apply_sender_rules`), where it overrides the
   provider tab - without that a learned rule only ever relabelled EXISTING mail
   and silently missed every new arrival, which is the opposite of what `label_mail`
   promises. Rules are read once per sync run and the matching itself stays in the
   config SSOT (`apply_sender_rules_to_category(..., rules=...)`).
-- Connecting mail requests engine-capable scopes up front (P6.4). For Google the
+- Connecting mail requests engine-capable scopes up front. For Google the
   mail connect passes `imap=true`, so ONE consent yields an account the engine can
   serve; the IMAP scope set is a union that still contains calendar, so the shared
   token keeps Calendar working. Without this every newly connected Google account
@@ -213,8 +304,8 @@ synced-inbox viewer, not a full mail client.
   system browser, so the panel polls and re-checks on window focus. A
   password/app-password account is IMAP-capable by definition and never carries
   `imap_ready`, so the UI gates that badge on the provider too.
-- Teardown prerequisites (P6.5), all three of which fail SILENTLY and would become
-  permanent once the legacy lane is gone:
+- Silent-failure classes the single-lane design depends on. Each one fails without
+  a word, and with no second lane to fall back to each would be permanent:
   - A send with no usable lane is classified `permanent`, not `transient`. A
     transient verdict is retried five times and then parked, and nothing read that
     state - the compose dialog reported success and the mail never left. The client
@@ -249,24 +340,16 @@ synced-inbox viewer, not a full mail client.
     `calendar_client` resolves calendars by exactly that provider, so the calendar
     lost the account without a word. The error points at Reconnect, which grants
     everything the engine needs.
-- Lazy folders (P6.3): `sync_account` covers the eager/headers tiers only; other
+- Lazy folders: `sync_account` covers the eager/headers tiers only; other
   folders sync ON OPEN. Nothing was requesting them, so every label stayed
   permanently empty - the client now issues a one-time
   `POST /api/mail/sync/{account}?folder=<name>` when an opened folder comes back
   empty, then re-reads.
-- Account list in the client (P6.0): `GET /api/mail/status` returns the UNION of the
+- Account list in the client: `GET /api/mail/status` returns the UNION of the
   engine store's accounts and the configured mail accounts, with config-only entries
   marked `synced: false`. The client renders those with a "needs IMAP re-consent"
   hint that opens the account panel, instead of dropping them - listing only the
   store would make an account still awaiting re-consent look deleted.
-- In-client account panel (P5.5, `MailAccounts.tsx`): the mail window's gear opens
-  a native panel (an overlay inside `MailClientView`, no separate wizard) built
-  entirely on the P4.3 `/api/mail/accounts` endpoints - list accounts with their
-  IMAP-ready state, add an IMAP account (test then save), verify a saved account,
-  edit its label, toggle auto-sync, and calendar-safe remove. OAuth sign-in
-  (Gmail/Microsoft add, or "Upgrade to IMAP" re-consent) stays on the shared
-  `/api/email` hub, and the account panel drives that flow itself (P7.1 removed the
-  setup wizard, so there is no hand-off left).
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in
@@ -276,174 +359,12 @@ synced-inbox viewer, not a full mail client.
   jail (`compute_user_jail` in `vaf/tools/filesystem.py`, same mechanism as
   LibrarianTool/WriteFileTool): a non-admin user cannot attach files outside
   their own data. Symlinks are resolved at check time and the real path is
-  re-checked. The native sender (send_mail tool, P2.3) reads the attachment BYTES
+  re-checked. The native sender reads the attachment BYTES
   inside the jail window and embeds them in the MIME, so the check-vs-read swap
   race is closed for every account (the non-imap_ready delegate that used to read
-  paths in the transport was deleted in P7.3). Guarded by
+  paths in the transport is gone). Guarded by
   `tests/test_mail_config_and_jail_guards.py`.
 - Rate limiting: failed IMAP credential tests feed the per-IP login limiter.
-
-### User isolation (v1 rules, unchanged in v2)
-
-- Account config: `email_config_by_scope[user_scope_id]` (preferred),
-  `email_config` only for the local admin, `email_config_by_user` legacy.
-  Non-admin config reads expose only the caller's own scope slice.
-- Store: one SQLite file per scope; every query filters on the single allowed
-  (username, scope) candidate.
-- Sharp edge: the v1 transport functions default `username`/`user_scope_id`
-  to None, which resolves to the LOCAL ADMIN's config (fails open). Every
-  route/tool must thread the caller's identity explicitly. The v2 service API
-  is fail-closed instead (see below).
-
-### Known v1 limitations (why v2 exists)
-
-No UID-based incremental sync, no push (IDLE), no offline bodies, no received
-attachments, no HTML rendering, no flags/read-state, no threads, no folder
-discovery, no full-text search, no compose/reply UI, no outbox/drafts, hard
-90-day retention, blocking IO inside async handlers, per-view full IMAP
-logins.
-
-## Target architecture (v2) - decided
-
-Decisions (owner-approved): IMAP-uniform engine (Gmail-API/Graph transports
-retired after migration); email stays OUT of the messaging channel model
-(`KNOWN_CHANNELS`) and `send_to_user` cannot deliver via email; no new-mail
-automation trigger in v1 of the client, but the sync engine emits internal
-new-mail events so a trigger can be added later; message bodies are encrypted
-at rest via the secure_store DEK; body-cache retention defaults to 12 months
-(headers kept indefinitely), configurable.
-
-### Engine (`vaf/mail/`, new package)
-
-- Store: one SQLite DB per user scope (`data_dir/scopes/<uuid>/mail.db`, WAL).
-  Tables: `accounts`, `folders` (uidvalidity, uidnext, highestmodseq,
-  special_use), `messages` (DB-assigned primary key; IMAP coordinates
-  account/folder/UIDVALIDITY/UID stored as mutable server pointers, never as
-  identity; flags + `server_flags` shadow copy for conflict diffs; References/
-  In-Reply-To; thread id), `message_raw` (zstd-compressed RFC 822 blob up to
-  ~256 KB, encrypted at rest; larger bodies fetched on demand via partial
-  FETCH), `attachments` (metadata; payloads as files under the scope dir),
-  `threads`, `ops` (durable operation queue), FTS5 external-content index
-  (unicode61, remove_diacritics 2) populated in the same transaction as
-  ingest, plus a `schema_version` table (lazy migrate-on-open). Invariant:
-  every derived table (threads, FTS, counters) is rebuildable from raw
-  messages + the server; reindex is a cheap command.
-- Sync: RFC 4549 baseline (cache keyed on mailbox+UIDVALIDITY+UID;
-  UIDVALIDITY change wipes the folder cache; new mail via
-  `UID FETCH lastseen+1:*`; flag/expunge resync via windowed FLAGS fetches in
-  ~100-UID batches). CONDSTORE/QRESYNC only as capability-gated accelerators
-  (Office365, Yahoo, GMX/web.de, T-Online lack them; iCloud's QRESYNC is
-  buggy - use defensively). Gmail modeled natively via X-GM-EXT-1
-  (X-GM-MSGID dedup, X-GM-THRID threads, X-GM-LABELS, X-GM-RAW search);
-  Archive = remove INBOX label, Delete = MOVE to `[Gmail]/Trash`, never rely
-  on the account's auto-expunge setting. MOVE with COPY+EXPUNGE fallback;
-  SPECIAL-USE folder discovery with a localized well-known-name fallback
-  table. New mail: one IDLE connection pinned to INBOX (re-issued ~every
-  25 min; dead socket means resync now; periodic NOOP safety net for the
-  Office365 IDLE bug) plus a STATUS sweep of other folders every 2-5 min.
-  Maximum two connections per account. Folder tiering: INBOX eager
-  (headers+bodies), Sent/Drafts/Archive headers eager + bodies lazy, other
-  folders on open.
-- Workers: a MailSyncSupervisor asyncio task in the web backend, started
-  unconditionally and re-reading the flag every cycle (so enabling the engine needs
-  no restart); one crash-isolated worker per account (synchronous IMAPClient driven
-  via asyncio.to_thread), restartable individually so one broken account never
-  stalls others. It does NOT replace the legacy 30-minute auto-sync loop: both run
-  It is the ONLY mail sync lane: the 30-minute legacy loop that used to run beside
-  it (fetching every INBOX a second time into `email_sync.db`) was removed in P7.2,
-  gated on the runtime proof that every configured account is engine-capable. CLI-only mode runs no workers (on-demand sync
-  remains). Account selection (P6.0): the sweep and the IDLE watchers poll only
-  accounts passing `_wants_sync` - `enabled` AND `mail_enabled` (a calendar-safe
-  mail delete clears it, and re-syncing would resurrect the messages the delete just
-  purged) AND `auto_sync_enabled` (the per-account panel toggle; ignoring it would
-  make switching auto-sync OFF raise the polling rate). The send drain deliberately
-  runs over the wider `enabled`-only set so a queued mail still leaves an account
-  whose mailbox is no longer polled. Writes go through the durable op queue:
-  UI/tools write the local DB immediately and enqueue idempotent operations (flag,
-  move, append, delete) replayed against the server using the `server_flags` diff.
-- Native send (`vaf/mail/sender.py`, mail v2-only port P2): one delivery core for
-  every account. Dispatch by `(provider, imap_ready)`: `imap` -> SMTP password;
-  `gmail`/`microsoft` AND `imap_ready` -> SMTP SASL XOAUTH2 (Gmail union token,
-  Microsoft `microsoft_imap` token - the same lanes the IMAP client uses); an
-  OAuth account that is not `imap_ready` has NO delivery lane: the REST/Graph
-  delegate was deleted in P7.3, so `send()` refuses PERMANENTLY with an error
-  naming the fix (reconnect the account) and logs a distinct NO_DELIVERY_LANE
-  line. Refusing beats falling through to SMTP, which would attempt XOAUTH2 with a
-  token that has no mail scope and turn a clear instruction into an opaque auth
-  error; and 'permanent' beats 'transient', which the outbox would retry five
-  times and then park in silence. Delivery uses
-  stdlib `smtplib` (every caller is synchronous - agent tool run / OpExecutor
-  drain via `asyncio.to_thread` - so no event-loop bridge is needed and the SMTP
-  conversation is driven step by step for honest hand-off classification). A
-  `handed_off` flag flips at the DATA command: a failure before it is
-  transient/permanent, at or after it is ambiguous (parked, never re-sent). Bcc
-  is stripped from the delivered wire and rides the SMTP envelope only;
-  `normalize_recipients` lives in `vaf/mail/addressing.py`. All four senders
-  (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
-- Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
-  submission (the native sender; aiosmtplib remains a declared dependency but is
-  unused - a synchronous send path fits every caller), stdlib `email` with
-  `policy.default` for parsing (per-message error boundary: a malformed message
-  must never abort a folder sync), nh3 (MIT) for HTML sanitization, zstandard for
-  blob compression. aioimaplib is
-  rejected (GPL-3.0). bleach is EOL - never adopt it.
-- Auth lanes: (1) password / app password (GMX, web.de, T-Online, iCloud,
-  Yahoo, consumer Gmail) with provider presets and help texts; (2) Microsoft
-  OAuth-IMAP via XOAUTH2 (`https://outlook.office.com/IMAP.AccessAsUser.All`
-  + `SMTP.Send` + `offline_access`; basic auth is retired); (3) Google
-  OAuth-IMAP via XOAUTH2 (`https://mail.google.com/`, restricted scope;
-  app password is the recommended first choice in the wizard). Existing v1
-  OAuth tokens carry API scopes unusable for IMAP: migration requires
-  re-consent with a scope union so calendar keeps working; legacy accounts
-  stay readable through the v1 transport until re-consent.
-
-### API and Web UI
-
-- REST under `/api/email/*` is now the OAuth + accounts hub only (P7.2); mail data
-  is served by `/api/mail`. Server-side mailbox writes stay behind
-  `mail_engine_write_enabled`. New endpoints for folders,
-  threads, messages, bodies, attachments, compose, drafts, ops. Object
-  vocabulary follows JMAP (RFC 8621) naming for Mailbox/Thread/Email shapes,
-  but VAF does NOT implement the JMAP wire protocol (deliberate
-  no-overengineering decision).
-- WebSocket deltas ride the existing event pipeline: per-account monotonic
-  `state` counter; `email_state` + `email_delta` events; a client that
-  detects a gap resyncs via REST. Events are scoped at the EMIT site
-  (`push_update_to_user`), never broadcast. Every new event field must be
-  forwarded explicitly in `web/app/page.tsx` (known dropped-field bug class)
-  and covered by a CI guard.
-- HTML rendering: sanitize server-side with nh3 at the trust boundary (strip
-  scripts/handlers/external references, resolve `cid:` parts from the store),
-  render into a sandboxed `srcdoc` iframe with CSP `script-src 'none'`.
-  Remote images blocked by default; per-sender opt-in loads them through a
-  server-side image proxy (reusing the SSRF guard). Blocked trackers and
-  quarantined phishing mails are logged to the security event log.
-- UI: the mail client is an in-app window modal (`MailClient`, three-pane
-  responsive layout, conversation view, quick actions, search with operators and
-  folder/everywhere scope, compose with reply/reply-all/forward quoting,
-  server-synced drafts, undo-send via a client-side outbox delay that
-  survives restarts) opened from the Connections "Email" tile - same window chrome
-  as the other dashboards, NOT a standalone full-screen route (the `/mail` URL is
-  only a direct-access fallback rendering the same `MailClientView`). Desktop and
-  mobile per [WEB_UI.md](../web-ui/WEB_UI.md) / [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
-  The in-client account panel is the account-management surface.
-
-### Agent tools contract
-
-The seven v1 tools keep their names, signatures, and output shapes; they read
-the v2 store internally. New verbs (reply/forward with quoting, move/archive/
-trash-only delete, attachment listing/reading) are added as NEW tools; the
-destructive ones are NOT added to the front-office allow-list. The phishing
-filter becomes body-aware (bodies are local in v2); untrusted mail content in
-tool outputs is clearly delimited.
-
-### Fail-closed scoping (v2 service API)
-
-Every v2 service call takes explicit `(username, user_scope_id)`. In network
-mode a missing scope raises; there is no silent fallback to the local admin.
-Deletion lifecycle is explicit: removing an account deletes its rows, blobs,
-FTS entries, queued ops, and credentials; deleting a user removes the scope
-directory and all credential keys.
 
 ## Registry copies checklist (CLAUDE.md Rule 2)
 

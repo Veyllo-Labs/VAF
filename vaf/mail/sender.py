@@ -7,10 +7,10 @@ One place owns outbound submission for every account. Dispatch by
 (provider, imap_ready):
   - provider 'imap'                    -> SMTP with password AUTH
   - gmail/microsoft AND imap_ready     -> SMTP with SASL XOAUTH2
-  - gmail/microsoft AND NOT imap_ready -> documented delegate to the legacy
-    vaf.core.email_transport REST/Graph path (the shrinking strangler tail; every
-    fall onto it emits a distinct, countable log line so the P6 go/no-go can
-    assert it is never hit; deleted in P7).
+  - gmail/microsoft AND NOT imap_ready -> PERMANENT refusal naming the fix. The
+    legacy REST/Graph delegate this used to fall back on was deleted with the rest
+    of the legacy stack (P7.3); such an account simply has no delivery lane until
+    it is reconnected.
 
 send() is SYNCHRONOUS and must be called from a worker thread (agent tool run or
 the OpExecutor drain via asyncio.to_thread), never from inside a running event
@@ -57,8 +57,7 @@ _PROVIDER_SMTP_DEFAULTS: Dict[str, tuple] = {
 class OutgoingMessage:
     """One message to deliver. `raw_bytes` is the exact RFC822 Sent copy (WITH a
     Bcc header) used by the native SMTP path so the delivered Message-ID is
-    byte-identical to the stored copy. The structured fields feed ONLY the legacy
-    delegate (non-imap_ready OAuth accounts), which rebuilds the MIME itself."""
+    byte-identical to the stored copy - the wire bytes are never rebuilt."""
     account: Dict[str, Any]
     raw_bytes: bytes
     to: Any = ""
@@ -66,7 +65,9 @@ class OutgoingMessage:
     bcc: Any = ""
     username: Optional[str] = None
     user_scope_id: Optional[str] = None
-    # delegate-only structured fields (email_transport.send_mail rebuilds the MIME)
+    # Envelope/header metadata the callers already carry. Kept on the dataclass
+    # (all four construction sites populate it) even though the native path sends
+    # raw_bytes verbatim; useful for logging and for any future non-SMTP lane.
     subject: str = ""
     body: str = ""
     subtype: str = "plain"
@@ -84,7 +85,6 @@ class SendResult:
     ok: bool
     classification: str  # 'ok' | 'transient' | 'permanent' | 'ambiguous'
     handed_off: bool = False
-    used_delegate: bool = False
     error: Optional[str] = None
 
 
@@ -128,44 +128,20 @@ def _xoauth2_string(user: str, token: str) -> str:
 def send(msg: OutgoingMessage) -> SendResult:
     """Deliver one message. Synchronous; call from a worker thread only."""
     provider = (msg.account.get("provider") or "imap").lower()
-    imap_ready = bool(msg.account.get("imap_ready"))
-    if provider in ("gmail", "microsoft") and not imap_ready:
-        return _delegate(msg)
-    return _smtp_send(msg, provider)
-
-
-def _delegate(msg: OutgoingMessage) -> SendResult:
-    """Legacy REST/Graph fall-back for an OAuth account that has not completed the
-    IMAP re-consent yet. Emits a distinct, countable signal so the P6 go/no-go can
-    assert the tail is never exercised. Deleted in P7."""
-    logger.warning(
-        "mail.sender: SMTP_XOAUTH2_UNAVAILABLE delegating to legacy transport "
-        "(provider=%s account=%s) - account not imap_ready",
-        msg.account.get("provider"), _account_id(msg)[:3] + "***")
-    try:
-        from vaf.core import email_transport
-        _send = email_transport.send_mail
-    except (ImportError, AttributeError):
-        # No delegate at all (the legacy transport is gone, P7). Retrying cannot
-        # help, and calling this 'transient' is the worst possible answer: the op
-        # would be retried five times and then parked with nothing on screen, so
-        # the user keeps believing the mail was sent. Fail PERMANENTLY with a
-        # reason that names the fix.
+    if provider in ("gmail", "microsoft") and not bool(msg.account.get("imap_ready")):
+        # No delivery lane: the REST/Graph delegate this used to fall back on was
+        # removed with the legacy stack. Refuse PERMANENTLY and say what fixes it -
+        # falling through to _smtp_send would open a real SMTP connection and try
+        # XOAUTH2 with a token that has no mail scope, turning a clear "reconnect
+        # this account" into an opaque auth error.
+        logger.warning(
+            "mail.sender: NO_DELIVERY_LANE account=%s provider=%s is not connected "
+            "for the mail engine", _account_id(msg)[:3] + "***", provider)
         return SendResult(
-            False, "permanent", used_delegate=True,
+            False, "permanent",
             error="account cannot send: it has not been connected for the mail engine yet - "
                   "reconnect it in the mail account panel")
-    try:
-        ok = _send(
-            _account_id(msg), msg.to, msg.subject, msg.body,
-            subtype=msg.subtype, username=msg.username, user_scope_id=msg.user_scope_id,
-            attachments=msg.attachments, cc=msg.cc, bcc=msg.bcc,
-            in_reply_to=msg.in_reply_to, references=msg.references,
-            message_id=msg.message_id)
-        return SendResult(bool(ok), "ok" if ok else "transient",
-                          used_delegate=True, error=None if ok else "delegate send returned False")
-    except Exception as e:  # transport raises MailConnectError on connect/auth
-        return SendResult(False, "transient", used_delegate=True, error=str(e))
+    return _smtp_send(msg, provider)
 
 
 def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:

@@ -26,7 +26,7 @@ import vaf.core.email_accounts as ea
 import vaf.mail.crypto as mail_crypto
 from vaf.mail.migrate import import_legacy_artifacts
 from vaf.mail.parser import ParsedMessage
-from vaf.mail.sender import OutgoingMessage, _delegate
+from vaf.mail.sender import OutgoingMessage, send as sender_send
 from vaf.mail.store import MailStore
 
 _SCOPE = "12345678-1234-1234-1234-123456789abc"
@@ -43,28 +43,28 @@ def _pinned_key():
 
 # ── 1. a send with no lane must fail LOUDLY, not look retryable ───────────────
 
-def test_missing_delegate_is_permanent_not_transient(monkeypatch):
-    """'transient' means retry-then-park-in-silence. A missing transport can never
-    succeed on retry, so it must be permanent and name the fix.
-
-    Modelled as the real P7 shape: the module survives (other helpers stay) and
-    only the send functions are deleted."""
-    import vaf.core.email_transport as et
-    monkeypatch.delattr(et, "send_mail", raising=True)
-    res = _delegate(OutgoingMessage(account={"provider": "gmail", "account_id": "g@x"},
-                                    raw_bytes=b"", to="a@b"))
+def test_an_account_without_a_delivery_lane_refuses_permanently():
+    """'transient' means retry-then-park-in-silence, so it is the one verdict this
+    case must never get: an OAuth account that was never connected for the engine
+    cannot succeed on a retry. P7.3 deleted the REST/Graph delegate it used to fall
+    back on, so the refusal is the whole answer - and it has to name the fix."""
+    res = sender_send(OutgoingMessage(
+        account={"provider": "gmail", "account_id": "g@x", "imap_ready": False},
+        raw_bytes=b"", to="a@b"))
     assert res.ok is False
     assert res.classification == "permanent"      # NOT 'transient'
     assert "reconnect" in (res.error or "").lower()
 
 
-def test_transport_error_stays_transient(monkeypatch):
-    """A real connect/auth failure IS worth retrying - do not over-correct."""
-    import vaf.core.email_transport as et
-    monkeypatch.setattr(et, "send_mail", lambda *a, **k: (_ for _ in ()).throw(OSError("conn reset")))
-    res = _delegate(OutgoingMessage(account={"provider": "gmail", "account_id": "g@x"},
-                                    raw_bytes=b"", to="a@b"))
-    assert res.ok is False and res.classification == "transient"
+def test_a_password_account_still_reaches_the_smtp_path(monkeypatch):
+    """The refusal must be scoped to OAuth accounts with no mail connection - a
+    plain IMAP account has a lane and must not be caught by it."""
+    import vaf.mail.sender as snd
+    seen = {}
+    monkeypatch.setattr(snd, "_smtp_send", lambda msg, provider: seen.setdefault("provider", provider))
+    sender_send(OutgoingMessage(account={"provider": "imap", "account_id": "i@x"},
+                                raw_bytes=b"", to="a@b"))
+    assert seen["provider"] == "imap"
 
 
 def test_ops_endpoint_exposes_the_reason_a_send_was_parked(monkeypatch, tmp_path):

@@ -45,18 +45,14 @@ class FakeSMTP:
 
 @pytest.fixture
 def patched(monkeypatch):
-    """No socket, no SSRF/cred/token I/O; capture token-lane + delegate calls."""
+    """No socket, no SSRF/cred/token I/O; capture which token lane was used."""
     monkeypatch.setattr(sender.smtplib, "SMTP", FakeSMTP)
     monkeypatch.setattr(sender.smtplib, "SMTP_SSL", FakeSMTP)
     monkeypatch.setattr(sender, "assert_safe_remote_host", lambda *a, **k: None)
     monkeypatch.setattr(sender, "get_email_credentials", lambda *a, **k: {"type": "imap", "password": "pw"})
-    seen = {"token_provider": None, "delegate": 0}
+    seen = {"token_provider": None}
     monkeypatch.setattr(sender, "get_valid_access_token",
                         lambda aid, provider, *a, **k: seen.__setitem__("token_provider", provider) or "tok")
-    def _fake_send_mail(*a, **k):
-        seen["delegate"] += 1
-        return True
-    monkeypatch.setattr(email_transport, "send_mail", _fake_send_mail)
     return seen
 
 
@@ -94,9 +90,17 @@ def test_microsoft_uses_microsoft_imap_token_lane(patched):
     assert r.ok and patched["token_provider"] == "microsoft_imap"
 
 
-def test_oauth_not_imap_ready_delegates_once(patched):
+def test_oauth_without_a_mail_connection_refuses_permanently(patched):
+    """No lane left: the REST/Graph delegate was deleted with the legacy stack.
+    'permanent' matters - a transient verdict would be retried five times and then
+    parked in silence - and the message must name the fix. It must NOT fall through
+    to SMTP, which would try XOAUTH2 with a token that has no mail scope and turn a
+    clear "reconnect this account" into an opaque auth error."""
+    FakeSMTP.last = None                  # shared class attribute across tests
     r = sender.send(_msg(provider="gmail", imap_ready=False))
-    assert r.ok and r.used_delegate and patched["delegate"] == 1
+    assert r.ok is False and r.classification == "permanent"
+    assert "reconnect" in (r.error or "").lower()
+    assert FakeSMTP.last is None          # no connection was opened
 
 
 def test_bcc_stripped_from_wire_but_in_envelope(patched):

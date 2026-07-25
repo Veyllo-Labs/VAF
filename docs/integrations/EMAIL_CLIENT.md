@@ -279,9 +279,9 @@ synced-inbox viewer, not a full mail client.
   their own data. Symlinks are resolved at check time and the real path is
   re-checked. The native sender (send_mail tool, P2.3) reads the attachment BYTES
   inside the jail window and embeds them in the MIME, so the check-vs-read swap
-  race is closed for every imap_ready account; only the shrinking non-imap_ready
-  OAuth delegate tail still reads paths in the transport (removed in P7). Guarded
-  by `tests/test_mail_config_and_jail_guards.py`.
+  race is closed for every account (the non-imap_ready delegate that used to read
+  paths in the transport was deleted in P7.3). Guarded by
+  `tests/test_mail_config_and_jail_guards.py`.
 - Rate limiting: failed IMAP credential tests feed the per-IP login limiter.
 
 ### User isolation (v1 rules, unchanged in v2)
@@ -366,9 +366,13 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   every account. Dispatch by `(provider, imap_ready)`: `imap` -> SMTP password;
   `gmail`/`microsoft` AND `imap_ready` -> SMTP SASL XOAUTH2 (Gmail union token,
   Microsoft `microsoft_imap` token - the same lanes the IMAP client uses); an
-  OAuth account not yet `imap_ready` falls onto a documented
-  `email_transport.send_mail` REST/Graph delegate (a shrinking strangler tail
-  removed in P7; each fall emits a distinct countable log line). Delivery uses
+  OAuth account that is not `imap_ready` has NO delivery lane: the REST/Graph
+  delegate was deleted in P7.3, so `send()` refuses PERMANENTLY with an error
+  naming the fix (reconnect the account) and logs a distinct NO_DELIVERY_LANE
+  line. Refusing beats falling through to SMTP, which would attempt XOAUTH2 with a
+  token that has no mail scope and turn a clear instruction into an opaque auth
+  error; and 'permanent' beats 'transient', which the outbox would retry five
+  times and then park in silence. Delivery uses
   stdlib `smtplib` (every caller is synchronous - agent tool run / OpExecutor
   drain via `asyncio.to_thread` - so no event-loop bridge is needed and the SMTP
   conversation is driven step by step for honest hand-off classification). A

@@ -5,10 +5,10 @@
 
 Gating (EMAIL_CLIENT.md): mailbox WRITES (flags/move/append) run only when
 mail_engine_write_enabled is on - until then queued ops stay pending and the
-local-first UI remains consistent. SEND ops ride the existing v1 transport
-(email_transport.send_mail - Bcc/provider semantics live there) and are gated
-on the v2 flag only; the Sent-folder APPEND after an SMTP send is a mailbox
-write and therefore respects the write flag.
+local-first UI remains consistent. SEND ops go through the native sender
+(vaf/mail/sender.py) and are NOT gated on the write flag - a queued mail must
+still leave; the Sent-folder APPEND after an SMTP send is a mailbox write and
+therefore does respect it.
 
 Safety rules:
 - Delete semantics are TRASH-ONLY: this module can MOVE to \\Trash but has no

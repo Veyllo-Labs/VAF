@@ -9,7 +9,6 @@ Scoped to the current user in network mode (only that user's connected accounts)
 
 from vaf.core.config import get_local_admin_scope_id
 from vaf.core.email_accounts import get_account
-from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -87,14 +86,6 @@ class ReadMailTool(BaseTool):
                 from vaf.mail.service import MailService
                 body = MailService(try_scope_id or get_local_admin_scope_id()).body_text(
                     message_id, account_id=account_id, cred_username=try_username)
-            # No v2 body means either flag-off or an account the engine does not
-            # sync (still awaiting the IMAP re-consent). Fall through to the
-            # legacy fetch rather than reporting the mail as unreadable.
-            if not (body and body.strip()):
-                body = get_message_body_plain(
-                    account_id=account_id, message_id=message_id, folder=folder,
-                    username=try_username, user_scope_id=try_scope_id,
-                    provider_message_id=provider_message_id)
             if body and body.strip():
                 return body.strip()
         if not found_account:

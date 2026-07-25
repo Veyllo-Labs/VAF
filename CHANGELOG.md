@@ -146,6 +146,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - The 30-minute background mail sync was removed. The mail engine's own sync
   (continuous, with push updates) is now the only one, so every mailbox was being
   fetched twice.
+- The old mail transport (its own IMAP, Gmail API and Microsoft Graph paths for
+  fetching, reading and sending) is gone; the mail engine handles all of it. An
+  account that has not been connected for the engine can no longer send through the
+  old path - it is refused with a message telling you to reconnect it, rather than
+  failing quietly.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

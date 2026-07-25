@@ -9,7 +9,6 @@ If exactly one match, returns the full body so the agent can answer in one call.
 
 from vaf.core.config import get_local_admin_scope_id
 from vaf.core.email_sync_store import search_messages
-from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -113,17 +112,6 @@ class FindMailTool(BaseTool):
                 body = MailService(used_scope or get_local_admin_scope_id()).body_text(
                     m.get("message_id") or "", account_id=m.get("account_id") or "",
                     cred_username=used_username)
-            # A match served from the legacy lane (account the engine does not
-            # sync) has no v2 body - fall through instead of claiming failure.
-            if not (body and body.strip()):
-                body = get_message_body_plain(
-                    account_id=m.get("account_id") or "",
-                    message_id=m.get("message_id") or "",
-                    folder=m.get("folder") or "INBOX",
-                    username=cred_username,
-                    user_scope_id=user_scope_id,
-                    provider_message_id=(m.get("provider_message_id") or "").strip() or None,
-                )
             if body and body.strip():
                 out += "\n\n--- Full body ---\n" + body.strip()
             else:

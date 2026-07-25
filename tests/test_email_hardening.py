@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from vaf.core.config import Config
-from vaf.core.email_transport import _decode_mail_header, normalize_recipients
+from vaf.core.email_transport import normalize_recipients
 from vaf.network.binding import assert_safe_remote_host
 import vaf.api.oauth_session_binding as ob
 
@@ -70,16 +70,6 @@ def test_is_secret_config_key_classification():
 
 
 # --- C.10: RFC-2047 header decoding ----------------------------------------------
-
-def test_decode_mail_header_encoded_words():
-    assert _decode_mail_header("=?UTF-8?B?w6TDtsO8?=") == "äöü"
-    assert _decode_mail_header("=?UTF-8?Q?Caf=C3=A9?=") == "Café"
-
-
-def test_decode_mail_header_passthrough():
-    assert _decode_mail_header("Plain Sender") == "Plain Sender"
-    assert _decode_mail_header("") == ""
-    assert _decode_mail_header(None) == ""
 
 
 # --- C.13: recipient parsing/validation ------------------------------------------

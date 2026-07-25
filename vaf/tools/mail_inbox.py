@@ -13,8 +13,6 @@ from datetime import datetime
 
 from vaf.core.config import Config
 from vaf.core.email_accounts import get_account
-from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
-from vaf.core.email_transport import fetch_mail
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -193,25 +191,13 @@ class MailInboxTool(BaseTool):
         v2 = mail_v2_active(store_username, user_scope_id)
         for try_username, try_scope_id in store_candidates:
             if v2:
-                # v2 rows win, but accounts the engine does not sync (an OAuth
-                # account still awaiting the IMAP re-consent) keep their legacy
-                # rows - enabling the flag must never blank a mailbox. Legacy
-                # path below stays for flag-off instances until P7.
+                # v2 rows win; the merge keeps the legacy rows of any account the
+                # engine does not sync, so a not-yet-reconnected mailbox is never
+                # blanked (the legacy STORE survives - only the legacy FETCH is gone).
                 from vaf.mail.tool_bridge import list_messages_merged
                 messages = list_messages_merged(
                     account_id or None, folder, max_messages, 0,
                     try_username, try_scope_id, category=category)
-            else:
-                init_store(try_username, try_scope_id)
-                messages = store_list_messages(
-                    account_id=account_id or None,
-                    folder=folder,
-                    limit=max_messages,
-                    offset=0,
-                    username=try_username,
-                    user_scope_id=try_scope_id,
-                    category=category,
-                )
             if messages:
                 used_store_username = try_username
                 used_scope_id = try_scope_id
@@ -243,33 +229,10 @@ class MailInboxTool(BaseTool):
                 "No messages in the sync store yet. Ask the user to open Settings → Connections → Email and click Sync on each account, "
                 "or call mail_inbox with a specific account_id to fetch that account."
             )
-        if v2:
-            from vaf.mail.tool_bridge import v2_syncs_account
-            if v2_syncs_account(account_id, user_scope_id):
-                # The engine owns this account and populates it via the background
-                # supervisor/IDLE - do not live-fetch into the legacy store (P3.3).
-                return (
-                    f"No messages in {folder} in the sync store yet. The mailbox syncs in the "
-                    "background; ask the user to click Sync in Settings → Connections → Email, then try again."
-                )
-            # The engine never covered this account (an OAuth account still
-            # awaiting the IMAP re-consent): fall through to the legacy live
-            # fetch instead of reporting an empty mailbox, and do not tell the
-            # user to press Sync - that would fail for exactly this account.
-        try:
-            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=user_scope_id)
-        except Exception as e:
-            return f"Failed to fetch mail: {e}"
-        if not messages:
-            return f"No messages in {folder}. Sync in Settings → Connections → Email to populate the mailbox."
-        upsert_messages(account_id, folder, messages, username=store_username, user_scope_id=user_scope_id)
-        messages = store_list_messages(
-            account_id=account_id, folder=folder, limit=max_messages, offset=0, username=store_username, user_scope_id=user_scope_id, category=category
-        )
-        messages, blocked_count = filter_phishing_messages_for_agent(messages)
-        if not messages:
-            return f"No safe messages in {folder}. Hidden {blocked_count} suspicious message(s) by phishing filter."
-        out = _format_inbox(messages, folder) + cat_suffix
-        if blocked_count:
-            out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
-        return out
+        # Nothing to live-fetch any more: the engine is the only lane and it
+        # populates the store from the background sweep/IDLE. Deliberately
+        # neutral - do NOT tell the user to press Sync, which fails for exactly
+        # the account class that lands here (not connected for the engine yet).
+        return (f"No messages in {folder} in the sync store yet. The mailbox syncs "
+                "in the background; if this account was just added it may still be "
+                "doing its first sync.")

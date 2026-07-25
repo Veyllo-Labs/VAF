@@ -33,13 +33,6 @@ def _pk_by_message_id(svc, message_id: str) -> Optional[int]:
     return int(row["id"]) if row else None
 
 
-def _v2_required() -> Optional[str]:
-    if not bool(Config.get("mail_engine_v2_enabled", False)):
-        return ("This tool needs the v2 mail engine (mail_engine_v2_enabled); "
-                "it is currently disabled.")
-    return None
-
-
 def _write_note() -> str:
     if not bool(Config.get("mail_engine_write_enabled", False)):
         return (" Note: server-side writes are disabled (mail_engine_write_enabled), "
@@ -72,9 +65,6 @@ class ForwardMailTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        err = _v2_required()
-        if err:
-            return err
         user_scope_id = cred_scope_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
         to = (kwargs.get("to") or "").strip()
@@ -144,9 +134,6 @@ class ArchiveMailTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        err = _v2_required()
-        if err:
-            return err
         svc = _service(cred_scope_from_kwargs(kwargs))
         pk = _pk_by_message_id(svc, kwargs.get("message_id") or "")
         if pk is None:
@@ -176,9 +163,6 @@ class DeleteMailTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        err = _v2_required()
-        if err:
-            return err
         svc = _service(cred_scope_from_kwargs(kwargs))
         pk = _pk_by_message_id(svc, kwargs.get("message_id") or "")
         if pk is None:

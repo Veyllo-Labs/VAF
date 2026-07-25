@@ -4,7 +4,7 @@
 """MailSyncSupervisor: background sync for the v2 engine (EMAIL_CLIENT.md).
 
 Runs as one asyncio task inside the web backend. Every cycle it re-reads
-mail_engine_v2_enabled (flipping the flag needs no restart), collects every
+the configured accounts every cycle, collects every
 configured account across all user scopes, and syncs each account in a worker
 thread with per-account crash isolation - one broken account never stalls the
 others. One IDLE watcher thread per eager account gives near-instant new-mail
@@ -256,45 +256,41 @@ class MailSyncSupervisor:
             self._pending.discard(key)
 
     async def run(self) -> None:
-        from vaf.core.config import Config
         self._loop = asyncio.get_running_loop()
         await asyncio.sleep(90)  # let the server settle before first sweep
         sem = self._sem
         while True:
             try:
-                if bool(Config.get("mail_engine_v2_enabled", False)):
-                    accounts = _collect_accounts()
-                    imap_accounts = [(s, u, a) for s, u, a in accounts
-                                     if _wants_sync(a)
-                                     and ((a.get("provider") or "imap").lower() == "imap"
-                                          or a.get("imap_ready"))]
+                accounts = _collect_accounts()
+                imap_accounts = [(s, u, a) for s, u, a in accounts
+                                 if _wants_sync(a)
+                                 and ((a.get("provider") or "imap").lower() == "imap"
+                                      or a.get("imap_ready"))]
 
-                    async def _bounded(s, u, a):
-                        async with sem:
-                            return await asyncio.to_thread(_sync_one, s, u, a)
+                async def _bounded(s, u, a):
+                    async with sem:
+                        return await asyncio.to_thread(_sync_one, s, u, a)
 
-                    results = await asyncio.gather(
-                        *[_bounded(s, u, a) for s, u, a in imap_accounts],
-                        return_exceptions=True)
-                    ok = sum(1 for r in results if isinstance(r, dict) and r.get("ok"))
-                    if imap_accounts:
-                        logger.info("mail v2 sweep: %d/%d accounts ok", ok, len(imap_accounts))
+                results = await asyncio.gather(
+                    *[_bounded(s, u, a) for s, u, a in imap_accounts],
+                    return_exceptions=True)
+                ok = sum(1 for r in results if isinstance(r, dict) and r.get("ok"))
+                if imap_accounts:
+                    logger.info("mail v2 sweep: %d/%d accounts ok", ok, len(imap_accounts))
 
-                    # Provider-agnostic send drain AFTER the sync: delivers queued
-                    # sends for EVERY account (incl. non-imap_ready gmail/microsoft
-                    # and accounts whose IMAP was down), so a queued send is never
-                    # stranded. imap accounts already drained their sends above, so
-                    # this is a cheap no-op for them (guarded by a pending-send check).
-                    async def _bounded_drain(s, u, a):
-                        async with sem:
-                            return await asyncio.to_thread(_drain_sends, s, u, a)
+                # Provider-agnostic send drain AFTER the sync: delivers queued
+                # sends for EVERY account (incl. non-imap_ready gmail/microsoft
+                # and accounts whose IMAP was down), so a queued send is never
+                # stranded. imap accounts already drained their sends above, so
+                # this is a cheap no-op for them (guarded by a pending-send check).
+                async def _bounded_drain(s, u, a):
+                    async with sem:
+                        return await asyncio.to_thread(_drain_sends, s, u, a)
 
-                    await asyncio.gather(*[_bounded_drain(s, u, a) for s, u, a in accounts],
-                                         return_exceptions=True)
+                await asyncio.gather(*[_bounded_drain(s, u, a) for s, u, a in accounts],
+                                     return_exceptions=True)
 
-                    self._ensure_idle_watchers(imap_accounts)
-                else:
-                    self._stop_idle_watchers()
+                self._ensure_idle_watchers(imap_accounts)
             except Exception as e:
                 logger.warning("mail v2 supervisor cycle error: %s", e)
             await asyncio.sleep(SWEEP_INTERVAL_SEC)
@@ -314,7 +310,3 @@ class MailSyncSupervisor:
         for key in list(self._watchers):
             if key not in alive_keys:
                 self._watchers.pop(key).stop_event.set()
-
-    def _stop_idle_watchers(self) -> None:
-        for key in list(self._watchers):
-            self._watchers.pop(key).stop_event.set()

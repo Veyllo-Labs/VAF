@@ -42,12 +42,10 @@ def seeded(tmp_path, monkeypatch):
         from_addr="Alice <alice@example.com>", to_addrs="bob@example.com",
         date_ts=1_700_000_000, body_text="hello"))
 
-    # v2 on, no trusted domains configured (so the risk-word gate fires).
+    # no trusted domains configured, so the risk-word gate fires
     real_get = Config.get  # bound classmethod captured BEFORE the patch below
 
     def _get(key, default=None):
-        if key == "mail_engine_v2_enabled":
-            return True
         if key == "email_agent_trusted_sender_domains":
             return []
         return real_get(key, default)

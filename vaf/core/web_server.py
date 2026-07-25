@@ -347,7 +347,7 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Email routes: {e}")
 
-# Mount Mail engine v2 routes (gated on mail_engine_v2_enabled; EMAIL_CLIENT.md)
+# Mount the mail routes (EMAIL_CLIENT.md)
 try:
     from vaf.api.mail_routes import router as mail_v2_router
     app.include_router(mail_v2_router)
@@ -896,9 +896,8 @@ async def startup_event():
         log("WebServer", f"Garbage collector start warning: {e}")
     
     # Mail sync (EMAIL_CLIENT.md): the engine supervisor is the ONLY mail sync
-    # lane. It is started unconditionally and re-reads mail_engine_v2_enabled every
-    # cycle, so enabling the engine needs no restart. The 30-minute legacy
-    # auto-sync loop that used to run beside it was removed with the legacy stack.
+    # lane. The 30-minute legacy auto-sync loop that used to run beside it was
+    # removed with the legacy stack.
     try:
         from vaf.mail.supervisor import MailSyncSupervisor
         asyncio.create_task(MailSyncSupervisor().run())

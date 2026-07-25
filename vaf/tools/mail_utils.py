@@ -59,19 +59,19 @@ def store_candidates_for_mail(
 
 
 def mail_v2_active(store_username: str, user_scope_id: Optional[str]) -> bool:
-    """Whether the v2 mail engine may serve THIS caller.
+    """Whether the mail engine may serve THIS caller. A USER-ISOLATION rule.
 
-    The flag alone is not enough: the v2 store is scope-keyed with no username
-    dimension, so a legacy per-username caller (username set, no scope) has no
-    store of its own. Falling back to the local admin scope for those callers
-    would commingle different users' mail - a user-isolation violation the two
-    other layers already refuse (email_sync_store's `_legacy_user` branch and
+    It survived the engine flag on purpose and has nothing to do with a rollout:
+    the store is scope-keyed with no username dimension, so a legacy per-username
+    caller (username set, NO user_scope_id) has no store of its own. Serving it
+    would resolve through the local admin scope and hand that caller the ADMIN's
+    mailbox - reads AND writes. Two other layers already refuse exactly this
+    (email_sync_store's `_legacy_user` branch and
     MailSyncSupervisor._collect_accounts, which never syncs email_config_by_user
-    accounts). This is the ONE place the tools ask, so the rule cannot drift
-    across the five call sites (Rule 2).
+    accounts); this is the ONE place the tools ask, so the rule cannot drift
+    across the five call sites (Rule 2). Such an install heals itself: the user
+    reconnects the account once and lands on a scope-keyed config.
     """
-    if not bool(Config.get("mail_engine_v2_enabled", False)):
-        return False
     legacy_user = bool((store_username or "").strip()) and not (user_scope_id or "").strip()
     return not legacy_user
 

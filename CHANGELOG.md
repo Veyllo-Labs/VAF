@@ -151,6 +151,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   account that has not been connected for the engine can no longer send through the
   old path - it is refused with a message telling you to reconnect it, rather than
   failing quietly.
+- The `mail_engine_v2_enabled` setting is gone. The mail engine is simply how mail
+  works now, so there is nothing left to switch. `mail_engine_write_enabled` is
+  unchanged and still off by default: it remains the separate switch for changes
+  written back to the mail server (read/unread, archive, delete).
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

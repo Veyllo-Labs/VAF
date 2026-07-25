@@ -17,11 +17,10 @@ email account setup), [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (email keys)
 
 Status: section "Current architecture" describes the v1 code. Section "Target
 architecture (v2)" records the decided design; this doc is updated as each
-phase ships. The engine is now the DEFAULT mail lane (`mail_engine_v2_enabled`
-defaults to `True` as of the v2-only port step P6.1); the flag survives only as a
-kill switch back to the legacy stack until the P7 teardown removes it. Server-side
-mailbox writes remain behind the separate `mail_engine_write_enabled`, still off by
-default. SHIPPED so far (phase 1, read-only): the `vaf/mail/` engine core - per-scope store
+phase ships. The engine is the ONLY mail lane: the rollout flag graduated in P7.4
+and no longer exists. Server-side mailbox writes remain behind
+`mail_engine_write_enabled`, still off by default. SHIPPED so far: the `vaf/mail/`
+engine core - per-scope store
 (store.py, schema v1 with FTS5 contentless-delete and encrypted zstd raw
 blobs), parser.py, RFC 4549 sync engine (sync.py) with Gmail X-GM capture,
 imap_client.py factory, service.py (nh3 sanitizer + attachment serving),
@@ -188,7 +187,7 @@ synced-inbox viewer, not a full mail client.
   (count changed) so the client refreshes the list when the backfill touched more
   than the one mail. All of it is a LOCAL classification (nothing written to the
   mail server), normalized to lowercase/underscores/64-char cap, and gated by the
-  v2 flag only, NOT `mail_engine_write_enabled`. The rule is ALSO applied at v2
+  a purely local classification, NOT gated by `mail_engine_write_enabled`. The rule is ALSO applied at v2
   ingest (`ImapSyncEngine._apply_sender_rules`, P6.3), where it overrides the
   provider tab - without that a learned rule only ever relabelled EXISTING mail
   and silently missed every new arrival, which is the opposite of what `label_mail`
@@ -400,10 +399,9 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
 
 ### API and Web UI
 
-- REST under `/api/email/*` (existing endpoints stay functional until the P7
-  teardown; the strangler rollout reached its default-on step in P6.1, with
-  `mail_engine_v2_enabled` now a kill switch and server-side writes still behind the
-  separate `mail_engine_write_enabled` flag). New endpoints for folders,
+- REST under `/api/email/*` is now the OAuth + accounts hub only (P7.2); mail data
+  is served by `/api/mail`. Server-side mailbox writes stay behind
+  `mail_engine_write_enabled`. New endpoints for folders,
   threads, messages, bodies, attachments, compose, drafts, ops. Object
   vocabulary follows JMAP (RFC 8621) naming for Mailbox/Thread/Email shapes,
   but VAF does NOT implement the JMAP wire protocol (deliberate

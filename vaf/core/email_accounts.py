@@ -348,12 +348,11 @@ def delete_mail_account(account_id: str, username: Optional[str] = None,
     provider = (acc.get("provider") or "imap").lower()
     backs_calendar = provider in ("gmail", "microsoft")
     result: Dict[str, Any] = {"ok": True, "backs_calendar": backs_calendar, "kept_for_calendar": False}
-    # v2 store cascade (best-effort: the store may not exist on a flag-off instance)
+    # Store cascade, best-effort: a never-synced account legitimately has no rows.
     try:
-        if Config.get("mail_engine_v2_enabled", False):
-            from vaf.mail.store import MailStore
-            scope = (user_scope_id or "").strip() or get_local_admin_scope_id()
-            MailStore(scope).delete_account(account_id)
+        from vaf.mail.store import MailStore
+        scope = (user_scope_id or "").strip() or get_local_admin_scope_id()
+        MailStore(scope).delete_account(account_id)
     except Exception as e:  # pragma: no cover - defensive
         result["store_error"] = str(e)
     from vaf.core.credential_store import delete_email_credentials

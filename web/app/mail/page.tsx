@@ -307,7 +307,8 @@ function MessageView({ msg, expanded, onToggle, onRelabeled }: {
 export function MailClientView({ onClose }: { onClose?: () => void }) {
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
-    const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
+    const [status, setStatus] = useState<{ accounts?: Account[] } | null>(null);
+    const [statusFailed, setStatusFailed] = useState(false);
     const [showAccounts, setShowAccounts] = useState(false);
     const syncedFolders = useRef<Set<string>>(new Set());  // on-open folder sync, once each
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
@@ -345,8 +346,15 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
         try {
             const s = await jfetch('api/mail/status');
             setStatus(s);
+            setStatusFailed(false);
             loadFolders(s.accounts || []);
-        } catch { setStatus({ v2_enabled: false }); }
+        } catch {
+            // With the engine as the only lane, a failed status is a backend or
+            // auth problem - NOT a disabled feature. Say so and offer a retry
+            // instead of rendering a "not enabled" screen that cannot be acted on.
+            setStatus({});
+            setStatusFailed(true);
+        }
     // loadFolders is only used to fan out here; keep loadStatus stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -381,15 +389,14 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
             setError(t('loadError'));
         } finally { setListLoading(false); }
     }, [sel, t]);
-    useEffect(() => { if (status?.v2_enabled) loadThreads(); }, [status?.v2_enabled, loadThreads]);
+    useEffect(() => { loadThreads(); }, [loadThreads]);
     // light refresh so new mail appears without manual sync (WS deltas: phase 2.5).
     // The folder badges ride along - otherwise the list shows new mail while the
     // unread counts next to it stay stale.
     useEffect(() => {
-        if (!status?.v2_enabled) return;
         const timer = setInterval(() => { loadThreads(); loadFolders(); }, 60_000);
         return () => clearInterval(timer);
-    }, [status?.v2_enabled, loadThreads, loadFolders]);
+    }, [loadThreads, loadFolders]);
 
     // A send that exhausted its retries is parked in the outbox. Nothing used to
     // read that state, so the compose dialog reported success and the mail simply
@@ -401,11 +408,10 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
                 .map(o => ({ id: o.id, subject: o.subject }))))
         .catch(() => undefined), []);
     useEffect(() => {
-        if (!status?.v2_enabled) return;
         checkOutbox();
         const timer = setInterval(checkOutbox, 60_000);
         return () => clearInterval(timer);
-    }, [status?.v2_enabled, checkOutbox]);
+    }, [checkOutbox]);
 
     const resolveOutbox = useCallback(async (action: 'retry' | 'discard') => {
         const ops = failedSends;
@@ -525,13 +531,17 @@ export function MailClientView({ onClose }: { onClose?: () => void }) {
     if (status === null) {
         return <div className="h-full grid place-items-center bg-[#181818] text-[#9a9a9a]"><Loader2 className="w-6 h-6 animate-spin" /></div>;
     }
-    if (!status.v2_enabled) {
+    if (statusFailed) {
         return (
             <div className="h-full grid place-items-center bg-[#181818] text-[#e8e8e8]">
                 <div className="max-w-md text-center space-y-3 p-6">
-                    <Mail className="w-10 h-10 mx-auto text-[#e05d44]" />
-                    <h1 className="text-lg font-semibold">{t('flagOffTitle')}</h1>
-                    <p className="text-sm text-[#9a9a9a]">{t('flagOffBody')}</p>
+                    <AlertTriangle className="w-10 h-10 mx-auto text-[#e05d44]" />
+                    <h1 className="text-lg font-semibold">{t('statusFailedTitle')}</h1>
+                    <p className="text-sm text-[#9a9a9a]">{t('statusFailedBody')}</p>
+                    <button type="button" onClick={() => loadStatus()}
+                        className="px-3 py-1.5 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444] text-sm">
+                        {t('retry')}
+                    </button>
                 </div>
             </div>
         );

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Flag-gated bridge tests: with mail_engine_v2_enabled the legacy store API
+"""Bridge tests: the legacy store API
 (email_sync_store.list_messages/search_messages) and the transport body path
 serve from the v2 engine store in the EXACT legacy row/body shapes - that one
 flag switches agent tools, legacy routes and MailDashboard together. Isolated:
@@ -24,15 +24,6 @@ _LEGACY_KEYS = {"account_id", "folder", "message_id", "category", "provider_mess
 def _isolated(tmp_path, monkeypatch):
     from vaf.core.platform import Platform
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
-    from vaf.core.config import Config
-    real_get = Config.get
-
-    def _get(key, default=None):
-        if key == "mail_engine_v2_enabled":
-            return True
-        return real_get(key, default)
-
-    monkeypatch.setattr(Config, "get", staticmethod(_get))
     old = mail_crypto._cached_key
     mail_crypto._cached_key = os.urandom(32)
     yield

@@ -69,8 +69,6 @@ def test_a_password_account_still_reaches_the_smtp_path(monkeypatch):
 
 def test_ops_endpoint_exposes_the_reason_a_send_was_parked(monkeypatch, tmp_path):
     """The client can only warn about a parked send if the API says one exists."""
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: True if k == "mail_engine_v2_enabled" else d))
     monkeypatch.setattr(mr, "_scope_of", lambda u: _SCOPE)
     store = MailStore(_SCOPE, base_dir=tmp_path)
     apk = store.upsert_account("a@x", "gmail", "a@x")
@@ -98,8 +96,6 @@ def test_a_parked_send_can_be_retried_and_discarded(monkeypatch, tmp_path):
     be retried or dismissed is a banner the user can never clear - which is what
     the first live test hit (the parked op predated the XOAUTH2 fix, so a retry
     would now succeed)."""
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: True if k == "mail_engine_v2_enabled" else d))
     monkeypatch.setattr(mr, "_scope_of", lambda u: _SCOPE)
     store = MailStore(_SCOPE, base_dir=tmp_path)
     apk = store.upsert_account("a@x", "gmail", "a@x")
@@ -224,8 +220,6 @@ def test_a_store_wide_marker_from_the_old_scheme_still_counts_as_done(tmp_path, 
 # ── 3. a password add must not silently unhook the calendar ───────────────────
 
 def test_password_add_is_refused_for_an_address_already_connected_via_oauth(monkeypatch):
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: True if k == "mail_engine_v2_enabled" else d))
     monkeypatch.setattr(mr, "_acct_identity", lambda u: ("admin", None, "s"))
     monkeypatch.setattr(ea, "oauth_provider_for",
                         lambda aid, u=None, user_scope_id=None: "gmail")
@@ -252,8 +246,6 @@ def test_oauth_provider_for_only_reports_calendar_capable_providers(monkeypatch)
 
 
 def test_password_add_still_works_for_a_fresh_address(monkeypatch):
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: True if k == "mail_engine_v2_enabled" else d))
     monkeypatch.setattr(mr, "_acct_identity", lambda u: ("admin", None, "s"))
     monkeypatch.setattr(ea, "oauth_provider_for", lambda aid, u=None, user_scope_id=None: None)
     monkeypatch.setattr(ea, "test_imap_login", lambda *a, **k: (True, "", ""))
@@ -264,11 +256,3 @@ def test_password_add_still_works_for_a_fresh_address(monkeypatch):
                         lambda entry, u=None, user_scope_id=None: added.update(entry))
     out = asyncio.run(mr.accounts_add({"email": "i@example.com", "password": "pw"}, _USER))
     assert out["ok"] is True and added["provider"] == "imap"
-
-
-def test_accounts_add_requires_v2(monkeypatch):
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: False if k == "mail_engine_v2_enabled" else d))
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(mr.accounts_add({"email": "a@x", "password": "p"}, _USER))
-    assert e.value.status_code == 404

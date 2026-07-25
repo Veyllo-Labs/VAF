@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Reply to an email with proper quoting and threading (mail engine v2).
-Requires mail_engine_v2_enabled; sends immediately through the same transport
+Sends immediately through the same transport
 and high-risk gate as send_mail."""
 import logging
 from typing import Optional
 
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import get_local_admin_scope_id
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs
 from vaf.tools.send_mail import _high_risk_send_reasons
@@ -57,9 +57,6 @@ class ReplyMailTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        if not bool(Config.get("mail_engine_v2_enabled", False)):
-            return ("reply_mail needs the v2 mail engine (mail_engine_v2_enabled). "
-                    "Use send_mail with in_reply_to instead.")
         user_scope_id = cred_scope_from_kwargs(kwargs)
         cred_username = cred_username_from_kwargs(kwargs)
         message_id = (kwargs.get("message_id") or "").strip()

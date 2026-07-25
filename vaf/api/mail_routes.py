@@ -7,11 +7,6 @@ Rules:
 - Every endpoint resolves the caller via _get_current_user and builds a
   MailService for that scope only (fail-closed; the local admin's identity
   fallback resolves to the admin's REAL scope UUID, never to "no scope").
-- Every endpoint is gated on mail_engine_v2_enabled via _require_v2 (404 while
-  off) so the legacy /api/email lane keeps serving until the rollout flips. The
-  ONE deliberate exception is GET /status: it answers even while the flag is off
-  (v2_enabled=false) so the /mail page can render its flag-off screen instead of
-  a bare 404.
 - Attachments are served with Content-Disposition: attachment and nosniff;
   only image/* (except SVG) keeps its real content type so cid: inline images
   render - everything else is application/octet-stream.
@@ -35,11 +30,6 @@ router = APIRouter(prefix="/api/mail", tags=["mail-v2"])
 _INFLIGHT_SEND_TASKS: set = set()
 
 
-def _require_v2() -> None:
-    if not bool(Config.get("mail_engine_v2_enabled", False)):
-        raise HTTPException(status_code=404, detail="mail engine v2 is not enabled")
-
-
 def _scope_of(user: Dict[str, Any]) -> str:
     scope = (user.get("user_scope_id") or "").strip() or get_local_admin_scope_id()
     if not scope:
@@ -54,23 +44,24 @@ def _service(user: Dict[str, Any]):
 
 @router.get("/status")
 async def status(_user: Dict[str, Any] = Depends(_get_current_user)) -> Dict[str, Any]:
-    """Engine status for the UI: flag state + per-scope counts (cheap).
+    """Status for the UI: per-scope counts and the account list (cheap).
 
     The account list is the UNION of the engine store and the configured mail
     accounts: an account the engine does not sync yet (an OAuth account still
     awaiting the IMAP re-consent) has no store row, and listing only the store
     would silently drop it from the client - which reads as "my account is
     gone" rather than "this account needs re-consent". Config-only entries are
-    marked synced=False so the UI can show that state instead."""
-    enabled = bool(Config.get("mail_engine_v2_enabled", False))
-    out: Dict[str, Any] = {"v2_enabled": enabled,
-                           "write_enabled": bool(Config.get("mail_engine_write_enabled", False))}
-    if enabled:
-        svc = _service(_user)
-        out["counts"] = await asyncio.to_thread(svc.counts)
-        synced = await asyncio.to_thread(svc.store.list_accounts)
-        out["accounts"] = await asyncio.to_thread(_union_config_accounts, synced, _user)
-    return out
+    marked synced=False so the UI can show that state instead.
+
+    write_enabled still travels: server-side mailbox writes keep their own
+    switch, which the client surfaces."""
+    svc = _service(_user)
+    synced = await asyncio.to_thread(svc.store.list_accounts)
+    return {
+        "write_enabled": bool(Config.get("mail_engine_write_enabled", False)),
+        "counts": await asyncio.to_thread(svc.counts),
+        "accounts": await asyncio.to_thread(_union_config_accounts, synced, _user),
+    }
 
 
 def _union_config_accounts(synced: list, user: Dict[str, Any]) -> list:
@@ -95,7 +86,6 @@ def _union_config_accounts(synced: list, user: Dict[str, Any]) -> list:
 async def list_threads(account_id: Optional[str] = None, folder: Optional[str] = None,
                        limit: int = 50, offset: int = 0,
                        _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     items = await asyncio.to_thread(
         svc.list_threads, account_id=account_id, folder=folder, limit=limit, offset=offset)
@@ -104,7 +94,6 @@ async def list_threads(account_id: Optional[str] = None, folder: Optional[str] =
 
 @router.get("/threads/{thread_id}")
 async def thread_detail(thread_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     msgs = await asyncio.to_thread(svc.thread_messages, thread_id)
     if not msgs:
@@ -117,7 +106,6 @@ async def list_messages(account_id: Optional[str] = None, folder: Optional[str] 
                         category: Optional[str] = None, limit: int = 50, offset: int = 0,
                         unread_only: bool = False,
                         _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     items = await asyncio.to_thread(
         svc.list_messages, account_id=account_id, folder=folder, category=category,
@@ -128,7 +116,6 @@ async def list_messages(account_id: Optional[str] = None, folder: Optional[str] 
 @router.get("/messages/{message_pk}/body")
 async def message_body(message_pk: int, allow_remote: bool = False,
                        _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     body = await asyncio.to_thread(svc.get_body, message_pk, allow_remote)
     if body is None:
@@ -139,7 +126,6 @@ async def message_body(message_pk: int, allow_remote: bool = False,
 @router.get("/messages/{message_pk}/parts/{part_ref}")
 async def message_part(message_pk: int, part_ref: str,
                        _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     att = await asyncio.to_thread(svc.get_attachment, message_pk, part_ref)
     if att is None:
@@ -162,7 +148,6 @@ async def message_part(message_pk: int, part_ref: str,
 @router.get("/search")
 async def search(q: str, account_id: Optional[str] = None, limit: int = 50,
                  _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     items = await asyncio.to_thread(svc.search, q, account_id=account_id, limit=limit)
     return {"messages": svc.annotate_visibility(items)}
@@ -170,7 +155,6 @@ async def search(q: str, account_id: Optional[str] = None, limit: int = 50,
 
 @router.get("/folders")
 async def folders(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     svc = _service(_user)
     return {"folders": await asyncio.to_thread(svc.folders, account_id)}
 
@@ -180,7 +164,6 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
                        _user: Dict[str, Any] = Depends(_get_current_user)):
     """One on-demand engine sync for the caller's account (whole account by
     tier, or a single folder when given). Runs fully in a worker thread."""
-    _require_v2()
     scope = _scope_of(_user)
     username = _user.get("username")
 
@@ -247,7 +230,6 @@ async def patch_flags(message_pk: int, body: Dict[str, Any] = Body(...),
                       _user: Dict[str, Any] = Depends(_get_current_user)):
     """Local-first flag change: {read?: bool, starred?: bool}. The server
     write replays via the op queue when mail_engine_write_enabled is on."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -269,7 +251,6 @@ async def patch_flags(message_pk: int, body: Dict[str, Any] = Body(...),
 @router.post("/messages/{message_pk}/archive")
 async def archive_message(message_pk: int,
                           _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -286,7 +267,6 @@ async def archive_message(message_pk: int,
 async def trash_message(message_pk: int,
                         _user: Dict[str, Any] = Depends(_get_current_user)):
     """Trash-only delete semantics: MOVE to the trash folder, never EXPUNGE."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -307,7 +287,6 @@ async def set_message_category(message_pk: int, body: Dict[str, Any] = Body(...)
     stored mail from that sender. All of it is a LOCAL classification (nothing is
     written to the mail server), so it needs only the v2 flag, not
     mail_engine_write_enabled. Returns {ok, category, updated}."""
-    _require_v2()
     scope = _scope_of(_user)
     username = _user.get("username")
 
@@ -326,7 +305,6 @@ async def set_message_category(message_pk: int, body: Dict[str, Any] = Body(...)
 async def apply_sender_rules(_user: Dict[str, Any] = Depends(_get_current_user)):
     """Re-apply the sender->category rules to every stored message (backfill).
     Local classification only; gated by the v2 flag. Returns {ok, updated}."""
-    _require_v2()
     scope = _scope_of(_user)
     username = _user.get("username")
 
@@ -340,7 +318,6 @@ async def apply_sender_rules(_user: Dict[str, Any] = Depends(_get_current_user))
 @router.get("/messages/{message_pk}/reply-prefill")
 async def reply_prefill(message_pk: int, reply_all: bool = False, forward: bool = False,
                         _user: Dict[str, Any] = Depends(_get_current_user)):
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -360,7 +337,6 @@ async def send_message(body: Dict[str, Any] = Body(...),
     """Queue an outgoing mail with an undo window (client-delay model). The
     outbox op survives restarts; delivery runs through the v1 transport with
     its provider-correct auth and Bcc semantics."""
-    _require_v2()
     account_id = (body.get("account_id") or "").strip()
     to = (body.get("to") or "").strip()
     if not account_id or not to:
@@ -443,7 +419,6 @@ class _NoImap:
 @router.delete("/send/{op_id}")
 async def cancel_send(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Undo: withdraw a queued send while its undo window is open."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -459,7 +434,6 @@ async def cancel_send(op_id: int, _user: Dict[str, Any] = Depends(_get_current_u
 @router.get("/ops")
 async def list_ops(_user: Dict[str, Any] = Depends(_get_current_user)):
     """Pending/failed ops of the caller's store (outbox + write replay state)."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -482,7 +456,6 @@ async def retry_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user
     Without this a parked send is a dead end: the banner reports it forever and
     nothing in the app can clear it, even after the cause was fixed (a
     re-connected account, a corrected credential)."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -499,7 +472,6 @@ async def retry_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user
 async def discard_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Drop a parked op the user does not want retried (the message stays in the
     store; only the queued delivery attempt is abandoned)."""
-    _require_v2()
     scope = _scope_of(_user)
 
     def _run():
@@ -523,7 +495,6 @@ async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_use
     TLS cert is still checked against the original hostname - so a rebind between a
     validating lookup and the connect cannot reach an internal address. Only the
     standard web ports (80/443) are reachable, blocking port-scan style abuse."""
-    _require_v2()
     from urllib.parse import urlparse
     parsed = urlparse(url or "")
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -609,7 +580,6 @@ def _acct_identity(user: Dict[str, Any]):
 @router.get("/accounts")
 async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
     """Connected mail accounts (calendar-only leftovers hidden via mail_enabled)."""
-    _require_v2()
     from vaf.core.email_accounts import list_mail_accounts
     username, _cred, scope = _acct_identity(_user)
     rows = await asyncio.to_thread(lambda: list_mail_accounts(username, user_scope_id=scope))
@@ -626,7 +596,6 @@ async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
 @router.post("/accounts/test")
 async def accounts_test(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
     """Try an IMAP login; nothing is saved."""
-    _require_v2()
     from vaf.core.email_accounts import test_imap_login
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
@@ -641,7 +610,6 @@ async def accounts_test(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] 
 async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
     """Add an IMAP account: verify the login, store the password, add the config
     entry with host/port defaulted from the provider presets."""
-    _require_v2()
     from vaf.core.credential_store import set_email_imap_password
     from vaf.core.email_accounts import (
         IMAP_SMTP_DEFAULTS, add_account, oauth_provider_for, test_imap_login,
@@ -682,7 +650,6 @@ async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] =
 @router.post("/accounts/{account_id}/verify")
 async def accounts_verify(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Re-check the connection for a saved account (IMAP password / OAuth token)."""
-    _require_v2()
     from vaf.core.email_accounts import get_account, test_imap_login
     username, cred_username, scope = _acct_identity(_user)
     acc = await asyncio.to_thread(lambda: get_account(account_id, username, user_scope_id=scope))
@@ -706,7 +673,6 @@ async def accounts_verify(account_id: str, _user: Dict[str, Any] = Depends(_get_
 @router.patch("/accounts/{account_id}")
 async def accounts_patch(account_id: str, body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
     """Edit a per-account label or auto-sync toggle."""
-    _require_v2()
     from vaf.core.email_accounts import patch_account
     fields: Dict[str, Any] = {}
     if "label" in body:
@@ -726,7 +692,6 @@ async def accounts_patch(account_id: str, body: Dict[str, Any] = Body(...), _use
 async def accounts_delete(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Calendar-safe delete via the shared email_accounts orchestrator (a
     gmail/microsoft account keeps its shared OAuth token + entry for Calendar)."""
-    _require_v2()
     from vaf.core.email_accounts import delete_mail_account
     username, cred_username, scope = _acct_identity(_user)
     res = await asyncio.to_thread(lambda: delete_mail_account(

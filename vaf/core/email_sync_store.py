@@ -238,12 +238,12 @@ def upsert_messages(
 
 def _v2_dual_write(username: Optional[str], user_scope_id: Optional[str],
                    account_id: str, message_id: str, field: str, value: str) -> bool:
-    """Best-effort mirror of a legacy metadata write into the v2 engine store
-    (only category/answered_at; guarded by the v2 flag). Never raises."""
+    """Best-effort mirror of a legacy metadata write into the engine store
+    (only category/answered_at). Never raises.
+
+    Skipped for a legacy per-username caller: the engine store is scope-keyed, so
+    that caller has none of its own and writing would land in the ADMIN's."""
     try:
-        from vaf.core.config import Config as _Cfg
-        if not bool(_Cfg.get("mail_engine_v2_enabled", False)):
-            return False
         _legacy_user = bool((username or "").strip()) and not (user_scope_id or "").strip()
         if _legacy_user:
             return False
@@ -269,17 +269,16 @@ def list_messages(
     If account_id is None, returns messages from all accounts (still filtered by folder).
     username/user_scope_id: when set (multi-user), only that user's messages are returned.
     category: when set, only that category (primary|social|promotions or custom). Spam is never stored.
-    With mail_engine_v2_enabled the rows come from the v2 engine store in the
+    Rows come from the engine store in the
     identical shape (vaf/mail/tool_bridge.py) - every consumer (agent tools,
     routes, dashboard) switches with that one flag; errors fall back to this
     legacy store so a broken v2 lane never blanks the mailbox.
     """
     try:
-        from vaf.core.config import Config as _Cfg
         # Delegate only for scope-keyed callers: legacy per-username users have
-        # no v2 store (review: mapping them to the admin scope commingles mail).
+        # no engine store (mapping them to the admin scope commingles mail).
         _legacy_user = bool((username or "").strip()) and not (user_scope_id or "").strip()
-        if (not _skip_v2) and (not _legacy_user) and bool(_Cfg.get("mail_engine_v2_enabled", False)):
+        if (not _skip_v2) and (not _legacy_user):
             from vaf.mail.tool_bridge import list_messages_merged as _v2_list
             return _v2_list(account_id, folder, limit, offset,
                             username or "", user_scope_id, category=category)
@@ -370,16 +369,15 @@ def search_messages(
     """
     Search synced messages by subject or sender (from_addr). Case-insensitive LIKE.
     username/user_scope_id: when set (multi-user), only that user's messages are searched.
-    With mail_engine_v2_enabled the search runs against the v2 engine's FTS5
+    The search runs against the engine's FTS5
     index instead (subject/from/to/BODY, ranked) in the identical row shape;
     errors fall back to this legacy LIKE search.
     """
     if not (query or "").strip():
         return []
     try:
-        from vaf.core.config import Config as _Cfg
         _legacy_user = bool((username or "").strip()) and not (user_scope_id or "").strip()
-        if (not _skip_v2) and (not _legacy_user) and bool(_Cfg.get("mail_engine_v2_enabled", False)):
+        if (not _skip_v2) and (not _legacy_user):
             from vaf.mail.tool_bridge import search_messages_merged as _v2_search
             return _v2_search(query, folder, limit, username or "", user_scope_id)
     except Exception as _e:  # pragma: no cover - availability fallback

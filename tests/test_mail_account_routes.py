@@ -15,13 +15,7 @@ import vaf.core.email_accounts as ea
 _USER = {"username": "admin", "user_scope_id": "s"}
 
 
-def _v2(monkeypatch, on=True):
-    monkeypatch.setattr(mr.Config, "get",
-                        staticmethod(lambda k, d=None: on if k == "mail_engine_v2_enabled" else d))
-
-
 def test_accounts_list_endpoint(monkeypatch):
-    _v2(monkeypatch)
     monkeypatch.setattr(ea, "list_mail_accounts", lambda u, user_scope_id=None: [
         {"account_id": "a@x", "email": "a@x", "provider": "imap", "label": "Work", "imap_ready": True}])
     out = asyncio.run(mr.accounts(_USER))
@@ -29,14 +23,12 @@ def test_accounts_list_endpoint(monkeypatch):
 
 
 def test_accounts_test_reports_failure_with_hint(monkeypatch):
-    _v2(monkeypatch)
     monkeypatch.setattr(ea, "test_imap_login", lambda *a, **k: (False, "auth failed", "use an app password"))
     out = asyncio.run(mr.accounts_test({"email": "a@x", "password": "pw"}, _USER))
     assert out["ok"] is False and out["hint"] == "use an app password"
 
 
 def test_accounts_delete_uses_calendar_safe_cascade(monkeypatch):
-    _v2(monkeypatch)
     seen = {}
     monkeypatch.setattr(ea, "delete_mail_account",
                         lambda aid, username=None, cred_username=None, user_scope_id=None:
@@ -45,17 +37,9 @@ def test_accounts_delete_uses_calendar_safe_cascade(monkeypatch):
     assert out["ok"] and out["kept_for_calendar"] is True and seen["aid"] == "g@x"
 
 
-def test_accounts_endpoint_requires_v2(monkeypatch):
-    _v2(monkeypatch, on=False)
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(mr.accounts(_USER))
-    assert e.value.status_code == 404
-
-
 def test_set_category_route_relabels_learns_and_backfills(monkeypatch):
-    # P5.3/P5.4: relabel route is local-only (v2 flag only, no write flag); learns
+    # P5.3/P5.4: relabel is a local classification (no write flag); learns
     # a sender rule + backfills (updated count passthrough); 404 on a missing pk.
-    _v2(monkeypatch)
     monkeypatch.setattr(mr, "_scope_of", lambda u: "s")
 
     class _Svc:
@@ -76,7 +60,6 @@ def test_status_accounts_union_keeps_a_not_yet_synced_account_visible(monkeypatc
     """P6.0/B2 (UI half): the client's sidebar comes from /status. Listing only the
     engine store would drop an account still awaiting the IMAP re-consent, which
     reads as "my account was deleted" rather than "this needs re-consent"."""
-    _v2(monkeypatch)
     monkeypatch.setattr(mr, "_acct_identity", lambda u: ("admin", None, "s"))
     monkeypatch.setattr(ea, "list_mail_accounts", lambda u, user_scope_id=None: [
         {"account_id": "i@x", "email": "i@x", "provider": "imap", "imap_ready": True},
@@ -93,7 +76,6 @@ def test_status_accounts_union_keeps_a_not_yet_synced_account_visible(monkeypatc
 def test_status_accounts_union_survives_a_config_read_failure(monkeypatch):
     """The store list must stay usable on its own - a config error may not blank
     the whole sidebar."""
-    _v2(monkeypatch)
 
     def _boom(*a, **k):
         raise RuntimeError("config unavailable")
@@ -104,8 +86,7 @@ def test_status_accounts_union_survives_a_config_read_failure(monkeypatch):
 
 
 def test_apply_sender_rules_route_returns_updated_count(monkeypatch):
-    # P5.4: standalone backfill endpoint, local classification, v2-gated.
-    _v2(monkeypatch)
+    # P5.4: standalone backfill endpoint, local classification.
     monkeypatch.setattr(mr, "_scope_of", lambda u: "s")
 
     class _Svc:

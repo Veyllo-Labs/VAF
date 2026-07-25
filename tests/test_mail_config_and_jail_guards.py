@@ -47,7 +47,6 @@ def test_phishing_and_ssrf_keys_are_registered_and_admin_only():
         "email_agent_phishing_filter_enabled",
         "email_agent_phishing_score_threshold",
         "email_agent_trusted_sender_domains",
-        "mail_engine_v2_enabled",
         "mail_engine_write_enabled",
         "mail_body_retention_days",
     ):

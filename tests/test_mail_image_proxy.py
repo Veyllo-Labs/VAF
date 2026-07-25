@@ -67,7 +67,6 @@ def test_resolve_pinned_target_unresolvable_propagates(monkeypatch):
 
 
 def test_image_proxy_rejects_nonstandard_port(monkeypatch):
-    monkeypatch.setattr(mail_routes, "_require_v2", lambda: None)
     with pytest.raises(HTTPException) as ei:
         asyncio.run(mail_routes.image_proxy(
             url="http://example.com:8080/x.png", _user={"username": "u"}))
@@ -75,7 +74,6 @@ def test_image_proxy_rejects_nonstandard_port(monkeypatch):
 
 
 def test_image_proxy_rejects_non_http_scheme(monkeypatch):
-    monkeypatch.setattr(mail_routes, "_require_v2", lambda: None)
     with pytest.raises(HTTPException) as ei:
         asyncio.run(mail_routes.image_proxy(
             url="file:///etc/passwd", _user={"username": "u"}))
@@ -83,7 +81,6 @@ def test_image_proxy_rejects_non_http_scheme(monkeypatch):
 
 
 def test_image_proxy_blocked_ip_logs_event_and_403(monkeypatch):
-    monkeypatch.setattr(mail_routes, "_require_v2", lambda: None)
 
     def _blocked(*a, **k):
         raise ValueError("private")

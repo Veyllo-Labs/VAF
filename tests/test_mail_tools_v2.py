@@ -19,14 +19,7 @@ import vaf.tools.mark_mail_answered as ma
 import vaf.tools.read_mail as rm
 
 
-def _flag(monkeypatch, on):
-    """Set mail_engine_v2_enabled at its single reader (mail_utils)."""
-    monkeypatch.setattr(mu.Config, "get",
-                        staticmethod(lambda k, d=None: on if k == "mail_engine_v2_enabled" else d))
-
-
 def test_find_mail_v2_searches_and_loads_body(monkeypatch):
-    _flag(monkeypatch, True)
     monkeypatch.setattr(fm, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
     monkeypatch.setattr(fm, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
     monkeypatch.setattr(
@@ -48,7 +41,6 @@ def test_find_mail_v2_searches_and_loads_body(monkeypatch):
 
 
 def test_mail_inbox_v2_lists_from_engine_store(monkeypatch):
-    _flag(monkeypatch, True)
     monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["a@x"])
     monkeypatch.setattr(mi, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
     monkeypatch.setattr(mi, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
@@ -62,7 +54,6 @@ def test_mail_inbox_v2_lists_from_engine_store(monkeypatch):
 
 
 def test_mark_answered_v2_uses_mailservice(monkeypatch):
-    _flag(monkeypatch, True)
     monkeypatch.setattr(ma, "get_account", lambda *a, **k: {"provider": "imap"})
     monkeypatch.setattr(ma, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
 
@@ -79,7 +70,6 @@ def test_mark_answered_v2_uses_mailservice(monkeypatch):
 
 
 def test_label_mail_v2_sets_category_and_rule(monkeypatch):
-    _flag(monkeypatch, True)
     monkeypatch.setattr(lm, "get_account", lambda *a, **k: {"provider": "imap"})
     monkeypatch.setattr(lm, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
     monkeypatch.setattr(lm, "_add_sender_rule", lambda scope, pattern, category: None)
@@ -100,7 +90,6 @@ def test_label_mail_v2_sets_category_and_rule(monkeypatch):
 
 
 def test_read_mail_v2_uses_mailservice_body_text(monkeypatch):
-    _flag(monkeypatch, True)
     monkeypatch.setattr(rm, "get_account", lambda *a, **k: {"provider": "imap", "email": "bob@example.com"})
     monkeypatch.setattr(rm, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
 
@@ -118,25 +107,22 @@ def test_read_mail_v2_uses_mailservice_body_text(monkeypatch):
 
 # ── P6.0 blocker guards ────────────────────────────────────────────────────────
 
-def test_v2_is_refused_for_a_scopeless_username_caller(monkeypatch):
-    """B1: username without a scope has no v2 store; serving it from the engine
-    would resolve to the LOCAL ADMIN's mailbox. email_sync_store and the sync
-    supervisor both refuse this - the tools must too."""
-    _flag(monkeypatch, True)
+def test_v2_is_refused_for_a_scopeless_username_caller():
+    """The isolation rule, which outlived the engine flag: a username without a
+    scope has no store of its own, and the store is scope-keyed - serving that
+    caller would resolve to the LOCAL ADMIN's mailbox. email_sync_store and the
+    sync supervisor refuse the same mapping."""
     assert mu.mail_v2_active("", None) is True            # local admin: allowed
     assert mu.mail_v2_active("", "scope-x") is True       # scoped: allowed
     assert mu.mail_v2_active("bob", "scope-x") is True    # scoped user: allowed
     assert mu.mail_v2_active("bob", None) is False        # legacy per-username: REFUSED
     assert mu.mail_v2_active("bob", "  ") is False        # blank scope counts as none
-    _flag(monkeypatch, False)
-    assert mu.mail_v2_active("", "scope-x") is False      # flag still wins
 
 
 def test_scopeless_username_caller_never_touches_the_v2_store(monkeypatch):
     """B1 end to end: NO v2 read may happen for that caller. Reading the engine
     store here would resolve to the admin's mailbox - a cross-user leak, not a
     fallback. The tool answers empty-handed instead, which is the honest result."""
-    _flag(monkeypatch, True)
     monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["a@x"])
     monkeypatch.setattr(mi, "get_account", lambda *a, **k: {"provider": "imap"})
     monkeypatch.setattr(mi, "filter_phishing_messages_for_agent", lambda ms: (ms, 0))
@@ -155,7 +141,6 @@ def test_mail_inbox_reports_an_empty_store_neutrally(monkeypatch):
     """With no live-fetch lane left, an empty store gets ONE honest answer. It must
     not tell the user to press Sync: that fails for exactly the account class that
     can land here (one not connected for the engine yet)."""
-    _flag(monkeypatch, True)
     monkeypatch.setattr(mi, "list_accounts_for_user", lambda u, user_scope_id=None: ["i@x"])
     monkeypatch.setattr(mi, "get_account", lambda *a, **k: {"provider": "imap"})
     monkeypatch.setattr(mi, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])

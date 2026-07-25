@@ -5,7 +5,7 @@
 
 The seven agent tools, the legacy /api/email message routes and MailDashboard
 all consume email_sync_store's row shape and get_message_body_plain's text
-contract. When mail_engine_v2_enabled is on, email_sync_store delegates here
+contract. email_sync_store delegates here
 so every consumer switches to the engine store with ONE flag and IDENTICAL
 output shapes (EMAIL_CLIENT.md: tools keep names/signatures/shapes). The
 legacy scope semantics are preserved exactly: user_scope_id=None means the

@@ -977,15 +977,40 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         return []
 
 
+def resolve_thinking_provider() -> str:
+    """The provider a thinking run will actually use.
+
+    `thinking_provider` wins when set; `inherit` (the default) means the run's own Agent reads
+    the main `provider` from config. Mirrors how the run itself decides - see the
+    VAF_PROVIDER assignment in run_thinking_cycle - and exists so the unload watchdog cannot
+    answer that question differently than the run does.
+    """
+    from vaf.core.config import Config
+    configured = (Config.get("thinking_provider") or "inherit").strip().lower()
+    if configured and configured != "inherit":
+        return configured
+    return (Config.get("provider", "local") or "local").strip().lower()
+
+
 def should_defer_model_unload() -> bool:
-    """True if the local model should stay loaded for the background thinking run — a run is currently
+    """True if the LOCAL model should stay loaded for the background thinking run — a run is currently
     active, or one is eligible to start right now (a user idle past the threshold AND cooldown elapsed).
     The DESKTOP model-unload watchdog (tray.py) calls this so it never pulls the model out from under
     thinking: think first, then unload. (Server/headless never runs that watchdog.) Returns False on any
-    error or when thinking is disabled."""
+    error or when thinking is disabled.
+
+    It also returns False whenever the run would not use the local model at all. That case is not
+    hypothetical: with a cloud provider the run inherits it and never touches the GGUF, yet the
+    deferral kept ~3.4 GB of VRAM pinned - and unlike an active run, an ELIGIBLE one has no upper
+    bound. Eligibility stays true for as long as somebody is idle, so "think first, then unload"
+    quietly became "never unload" (measured: a scope eligible for 146 minutes past its cooldown
+    without a run happening, on a machine whose local model was no longer being used by anything)."""
     try:
         from vaf.core.config import Config
         if not Config.get("thinking_enabled", True):
+            return False
+        # 0) The run will not use the local model -> nothing to defer for.
+        if resolve_thinking_provider() != "local":
             return False
         # 1) A run is executing right now (lock held for the local user).
         if is_locked(None):

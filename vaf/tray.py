@@ -1221,7 +1221,13 @@ def check_activity_loop(update_icon_callback):
                     and has_websocket)
             except Exception:
                 voice_local_lane = False
-        if is_cloud_provider and tray_context.model_loaded and not thinking_defer and not voice_local_lane:
+        # work_busy is checked here for the same reason the idle branch below checks it: a task,
+        # a sub-agent or a live call may still be using this model, and "the main provider is
+        # cloud" says nothing about that. It was survivable while the thinking deferral happened
+        # to block this branch almost permanently; now that the deferral correctly steps aside for
+        # a cloud run, this branch actually fires and needs the guard its sibling already had.
+        if (is_cloud_provider and tray_context.model_loaded
+                and not thinking_defer and not voice_local_lane and not work_busy):
             log("Tray", f"Cloud provider '{provider}' active — unloading local model to free memory.")
             try:
                 server_mgr.stop_server(force_external=True)

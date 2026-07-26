@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Background thinking kept the local model on your graphics card for nothing.** After
+  switching to a cloud provider VAF frees the local model, but the background "thinking"
+  feature asked to keep it - without checking that the next thinking run would itself run in
+  the cloud and never touch it. It asked that not only while a run was in progress but also
+  while one was merely due, and that stays true for as long as you are away, so the model was
+  held indefinitely. It is now kept only for a run that will actually use it, and a task, a
+  sub-agent or a live call still protects it from being unloaded underneath them.
 - **Changing your API key only took effect after a restart.** Switching provider or key is
   handled in one place inside VAF, but the three parts that receive a settings change had
   each rebuilt that step by hand and each left pieces out. A key change with the provider

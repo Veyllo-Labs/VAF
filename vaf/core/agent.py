@@ -10689,6 +10689,15 @@ class Agent:
                         ))
                     except Exception:
                         pass
+                if name == "edit_file":
+                    # edit_file is the other half of the main agent's file-writing surface and
+                    # needs the same jail as write_file: it READS the target (its miss path
+                    # answers with a slice of the file) and then WRITES through a nested
+                    # WriteFileTool call that carries no scope of its own. Without this the
+                    # tool ran unconfined while write_file next to it was jailed.
+                    # ASSIGNED, never defaulted (see the write_file block above).
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

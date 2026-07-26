@@ -1025,7 +1025,9 @@ class EditFileTool(BaseTool):
     whole file with write_file. Modeled on Claude Code's exact old->new string replacement:
     each edit's `search` must match the file EXACTLY and UNIQUELY. All edits are applied
     all-or-nothing against the original buffer, then written once via WriteFileTool (so the
-    workspace jail, home-reroute and atomic write are all inherited)."""
+    home-reroute and atomic write are inherited). The per-user jail is installed by run()
+    around the whole body - it cannot be left to the inner WriteFileTool call, which is
+    handed no scope and would run unconfined."""
 
     name = "edit_file"
     permission_level = "write"
@@ -1098,6 +1100,32 @@ class EditFileTool(BaseTool):
         return "ambiguous" if len(hits) > 1 else "not_found"
 
     def run(self, **kwargs) -> str:
+        # Same contract as WriteFileTool.run: execute_tool injects the caller's scope and
+        # role, and the jail is installed HERE, in the tool's own thread, because the
+        # bounded-run dispatcher would not propagate a contextvar set outside it.
+        #
+        # It must wrap the WHOLE body, not just the write. edit_file reads the target to
+        # compute the edit, and its miss path answers with a slice of the file ("nearest
+        # region"), so an unjailed run is a read primitive as much as a write one. The
+        # inner WriteFileTool call inherits this contextvar - it is the same thread and
+        # that tool sees no scope of its own.
+        #
+        # Both keys are ASSIGNED by the dispatcher, never defaulted: kwargs starts out as
+        # the arguments the model produced.
+        _jail_token = None
+        _scope = kwargs.pop("user_scope_id", None)
+        _role = kwargs.pop("user_role", None)
+        if _scope:
+            _info = compute_user_jail(_scope, _role)
+            if not _info.get("is_admin"):
+                _jail_token = set_librarian_scope(_info)
+        try:
+            return self._run_edit(**kwargs)
+        finally:
+            if _jail_token is not None:
+                reset_librarian_scope(_jail_token)
+
+    def _run_edit(self, **kwargs) -> str:
         path = kwargs.get("path", "")
         edits = kwargs.get("edits")
         # Weak models sometimes pass a single {search,replace} or flat search/replace.

@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **One of the agent's two ways to change a file skipped the per-user boundary.** When
+  several people use one VAF, each is confined to their own project folder. Asking the
+  agent to rewrite a file respected that; asking it to change a few lines in a file did
+  not, so a file belonging to someone else could be altered, and a failed attempt even
+  returned a few lines of that file. Both ways now enforce the same boundary. Nothing
+  changes for a single-user VAF, for administrators, or for files of your own.
 - **The agent could open VAF's own settings folder, where the keys live.** Asking the agent to
   read a file gave it access to the folder VAF stores itself in - the file holding every
   connected API key and the sign-in secret, saved copies of it, stored browser logins, voice

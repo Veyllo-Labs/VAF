@@ -841,39 +841,73 @@ def _composer_related(svc, instruction: str, thread_id: Optional[int]) -> str:
     return composer.format_related(rows)
 
 
-def _composer_knowledge(user: Dict[str, Any], instruction: str) -> str:
-    """The user's own long-term memory, retrieved for THIS instruction.
+def _composer_knowledge(user: Dict[str, Any], instruction: str, subject: str = "") -> str:
+    """The user's own long-term memory, retrieved for this request.
 
-    Two rules make this safe enough to enable by default, and both are structural:
+    The SAME lane the main agent and the voice agent use - `run_memory_search_sync`
+    with the user's scope - and called the same way they call it: unconditionally,
+    gated only on `memory_enabled`, with `memory_rag_k` (the main agent's own key)
+    rather than a number invented here. A composer that only sometimes remembers
+    who you are is worse than one that never does, because you cannot tell which
+    run you got.
 
-    1. The query is built from the USER's instruction ONLY - never from mail text.
-       A mail cannot steer what gets retrieved, which is the difference between
-       "the model may mention my day rate" and "a stranger picks what of mine the
-       model sees".
-    2. No instruction, no retrieval. A bare "write a draft" pulls nothing, so the
-       common case carries no extra exposure at all.
-
-    Residual risk, stated rather than hidden: the retrieved text and the mail sit in
-    the same context, so an injection can still try to get the model to WRITE that
-    text into the draft. The prompt forbids it and the user reads the draft before
-    sending, but a user who sends without reading can be walked into disclosing
-    their own notes. That is why this is admin-switchable.
+    Query: the user's instruction, which is their prompt for this turn, exactly as
+    `task.input_text` is the main agent's. With no instruction it falls back to the
+    subject of the mail being answered, so drafting a reply without typing anything
+    still gets memory. That fallback is mail-controlled text and therefore lets a
+    subject line influence WHICH of the user's memories are retrieved - a narrower
+    version of what the main agent already does with any message it is handed. It is
+    the owner's call, taken deliberately; `mail_composer_memory_enabled` turns the
+    whole lane off.
     """
-    q = (instruction or "").strip()
-    if len(q) < 3:
+    if not Config.get("memory_enabled", True):
         return ""
     scope = (user.get("user_scope_id") or "").strip() or get_local_admin_scope_id()
     if not scope:
+        return ""                      # user isolation: never search unscoped
+    query = (instruction or "").strip() or (subject or "").strip()
+    if not query:
         return ""
     try:
         from uuid import UUID
 
         from vaf.memory.rag import run_memory_search_sync
-        return run_memory_search_sync(query=q, k=4, user_scope_id=UUID(str(scope)),
+        k = max(1, min(20, int(Config.get("memory_rag_k", 5) or 5)))
+        return run_memory_search_sync(query=query, k=k, user_scope_id=UUID(str(scope)),
                                       caller="mail_composer") or ""
     except Exception as e:  # pragma: no cover - memory is optional infrastructure
         logger.info("mail composer: memory lookup unavailable: %s", e)
         return ""
+
+
+def _composer_related(svc, instruction: str, thread_id: Optional[int]) -> str:
+    """Older mail from OTHER threads that matches what the user asked for.
+
+    Uses the FTS5 index the store already maintains (subject/from/to/body) - no
+    vector lane, no second copy of anyone's mail. The same rule as the memory
+    lookup applies and for the same reason: the query is the USER's instruction,
+    never mail text, so a message cannot decide which of the user's older mail is
+    pulled into the prompt.
+
+    Everything found here is attacker-controlled correspondence the user did NOT
+    open, so it is the least verified input in the prompt: hits run through the
+    phishing scorer and flagged ones are dropped entirely (not placeholdered - an
+    unopened keyword hit is not worth a line), the current thread is excluded, and
+    the caller places the result inside the untrusted fence.
+    """
+    from vaf.mail import composer
+
+    q = (instruction or "").strip()
+    if len(q) < 3:
+        return ""
+    try:
+        rows = svc.search(q, limit=12) or []
+    except Exception as e:  # pragma: no cover - search must never break drafting
+        logger.info("mail composer: mailbox search unavailable: %s", e)
+        return ""
+    rows = [r for r in rows if r.get("thread_id") != thread_id]
+    rows = [r for r in svc.annotate_visibility(rows) if not r.get("suspicious_for_agent")]
+    return composer.format_related(rows)
 
 
 def _composer_stream(messages, max_tokens: int, temperature: float):
@@ -1007,10 +1041,18 @@ async def composer_draft(body: Dict[str, Any] = Body(...),
                 b = svc.get_body(int(r["id"]))
                 if b and b.get("cached"):
                     bodies[int(r["id"])] = b.get("text") or ""
+        # The user's own addresses let the assembler label which half of the
+        # conversation they wrote, so the draft can match THEIR register rather
+        # than the correspondent's. Folder wins over From (see is_own_message);
+        # this list is only the fallback for unclassified folders.
+        try:
+            own = {a.get("email") for a in (svc.store.list_accounts() or []) if a.get("email")}
+        except Exception:
+            own = set()
         return composer.build_thread_context(
             rows, bodies, anchor_pk=int(anchor_pk) if anchor_pk is not None else -1,
             budget_chars=cfg["budget"], per_msg_chars=cfg["per_msg"],
-            max_messages=cfg["max_messages"])
+            max_messages=cfg["max_messages"], own_addresses=own)
 
     ctx = await asyncio.to_thread(_assemble)
     if ctx is None:
@@ -1021,7 +1063,8 @@ async def composer_draft(body: Dict[str, Any] = Body(...),
     instruction = str(body.get("instruction") or "")
     knowledge = ""
     if cfg["memory"]:
-        knowledge = await asyncio.to_thread(_composer_knowledge, _user, instruction)
+        knowledge = await asyncio.to_thread(
+            _composer_knowledge, _user, instruction, ctx.anchor_subject)
     related = ""
     if cfg["mailbox"] and mode == "draft":
         # rewrite works on the user's own text and deliberately reads no mail at all
@@ -1040,7 +1083,8 @@ async def composer_draft(body: Dict[str, Any] = Body(...),
     async def _events():
         import json as _json
         meta = {"included": ctx.included, "total": ctx.total, "truncated": ctx.truncated,
-                "hidden_suspicious": ctx.hidden_suspicious, "dropped": ctx.dropped}
+                "hidden_suspicious": ctx.hidden_suspicious, "dropped": ctx.dropped,
+                "own_included": ctx.own_included}
         yield f"event: meta\ndata: {_json.dumps(meta)}\n\n"
         if await asyncio.to_thread(_local_model_is_cold):
             yield f"event: notice\ndata: {_json.dumps('local_loading')}\n\n"

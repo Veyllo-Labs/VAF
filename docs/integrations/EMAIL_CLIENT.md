@@ -270,18 +270,50 @@ not instead of it:
 - `tests/test_mail_composer_guards.py` pins the no-tools, no-op property so a later
   refactor cannot quietly hand this lane a tool.
 
-**The user's own knowledge.** With `mail_composer_memory_enabled` the Composer
-consults the user's long-term memory while drafting, and two structural rules keep
-that from becoming an exfiltration path. The retrieval query is built from the
-USER's instruction ONLY, never from mail text, so a message cannot steer which of
-the user's notes the model sees; and with no instruction there is no retrieval at
-all, so the plain "write a draft" case carries no extra exposure. Results ride in
-the TRUSTED operator turn, never inside the fence. The residual risk is stated
-rather than hidden: notes and mail share one context, so an injection can still try
-to get the model to write those notes INTO the draft. The prompt forbids it and the
-user reads the draft before sending, but a user who sends unread can be walked into
-disclosing their own material - which is why the key exists and is admin-only. A
-memory outage degrades to "no notes", never to "no draft".
+**Prompt shape mirrors the main agent**, deliberately, so the two do not drift into
+different mental models of the same job: an English system prompt in `##` sections
+(ROLE / UNTRUSTED CONTENT / OUTPUT / HONESTY), then memory as its OWN system
+message under the main agent's heading `## Memory context (relevant to this query)`,
+then the untrusted fence, then the conversation. The memory section is present even
+when retrieval found nothing, carrying an explicit "nothing matched" - also the main
+agent's behaviour, and informative: "you looked and there is nothing" is different
+from "you never looked".
+
+**Whose words are whose.** Each message in the assembled thread is labelled with
+who wrote it, and the user's own messages carry `from: YOUR USER (wrote this)`. The
+`## VOICE` section then tells the model to read those for HOW the user writes -
+greeting, sign-off, formal or casual, terse or long, which language - and to match
+that register without copying wording. With no message of the user's own in the
+thread it is told to use a plain neutral register and NOT to invent a personal
+style; the panel says which of the two happened, so an off-sounding draft is
+explainable rather than mysterious.
+
+Ownership is decided by the FOLDER, not the From header (`is_own_message`, with
+`folder_special_use` now travelling from `store.thread_messages`). A From header is
+trivially forged, and a message wrongly labelled as the user's own would be read as
+an example of how they write - handing an attacker the voice of every future draft,
+and a claim of authority inside the fence. A message in this mailbox's Sent folder
+genuinely left it. The address list is only a fallback for folders a provider never
+classified, and it is refused outright for anything in Inbox, Junk or Trash, which
+is precisely where a forged From lands.
+
+**The user's own knowledge** is retrieved the way the main agent and the voice agent
+retrieve it - `run_memory_search_sync` with the caller's scope, gated only on
+`memory_enabled`, with `memory_rag_k` (the main agent's own key) rather than a
+number invented here. UNCONDITIONALLY, by owner decision: a composer that only
+sometimes remembers who you are is worse than one that never does, because you
+cannot tell which run you got. The query is the user's instruction, their prompt for
+this turn exactly as `task.input_text` is the main agent's; with nothing typed it
+falls back to the subject of the mail being answered so a bare "write a draft" still
+gets memory. That fallback is mail-controlled text and therefore lets a subject line
+influence WHICH memories are retrieved - a narrower version of what the main agent
+already does with any message handed to it. Results ride in the memory system
+message, never inside the fence. Residual risk, stated rather than hidden: notes and
+mail share one context, so an injection can still try to get the model to write
+those notes INTO the draft. The prompt forbids it and the user reads the draft
+before sending, but a user who sends unread can be walked into disclosing their own
+material - which is what `mail_composer_memory_enabled` is for. A memory outage
+degrades to "no notes", never to "no draft".
 
 **Older mail from other threads** (`mail_composer_mailbox_search_enabled`, OFF by
 default) quotes what the user asked about from the rest of the mailbox, using the
@@ -428,8 +460,8 @@ through only split-horizon names the local resolver does not know.
   provider response bodies).
 - Phishing visibility split (inbound prompt-injection defense): suspicious
   messages are hidden from agent mail tools while the human mail client still
-  shows them with a warning. The v2 client re-surfaces this via
-  `MailService.annotate_visibility`, which shims the v2 row fields
+  shows them with a warning. The client re-surfaces this via
+  `MailService.annotate_visibility`, which shims the store row fields
   (`from_addr`->`from`, `snippet`->`body_snippet`, `category`) into the SSOT
   scorer `mail_utils.annotate_messages_with_agent_visibility` and stamps
   `suspicious_for_agent` / `suspicious_reasons` onto every `/api/mail` read
@@ -452,7 +484,7 @@ through only split-horizon names the local resolver does not know.
   structural - no tools on that call - rather than a filter that a crafted body can
   talk its way past.
 - Answered indicator: the store tracks `answered_at` (set when a reply is
-  sent); `store.list_threads` exposes an `answered` count and the v2 client shows
+  sent); `store.list_threads` exposes an `answered` count and the client shows
   a reply marker on answered conversations and "Answered on {date}" in the reader,
   so a mail is not answered twice.
 - Gmail-style categories: Gmail's inbox tabs
@@ -462,7 +494,7 @@ through only split-horizon names the local resolver does not know.
   `primary`). The category is therefore resolved with `SEARCH UID lo:hi X-GM-RAW
   "category:<tab>"`, one search per tab (promotions/social/updates/forums), scoped
   to the UID range being ingested and to the inbox, degrading to `primary` on any
-  error. The v2 client shows a category chip on non-primary conversations and a
+  error. The client shows a category chip on non-primary conversations and a
   relabel picker in the reader. Categories are applied on INSERT only, so a manual
   relabel is never overwritten by a later sync.
 - Sender-rule learning on relabel (owner decision: every relabel learns a rule):
@@ -600,6 +632,6 @@ Mailspring + Mailspring-Sync (GPL-3.0), Geary (LGPL-2.1+), Evolution/EDS
 Protocol algorithms come from IETF RFCs (freely implementable): 2177 (IDLE),
 3676 (format=flowed), 4315 (UIDPLUS), 4549 (offline sync), 5256 (threading),
 6154 (SPECIAL-USE), 6851 (MOVE), 7162 (CONDSTORE/QRESYNC), 8621 (JMAP data
-model). Runtime dependencies (v2): IMAPClient BSD-3-Clause, aiosmtplib MIT,
+model). Runtime dependencies: IMAPClient BSD-3-Clause, aiosmtplib MIT,
 nh3 MIT (ammonia MIT/Apache-2.0), zstandard BSD, optional DOMPurify
 Apache-2.0/MPL dual. GPL/AGPL projects are pattern references only.

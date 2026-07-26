@@ -336,10 +336,10 @@ When the system is in local mode (no auth), the WebSocket assigns `username="adm
 
 ### Problem 4: Email Config Fallback Chain
 
-Email config lookup follows the chain in Phase 2 below. So that the Mail dashboard and agent tools stay in sync when the chat session identity differs from the HTTP/session identity (e.g. WebSocket as local admin, dashboard as JWT user), the **tools implement fallbacks**:
+Email config lookup follows the chain in Phase 2 below. So that the mail client and agent tools stay in sync when the chat session identity differs from the HTTP/session identity (e.g. WebSocket as local admin, dashboard as JWT user), the **tools implement fallbacks**:
 
 - **Account lookup** (`mail_utils.list_accounts_with_labels_for_user`): If the primary lookup (by `user_scope_id` or `cred_username`) returns no accounts, the code tries legacy `email_config` and, when exactly one scope in `email_config_by_scope` has accounts, that scope’s accounts. So `list_email_accounts`, `mail_inbox`, and `send_mail` see the same accounts as the dashboard.
-- **Sync store** (`mail_inbox`): When listing messages, the tool tries the primary store, then the legacy store, then the single-scope store (when only one scope has accounts), so it reads from the same SQLite DB as the Mail dashboard.
+- **Sync store** (`mail_inbox`): When listing messages, the tool tries the primary store, then the legacy store, then the single-scope store (when only one scope has accounts), so it reads from the same SQLite DB as the mail client.
 
 Best practice: Prefer storing under `email_config_by_scope[user_scope_id]`; the fallbacks cover single-user and identity-mismatch cases.
 
@@ -357,7 +357,8 @@ All functions that previously accepted only `username` now also accept `user_sco
 - `vaf/core/whatsapp_message_store.py` — `_db_path()`, `append_message()`, etc.
 - `vaf/core/contacts_store.py` — All CRUD + lookup functions accept `user_scope_id`
 - `vaf/core/credential_store.py` — `_credential_key()`, get/set/delete functions
-- `vaf/core/email_transport.py` — `_get_email_config()`, `fetch_mail()`, `send_mail()`, etc.
+- `vaf/core/email_accounts.py` — account-config SSOT: `get_email_config()`, `get_account()`, `list_mail_accounts()` (re-exported by `email_transport.py`, which is now only a compatibility shim)
+- `vaf/mail/store.py` — one SQLite store per scope (`scopes/<uuid>/mail.db`); `vaf/mail/service.py` raises without a scope
 - `vaf/api/email_routes.py` — All endpoints extract `user_scope_id` from `_get_current_user()`
 - `vaf/api/contact_routes.py` — All CRUD endpoints pass `user_scope_id`
 - `vaf/core/oauth_pkce.py` — `get_valid_access_token()` passes scope to credential operations
@@ -374,7 +375,7 @@ All functions that previously accepted only `username` now also accept `user_sco
 }
 ```
 
-Lookup priority (implemented in `email_transport._get_email_config()` and `mail_utils.list_accounts_with_labels_for_user()`):
+Lookup priority (implemented in `email_accounts.get_email_config()` and `mail_utils.list_accounts_with_labels_for_user()`):
 
 1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
 2. `email_config_by_user[username]` — legacy per-user
@@ -471,7 +472,7 @@ When building a new feature that handles user data:
 | Sandbox | `vaf/tools/python_sandbox.py` | `/tmp/vaf_{scope_prefix}_{exec_id}` |
 | Automation | `vaf/core/automation.py` | Tasks carry `user_scope_id` |
 | Email Config | `vaf/tools/mail_utils.py` | `email_config_by_scope[scope]` → `email_config_by_user` → `email_config` |
-| Email Transport | `vaf/core/email_transport.py` | `_get_email_config(username, user_scope_id)` with scope-first lookup |
+| Email accounts (SSOT) | `vaf/core/email_accounts.py` | `get_email_config(username, user_scope_id)` with scope-first lookup |
 | Email Sync Store | `vaf/core/email_sync_store.py` | `scopes/{scope_id}/email_sync.db` |
 | Email Routes | `vaf/api/email_routes.py` | `_get_current_user()` returns `user_scope_id`, all endpoints pass it |
 | WhatsApp Store | `vaf/core/whatsapp_message_store.py` | `scopes/{scope_id}/whatsapp_messages.db` |
@@ -501,7 +502,7 @@ When building a new feature that handles user data:
 | `vaf/core/whatsapp_message_store.py` | `_is_per_user_db(username, user_scope_id)` | Scope-only |
 | `vaf/core/contacts_store.py` | `_contacts_path(username, user_scope_id)` | Scope-only |
 | `vaf/core/credential_store.py` | `_credential_key(…, user_scope_id)` | Scope-only |
-| `vaf/core/email_transport.py` | `_get_email_config(username, user_scope_id)` | Scope-only |
+| `vaf/core/email_accounts.py` | `get_email_config(username, user_scope_id)` | Scope-only |
 | `vaf/api/email_routes.py` | `_store_and_cred_from_user()` returns both | Scope-only |
 | `vaf/api/config_routes.py` | `get_current_scope_id()` added | Already scope-aware |
 

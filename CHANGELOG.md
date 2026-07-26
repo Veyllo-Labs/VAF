@@ -71,6 +71,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   running yet, it is started for you instead of asking you to do it, with a note
   while it loads. Admins can additionally allow the Composer to quote older mail
   from other conversations (`mail_composer_mailbox_search_enabled`, off by default).
+  The Composer knows what VAF remembers about you the same way the chat does, every
+  time rather than only when you phrase a request a certain way, and it now writes a
+  complete message (greeting, the point, a closing) in the language of the mail it is
+  answering instead of a single bare sentence. It also tells apart which messages in
+  a conversation you wrote and which the other person wrote, and writes in YOUR tone
+  by following how you replied earlier in the same thread; if there is nothing of
+  yours to go by it says so and stays neutral instead of inventing a style.
 - The mail window's gear opens a built-in account panel: see your mail accounts,
   connect a new Gmail/Microsoft or IMAP account (with a Test button), reconnect,
   verify a connection, rename an account, toggle auto-sync, and remove an account.

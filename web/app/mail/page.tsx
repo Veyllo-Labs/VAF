@@ -57,7 +57,7 @@ interface Body {
     attachments: { id: number; part_id: string; filename?: string; content_type?: string; size_bytes?: number; is_inline: number }[];
 }
 /** What the composer read, so the panel can say so rather than imply it saw everything. */
-interface ComposerMeta { included: number; total: number; truncated: boolean; hidden_suspicious: number; dropped: number }
+interface ComposerMeta { included: number; total: number; truncated: boolean; hidden_suspicious: number; dropped: number; own_included: number }
 /** One exchange with the Mail Composer. Assistant turns hold the draft they
  *  produced, so a follow-up ("shorter") refines it instead of starting over. */
 interface ComposerTurn { role: 'user' | 'assistant'; content: string }
@@ -315,10 +315,15 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                             the whole compose box is. */}
                         <textarea value={body} onChange={e => setBody(e.target.value)} placeholder={t('compose.body')}
                             readOnly={assistBusy}
-                            className={cn("w-full flex-1 min-h-[27.5rem] border rounded-lg px-3 py-2 text-sm outline-none font-mono resize-none",
-                                paper
-                                    ? "bg-white text-[#222] border-[#d8d8d8] placeholder-[#999] focus:border-[#b0b0b0]"
-                                    : "bg-[#262626] text-inherit border-[#2e2e2e] focus:border-[#444]")} />
+                            // Inline style, not classes: this element sits inside a
+                            // dark-themed tree and a utility class for the light look
+                            // is one cascade surprise away from applying the text
+                            // colour without the background - which reads as "the
+                            // toggle does nothing" while actually hiding the draft.
+                            style={paper
+                                ? { background: '#ffffff', color: '#222222', borderColor: '#d8d8d8' }
+                                : { background: '#262626', borderColor: '#2e2e2e' }}
+                            className="w-full flex-1 min-h-[27.5rem] border rounded-lg px-3 py-2 text-sm outline-none font-mono resize-none" />
                         {error && <div className="text-[#e08c8c] text-sm">{error}</div>}
                     </div>
 
@@ -363,6 +368,13 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
                                             <> {t('composer.hidSuspicious', { n: assistMeta.hidden_suspicious })}</>}
                                         {(assistMeta.truncated || assistMeta.dropped > 0) &&
                                             <> {t('composer.shortened')}</>}
+                                        {/* Whether it had a sample of the user's own
+                                            writing at all. Without one it falls back to
+                                            a neutral register, and the user should know
+                                            that rather than wonder why it sounds off. */}
+                                        <> {assistMeta.own_included > 0
+                                            ? t('composer.matchedYourTone', { n: assistMeta.own_included })
+                                            : t('composer.noToneSample')}</>
                                     </div>
                                 )}
                                 <div ref={chatEndRef} />

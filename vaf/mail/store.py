@@ -720,7 +720,12 @@ class MailStore:
 
     def thread_messages(self, thread_id: int) -> List[Dict[str, Any]]:
         rows = self._conn().execute(
-            "SELECT m.*, f.name AS folder_name FROM messages m "
+            # folder_special_use travels because it is the only trustworthy way to
+            # tell the user's OWN messages from the correspondent's: a From header
+            # is not authenticated, but a message sitting in this mailbox's Sent
+            # folder really was sent from it.
+            "SELECT m.*, f.name AS folder_name, f.special_use AS folder_special_use "
+            "FROM messages m "
             "JOIN folders f ON f.id=m.folder_id WHERE m.thread_id=? "
             "ORDER BY COALESCE(m.date_ts, m.internaldate_ts, 0), m.id", (thread_id,)).fetchall()
         out = []

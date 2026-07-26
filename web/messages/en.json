@@ -1414,7 +1414,9 @@
       "newChat": "New",
       "followUp": "Change anything else?",
       "inserted": "Draft inserted into the text field.",
-      "working": "writing ..."
+      "working": "writing ...",
+      "matchedYourTone": "Tone matched to {n} of your own messages in this thread.",
+      "noToneSample": "No message of your own in this thread - neutral tone."
     }
   }
 }

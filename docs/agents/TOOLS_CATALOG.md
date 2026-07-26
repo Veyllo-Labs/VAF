@@ -142,19 +142,26 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `read_mail` | read | Read the full body of one email. |
 | `find_mail` | read | Search the mailbox by subject/sender. |
 | `send_mail` | write | Send an email (irreversible). |
-| `reply_mail` | write | Reply (quoted, correctly threaded) to an email; v2 engine (irreversible). |
-| `forward_mail` | write | Forward an email to new recipients; v2 engine (irreversible). |
-| `archive_mail` | write | Move an email out of the inbox into Archive; v2 engine. |
-| `delete_mail` | write | Move an email to Trash (trash-only, never expunged); v2 engine. |
+| `reply_mail` | write | Reply (quoted, correctly threaded) to an email (irreversible). |
+| `forward_mail` | write | Forward an email to new recipients (irreversible). |
+| `archive_mail` | write | Move an email out of the inbox into Archive. |
+| `delete_mail` | write | Move an email to Trash (trash-only, never expunged). |
 | `label_mail` | write | Set an email's label/category. |
 | `mark_mail_answered` | write | Mark an email as answered. |
 | `list_email_accounts` | read | List connected email accounts. |
 
 `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` are live agent
-verbs. Their mailbox writes apply locally first and replay through the
-durable op queue only once `mail_engine_write_enabled` is on (still off by
-default); sending, however, is gated by the engine flag alone. All four are
-excluded from the front-office contact lane by design.
+verbs. Their mailbox writes apply locally first and replay to the server through
+the durable op queue only once `mail_engine_write_enabled` is on (still off by
+default). SENDING is deliberately not gated by that flag - a queued mail must be
+able to leave - so `reply_mail` and `forward_mail` send for real, each still
+passing the high-risk send gate. All four are excluded from the front-office
+contact lane by design.
+
+Note that the **Mail Composer** (the draft assistant in the mail window's compose
+box) is NOT a tool and is not in this list. It is a route, it never sends, and it
+runs its model call with no tools at all - see
+[EMAIL_CLIENT.md](../integrations/EMAIL_CLIENT.md).
 
 ## Messaging
 

@@ -471,8 +471,8 @@ Telegram uses the same pipeline as the Web UI:
 
 ## Email Integration
 
-> Architecture design doc: [EMAIL_CLIENT.md](EMAIL_CLIENT.md) (current subsystem
-> layout, safety layers, and the decided v2 mail-client architecture). Read it
+> Architecture design doc: [EMAIL_CLIENT.md](EMAIL_CLIENT.md) (the engine, safety
+> layers, remote-content and tracking behaviour, and the Mail Composer). Read it
 > before changing any mail-related file.
 
 ### Features
@@ -481,8 +481,9 @@ Telegram uses the same pipeline as the Web UI:
 - **Secure storage**: OAuth tokens and IMAP passwords are stored in the OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service). If the keyring is unavailable, credentials are stored in an AES-256-GCM encrypted file under the platform data directory. No passwords or tokens are stored in `config.json`.
 - **Agent tools**: When at least one email account is connected, the agent can use `mail_inbox`, `find_mail`, `read_mail`, `mark_mail_answered`, `label_mail`, and `send_mail`. Credentials are never passed to the agent; the transport layer resolves them by `account_id`. Access tokens are refreshed automatically when expired.
 - **Dashboard–tool alignment**: Message listing still uses sync-store fallbacks so already-synced mail remains visible. **Account visibility is strict per user scope** in network mode: a user only sees accounts connected in that same authenticated scope. There is no cross-user account fallback.
-- **Mail dashboard during sync**: The Mail dashboard shows already-synced messages while a sync or refresh is in progress, so you can read mail without waiting for the sync to finish. A small "Updating…" indicator appears in the header during refresh.
-- **Phishing visibility split (UI vs agent)**: Suspicious mails remain visible in the Mail dashboard, marked with a warning icon and explanation tooltip. The same mails are hidden from agent-facing mail tools by default, so they cannot be used as normal context for automated actions.
+- **Mail client during sync**: The client shows already-synced messages while a sync or refresh is in progress, so you can read mail without waiting for the sync to finish. A small "Updating…" indicator appears in the header during refresh.
+- **Mail Composer**: the compose box can draft a reply from the open conversation or rewrite what you typed, streaming into the text field. It never sends - you press Send. It matches your own tone by reading the messages you wrote earlier in the same thread, and it can use what VAF remembers about you. Admin keys `mail_composer_*`; the design and its containment rules are in [EMAIL_CLIENT.md](EMAIL_CLIENT.md).
+- **Phishing visibility split (UI vs agent)**: Suspicious mails remain visible in the mail client, marked with a warning badge and explanation tooltip. The same mails are hidden from agent-facing mail tools by default, so they cannot be used as normal context for automated actions.
 
 #### Agent email tools (mail_inbox, find_mail, read_mail, mark_mail_answered, label_mail, send_mail)
 
@@ -492,18 +493,18 @@ Telegram uses the same pipeline as the Web UI:
 | `find_mail` | Search the synced mailbox by subject or sender (`query`, optional `folder`, `limit`). Returns matches with `account_id`, `message_id`, `provider_message_id`; if exactly one match, returns the full body. Suspicious matches are filtered from agent output by default. | User asks "what does the X mail say?" or "details about the Postman/Twitch/… email" → use find_mail(query="X"); if result includes full body use it, else call read_mail with first match's IDs. |
 | `read_mail` | Return the full body of one message as plain text. Parameters: `account_id`, `message_id`, `folder` (default INBOX), optional `provider_message_id`. Use IDs from the mail_inbox "IDs by index" block or from find_mail. | When the user wants to read a message; use the IDs from the mail_inbox output (by index) or find_mail; do not ask the user for these. |
 | `mark_mail_answered` | Mark a message as answered by the agent (`account_id`, `message_id`, `folder`). Sets a timestamp so the Mail UI shows an answered indicator and the message is not handled twice. | After the agent has processed or replied to an email. |
-| `label_mail` | Set a message's label/category (`account_id`, `message_id`, `category`; optional `folder`). Use categories like `promotions`, `newsletter`, `social`, `primary`, or a custom label. Adds a sender rule so future mails from that sender get the same label (same as changing the label in the Mail dashboard). | User asks to label emails (e.g. "label newsletters as promotions", "mark this as newsletter"). Use message_id from mail_inbox "IDs by index" block. |
+| `label_mail` | Set a message's label/category (`account_id`, `message_id`, `category`; optional `folder`). Use categories like `promotions`, `newsletter`, `social`, `primary`, or a custom label. Adds a sender rule so future mails from that sender get the same label (same as changing the label in the mail client). | User asks to label emails (e.g. "label newsletters as promotions", "mark this as newsletter"). Use message_id from mail_inbox "IDs by index" block. |
 | `send_mail` | Send an email (`account_id`, `to`, `subject`, `body`; optional `cc`, `bcc`, `attachment_paths` for documents, and `in_reply_to` with the original `message_id` for reply threading). Recipient addresses are validated; paths support folder aliases (Downloads, Desktop, Documents). High-risk patterns (e.g., urgency + transfer/credential requests) are blocked unless explicitly confirmed with `confirm_high_risk=true`. | User asks to send or reply to an email; for documents pass `attachment_paths`; when replying pass `in_reply_to`. For sensitive requests, require explicit user confirmation before retrying with `confirm_high_risk=true`. |
 
 The `mail_inbox` tool uses a compact list format (truncated From/Subject, short date) plus a separate "IDs by index" block so more messages fit in context and the agent can present N distinct emails when the user asks for "N mails". Best practice: when the user requests a number (e.g. 15 or 20), call `mail_inbox(max_messages=N)` and relay the tool result; do not invent or repeat entries from a previous turn.
 
-Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the Mail dashboard and for the agent. This keeps context size low and avoids raw markup.
+Message bodies are always returned as plain text: HTML and MIME structure are stripped, and the same cleaned text is used in the mail client and for the agent. This keeps context size low and avoids raw markup.
 
 ### Agent-side phishing protection
 
 - **Goal**: reduce prompt-injection and social-engineering risk from email content while keeping operator visibility in the dashboard.
 - **Agent filter scope**: `mail_inbox` and `find_mail` apply a phishing heuristic filter before returning results to the agent. Messages over the configured risk threshold are hidden from tool results.
-- **Dashboard scope**: suspicious messages are still shown in the Web UI Mail dashboard with a warning indicator and reason tooltip.
+- **Dashboard scope**: suspicious messages are still shown in the mail client with a warning indicator and reason tooltip.
 - **Config keys** (registered in `Config.DEFAULTS`, admin-write-only via the
   `email_agent_` prefix; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)):
   - `email_agent_phishing_filter_enabled` (default `true`)
@@ -598,15 +599,15 @@ You can optionally add **sender rules** so that messages from certain senders ar
 ```
 
 - **New syncs**: When mail is fetched (Gmail, Microsoft, IMAP), each message’s category is set from the provider (Gmail labels) or from sender rules. So new mails get the right label automatically.
-- **Auto-sync every 30 min**: If the user enables "Auto sync every 30 min" for an account in Settings → Connections → Email, the backend runs a periodic task that syncs all such accounts every 30 minutes. The first run is 60 seconds after server startup; mail is updated even when the Mail dashboard or browser is closed, as long as the VAF server (web or headless) is running.
-- **Label in UI**: When the user changes a message's label in the Mail dashboard (Primary, Social, Promotions, or custom), the backend automatically adds a sender rule for that message's From address and applies it to all synced messages from that sender (existing and future). No extra action is required.
-- **Manual backfill**: If you edit `sender_category_rules` in config by hand, call **POST** `/api/email/messages/apply-sender-rules` (with auth) to re-apply rules to all synced messages. Response: `{ "ok": true, "updated": 42 }`.
+- **Continuous sync**: the mail engine keeps each enabled account up to date by itself - one IDLE connection pinned to the inbox for near-instant new mail, plus a periodic sweep of the other folders. Mail is updated even when the mail window or the browser is closed, as long as the VAF server (web or headless) is running. The per-account **Auto-sync** toggle in the account panel takes that account out of the sweep; a mail still queued for sending leaves regardless. The old 30-minute polling loop is gone: it fetched every inbox a second time into a separate store.
+- **Label in UI**: When the user changes a message's label in the mail client (Primary, Social, Promotions, or custom), the backend automatically adds a sender rule for that message's From address and applies it to all synced messages from that sender (existing and future). No extra action is required.
+- **Manual backfill**: If you edit `sender_category_rules` in config by hand, call **POST** `/api/mail/messages/apply-sender-rules` (with auth) to re-apply rules to all synced messages. Response: `{ "ok": true, "updated": 42 }`.
 
 ### Mail sync store (SQLite)
 
 - **Path**: By default the DB file is `email_sync.db` in the platform data dir (e.g. `%LOCALAPPDATA%\\vaf` on Windows). To use a Docker volume or custom path, set the environment variable **`VAF_EMAIL_SYNC_DB`** to the full path of the SQLite file (e.g. `/data/vaf/email_sync.db`). The parent directory is created if missing. **Best practice (Docker):** If you run VAF in Docker, mount a volume (e.g. at `/data/vaf`) and set `VAF_EMAIL_SYNC_DB=/data/vaf/email_sync.db` so the Mail DB lives in the volume and is persistent.
 - **Version control**: Database files (`*.db`, `*.db-wal`, `*.db-shm`) are listed in `.gitignore`; synced mail data is never committed to the repository.
-- **Per-user DB (network mode)**: When multiple users are enabled (network / login), **each user gets their own SQLite file**: `data_dir/users/{username}/email_sync.db` or `data_dir/scopes/<user_scope_id>/email_sync.db`. User A and User B never share mail data. The **agent tools** (`mail_inbox`, etc.) try the primary store (from the chat session’s user/scope), then the legacy store and, when only one scope has accounts, that scope’s store—so the same messages shown in the Mail dashboard are available to the agent even if the chat was connected with a different identity (e.g. local admin vs. JWT scope).
+- **Per-user DB (network mode)**: When multiple users are enabled (network / login), **each user gets their own SQLite file**: `data_dir/users/{username}/email_sync.db` or `data_dir/scopes/<user_scope_id>/email_sync.db`. User A and User B never share mail data. The **agent tools** (`mail_inbox`, etc.) try the primary store (from the chat session’s user/scope), then the legacy store and, when only one scope has accounts, that scope’s store—so the same messages shown in the mail client are available to the agent even if the chat was connected with a different identity (e.g. local admin vs. JWT scope).
 - **Retention**: Messages older than **90 days** (by message date, or by sync date if the message date cannot be parsed) are **deleted automatically** on each sync. This keeps the store size bounded.
 - **Answered flag**: When the agent has processed or replied to a message, it can call the **`mark_mail_answered`** tool so the message is marked with a timestamp. The Mail UI then shows an answered timestamp and an "Answered" badge in the list, so the same mail is not handled twice.
 

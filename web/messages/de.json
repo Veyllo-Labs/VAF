@@ -1414,7 +1414,9 @@
       "newChat": "Neu",
       "followUp": "Noch etwas aendern?",
       "inserted": "Entwurf ins Textfeld eingefuegt.",
-      "working": "schreibt ..."
+      "working": "schreibt ...",
+      "matchedYourTone": "Ton an {n} deiner eigenen Nachrichten im Verlauf angelehnt.",
+      "noToneSample": "Keine eigene Nachricht im Verlauf - neutraler Ton."
     }
   }
 }

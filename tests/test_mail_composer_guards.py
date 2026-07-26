@@ -29,6 +29,21 @@ def _row(pk, sender="a@x", subject="Re: x", snippet="body", suspicious=False):
             "date_ts": 1_700_000_000, "suspicious_for_agent": suspicious}
 
 
+def _fence(msgs):
+    """Found by content, not position: the prompt gained a message when the memory
+    block became its own system turn, the way the main agent injects it."""
+    # STARTS with the tag: the system rules name it too, so a substring match
+    # returns the rules and every assertion about "the fence" silently checks the
+    # wrong message.
+    return next(m["content"] for m in msgs
+                if m["content"].startswith("<untrusted_email_thread>"))
+
+
+def _memory_block(msgs):
+    from vaf.mail.composer import _MEMORY_HEADING
+    return next(m["content"] for m in msgs if _MEMORY_HEADING in m["content"])
+
+
 class _Svc:
     """Minimal MailService stand-in: the route must never reach past these."""
 
@@ -120,7 +135,7 @@ def test_a_flagged_anchor_refuses_the_whole_request(monkeypatch):
 def test_a_flagged_non_anchor_contributes_no_body(monkeypatch):
     svc = _Svc([_row(1, sender="eve@evil", snippet="WIRE MONEY", suspicious=True), _row(2)])
     _out, seen = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 2}, svc, monkeypatch)
-    fenced = seen["messages"][1]["content"]
+    fenced = _fence(seen["messages"])
     assert "WIRE MONEY" not in fenced and "flagged as possible phishing" in fenced
     assert ("get_body", 1) not in svc.calls, "a flagged body must never even be read"
 
@@ -155,7 +170,7 @@ def test_rewrite_needs_text_and_reads_no_bodies(monkeypatch):
     _out, seen = _run({"mode": "rewrite", "draft": "i can do friday",
                        "thread_id": 7, "anchor_pk": 2}, svc, monkeypatch)
     assert not any(c[0] == "get_body" for c in svc.calls)
-    assert "i can do friday" in seen["messages"][2]["content"]
+    assert "i can do friday" in seen["messages"][-1]["content"]
 
 
 def test_bad_mode_is_rejected(monkeypatch):
@@ -360,21 +375,52 @@ def test_memory_query_comes_from_the_user_not_the_mail(monkeypatch):
     assert seen["query"] == "confirm our day rate"
     assert "SECRETS" not in seen["query"] and "eve@evil" not in seen["query"]
     # retrieved notes go in the TRUSTED turn, never beside the mail
-    assert "<my_notes>" in prompt["messages"][2]["content"]
-    assert "<my_notes>" not in prompt["messages"][1]["content"]
-    assert "900 EUR" not in prompt["messages"][1]["content"]
+    assert "900 EUR" in _memory_block(prompt["messages"])
+    assert "900 EUR" not in _fence(prompt["messages"]), "notes are never untrusted content"
 
 
-def test_no_instruction_means_no_retrieval(monkeypatch):
-    """A bare "write a draft" must carry no extra exposure at all."""
-    called = {"n": 0}
+def test_memory_is_retrieved_even_without_an_instruction(monkeypatch):
+    """Owner decision: the Composer gets memory the way the main agent and the voice
+    agent do - unconditionally. A composer that only sometimes remembers who you are
+    is worse than one that never does, because you cannot tell which run you got.
+    With nothing typed the query falls back to the subject being answered."""
+    seen = {}
 
     import vaf.memory.rag as rag
     monkeypatch.setattr(rag, "run_memory_search_sync",
-                        lambda **kw: called.update(n=called["n"] + 1) or "x")
-    svc = _Svc([_row(1)])
-    _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1}, svc, monkeypatch, user=_UUID_USER)
-    assert called["n"] == 0
+                        lambda **kw: seen.update(kw) or "Day rate is 900 EUR.")
+    svc = _Svc([_row(1, subject="Re: the March quote")])
+    _out, prompt = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1}, svc,
+                        monkeypatch, user=_UUID_USER)
+    assert seen["query"] == "Re: the March quote"
+    assert seen["caller"] == "mail_composer"
+    assert "900 EUR" in _memory_block(prompt["messages"])
+
+
+def test_memory_uses_the_main_agent_k_not_a_local_number(monkeypatch):
+    """memory_rag_k is the knob users already tune for the chat lane; inventing a
+    second number here would make the two disagree with no way to tell why."""
+    seen = {}
+    import vaf.memory.rag as rag
+    monkeypatch.setattr(rag, "run_memory_search_sync", lambda **kw: seen.update(kw) or "")
+    monkeypatch.setitem(Config.DEFAULTS, "memory_rag_k", 7)
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, k, d=None: 7 if k == "memory_rag_k" else Config.DEFAULTS.get(k, d)))
+    _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1, "instruction": "confirm it"},
+         _Svc([_row(1)]), monkeypatch, user=_UUID_USER)
+    assert seen["k"] == 7
+
+
+def test_the_memory_section_is_present_even_when_nothing_matched(monkeypatch):
+    """Same as the main agent: an explicit "nothing matched" is different
+    information from no section at all."""
+    import vaf.memory.rag as rag
+    monkeypatch.setattr(rag, "run_memory_search_sync", lambda **kw: "")
+    _out, prompt = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1,
+                         "instruction": "confirm it"}, _Svc([_row(1)]), monkeypatch,
+                        user=_UUID_USER)
+    from vaf.mail.composer import _MEMORY_EMPTY
+    assert _MEMORY_EMPTY in _memory_block(prompt["messages"])
 
 
 def test_memory_can_be_switched_off(monkeypatch):
@@ -444,9 +490,9 @@ def test_mailbox_query_is_the_users_words_not_the_mails(monkeypatch):
                        "instruction": "what did we agree in March"}, svc, monkeypatch)
     assert svc.search_calls == ["what did we agree in March"]
     assert "passwords" not in svc.search_calls[0]
-    fenced = seen["messages"][1]["content"]
+    fenced = _fence(seen["messages"])
     assert "We agreed 900 EUR." in fenced, "the hit must be usable"
-    assert "We agreed 900 EUR." not in seen["messages"][-1]["content"], "and never trusted"
+    assert "We agreed 900 EUR." not in seen["messages"][0]["content"], "and never in the rules"
 
 
 def test_a_flagged_hit_is_dropped_entirely(monkeypatch):
@@ -460,7 +506,7 @@ def test_a_flagged_hit_is_dropped_entirely(monkeypatch):
          "snippet": "Invoice 41 is paid.", "date_ts": 1_700_000_000}])
     _out, seen = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1,
                        "instruction": "about the invoice"}, svc, monkeypatch)
-    fenced = seen["messages"][1]["content"]
+    fenced = _fence(seen["messages"])
     assert "WIRE 5000 EUR NOW" not in fenced
     assert "Invoice 41 is paid." in fenced
 
@@ -472,7 +518,7 @@ def test_the_open_thread_is_not_quoted_back_to_itself(monkeypatch):
          "snippet": "already in the thread above", "date_ts": 1_700_000_000}])
     _out, seen = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1,
                        "instruction": "answer this"}, svc, monkeypatch)
-    assert "already in the thread above" not in seen["messages"][1]["content"]
+    assert "already in the thread above" not in _fence(seen["messages"])
 
 
 def test_rewrite_never_searches_the_mailbox(monkeypatch):

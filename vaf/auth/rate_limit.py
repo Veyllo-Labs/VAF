@@ -69,8 +69,31 @@ class _AttemptTracker:
 _tracker = _AttemptTracker()
 
 
+def client_key(request: Request) -> str:
+    """The identity this sliding window is keyed on: the REAL client, not the socket peer.
+
+    The integrated HTTPS proxy relays every LAN device to the backend over loopback, so
+    ``request.client.host`` is 127.0.0.1 for all of them. Keying on it put every device in one
+    shared bucket: five failed logins by anyone locked out the whole network for the window, and
+    an attacker could not be told apart from a legitimate user.
+
+    Use this from EVERY site that records or checks a failure. The recording path and the
+    checking path must agree on the key - if one used the peer and the other the real client, the
+    limiter would record under one key, look up another, and silently stop blocking anything.
+    """
+    peer = request.client.host if request.client else "unknown"
+    try:
+        from vaf.network.binding import effective_client_ip
+        return effective_client_ip(peer, request.headers.get("x-forwarded-for"))
+    except Exception:
+        return peer
+
+
 def record_login_failure(ip: str) -> None:
-    """Record a failed login attempt (called from auth_routes on 401)."""
+    """Record a failed login attempt (called from auth_routes on 401).
+
+    Pass ``client_key(request)``, never ``request.client.host``.
+    """
     _tracker.record_failure(ip)
     logger.info("Rate-limit: recorded failed attempt for %s", ip)
 
@@ -98,7 +121,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method != "POST":
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = client_key(request)
 
         max_attempts = int(Config.get("local_network_rate_limit_attempts", 5))
         window_minutes = int(Config.get("local_network_rate_limit_window_minutes", 15))

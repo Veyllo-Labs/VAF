@@ -55,13 +55,32 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE_NAME = "vaf_token"
 
 
+def _client_ip(request: Request) -> str:
+    """Who this request REALLY comes from - the device, not the socket peer.
+
+    The integrated HTTPS proxy relays every LAN device to the backend over loopback, so
+    ``request.client.host`` is 127.0.0.1 for all of them. Every decision in this module that
+    means "the person is sitting at this machine" (long-lived tokens, the 2FA shortcut on
+    refresh) and every record of "where did this come from" (the security log, session
+    provenance) must use this instead, or it applies to the whole network.
+
+    Delegates to the one shared resolver so this module, the auth middleware, the rate limiter,
+    the WebSocket handshake and the OAuth callback exception cannot disagree.
+    """
+    peer = request.client.host if request.client else ""
+    try:
+        from vaf.network.binding import effective_client_ip
+        return effective_client_ip(peer, request.headers.get("x-forwarded-for"))
+    except Exception:
+        return peer
+
+
 def _log_auth_failure(kind: str, request: Request, username: str = "", detail: str = "") -> None:
     """Record a failed login/2FA attempt in the security event log (never the
     password/code itself). Lazy + swallow-all: auditing must never break auth."""
     try:
         from vaf.core.security_events import log_security_event
-        ip = request.client.host if request.client else ""
-        log_security_event(kind, ip=ip or "", username=username, detail=detail)
+        log_security_event(kind, ip=_client_ip(request), username=username, detail=detail)
     except Exception:
         pass
 
@@ -275,7 +294,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             # DB uses TIMESTAMP WITHOUT TIME ZONE; store naive UTC
             if expires_at.tzinfo is not None:
                 expires_at = expires_at.replace(tzinfo=None)
-            client_host = request.client.host if request.client else None
+            client_host = _client_ip(request) or None
             user_agent = request.headers.get("user-agent", "")
             session = UserSession(
                 user_id=new_user.id,
@@ -352,9 +371,8 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
     if not ok:
         # Feed the shared per-IP rate limiter (this route returns 200 even on failure).
         try:
-            from vaf.auth.rate_limit import record_login_failure
-            client_ip = request.client.host if request.client else "unknown"
-            record_login_failure(client_ip)
+            from vaf.auth.rate_limit import client_key, record_login_failure
+            record_login_failure(client_key(request))
         except Exception:
             pass
     return {"ok": ok}
@@ -468,7 +486,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         )
         if expires_at.tzinfo is not None:
             expires_at = expires_at.replace(tzinfo=None)
-        client_host = request.client.host if request.client else None
+        client_host = _client_ip(request) or None
         user_agent = request.headers.get("user-agent", "")
         session = UserSession(
             user_id=user.id,
@@ -523,9 +541,11 @@ async def login(body: LoginRequest, request: Request, response: Response):
         needs_2fa_setup = user.requires_2fa_setup
         is_2fa_verified = not (needs_2fa_setup or has_2fa_configured)
 
-        # Localhost (desktop tray) logins always get a long-lived token —
-        # the user is on their own machine, 24h expiry serves no security purpose.
-        client_ip = request.client.host if request.client else ""
+        # Logins from the machine VAF runs on always get a long-lived token — the user is at
+        # their own desk, 24h expiry serves no security purpose there. This must key on the REAL
+        # client: behind the integrated HTTPS proxy every LAN device also arrives as 127.0.0.1,
+        # so the peer address handed a 30-day token to phones and laptops the rule never meant.
+        client_ip = _client_ip(request)
         _is_localhost = client_ip in ("127.0.0.1", "::1", "localhost")
         _localhost_expiry_hours = 30 * 24  # 30 days
         access = create_access_token(
@@ -555,7 +575,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
     )
     if expires_at_login.tzinfo is not None:
         expires_at_login = expires_at_login.replace(tzinfo=None)
-    client_host_login = request.client.host if request.client else None
+    client_host_login = _client_ip(request) or None
     user_agent_login = request.headers.get("user-agent", "")
     async with get_auth_db() as db:
         login_session = UserSession(
@@ -659,7 +679,10 @@ async def _me_user_from_token(request: Request, response: Response, token: str) 
 
                 require_2fa = Config.get("local_network_require_2fa", True)
                 if require_2fa and not payload.get("is_2fa_verified", False):
-                    client_ip = request.client.host if request.client else "unknown"
+                    # The admin physically at the machine is exempt from re-proving 2FA here.
+                    # Must be the REAL client: behind the proxy every LAN device also looks like
+                    # 127.0.0.1, which extended the exemption to remote admins.
+                    client_ip = _client_ip(request) or "unknown"
                     try:
                         from vaf.network.binding import is_localhost
                     except ImportError:

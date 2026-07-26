@@ -330,9 +330,8 @@ async def test_imap_connection(request: Request, body: TestImapRequest, _user: D
     # Feed the shared rate limiter so repeated failed credential tests get blocked per IP
     # (the test route returns 200 even on failure, so the middleware's 401 path won't catch it).
     try:
-        from vaf.auth.rate_limit import record_login_failure
-        client_ip = request.client.host if request.client else "unknown"
-        record_login_failure(client_ip)
+        from vaf.auth.rate_limit import client_key, record_login_failure
+        record_login_failure(client_key(request))
     except Exception:
         pass
     return {"ok": False, "error": err, "hint": hint}

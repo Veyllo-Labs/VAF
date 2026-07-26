@@ -12,6 +12,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A single device could lock everyone else out of signing in.** VAF blocks an address after
+  repeated failed logins, but behind the built-in HTTPS proxy every device on the network
+  counted as the same one. Five wrong passwords from anywhere blocked everybody for the next
+  quarter of an hour, and the block could not be traced to whoever caused it. Attempts are now
+  counted per device.
+- **Conveniences meant for the computer VAF runs on reached the whole network.** Signing in at
+  the machine itself gives a long-lived session, and an administrator there does not have to
+  re-enter a two-factor code when the session refreshes - both because the person is physically
+  at the keyboard. Behind the proxy every device on the network looked like the machine itself
+  and received the same treatment. VAF now recognises which device is really the local one; the
+  computer you run VAF on keeps both conveniences unchanged.
+- **Your login history and the security log showed every device as the local computer.** Sessions
+  and failed attempts from the network were recorded as coming from VAF's own machine, so it was
+  impossible to see where a login had actually come from. Both now show the real device.
 - **Devices on your network could reach VAF without logging in.** When network access was
   switched on, VAF's built-in HTTPS proxy passed every device to the backend as if it were
   the computer itself, so any device on the same network could open pages and APIs without

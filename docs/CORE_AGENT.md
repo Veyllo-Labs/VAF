@@ -140,7 +140,26 @@ error text).
   session: rebinds identity from session metadata, re-inits the prompt, and
   replays messages preserving tool-call linkage.
 - Hot reload: `reload_builtin_tools()` (new in-tree files only),
-  `reload_custom_tools()`, `reload_mcp_tools()`, `reload_api_backend()`.
+  `reload_custom_tools()`, `reload_mcp_tools()`,
+  `reload_api_backend(*, force=False)`.
+- `reload_api_backend(*, force=False) -> bool` is the **only** supported way to move a
+  running agent to a different provider or API key, and it is the whole job: it takes a
+  swap lock, refuses to touch a sub-agent pinned via `VAF_PROVIDER` or an embedded agent
+  with `config_overrides`, builds the backend through `_build_api_backend` (so an embedded
+  `api_key` reaches it), reattaches the structured event sink, drops the local stack on
+  `local -> cloud` (`use_server=False`, `llm=None`, and `stop_server()` on **its own**
+  `ServerManager`), resets the tokenizer and refreshes `model_display_name`. On a failed
+  build it reports `False` and leaves the agent on its previous backend rather than
+  stranding it with none. Returns `True` when the active backend actually changed.
+  **It can only stop a server it owns.** In the desktop/tray product the `llama-server`
+  child belongs to the tray's module-level `ServerManager` (`vaf/tray.py`), not to the
+  agent, so `agent.server` is `None` there and the loaded GGUF stays resident across a
+  provider switch (verified on a single running instance). Releasing that one is the tray's
+  job and is not wired up yet. **Pass `force=True` when the provider may be unchanged
+  but the key may have moved** - the default skips that case, which is why a config-reload
+  that does not know which key changed must force. Do not reassign `provider`,
+  `api_backend`, `use_server` or `llm` by hand; guarded by
+  `tests/test_provider_swap_single_implementation.py`.
 
 ## Concurrency contract
 

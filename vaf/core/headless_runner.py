@@ -2887,30 +2887,22 @@ def _handle_command(cmd_str, agent, session_mgr):
             print(f"[Headless] LOAD_SESSION: Switched agent context to {sid}")
 
         elif cmd_type == "RELOAD_CONFIG":
+            # The backend swap belongs to the agent, not to whoever happens to receive the
+            # command: Agent.reload_api_backend does it with the swap lock, the sub-agent
+            # pin and embedded guards, the embedded-key path (_build_api_backend), the
+            # event-sink reattach, the local teardown (stop_server, so the GGUF leaves
+            # VRAM), the tokenizer reset and the model-name refresh. This runner used to
+            # reimplement it and had none of that. force=True because RELOAD_CONFIG does
+            # not know WHICH key changed - without it a pure API-key change is a no-op.
             from vaf.core.config import Config
-            new_cfg = Config.load()
-            agent.config = new_cfg
-            # Ensure provider changes take effect for the running agent
-            new_provider = new_cfg.get("provider", "local")
+            agent.config = Config.load()   # non-provider keys, as before
             old_provider = getattr(agent, "provider", "local")
-            print(f"[Headless] RELOAD_CONFIG: old={old_provider} new={new_provider}")
-            if old_provider != new_provider:
-                agent.provider = new_provider
-                if new_provider != "local":
-                    try:
-                        from vaf.core.api_backend import APIBackendManager
-                        agent.api_backend = APIBackendManager(new_provider)
-                        print(f"[Headless] API backend created for {new_provider}")
-                    except Exception as e:
-                        agent.api_backend = None
-                        print(f"[Headless] API backend creation failed: {e}")
-                    agent.use_server = False
-                    agent.llm = None
-                else:
-                    agent.api_backend = None
-                    print("[Headless] Switched to local provider")
-                
-                # Send updated stats to reflect provider change in UI
+            changed = agent.reload_api_backend(force=True)
+            print(f"[Headless] RELOAD_CONFIG: old={old_provider} "
+                  f"new={getattr(agent, 'provider', 'local')} changed={changed}")
+            if changed:
+                # Reflect the (possibly) new backend in the UI. Gated on the agent's own
+                # verdict rather than a provider comparison, so a key-only swap counts too.
                 try:
                     used, total = agent.get_token_usage()
                     stats = {

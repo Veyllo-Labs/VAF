@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Changing your API key only took effect after a restart.** Switching provider or key is
+  handled in one place inside VAF, but the three parts that receive a settings change had
+  each rebuilt that step by hand and each left pieces out. A key change with the provider
+  unchanged was ignored entirely; VAF could keep telling the model, and the logs, that it
+  was still the previous one; and if the new provider could not be reached, VAF could be
+  left with no working model at all until you restarted, instead of simply staying on the
+  one that was working. All three now go through the same implementation.
 - **One of the agent's two ways to change a file skipped the per-user boundary.** When
   several people use one VAF, each is confined to their own project folder. Asking the
   agent to rewrite a file respected that; asking it to change a few lines in a file did

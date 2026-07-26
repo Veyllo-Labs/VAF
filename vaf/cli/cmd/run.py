@@ -1406,28 +1406,20 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     continue
 
                                 elif cmd_type == "RELOAD_CONFIG":
-                                    # Reload agent config and apply provider change (same logic as headless_runner)
+                                    # Delegate the backend swap to the agent (see the same
+                                    # branch in headless_runner): this used to be a hand-rolled
+                                    # copy missing the swap lock, the sub-agent pin and embedded
+                                    # guards, the embedded-key path, the event-sink reattach,
+                                    # stop_server (GGUF stayed in VRAM), the tokenizer reset and
+                                    # the model-name refresh. force=True so a pure key change
+                                    # is not swallowed by the no-op guard.
                                     try:
                                         tui.event("System", "Config updated from WebUI", style="dim")
                                         from vaf.core.config import Config
-                                        new_cfg = Config.load()
                                         if hasattr(agent, "config"):
-                                            agent.config = new_cfg
-                                        new_provider = new_cfg.get("provider", "local")
-                                        old_provider = getattr(agent, "provider", "local")
-                                        if old_provider != new_provider:
-                                            agent.provider = new_provider
-                                            if new_provider != "local":
-                                                try:
-                                                    from vaf.core.api_backend import APIBackendManager
-                                                    agent.api_backend = APIBackendManager(new_provider)
-                                                except Exception:
-                                                    agent.api_backend = None
-                                                agent.use_server = False
-                                                agent.llm = None
-                                            else:
-                                                agent.api_backend = None
-                                            tui.event("System", f"Provider switched to {new_provider.upper()}", style="dim")
+                                            agent.config = Config.load()
+                                        if agent.reload_api_backend(force=True):
+                                            tui.event("System", f"Provider switched to {getattr(agent, 'provider', 'local').upper()}", style="dim")
                                     except Exception:
                                         pass
                                     continue
@@ -1541,28 +1533,15 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             continue
                                         
                                         elif cmd_type == "RELOAD_CONFIG":
-                                            # Reload agent config and apply provider change (same logic as headless_runner)
+                                            # Same delegation as the sibling branch above - one
+                                            # command, one implementation, in the agent.
                                             try:
                                                 tui.event("System", "Config updated from WebUI", style="dim")
                                                 from vaf.core.config import Config
-                                                new_cfg = Config.load()
                                                 if hasattr(agent, "config"):
-                                                    agent.config = new_cfg
-                                                new_provider = new_cfg.get("provider", "local")
-                                                old_provider = getattr(agent, "provider", "local")
-                                                if old_provider != new_provider:
-                                                    agent.provider = new_provider
-                                                    if new_provider != "local":
-                                                        try:
-                                                            from vaf.core.api_backend import APIBackendManager
-                                                            agent.api_backend = APIBackendManager(new_provider)
-                                                        except Exception:
-                                                            agent.api_backend = None
-                                                        agent.use_server = False
-                                                        agent.llm = None
-                                                    else:
-                                                        agent.api_backend = None
-                                                    tui.event("System", f"Provider switched to {new_provider.upper()}", style="dim")
+                                                    agent.config = Config.load()
+                                                if agent.reload_api_backend(force=True):
+                                                    tui.event("System", f"Provider switched to {getattr(agent, 'provider', 'local').upper()}", style="dim")
                                             except Exception:
                                                 pass
                                             wake_word_detected_flag.clear()

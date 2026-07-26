@@ -31,6 +31,11 @@ AUTH_EXEMPT_PATHS: set[str] = {
     "/api/auth/verify-2fa",
     "/api/auth/refresh",
     "/api/auth/setup-2fa",
+    # First-run only: the onboarding wizard live-tests a Veyllo key BEFORE /bootstrap, so no token
+    # can exist yet. The endpoint gates itself (403 once an admin exists) and is rate-limited, so
+    # exempting it opens nothing after setup. Needed for a headless/LAN first run, where the
+    # tokenless-localhost path no longer covers a browser on another device.
+    "/api/auth/test-veyllo-key",
     "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
     "/docs",
     "/openapi.json",
@@ -111,13 +116,29 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # HTTP middleware (BaseHTTPMiddleware skips non-http scopes); the /ws route
         # self-authenticates. An "Upgrade: websocket" header on an HTTP-scope request
         # is therefore only ever an auth-bypass attempt — it must NOT skip auth.
-        client_ip = request.client.host if request.client else "unknown"
+        peer_ip = request.client.host if request.client else "unknown"
 
         try:
-            from vaf.network.binding import is_localhost
+            from vaf.network.binding import effective_client_ip, is_localhost
         except ImportError:
             def is_localhost(ip: str) -> bool:
                 return ip in ("127.0.0.1", "::1", "localhost")
+
+            def effective_client_ip(peer: str, forwarded_for: str | None) -> str:
+                if not is_localhost(peer):
+                    return peer
+                return ((forwarded_for or "").split(",")[0] or "").strip() or peer
+
+        # A 127.0.0.1 peer is NOT proof of a local client: the integrated HTTPS proxy terminates TLS
+        # on 0.0.0.0 and relays every LAN device to the backend over loopback, so request.client.host
+        # is 127.0.0.1 for remote users too — which made every tokenless LAN request pass the checks
+        # below and reach the route-level local-admin floors. Resolve the REAL client from the
+        # proxy-authored X-Forwarded-For instead (the proxy strips any client-supplied copy first, so
+        # a hop can only be ADDED, never removed). Still local, still tokenless, still working:
+        # internal loopback IPC (/api/subagent/stream, /api/workflow/update, /api/heartbeat), the
+        # desktop via the Next.js /api route (sets no forwarding header) and the same-host OAuth
+        # callback (relayed hop is 127.0.0.1). A LAN client without a valid token now gets 401.
+        client_ip = effective_client_ip(peer_ip, request.headers.get("x-forwarded-for"))
 
         token = _extract_token(request)
 

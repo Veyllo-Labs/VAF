@@ -90,6 +90,30 @@ def is_allowed_ip(ip: str) -> bool:
         return False
 
 
+def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
+    """Resolve who the client REALLY is, accounting for the integrated HTTPS proxy.
+
+    Why this exists: the proxy terminates TLS on 0.0.0.0 and relays every LAN device to the
+    backend over loopback, so the raw socket peer is 127.0.0.1 for remote users too. Trusting
+    the peer alone therefore treats the whole LAN as local.
+
+    The polarity is deliberately fail-safe: a forwarding hop REMOVES trust, it never grants it.
+    ``X-Forwarded-For`` is honoured only when the immediate peer is itself loopback (i.e. the
+    request was relayed by our own proxy, which strips any client-supplied copy before setting
+    its own - see vaf/network/https_proxy.py). A direct non-loopback peer keeps its socket
+    address no matter what it claims, so a client can only make itself look MORE remote,
+    never more local.
+
+    Callers with no forwarding header (internal loopback IPC, the desktop via the Next.js
+    /api route) resolve to the peer unchanged.
+    """
+    peer = (peer_ip or "").strip() or "unknown"
+    if not is_localhost(peer):
+        return peer
+    first_hop = ((forwarded_for or "").split(",")[0] or "").strip()
+    return first_hop or peer
+
+
 def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
     """SSRF guard for user-supplied OUTBOUND targets (e.g. an IMAP/SMTP server a user types
     into the email wizard). Resolves the host and raises ValueError if ANY resolved address is

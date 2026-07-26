@@ -2804,6 +2804,22 @@ VAF_TOKEN_COOKIE = "vaf_token"
 
 
 
+def _ws_client_ip(websocket) -> str:
+    """Real client address for a WS handshake.
+
+    X-Forwarded-For is honoured only when the immediate peer is loopback (i.e. the handshake was
+    relayed by the integrated HTTPS proxy, which rebuilds the relayed headers itself). A direct
+    non-loopback client therefore cannot forge a loopback identity to skip the network-mode token
+    check, the 2FA gate or the local-admin fallback further down.
+    """
+    peer = websocket.client.host if websocket.client else "unknown"
+    try:
+        from vaf.network.binding import effective_client_ip
+        return effective_client_ip(peer, websocket.headers.get("x-forwarded-for"))
+    except Exception:
+        return peer
+
+
 def _emit_sec_ws(detail: str, ip: str = "") -> None:
     """Security-event mirror for rejected NETWORK WebSocket handshakes (lazy, never raises)."""
     try:
@@ -2829,12 +2845,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         token = websocket.cookies.get(VAF_TOKEN_COOKIE)
     # Prefer X-Forwarded-For (set by the integrated HTTPS proxy) so a LAN device shows its REAL IP in the
     # network map, not 127.0.0.1 (the proxy). Fall back to the direct peer for the desktop/localhost path.
-    _xff = ""
-    try:
-        _xff = (websocket.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
-    except Exception:
-        _xff = ""
-    client_ip = _xff or (websocket.client.host if websocket.client else "unknown")
+    client_ip = _ws_client_ip(websocket)
     print(f"[WebSocket] Connection attempt from {client_ip}")
     log("API", f"WebSocket connection attempt from {client_ip}")
     

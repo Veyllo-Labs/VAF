@@ -127,8 +127,13 @@ def _normalize_headers_for_upstream(headers: dict, target_origin: str, original_
     """Drop hop-by-hop, set forward headers, set single Host to target (remove any existing host)."""
     for h in ("connection", "transfer-encoding", "keep-alive", "te", "trailer", "upgrade", "proxy-authorization"):
         headers.pop(h, None)
+    # Drop every CLIENT-supplied copy of the headers this proxy authors below. Starlette hands us
+    # lowercased header names, so writing "X-Forwarded-For" would ADD a second header rather than
+    # replace the client's - and the backend's Headers.get() returns the FIRST match, i.e. the
+    # forged one. A LAN device could then claim "X-Forwarded-For: 127.0.0.1" and be treated as a
+    # local client. Strip first, set after: the value the backend sees is always ours.
     for k in list(headers):
-        if k.lower() == "host":
+        if k.lower() in ("host", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host"):
             del headers[k]
     from urllib.parse import urlparse
     parsed = urlparse(target_origin)
@@ -149,8 +154,10 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     headers = dict(request.headers)
     original_host = request.headers.get("host") or request.headers.get("Host") or "127.0.0.1"
     _normalize_headers_for_upstream(headers, target_origin, original_host)
-    if request.client:
-        headers["X-Forwarded-For"] = request.client.host
+    # Set unconditionally: "no X-Forwarded-For" must reliably mean "not relayed by this proxy",
+    # otherwise a relayed request without client info would be indistinguishable from genuine
+    # internal loopback traffic. "unknown" is not a valid IP, so the backend fails closed.
+    headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
     try:
         body = await request.body()
     except Exception:

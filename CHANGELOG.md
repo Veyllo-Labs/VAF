@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Devices on your network could reach VAF without logging in.** When network access was
+  switched on, VAF's built-in HTTPS proxy passed every device to the backend as if it were
+  the computer itself, so any device on the same network could open pages and APIs without
+  a token, and even an expired or wrong token was let through. That included user
+  management, the log viewer and the security dashboard. VAF now recognises which device a
+  request really came from and asks anyone who is not on this computer to sign in.
+  Signing in on another device, the desktop app, and first-time setup all keep working
+  exactly as before. **After updating, restart VAF so the fix takes effect.**
+- **A device on your network could pretend to be this computer.** The proxy added its own
+  sender information alongside whatever a device had claimed, and the backend read the
+  claimed value first. A device could therefore present itself as local and skip the check
+  that ties a connected account (for example Gmail or a cloud drive) to the person who
+  started the connection. The proxy now removes any claimed sender information before
+  adding its own.
+
 ### Added
 - A completely new built-in mail client, and it is now the only one
   (design doc `docs/integrations/EMAIL_CLIENT.md`). VAF has a real mail engine:

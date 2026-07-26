@@ -18,17 +18,17 @@ logger = logging.getLogger("vaf.api.oauth_binding")
 def _real_client_ip(request: Request) -> str:
     """The true remote peer IP, accounting for the integrated HTTPS proxy.
 
-    The proxy connects to the backend over loopback and OVERWRITES X-Forwarded-For with the real
-    socket peer (https_proxy.py), discarding any client-supplied value. So we trust XFF ONLY when
-    the immediate peer is itself loopback (i.e. the request came through the local proxy). A direct
-    remote connection (peer = a real LAN IP) cannot spoof loopback via a forged XFF, because we
-    ignore XFF in that case and use the socket peer."""
-    peer = (request.client.host if request.client else "") or ""
-    if peer in ("127.0.0.1", "::1"):
-        xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        if xff:
-            return xff
-    return peer
+    Delegates to the single shared resolver so this loopback exception, the auth middleware and
+    the WebSocket handshake can never disagree about who the client is.
+
+    History worth keeping: this used to reimplement the rule with a docstring asserting that the
+    proxy "OVERWRITES X-Forwarded-For, discarding any client-supplied value". It did not - it
+    ADDED a second header under a different case, and the backend's Headers.get() returned the
+    client's forged copy, so a LAN device could claim loopback and skip the callback actor
+    binding below. The proxy now strips client copies before setting its own.
+    """
+    from vaf.network.binding import effective_client_ip
+    return effective_client_ip(request.client.host if request.client else "", request.headers.get("x-forwarded-for"))
 
 
 def require_oauth_actor_in_network_mode(request: Request) -> dict:

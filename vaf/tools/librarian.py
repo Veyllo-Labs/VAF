@@ -201,18 +201,20 @@ You have access to this filesystem map for fast navigation:
         # tool is affected. user_scope_id is injected by the agent's tool dispatcher (in-process) or via env.
         from vaf.tools.filesystem import set_librarian_scope, reset_librarian_scope
         scope = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID") or None
-        token = set_librarian_scope(self._compute_jail(scope))
+        role = kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE") or None
+        token = set_librarian_scope(self._compute_jail(scope, role))
         try:
             return self._run_impl(**kwargs)
         finally:
             reset_librarian_scope(token)
 
-    def _compute_jail(self, user_scope_id):
-        """Librarian jail info. Local admin (no scope OR the local-admin scope) => full access; a remote
-        user => jailed to their own VAF_Projects/<uid8> only (no personal folders). Fail-closed on error.
-        Delegates to the shared computation in filesystem.py (single source for all jailed tools)."""
+    def _compute_jail(self, user_scope_id, user_role=None):
+        """Librarian jail info. An admin (role admin, no scope, or the local-admin scope) => full access;
+        any other user => jailed to their own VAF_Projects/<uid8> only (no personal folders). Fail-closed
+        on error. Delegates to the shared computation in filesystem.py (single source for all jailed
+        tools), so the definition of "admin" cannot drift between the librarian and write_file."""
         from vaf.tools.filesystem import compute_user_jail
-        return compute_user_jail(user_scope_id)
+        return compute_user_jail(user_scope_id, user_role)
 
     def _run_impl(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()
@@ -244,10 +246,15 @@ You have access to this filesystem map for fast navigation:
             _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "librarian_agent"}
             if session_id:
                 _sub_env["VAF_SESSION_ID"] = session_id
-            # Carry the user scope into the child so its librarian jail (is_safe_path) applies there too.
+            # Carry the user scope AND role into the child so its librarian jail (is_safe_path) reaches
+            # the same verdict there. Both or neither: passing the scope alone would jail an admin in
+            # the terminal lane that runs unjailed in-process.
             _scope_for_child = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID")
             if _scope_for_child:
                 _sub_env["VAF_USER_SCOPE_ID"] = str(_scope_for_child)
+            _role_for_child = kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE")
+            if _role_for_child:
+                _sub_env["VAF_USER_ROLE"] = str(_role_for_child)
 
             # Pass provider configuration to sub-agent (Best Practice: Inherit or override)
             use_separate_provider = Config.get("subagent_use_separate_provider", False)

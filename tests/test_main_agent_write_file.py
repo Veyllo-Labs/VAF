@@ -74,6 +74,7 @@ def test_execute_tool_injection_block_present():
     assert m, "write_file injection block missing in execute_tool"
     block = m.group(1)
     for needle in ('tool_args["user_scope_id"]',
+                   'tool_args["user_role"]',
                    'tool_args["_session_id"]',
                    'tool_args["_session_workspace"]'):
         assert needle in block, f"injection block lost {needle}"

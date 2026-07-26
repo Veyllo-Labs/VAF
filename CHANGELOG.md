@@ -18,6 +18,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   profiles and every conversation. A key read out of there keeps working outside VAF and
   cannot be taken back, so the folder is now closed to the file tools for everyone, the owner
   of the machine included. Skills and workflows you create still live there and stay readable.
+- **A second administrator was treated as an ordinary user by the file tools.** VAF lets you
+  create more than one administrator, and they can do everything an administrator does -
+  manage users, see every conversation, read the full settings. But when they asked the agent
+  to work with a file, or opened a file from a chat, VAF checked only whether they were the
+  very first administrator account and otherwise confined them to their own project folder.
+  Administrators are now recognised as administrators everywhere. Nobody else gains access:
+  ordinary users stay confined to their own files exactly as before.
 - **A single device could lock everyone else out of signing in.** VAF blocks an address after
   repeated failed logins, but behind the built-in HTTPS proxy every device on the network
   counted as the same one. Five wrong passwords from anywhere blocked everybody for the next

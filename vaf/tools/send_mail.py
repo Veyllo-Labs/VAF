@@ -224,7 +224,9 @@ class SendMailTool(BaseTool):
         att_bytes = []        # {filename, content_type, payload} - read INSIDE the jail
         if attachment_paths:
             _jail_token = None
-            _jail_info = compute_user_jail(user_scope_id)
+            # user_role is set by the dispatcher from the session's JWT-derived role, so a
+            # model-supplied value never reaches this call.
+            _jail_info = compute_user_jail(user_scope_id, kwargs.get("user_role"))
             if not _jail_info.get("is_admin"):
                 _jail_token = set_librarian_scope(_jail_info)
             try:

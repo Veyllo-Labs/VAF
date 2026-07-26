@@ -2104,10 +2104,10 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
             # FAIL-CLOSED: if ownership cannot be verified, deny (never serve a per-user file on error).
             try:
                 from vaf.api.config_routes import get_current_user_or_local_admin
-                from vaf.core.config import get_local_admin_scope_id
+                from vaf.core.config import is_admin_identity
                 _user = get_current_user_or_local_admin(request) or {}
                 _scope = str(_user.get("user_scope_id") or "")
-                _is_admin = _scope == str(get_local_admin_scope_id())
+                _is_admin = is_admin_identity(_user.get("role"), _scope)
                 _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first_seg)
             except HTTPException:
                 raise
@@ -2159,10 +2159,12 @@ async def describe_image(request: Request):
     if _re_id.fullmatch(r"[0-9a-f]{8}", _first):
         try:
             from vaf.api.config_routes import get_current_user_or_local_admin
-            from vaf.core.config import get_local_admin_scope_id
+            from vaf.core.config import is_admin_identity
             _user = get_current_user_or_local_admin(request) or {}
             _scope = str(_user.get("user_scope_id") or "")
-            _is_admin = _scope == str(get_local_admin_scope_id())
+            # Role-aware, exactly like the session check 25 lines below: this function used to
+            # answer "is this an admin" two different ways within one request.
+            _is_admin = is_admin_identity(_user.get("role"), _scope)
             _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first)
         except HTTPException:
             raise

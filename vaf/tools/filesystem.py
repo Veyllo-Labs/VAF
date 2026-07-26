@@ -42,21 +42,28 @@ def reset_librarian_scope(token):
         pass
 
 
-def compute_user_jail(user_scope_id):
+def compute_user_jail(user_scope_id, user_role=None):
     """Jail info for set_librarian_scope, shared by every tool that confines file
     access to the caller (librarian, write_file, send_mail attachments).
 
-    The LOCAL ADMIN is "no scope OR the configured local-admin scope": an owner
-    session carries the admin's real UUID, not None, so a plain truthiness check
-    would jail the machine owner out of their own files (live regression class).
+    Admin means the same thing here as everywhere else in VAF (is_admin_identity):
+    the DB role, OR the configured local-admin scope. The scope half is not
+    redundant - a direct consumer and the tokenless desktop have no role, and an
+    owner session carries the admin's real UUID rather than None, so a plain
+    truthiness check would jail the machine owner out of their own files (live
+    regression class). The role half is not redundant either: a SECOND admin
+    account carries its own scope UUID and used to be jailed here while every
+    other gate in the app already treated it as a full admin.
+
+    user_role must come from the caller's trusted context (the injected, JWT-derived
+    role), never from an argument the model chose - the dispatcher overwrites it.
     Fail-closed: on any error the caller gets a jail with no allowed roots rather
     than no jail at all."""
     try:
-        from vaf.core.config import get_local_admin_scope_id
+        from vaf.core.config import is_admin_identity
         from vaf.core.session import get_user_projects_root
         scope = str(user_scope_id or "")
-        local_admin = str(get_local_admin_scope_id() or "")
-        if (not scope) or (scope == local_admin):
+        if (not scope) or is_admin_identity(user_role, scope):
             return {"is_admin": True, "uid8": None, "allowed_roots": []}
         own_root = get_user_projects_root(scope)
         return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
@@ -707,8 +714,11 @@ class WriteFileTool(BaseTool):
         # and run the body unchanged.
         _jail_token = None
         _scope = kwargs.pop("user_scope_id", None)
+        # Popped unconditionally: execute_tool always SETS this from the trusted session
+        # context, so a model-supplied value is overwritten before it ever arrives here.
+        _role = kwargs.pop("user_role", None)
         if _scope:
-            _info = compute_user_jail(_scope)
+            _info = compute_user_jail(_scope, _role)
             if not _info.get("is_admin"):
                 _jail_token = set_librarian_scope(_info)
         try:

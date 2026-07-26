@@ -1223,6 +1223,29 @@ def get_local_admin_scope_id() -> str:
     return str(Config.get("local_admin_scope_id", LEGACY_LOCAL_ADMIN_SCOPE_ID) or LEGACY_LOCAL_ADMIN_SCOPE_ID).strip()
 
 
+def is_admin_identity(role: Optional[str], user_scope_id: Optional[str]) -> bool:
+    """Return True if this identity has admin rights.
+
+    Two halves, and neither is redundant:
+    - ``role == "admin"`` covers every admin account. VAF supports more than one admin
+      (user management refuses to delete the LAST one), and a second admin carries their
+      OWN scope UUID - a scope-only check would treat them as an ordinary user.
+    - the local-admin scope covers the machine owner when there is no DB role at all:
+      the tokenless desktop, the CLI and automations resolve to ``local_admin_scope_id``
+      with no role claim, so a role-only check would lock the owner out.
+
+    The role is only ever read from a signature-verified JWT claim (issued from
+    ``LocalUser.role`` at login), never from client- or model-supplied input. Callers that
+    receive tool arguments MUST overwrite the role from their trusted context rather than
+    honoring whatever a model passed in.
+    """
+    if str(role or "").strip().lower() == "admin":
+        return True
+    if user_scope_id is None:
+        return False
+    return str(user_scope_id).strip() == str(get_local_admin_scope_id())
+
+
 def get_local_admin_username() -> str:
     """Return the local admin username. Use for display and paths when no JWT."""
     return (Config.get("local_admin_username") or "admin").strip()

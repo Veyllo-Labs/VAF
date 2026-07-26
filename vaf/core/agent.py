@@ -10644,8 +10644,11 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "librarian_agent":
                     # Drives the per-user filesystem jail (is_safe_path) so the librarian only reads the
-                    # caller's own data, never another user's VAF_Projects/<uid8>.
+                    # caller's own data, never another user's VAF_Projects/<uid8>. Both keys are ASSIGNED,
+                    # never defaulted: tool_args starts out as the arguments the MODEL produced, so a
+                    # prompt-injected user_role="admin" must be overwritten with the session's real one.
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                 if name == "browser_agent":
                     # Scope the persistent cookie/login store per user so one user's browser logins are
                     # never shared with or readable by another (the store dir is keyed by user_scope_id).
@@ -10675,6 +10678,7 @@ class Agent:
                     # (coder, workflow engine, librarian, automations) pass none of these kwargs
                     # and keep their exact legacy behavior.
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                     tool_args["_session_id"] = getattr(self, "current_session_id", None)
                     try:
                         from vaf.core.platform import Platform as _PlatWF
@@ -10745,6 +10749,10 @@ class Agent:
                 if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail", "reply_mail", "forward_mail", "archive_mail", "delete_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name == "send_mail":
+                    # send_mail is the only mail tool that resolves attachment paths, so it is the
+                    # only one that installs the filesystem jail. ASSIGNED, not defaulted (see above).
+                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                 if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("create_automation", "list_automations", "read_automation", "update_automation", "delete_automation", "restore_automation", "list_trash"):

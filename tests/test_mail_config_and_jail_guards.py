@@ -7,7 +7,8 @@ Guards:
 - every email-related DEFAULTS key has a row in docs/setup/CONFIG_SCHEMA.md
   (wildcard rows like `email_oauth_*_client_id` count),
 - the phishing-filter keys and the SSRF toggle are admin-write-only,
-- compute_user_jail treats only the local admin as unjailed,
+- compute_user_jail leaves an admin unjailed and confines everyone else
+  (the role half of "admin" is pinned in tests/test_admin_identity_is_role_aware.py),
 - SendMailTool cannot attach files outside a non-admin user's own data
   (the attachment resolution installs the shared per-user jail).
 """

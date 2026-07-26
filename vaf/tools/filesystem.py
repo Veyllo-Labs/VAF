@@ -237,6 +237,40 @@ def is_safe_path(path):
                     return False, f"Access denied: {blocked}"
             elif blocked in components:
                 return False, f"Access denied: {blocked}"
+        # VAF's own data directory is the credential store, and no file tool has a
+        # legitimate reason to open it: settings are read through Config.get(), never
+        # through read_file. It holds config.json (every api_key_*, the JWT secret) and
+        # its .bak copies, secrets/, ssl/ private keys, browser_sessions/ (live logged-in
+        # cookies), speaker_profiles/ (voice biometrics) and sessions/ (every
+        # conversation). This is blocked for EVERYONE, the machine owner included: an API
+        # key extracted through a chat prompt keeps working outside VAF and outlives any
+        # access this instance could revoke, so it is not a per-user permission question.
+        #
+        # Deny-by-default, so a new folder under ~/.vaf is protected the day it is added
+        # rather than the day someone remembers to list it. The exceptions are the folders
+        # holding USER-CREATED CONTENT, which is ordinary material the agent works with and
+        # which is governed by the per-user jail below like anything else - not by this
+        # block, whose job is only the credential store:
+        #   skills/    - use_skill hands the model absolute paths to a skill's bundled
+        #                files and tells it to open them with read_file (use_skill.py:33,92)
+        #   workflows/ - agent-created workflows; the same category as skills and as the
+        #                custom tools in data_dir/custom_tools, which this block never
+        #                touched because they live outside ~/.vaf
+        # Fail-closed: if the data dir cannot be resolved, nothing under .vaf is allowed.
+        if ".vaf" in components:
+            _content_ok = False
+            try:
+                from vaf.core.platform import Platform as _PlatFS
+                _vaf_root = Path(_PlatFS.vaf_dir()).resolve()
+                for _sub in ("skills", "workflows"):
+                    _root = str(_vaf_root / _sub).replace("\\", "/")
+                    if norm == _root or norm.startswith(_root + "/"):
+                        _content_ok = True
+                        break
+            except Exception:
+                _content_ok = False
+            if not _content_ok:
+                return False, "Access denied: VAF's own data directory"
         # Librarian per-user jail (no-op unless a librarian run set the scope contextvar).
         if not _librarian_jail_ok(abs_path):
             return False, "Access denied: outside your own data"

@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The agent could open VAF's own settings folder, where the keys live.** Asking the agent to
+  read a file gave it access to the folder VAF stores itself in - the file holding every
+  connected API key and the sign-in secret, saved copies of it, stored browser logins, voice
+  profiles and every conversation. A key read out of there keeps working outside VAF and
+  cannot be taken back, so the folder is now closed to the file tools for everyone, the owner
+  of the machine included. Skills and workflows you create still live there and stay readable.
 - **A single device could lock everyone else out of signing in.** VAF blocks an address after
   repeated failed logins, but behind the built-in HTTPS proxy every device on the network
   counted as the same one. Five wrong passwords from anywhere blocked everybody for the next

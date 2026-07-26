@@ -33,7 +33,6 @@ export const thirdPartyLicenses = [
   { name: 'Monaco Editor (React)', license: 'MIT', url: 'https://github.com/suren-atoyan/monaco-react' },
   // Mail client engine (vaf/mail/)
   { name: 'IMAPClient', license: 'BSD-3-Clause', url: 'https://github.com/mjs/imapclient' },
-  { name: 'aiosmtplib', license: 'MIT', url: 'https://github.com/cole/aiosmtplib' },
   { name: 'nh3 (ammonia)', license: 'MIT', url: 'https://github.com/messense/nh3' },
   { name: 'python-zstandard', license: 'BSD-3-Clause', url: 'https://github.com/indygreg/python-zstandard' },
   // AI provider SDKs

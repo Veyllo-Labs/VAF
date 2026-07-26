@@ -132,7 +132,10 @@ Deliberately deferred, listed so nobody looks for them in the code:
   `normalize_recipients` lives in `vaf/mail/addressing.py`. All four senders
   (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
 - Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
-  submission, stdlib `email` with `policy.default` for parsing (per-message error
+  submission (every caller is synchronous, so an async SMTP client buys nothing;
+  aiosmtplib was declared for a while, never imported, and has been dropped - do
+  not re-add it without a caller that needs it), stdlib `email` with
+  `policy.default` for parsing (per-message error
   boundary: a malformed message must never abort a folder sync), nh3 (MIT) for
   HTML sanitization, zstandard for blob compression. aioimaplib is rejected
   (GPL-3.0). bleach is EOL - never adopt it.
@@ -638,6 +641,6 @@ Mailspring + Mailspring-Sync (GPL-3.0), Geary (LGPL-2.1+), Evolution/EDS
 Protocol algorithms come from IETF RFCs (freely implementable): 2177 (IDLE),
 3676 (format=flowed), 4315 (UIDPLUS), 4549 (offline sync), 5256 (threading),
 6154 (SPECIAL-USE), 6851 (MOVE), 7162 (CONDSTORE/QRESYNC), 8621 (JMAP data
-model). Runtime dependencies: IMAPClient BSD-3-Clause, aiosmtplib MIT,
+model). Runtime dependencies: IMAPClient BSD-3-Clause,
 nh3 MIT (ammonia MIT/Apache-2.0), zstandard BSD, optional DOMPurify
 Apache-2.0/MPL dual. GPL/AGPL projects are pattern references only.

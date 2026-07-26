@@ -100,7 +100,6 @@ redis>=5.0.0  # Redis client for caching embeddings, RAG queries, sessions
 
 # Mail client engine (vaf/mail/, docs/integrations/EMAIL_CLIENT.md)
 IMAPClient>=3.0.0    # IMAP driver (BSD-3): IDLE, XOAUTH2, parsed responses
-aiosmtplib>=3.0.0    # Async SMTP submission (MIT)
 nh3>=0.2.17          # HTML e-mail sanitization at the trust boundary (MIT, Rust/ammonia)
 zstandard>=0.22.0    # Compression for raw RFC822 blobs in the mail store (BSD)
 

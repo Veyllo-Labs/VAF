@@ -24,7 +24,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rendered sanitized in a sandboxed frame with remote images blocked by default
   for tracking protection, attachment download, and search over message bodies.
   Mail opens offline from the local store. New permissive-licensed dependencies
-  (in the `mail` extra): IMAPClient (BSD-3-Clause), aiosmtplib (MIT), nh3 (MIT),
+  (in the `mail` extra): IMAPClient (BSD-3-Clause), nh3 (MIT),
   zstandard (BSD-3-Clause), listed in `THIRD_PARTY.md` and the About tab's
   third-party license list.
 - Mail can be acted on, not just read: read/unread, star, archive and trash in

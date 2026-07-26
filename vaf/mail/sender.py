@@ -15,9 +15,10 @@ One place owns outbound submission for every account. Dispatch by
 send() is SYNCHRONOUS and must be called from a worker thread (agent tool run or
 the OpExecutor drain via asyncio.to_thread), never from inside a running event
 loop. We use the standard-library smtplib (already the proven SMTP path in this
-codebase) rather than aiosmtplib: every caller is synchronous, smtplib gives
-precise control over the SMTP conversation for honest hand-off classification,
-and it avoids event-loop bridging.
+codebase) rather than an async SMTP client: every caller is synchronous, smtplib
+gives precise control over the SMTP conversation for honest hand-off
+classification, and it avoids event-loop bridging. aiosmtplib was declared as a
+dependency for a while and never imported; it has been dropped.
 
 Hand-off classification (never double-send): handed_off flips True the instant the
 DATA command is issued. A failure BEFORE hand-off is transient (connect/4xx, safe

@@ -7,7 +7,7 @@ Design doc: docs/integrations/EMAIL_CLIENT.md (read it before changing anything
 here). One SQLite store per user scope, RFC 4549 baseline sync, JWZ-style
 conversation threading, FTS5 search, encrypted raw bodies (decision E4).
 
-External dependencies (IMAPClient, aiosmtplib, nh3, zstandard) are imported
+External dependencies (IMAPClient, nh3, zstandard) are imported
 lazily inside the modules that need them so the slim library base stays
 importable without the "mail" extra.
 """

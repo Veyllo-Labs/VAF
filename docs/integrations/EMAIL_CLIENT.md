@@ -437,7 +437,13 @@ outbound traffic can see and filter what the mail renderer fetches - and so imag
 loading works there at all. `https_proxy`/`HTTPS_PROXY` for https targets,
 lowercase `http_proxy` only for http (the uppercase form is attacker-influenced in
 CGI-style deployments), `no_proxy`/`NO_PROXY` matched by exact host, dot-suffix or
-`*`, and a non-http proxy value ignored rather than half-applied.
+`*`, and a non-http proxy value ignored rather than half-applied. The
+lowercase-only rule is a POSIX-only protection: Windows environment variables are
+case-insensitive and Python mirrors that, so there the two names are one variable
+and nothing distinguishes them. Acceptable, because the CGI vector needs a CGI
+server mapping request headers into the environment and VAF runs that way on no
+platform - but a guarantee that holds on one OS has to say so, and asserting it
+everywhere is what made the test pass locally and fail on the Windows runner.
 
 There is deliberately no config key: the environment variable IS the operator's
 control, and a second switch to override the first would only create drift. With no

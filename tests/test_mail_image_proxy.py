@@ -13,6 +13,7 @@ guarantees shift - the site proxy performs egress control and DNS, VAF still
 refuses a host that resolves locally to an internal address, and a name only the
 proxy can resolve is passed through rather than treated as blocked."""
 import asyncio
+import os
 import socket
 
 import pytest
@@ -108,9 +109,18 @@ def test_system_proxy_for_env_matrix(monkeypatch):
 
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
     assert binding.system_proxy_for("https", "t.example") == "http://proxy.corp:3128"
-    # uppercase HTTP_PROXY is attacker-influenced in CGI deployments: never honoured
+
+    # Uppercase HTTP_PROXY is attacker-influenced in CGI deployments, so it is not
+    # honoured for http targets - on POSIX. Windows environment variables are
+    # case-insensitive and Python mirrors that, so there the two names ARE one
+    # variable and the distinction cannot exist. Asserting the POSIX behaviour
+    # everywhere is what turned this green locally and red on the Windows runner.
     monkeypatch.setenv("HTTP_PROXY", "http://evil:8080")
-    assert binding.system_proxy_for("http", "t.example") is None
+    if os.name == "nt":
+        assert binding.system_proxy_for("http", "t.example") == "http://evil:8080"
+    else:
+        assert binding.system_proxy_for("http", "t.example") is None
+
     monkeypatch.setenv("http_proxy", "http://proxy.corp:3128")
     assert binding.system_proxy_for("http", "t.example") == "http://proxy.corp:3128"
 

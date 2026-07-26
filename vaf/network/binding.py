@@ -180,10 +180,20 @@ def system_proxy_for(scheme: str, host: str) -> Optional[str]:
     simply fails - and, worse, means the operator cannot see or filter what the
     mail renderer fetches from the internet.
 
-    Deliberately narrow: lowercase `http_proxy` is honoured only for http targets
-    (the uppercase form is unsafe by convention - CGI turns a `Proxy:` request
-    header into `HTTP_PROXY`), NO_PROXY is matched by suffix with a `*` wildcard,
-    and a proxy value that is not http(s) is ignored rather than half-applied.
+    Deliberately narrow: for http targets only the lowercase `http_proxy` is read,
+    because CGI-style servers map an inbound `Proxy:` request header into
+    `HTTP_PROXY` and every HTTP client treats the uppercase form as untrusted for
+    that reason. NO_PROXY is matched by exact host, dot-suffix or `*`, and a proxy
+    value that is not http(s) is ignored rather than half-applied.
+
+    PLATFORM CAVEAT, because a guarantee that only holds on one OS has to say so:
+    Windows environment variables are case-insensitive, and Python mirrors that -
+    `os.environ.get("http_proxy")` returns whatever `HTTP_PROXY` holds. The
+    lowercase-only rule is therefore a POSIX-only protection; on Windows the two
+    names are one variable and there is nothing to distinguish. That is acceptable
+    here: the CGI vector requires a CGI server mapping request headers into the
+    environment, which is not how VAF runs on any platform.
+
     Reading the environment on every call is intentional: no import-time snapshot
     to go stale, and a test can monkeypatch os.environ.
     """

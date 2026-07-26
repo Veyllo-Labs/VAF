@@ -134,6 +134,42 @@ def test_the_cloud_unload_checks_work_in_flight():
     src = Path(tray_mod.__file__).read_text(encoding="utf-8")
     idx = src.find("unloading local model to free memory")
     assert idx != -1, "the cloud-unload branch is gone"
-    condition = src[max(0, idx - 400):idx]
-    for needle in ("not thinking_defer", "not voice_local_lane", "not work_busy"):
+    condition = src[max(0, idx - 200):idx]
+    for needle in ("not thinking_defer", "not work_busy"):
         assert needle in condition, f"the cloud-unload branch lost its guard: {needle}"
+
+
+def test_a_connected_websocket_is_not_a_voice_call():
+    """A "dedicated local voice lane" term used to pin the model whenever
+    voice_agent_provider was local AND any websocket was connected. A connected websocket is
+    not a call - it is true for as long as the app is open - so the model was held forever, the
+    same failure the _VOICE_CALLS review called out ("would pin the model forever and silently
+    switch off idle unloading altogether"). A RUNNING call is reported by _work_in_flight from
+    the call registry; a call that has not started loads its own model at voice_call_start."""
+    from pathlib import Path
+
+    import vaf.tray as tray_mod
+
+    src = Path(tray_mod.__file__).read_text(encoding="utf-8")
+    assert "voice_local_lane" not in src, (
+        "the websocket-based voice reservation is back; a connected socket is not a call"
+    )
+    # The precise replacement must still be there.
+    assert '"Voice call"' in src, "the call-registry probe in _work_in_flight is gone"
+
+
+def test_the_voice_call_probe_fails_towards_keeping_the_model():
+    """It is now the ONLY thing between a live call and an unload, so a registry that exists
+    but cannot be read must keep the model, like the queue and sub-agent probes above it.
+    A build without the registry at all still reports nothing - that is not an error."""
+    from pathlib import Path
+
+    import vaf.tray as tray_mod
+
+    src = Path(tray_mod.__file__).read_text(encoding="utf-8")
+    idx = src.find('return True, "Voice call"')
+    assert idx != -1
+    tail = src[idx:idx + 700]
+    assert "Busy probe failed" in tail, (
+        "a failing voice-call probe no longer keeps the model loaded"
+    )

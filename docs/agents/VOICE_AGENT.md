@@ -52,6 +52,18 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
   (its repo comes from the voice ref), so vision keeps working mid-call.
   A non-local provider that is unavailable keeps `reason: "no_model"` and
   the muted-mic state.
+  **Nothing keeps a model resident for a call that has not started.** Loading it is the
+  call's own job, which is why the load-then-heal path above exists at all. The tray's
+  cloud-provider unload used to spare the model whenever `voice_agent_provider` was `local`
+  and any websocket was connected - but a connected websocket is not a call, it is true for
+  as long as the app is open, so a dedicated-voice setup pinned its GGUF (~3.4 GB) forever
+  on a machine whose main provider no longer used it. A call that is genuinely RUNNING is
+  protected instead by the tray's work-in-flight probe, which reads the call registry and
+  intersects it with the live sockets (`tray._work_in_flight`, reported as `Voice call`);
+  that probe fails towards keeping the model, so an unreadable registry never costs a call
+  its model mid-sentence. The cost of not reserving is the first call after an idle period
+  waiting for the load - exactly the case the loading state, the ring tone and the re-sent
+  `voice_call_start` were built for.
 - The speech stack (STT + TTS, local Docker or a cloud voice provider - see
   [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
 - Optional but strongly recommended: an enrolled speaker profile

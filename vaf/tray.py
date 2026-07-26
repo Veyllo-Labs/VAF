@@ -1083,13 +1083,22 @@ def _work_in_flight():
         # can be permanently true, which would pin the model forever and silently switch off
         # idle unloading altogether. Found in review before it shipped.
         from vaf.core.web_server import _VOICE_CALLS, manager as _ws_manager
-        if _VOICE_CALLS:
-            live = {id(ws) for ws in getattr(_ws_manager, "active_connections", [])}
-            if any(key in live for key in _VOICE_CALLS):
-                return True, "Voice call"
     except Exception:
         # No call registry in this build: not an error, just nothing to report.
-        pass
+        _VOICE_CALLS = _ws_manager = None
+    if _VOICE_CALLS is not None:
+        try:
+            if _VOICE_CALLS:
+                live = {id(ws) for ws in getattr(_ws_manager, "active_connections", [])}
+                if any(key in live for key in _VOICE_CALLS):
+                    return True, "Voice call"
+        except Exception as e:
+            # The registry EXISTS but could not be read. Fail towards keeping the model, like
+            # the two probes above: since the separate voice-lane term was removed from the
+            # cloud unload, this is the only thing between a live call and losing its model
+            # mid-sentence. A build without the registry still reports nothing (above).
+            log("Tray", f"work-in-flight probe (voice) failed, keeping model loaded: {e}")
+            return True, "Busy probe failed"
 
     return False, ""
 
@@ -1208,26 +1217,25 @@ def check_activity_loop(update_icon_callback):
         # below is gated on `not is_cloud_provider`, so a model loaded BEFORE a switch to a cloud/API
         # provider would otherwise stay warm forever. Free it here (level-triggered: retried each tick, and
         # deferred only while a thinking run is active), and (re)load it when switching back to local.
-        # Dedicated local VOICE model (voice_agent_provider=local): the llama
-        # server legitimately runs next to a cloud MAIN provider - it serves
-        # only the live call. The cloud-unload must spare it while websockets
-        # are connected (a possible call); the normal ws-idle unload below
-        # still frees it when the UI is gone.
-        voice_local_lane = False
-        if is_cloud_provider and tray_context.model_loaded:
-            try:
-                voice_local_lane = (
-                    (Config.get("voice_agent_provider", "") or "").strip().lower() == "local"
-                    and has_websocket)
-            except Exception:
-                voice_local_lane = False
         # work_busy is checked here for the same reason the idle branch below checks it: a task,
         # a sub-agent or a live call may still be using this model, and "the main provider is
         # cloud" says nothing about that. It was survivable while the thinking deferral happened
         # to block this branch almost permanently; now that the deferral correctly steps aside for
         # a cloud run, this branch actually fires and needs the guard its sibling already had.
+        #
+        # It also REPLACES a separate "dedicated local voice lane" term that used to sit here
+        # (voice_agent_provider == "local" AND a websocket is connected). That term was both
+        # redundant and harmful. Redundant, because an actually running call is what
+        # _work_in_flight reports as "Voice call", from the call registry, intersected with the
+        # live sockets. Harmful, because a connected websocket is not a call: it is true for as
+        # long as the app is open, so the model was pinned permanently - the exact shape the
+        # review of the _VOICE_CALLS term called "uniquely dangerous ... would pin the model
+        # forever and silently switch off idle unloading altogether". A call that has NOT started
+        # needs no reservation: voice_call_start loads the voice GGUF itself
+        # (voice_model.ensure_voice_model_async) and the window shows a loading state and
+        # re-sends the start once the model reports ready. See docs/agents/VOICE_AGENT.md.
         if (is_cloud_provider and tray_context.model_loaded
-                and not thinking_defer and not voice_local_lane and not work_busy):
+                and not thinking_defer and not work_busy):
             log("Tray", f"Cloud provider '{provider}' active — unloading local model to free memory.")
             try:
                 server_mgr.stop_server(force_external=True)

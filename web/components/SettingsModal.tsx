@@ -675,7 +675,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showSkillsModal, setShowSkillsModal] = useState(false);
     const [skillsEditor, setSkillsEditor] = useState<{
         skillId: string | null;
-        initialData?: { name?: string; description?: string; source?: string };
+        initialData?: { name?: string; description?: string; source?: string; shared_with?: string[] };
     } | null>(null);
     const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
@@ -4548,6 +4548,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 <SkillsEditor
                     skillId={skillsEditor.skillId}
                     initialData={skillsEditor.initialData}
+                    users={customToolUsers}
                     isSaving={isSkillSaving}
                     backendError={skillBackendError}
                     onClose={() => setSkillsEditor(null)}
@@ -4911,7 +4912,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {/* "Create Skill" card (admin only, first) */}
                                 {currentUser?.role === 'admin' && onCreateSkill && skillsSearch === '' && (
                                     <button
-                                        onClick={() => setSkillsEditor({ skillId: null })}
+                                        onClick={() => {
+                                            // Fetch non-admin users for the visibility picker, same as the
+                                            // custom-tool editor does right before opening.
+                                            if (onGetCustomToolUsers) onGetCustomToolUsers();
+                                            setSkillsEditor({ skillId: null });
+                                        }}
                                         className="group aspect-square bg-white rounded-2xl border-2 border-dashed border-gray-300 hover:border-emerald-400 hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-3 text-gray-400 hover:text-emerald-500"
                                         title="Create a new skill"
                                     >
@@ -4932,7 +4938,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         return (
                                             <div
                                                 key={s.id || idx}
-                                                onClick={() => { if (canManage) setSkillsEditor({ skillId: s.id, initialData: { name: s.name, description: s.description, source: s.source } }); }}
+                                                onClick={() => { if (canManage) { if (onGetCustomToolUsers) onGetCustomToolUsers(); setSkillsEditor({ skillId: s.id, initialData: { name: s.name, description: s.description, source: s.source, shared_with: s.shared_with } }); } }}
                                                 className={`group relative aspect-square bg-white rounded-2xl border-2 transition-all overflow-hidden flex flex-col ${canManage ? 'cursor-pointer hover:shadow-xl hover:-translate-y-1' : ''} ${invalid ? 'border-red-200 hover:border-red-400' : 'border-emerald-200 hover:border-emerald-500'}`}
                                             >
                                                 <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">

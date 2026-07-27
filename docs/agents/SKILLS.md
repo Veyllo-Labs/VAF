@@ -134,6 +134,10 @@ There are two mutation paths:
 - **Admin WebUI / WebSocket** - create / edit / delete / upload and permission changes
   are **admin-only** (enforced in the handlers); these can set any `shared_with` and may
   override a high-risk scan. They do not set `owner_scope_id` (the field stays absent).
+  The skill editor exposes `shared_with` directly (Everyone / Only me / specific users,
+  the same three states and semantics as the custom-tool editor), sent along with
+  `create_skill` / `update_skill`; the separate `update_skill_permissions` message stays
+  available for changing visibility on its own.
 - **Agent self-service tools** - a regular user manages their **own** skills through the
   agent (`create_skill` / `update_skill` / `delete_skill`); see
   [Self-service skill tools](#self-service-skill-tools-per-user). These stamp

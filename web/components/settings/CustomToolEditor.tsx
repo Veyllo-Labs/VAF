@@ -29,6 +29,8 @@ import dynamic from 'next/dynamic';
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, Loader2, Save, Trash2, Users, X } from 'lucide-react';
 
+import UserVisibilityPicker from './UserVisibilityPicker';
+
 // Monaco is heavy — load it client-side only (same pattern as CodeViewer.tsx)
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
@@ -139,21 +141,6 @@ export default function CustomToolEditor({
   }, [isEditMode]);
 
   // ── Sharing helpers ──────────────────────────────────────────────────────
-  const isAllUsers    = sharedWith.includes('*');
-  const isAdminOnly   = sharedWith.length === 0;
-
-  function toggleAllUsers(checked: boolean) {
-    setSharedWith(checked ? ['*'] : []);
-  }
-
-  function toggleUser(scopeId: string, checked: boolean) {
-    if (isAllUsers) return; // "all users" overrides individual selection
-    setSharedWith(prev =>
-      checked ? [...prev.filter(id => id !== '*'), scopeId]
-              : prev.filter(id => id !== scopeId)
-    );
-  }
-
   // ── Derived validation ───────────────────────────────────────────────────
   const nameError =
     name.length > 0 && !isValidToolName(name)
@@ -262,57 +249,16 @@ export default function CustomToolEditor({
             </button>
 
             {showSharePanel && (
-              <div className="px-4 py-3 space-y-3">
-                {/* All users toggle */}
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={isAllUsers}
-                    onChange={e => toggleAllUsers(e.target.checked)}
-                    className="accent-blue-500"
-                  />
-                  <span className="text-sm text-gray-300">All users</span>
-                </label>
-
-                {/* Admin-only shortcut */}
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={isAdminOnly}
-                    onChange={e => {
-                      if (e.target.checked) setSharedWith([]);
-                    }}
-                    className="accent-blue-500"
-                  />
-                  <span className="text-sm text-gray-300">Admin only</span>
-                </label>
-
-                {/* Per-user checkboxes (only shown when not "all users") */}
-                {!isAllUsers && users.length > 0 && (
-                  <>
-                    <p className="text-[11px] text-gray-500 uppercase tracking-wider pt-1">
-                      Specific users
-                    </p>
-                    {users.map(u => (
-                      <label
-                        key={u.user_scope_id}
-                        className="flex items-center gap-2 cursor-pointer select-none"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={sharedWith.includes(u.user_scope_id)}
-                          onChange={e => toggleUser(u.user_scope_id, e.target.checked)}
-                          className="accent-blue-500"
-                        />
-                        <span className="text-sm text-gray-300 truncate">{u.username}</span>
-                      </label>
-                    ))}
-                  </>
-                )}
-
-                {!isAllUsers && users.length === 0 && (
-                  <p className="text-xs text-gray-500">No other users found.</p>
-                )}
+              <div className="px-4 py-3">
+                {/* Same picker the skill editor uses - the per-user list moved into a popup so
+                    this sidebar keeps its width with any number of accounts. */}
+                <UserVisibilityPicker
+                  value={sharedWith}
+                  onChange={setSharedWith}
+                  users={users}
+                  accent="accent-blue-500 dark:accent-[#d9d9d9]"
+                  adminOnlyLabel="Admin only"
+                />
               </div>
             )}
 

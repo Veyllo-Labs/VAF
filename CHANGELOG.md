@@ -11,6 +11,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **You can now choose who a skill is for.** The skill editor has a visibility setting -
+  everyone, only you, or named people - the same one custom tools already had. It decides who
+  sees the skill and who can use it, and now also whose agent may open the files bundled with
+  it. Existing skills keep the setting they have; a new one starts as visible to everyone.
+
 ### Fixed
 - **The agent could read files belonging to other people using the same VAF.** Writing was
   already confined to your own project folder, but reading was not, so the agent could open -

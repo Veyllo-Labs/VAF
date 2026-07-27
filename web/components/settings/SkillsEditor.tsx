@@ -6,6 +6,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { X, Trash2, AlertCircle, Loader2, Sparkles, Upload } from 'lucide-react';
 
+import UserVisibilityPicker from './UserVisibilityPicker';
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface SkillSaveData {
@@ -16,6 +18,17 @@ export interface SkillSaveData {
   body: string;
   /** Admin override to install despite a HIGH-risk security-scan finding. */
   override?: boolean;
+  /** Who may see and use this skill: ['*'] everyone, [] admin only, [scope ids] those users.
+   *  It also decides whose file tools may open the skill's bundled files (the per-user read
+   *  jail admits only visible skill folders - see docs/security/USER_ISOLATION.md). */
+  shared_with?: string[];
+}
+
+export interface SkillEditorUser {
+  id: string;
+  username: string;
+  user_scope_id: string;
+  role: string;
 }
 
 export interface SkillsEditorProps {
@@ -26,7 +39,11 @@ export interface SkillsEditorProps {
     description?: string;
     /** Raw SKILL.md text (edit mode). Parsed into name/description/body below. */
     source?: string;
+    /** Current shared_with (edit mode); undefined in create mode -> defaults to everyone. */
+    shared_with?: string[];
   };
+  /** Non-admin users for the visibility picker. Fetched lazily when the editor opens. */
+  users?: SkillEditorUser[];
   onSave: (data: SkillSaveData) => void;
   onDelete?: (id: string) => void;
   /** Upload a folder bundle as a .zip (create mode only). */
@@ -77,6 +94,7 @@ read them on demand.`;
 export default function SkillsEditor({
   skillId,
   initialData,
+  users = [],
   onSave,
   onDelete,
   onUploadZip,
@@ -96,6 +114,10 @@ export default function SkillsEditor({
   const [localError, setLocalError] = useState<string | null>(null);
   const [override, setOverride] = useState(false);
   const [lastUpload, setLastUpload] = useState<{ filename: string; base64: string } | null>(null);
+  // Visibility - the three states live in the shared UserVisibilityPicker, so a skill and a
+  // custom tool are shared the same way and stay that way. A NEW skill starts as everyone,
+  // matching the manifest default (shared_with: ["*"]).
+  const [sharedWith, setSharedWith] = useState<string[]>(initialData?.shared_with ?? ['*']);
 
   // Auto-generate ID from name (create mode only, until the user edits ID).
   useEffect(() => {
@@ -117,7 +139,8 @@ export default function SkillsEditor({
       setLocalError('Skill ID must be lowercase snake_case (e.g. my_skill).');
       return;
     }
-    onSave({ skill_id: finalId, name: name.trim(), description: description.trim(), body, override });
+    onSave({ skill_id: finalId, name: name.trim(), description: description.trim(), body, override,
+             shared_with: sharedWith });
   };
 
   const handleZip = useCallback((file: File) => {
@@ -218,6 +241,24 @@ export default function SkillsEditor({
               placeholder="What the skill does and when to use it"
               className="w-full h-10 px-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
             />
+          </div>
+
+          {/* Visibility. One shared picker for skills and custom tools - the per-user list
+              lives in a popup so the editor stays the same height whether there are three
+              accounts or three hundred. Visibility is not only about the list: the per-user
+              read jail admits only the folders of skills a caller can see, so a skill kept
+              private stays unreadable for everyone else. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Visibility <span className="text-gray-300 font-normal">— who may see and use this skill</span>
+            </label>
+            <div className="border border-gray-200 rounded-lg p-3">
+              <UserVisibilityPicker
+                value={sharedWith}
+                onChange={setSharedWith}
+                users={users}
+              />
+            </div>
           </div>
 
           {/* Instructions body */}

@@ -11,6 +11,9 @@ The directory holds the top-level components plus several feature subfolders. Th
 - **connections/**: Messaging and integration dashboards (Telegram, WhatsApp, Discord, Mail/Email, GitHub, Cloud, Calendar, Contacts) and their setup wizards.
 - **memory/**: Memory graph, memory detail panel, and RAG query UI, plus the memory store.
 - **settings/**: Editors used by the settings dialog (custom tools, MCP servers, skills, TTS, and workflow creation).
+  `UserVisibilityPicker` is shared by the skill and custom-tool editors: it edits the
+  three-state `shared_with` value and keeps the per-user list in a popup, so an editor's
+  height does not depend on how many accounts exist.
 - **workflows/**: Workflow runtime UI components and store.
 - **ui/**: Low-level UI primitives used by higher-level components.
 - **__tests__/**: Component unit tests.

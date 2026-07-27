@@ -142,7 +142,7 @@ export default function McpServerEditor({ server, isSaving = false, backendError
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 max-md:p-0" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div className="relative bg-white w-full max-w-4xl aspect-[3/2] max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:aspect-auto max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-white w-full max-w-4xl aspect-[4/3] max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:aspect-auto max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
           <h2 className="text-lg font-bold text-gray-800">{isEdit ? t('editTitle') : t('addTitle')}</h2>
@@ -211,35 +211,37 @@ export default function McpServerEditor({ server, isSaving = false, backendError
           </div>
         </div>
 
-        {/* Test connection + errors */}
-        <div className="px-6 pb-2 space-y-3">
-          {onTest && (
-            <div className="flex items-center gap-3">
-              <button onClick={handleTest} disabled={isTesting} className="flex items-center gap-2 px-4 h-10 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-xl text-sm font-medium transition-colors disabled:opacity-50">
-                {isTesting ? <Loader2 size={16} className="animate-spin" /> : <Wifi size={16} />} {isTesting ? t('testing') : t('test')}
-              </button>
-              {!isTesting && testResult && (
-                testResult.connected
-                  ? <span className="flex items-center gap-1.5 text-sm text-green-600"><CheckCircle2 size={16} /> {t('testOk', { count: testResult.tool_count })}</span>
-                  : <span className="flex items-center gap-1.5 text-sm text-red-600"><AlertCircle size={16} /> {testResult.error || t('testFail')}</span>
-              )}
-            </div>
-          )}
-          {(localError || backendError) && (
+        {(localError || backendError) && (
+          <div className="px-6 pb-3">
             <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{localError || backendError}</span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Footer */}
-        <div className="border-t border-gray-100 p-4 flex items-center justify-between shrink-0">
-          {isEdit && onDelete ? (
-            <button onClick={() => onDelete(server!.name)} disabled={isSaving} className="flex items-center gap-2 px-4 h-10 text-red-600 hover:bg-red-50 rounded-xl text-sm font-medium transition-colors disabled:opacity-50">
-              <Trash2 size={16} /> {t('remove')}
-            </button>
-          ) : <span />}
+        <div className="border-t border-gray-100 p-4 flex items-center justify-between gap-3 shrink-0">
+          {/* Left: everything that acts ON this server. "Test connection" used to sit in a strip
+              of its own above the footer, which cost a row of height for one button and left an
+              empty band whenever there was nothing to report. */}
+          <div className="flex items-center gap-2 min-w-0">
+            {isEdit && onDelete && (
+              <button onClick={() => onDelete(server!.name)} disabled={isSaving} className="flex items-center gap-2 px-4 h-10 text-red-600 hover:bg-red-50 rounded-xl text-sm font-medium transition-colors disabled:opacity-50">
+                <Trash2 size={16} /> {t('remove')}
+              </button>
+            )}
+            {onTest && (
+              <button onClick={handleTest} disabled={isTesting} className="flex items-center gap-2 px-4 h-10 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 dark:bg-white/5 dark:text-gray-200 dark:hover:bg-white/10">
+                {isTesting ? <Loader2 size={16} className="animate-spin" /> : <Wifi size={16} />} {isTesting ? t('testing') : t('test')}
+              </button>
+            )}
+            {!isTesting && testResult && (
+              testResult.connected
+                ? <span className="flex items-center gap-1.5 text-sm text-green-600 truncate"><CheckCircle2 size={16} className="shrink-0" /> {t('testOk', { count: testResult.tool_count })}</span>
+                : <span className="flex items-center gap-1.5 text-sm text-red-600 truncate"><AlertCircle size={16} className="shrink-0" /> {testResult.error || t('testFail')}</span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-4 h-10 text-gray-600 hover:bg-gray-100 rounded-xl text-sm font-medium transition-colors">{t('cancel')}</button>
             <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 h-10 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none">

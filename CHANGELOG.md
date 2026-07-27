@@ -36,6 +36,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   runs, so "Read-only" did not actually stop anything. The dialog now says so plainly instead
   of implying a restriction that is not there yet. The selection itself is unchanged and is
   kept for when it takes effect.
+- **The "Add MCP server" dialog needed scrolling to reach its last field.** Test connection
+  moved down next to Cancel and Save instead of occupying a row of its own, the empty band
+  it left behind is gone, and the dialog is taller.
 - **The failover setting looked navy in dark mode.** Its slider track and the step markers
   now use the same neutral tone as the other controls.
 - **The agent could read files belonging to other people using the same VAF.** Writing was

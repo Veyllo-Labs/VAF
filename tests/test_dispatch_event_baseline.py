@@ -168,12 +168,27 @@ def _shape(s):
     return "<plain>"
 
 
-def _run(tools, call, pre_approved=True, **over):
+def _run(tools, call, pre_approved=True, config=None, **over):
+    """Run one dispatch under a fully controlled environment.
+
+    Every input the dispatcher consults has to be pinned here, config included. The first
+    version of this file patched the trust store but let ``Config`` fall through to whatever
+    the developing machine had on disk - and the machine that recorded the baseline happened
+    to have ``channel_tools_unrestricted`` turned OFF while the shipped default is ON. So the
+    channel scenario measured a blocked call locally and an executed one in CI, and the
+    baseline was a fact about one laptop rather than about the code.
+    """
     events = []
     fake = _fake(tools, events, **over)
     policy = "always" if pre_approved else "ask"
+    settings = dict(config or {})
+
+    def _config_get(key, default=None):
+        return settings.get(key, default)
+
     with patch("vaf.core.trust.get_tool_policy", return_value=policy), \
-         patch("vaf.core.trust.is_trusted_dir", return_value=pre_approved):
+         patch("vaf.core.trust.is_trusted_dir", return_value=pre_approved), \
+         patch("vaf.core.config.Config.get", side_effect=_config_get):
         res = Agent.execute_tool(fake, *call)
     return {
         "events": [(e.get("type"), e.get("ok")) for e in events],
@@ -198,8 +213,11 @@ SCENARIOS = {
     "tool_raises": lambda: _run([_tool("probe", _boom)], ("probe", {})),
     "policy_admin_only": lambda: _run(
         [_tool("probe", admin_only=True)], ("probe", {}), _current_user_role="user"),
+    # channel_tools_unrestricted LIFTS the channel block, and its shipped default is ON - so
+    # the scenario has to state which side of that it is testing. Here: the block itself.
     "policy_channel": lambda: _run(
         [_tool("probe", channel_restrictions=("telegram",))], ("probe", {}),
+        config={"channel_tools_unrestricted": False},
         _current_chat_source="telegram"),
     "plan_gate": lambda: _run(
         [_tool("probe")], ("probe", {}),

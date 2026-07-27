@@ -23,6 +23,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   VAF or you wrote it. Nothing changes for existing tools.
 
 ### Fixed
+- **Mail did not work at all on some Windows and macOS installations.** The search index
+  used a feature that needs a recent SQLite, and it was created together with the rest of
+  the mail database - so on an older SQLite the whole mail store failed to be created, not
+  just search. Affected setups running Python 3.10, which still ships an older SQLite on
+  those two systems. The index now checks what the system supports and falls back to a form
+  that works everywhere; searching, sorting by relevance and deleting behave the same, the
+  index just takes a little more disk space there.
 - **A workflow could open a skill somebody kept private.** Skills have a visibility setting,
   and in chat the agent respects it: a skill shared only with certain people stays closed to
   everyone else. A workflow step, however, was never told who had started it, so it acted as

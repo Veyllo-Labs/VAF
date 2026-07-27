@@ -19,6 +19,7 @@ Design invariants:
   msg_refs table), else new thread; colliding threads are merged. A full
   RFC 5256 rebuild is available via rebuild_threads().
 """
+import functools
 import json
 import re
 import sqlite3
@@ -34,6 +35,55 @@ RAW_CACHE_MAX_BYTES = 256 * 1024
 SNIPPET_CHARS = 240
 
 _RE_SUBJECT_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|wg|sv|antw)(\[\d+\])?:\s*)+", re.IGNORECASE)
+
+
+@functools.lru_cache(maxsize=1)
+def _fts_supports_contentless_delete() -> bool:
+    """Can this SQLite delete rows from a contentless FTS5 table?
+
+    ``contentless_delete=1`` arrived in SQLite 3.43 (2023). Older builds reject it while
+    the table is being CREATEd, which took the whole mail store down with it - and
+    ``requires-python`` allows 3.10, whose bundled SQLite on Windows and macOS predates
+    3.43 (found by the nightly full matrix: 81 mail tests erroring on exactly this).
+
+    Probed, not version-compared: which FTS5 options a build compiles in is a property of
+    the build, and the thing being avoided is a CREATE that fails.
+    """
+    try:
+        probe = sqlite3.connect(":memory:")
+    except sqlite3.Error:
+        return False
+    try:
+        probe.execute("CREATE VIRTUAL TABLE t USING fts5(x, content='', contentless_delete=1)")
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        try:
+            probe.close()
+        except Exception:
+            pass
+
+
+def _fts_create_sql() -> str:
+    """DDL for the message search index, in the best form this SQLite supports.
+
+    Preferred: contentless (``content=''``), which keeps only the index and not a second
+    copy of every subject and body - it is the reason a mail store can index bodies without
+    doubling on disk. Deleting from one needs 3.43+.
+
+    Fallback: an ordinary FTS5 table, which stores its own copy of the indexed columns.
+    Same INSERT / DELETE-by-rowid / MATCH / bm25 surface, so no call site changes; it just
+    costs disk. Simply dropping the option is NOT an option: a contentless table without it
+    refuses DELETE ("cannot DELETE from contentless fts5 table"), and the store deletes
+    from this index on every message removal, purge and re-index.
+    """
+    columns = 'subject, from_addr, to_addrs, body_text'
+    tokenizer = 'tokenize="unicode61 remove_diacritics 2"'
+    if _fts_supports_contentless_delete():
+        return (f"CREATE VIRTUAL TABLE messages_fts USING fts5("
+                f"{columns}, content='', contentless_delete=1, {tokenizer})")
+    return f"CREATE VIRTUAL TABLE messages_fts USING fts5({columns}, {tokenizer})"
 
 
 def _now() -> str:
@@ -199,12 +249,10 @@ class MailStore:
           updated_at TEXT
         );
         CREATE INDEX idx_ops_state ON ops(account_id, state);
-        CREATE VIRTUAL TABLE messages_fts USING fts5(
-          subject, from_addr, to_addrs, body_text,
-          content='', contentless_delete=1,
-          tokenize="unicode61 remove_diacritics 2"
-        );
         """)
+        conn.execute(_fts_create_sql())
+        conn.execute("INSERT INTO schema_meta(key, value) VALUES('fts_variant', ?)",
+                     ("contentless" if _fts_supports_contentless_delete() else "stored",))
         conn.execute("INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)",
                      (str(SCHEMA_VERSION),))
         conn.execute("INSERT INTO schema_meta(key, value) VALUES('created_at', ?)", (_now(),))

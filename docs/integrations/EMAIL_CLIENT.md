@@ -73,11 +73,26 @@ Deliberately deferred, listed so nobody looks for them in the code:
   In-Reply-To; thread id), `message_raw` (zstd-compressed RFC 822 blob up to
   ~256 KB, encrypted at rest; larger bodies fetched on demand via partial
   FETCH), `attachments` (metadata; payloads as files under the scope dir),
-  `threads`, `ops` (durable operation queue), FTS5 external-content index
+  `threads`, `ops` (durable operation queue), an FTS5 search index
   (unicode61, remove_diacritics 2) populated in the same transaction as
   ingest, plus a `schema_version` table (lazy migrate-on-open). Invariant:
   every derived table (threads, FTS, counters) is rebuildable from raw
   messages + the server; reindex is a cheap command.
+- FTS index, two forms. Preferred is **contentless** (`content=''`), which keeps
+  the index without a second copy of every subject and body - the reason bodies
+  can be indexed without doubling on disk. Deleting from a contentless table
+  needs `contentless_delete=1`, i.e. SQLite 3.43+, and the store deletes from
+  this index on every removal, purge and reindex. Older SQLite rejects that
+  option while the table is being CREATEd, which used to take the whole store
+  down with it; since `requires-python` allows 3.10, whose bundled SQLite on
+  Windows and macOS predates 3.43, that is a real install and not only a CI
+  matrix cell. So support is probed at schema creation and an ordinary,
+  content-storing FTS5 table is used instead where it is missing: same
+  INSERT / DELETE-by-rowid / MATCH / bm25 surface and the same tokenizer, at the
+  cost of disk. Which form a database got is recorded in `schema_meta.fts_variant`,
+  because that is a property of the file, not of the machine reading it. Note that
+  simply omitting the option is not a fallback - a contentless table without it
+  refuses `DELETE` outright.
 - Sync: RFC 4549 baseline (cache keyed on mailbox+UIDVALIDITY+UID;
   UIDVALIDITY change wipes the folder cache; new mail via
   `UID FETCH lastseen+1:*`; flag/expunge resync via windowed FLAGS fetches in

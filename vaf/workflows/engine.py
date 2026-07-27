@@ -163,6 +163,59 @@ def paused_tool_message(
     )
 
 
+def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[str] = None,
+                        *, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """What a workflow consumer should hand the engine as identity, honouring the rollout.
+
+    Seven places construct a WorkflowEngine. Three have always passed an identity: the chat
+    user for a temporary workflow, the task owner for an automation, the paused record on
+    resume. Four passed nothing at all - including the main saved-template lane - so a
+    workflow started by ANY user ran as ``username="admin"`` with no scope, and every tool
+    that keys on the caller (memory, messaging, mail, calendar, contacts) resolved to the
+    machine owner regardless of who pressed the button.
+
+    Closing that is a behaviour change by definition; it is the point. So it rolls out behind
+    ``workflow_identity_injection``:
+
+      ``"legacy"`` (default)  the four keep passing nothing, byte-for-byte as before
+      ``"declared"``          they pass the real identity
+
+    Three values rather than a boolean, deliberately: "off" is NOT the old state. The three
+    lanes that always passed an identity keep doing so under every setting - this resolver
+    only governs the four that did not, and turning it off would silently demote them too.
+
+    ``session_id`` is for the one consumer with no agent object at all (the workflow CLI
+    subprocess): it resolves the scope from the session's own metadata, the same way the
+    engine already derives the project path.
+
+    Returns kwargs to splat into ``WorkflowEngine(...)``; an empty dict means "as before".
+    """
+    try:
+        from vaf.core.config import Config
+        mode = str(Config.get("workflow_identity_injection", "legacy") or "legacy").strip().lower()
+    except Exception:
+        mode = "legacy"
+    if mode != "declared":
+        return {}
+
+    if not user_scope_id and session_id:
+        try:
+            from vaf.core.session import SessionManager
+            meta = (SessionManager().load(session_id).metadata or {})
+            user_scope_id = meta.get("user_scope_id") or None
+            username = username or meta.get("username") or None
+        except Exception:
+            pass
+    if not user_scope_id and not username:
+        return {}
+    out: Dict[str, Any] = {}
+    if user_scope_id:
+        out["user_scope_id"] = user_scope_id
+    if username:
+        out["username"] = username
+    return out
+
+
 def _workflow_step_timeout(tool_name: str) -> float:
     """Worst-case hard cap for one workflow step.
 

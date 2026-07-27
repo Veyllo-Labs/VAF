@@ -103,6 +103,7 @@ class ExecuteWorkflowTool(BaseTool):
                 WorkflowEngine,
                 _workflow_step_timeout,
                 create_workflow,
+                identity_for_engine,
             )
 
             # Resolve the session ONCE, up front: prefer the injected agent's
@@ -482,9 +483,17 @@ class ExecuteWorkflowTool(BaseTool):
                 _push({"type": "workflow_output_stream", "workflowId": wf_id, "line": line})
 
             # ── Execute ───────────────────────────────────────────────────────
+            # The saved-template lane is the one most people actually use, and it passed no
+            # identity at all - so every workflow ran as the machine owner, whoever started
+            # it. _agent has been in scope the whole time (see above); it just was not asked.
             engine = WorkflowEngine(
                 tools         = tools,
                 callback      = _ws_callback,
+                **identity_for_engine(
+                    getattr(_agent, "_current_user_scope_id", None),
+                    getattr(_agent, "_current_username", None),
+                    session_id=session_id,
+                ),
             )
             # Run identity, so a pause on an async sub-agent step produces a record that can
             # be routed back to THIS session and THIS panel (see engine's pause branch).

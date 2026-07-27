@@ -267,7 +267,14 @@ def run_workflow(
                 UI.event("Workflow", f"[X] Step {current}/{total}: {step.tool} failed", style="red")
 
         # Create engine and execute
-        engine = WorkflowEngine(tools, callback=progress_callback)
+        # The only consumer with no agent object at all - this runs as its own subprocess and
+        # builds its tools from workflow_primitives(). The identity therefore comes from the
+        # session's own metadata, the way the engine already derives the project path.
+        from vaf.workflows.engine import identity_for_engine
+        engine = WorkflowEngine(
+            tools, callback=progress_callback,
+            **identity_for_engine(session_id=session_id),
+        )
         engine._workflow_defaults = template.get("defaults", {})
         engine._workflow_name = workflow_id
         engine._template_id = workflow_id

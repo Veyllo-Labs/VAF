@@ -5917,8 +5917,16 @@ class Agent:
                 if stream_callback and event == "success":
                     stream_callback(f"\n✓ Step {current}/{total}: {step.tool}\n")
             
-            engine = WorkflowEngine(all_tools, callback=workflow_callback)
-            
+            # This lane never passed an identity either, although `self` is right here.
+            from vaf.workflows.engine import identity_for_engine
+            engine = WorkflowEngine(
+                all_tools, callback=workflow_callback,
+                **identity_for_engine(
+                    getattr(self, "_current_user_scope_id", None),
+                    getattr(self, "_current_username", None),
+                ),
+            )
+
             # Execute workflow
             # Get defaults from template if available
             template_defaults = result.template.get("defaults", {}) if result.template else {}

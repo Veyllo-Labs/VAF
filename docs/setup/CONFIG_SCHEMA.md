@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (286 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (287 keys).
 
 ## How configuration is set
 
@@ -157,6 +157,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `ask_first_drain_gate_enabled` | `True` | While the agent awaits the user's answer to its own question, background drain turns cannot start new write-level tools or delegations. |
 | `task_overwrite_guard_enabled` | `True` | Confirm before replacing the whole task list while steps are pending. |
 | `task_overwrite_confirm_window_seconds` | `120` | Re-call within this window = confirmed. |
+| `workflow_identity_injection` | `legacy` | Who a workflow's tools think is calling. Seven places construct a `WorkflowEngine`; three always passed an identity (chat user for a temporary workflow, task owner for an automation, the paused record on resume), four passed none - including the main saved-template lane - so a workflow ran as the machine owner whoever started it, and every tool keyed on the caller (memory, messaging, mail, calendar, contacts) followed. `legacy` keeps those four passing nothing; `declared` makes them pass the real identity. Three values and not a boolean on purpose: `off` is not the old state, and the three lanes that always passed one are unaffected either way. |
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |
 | `workflow_step_validation_max_retries` | `3` | Retries before accepting the result. |
 | `channel_tools_unrestricted` | `True` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent — `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist (`paired_only` by default) still apply. On by default; set to `False` to restrict channel sessions to non-channel-restricted tools. |

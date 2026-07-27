@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Workflows can now run as the person who started them.** Until now a saved workflow always
+  acted as the machine owner, no matter who ran it - so anything it did with memory, mail,
+  messages, the calendar or contacts was filed under the owner's account. The new setting
+  `workflow_identity_injection` switches this over: leave it at `legacy` for the previous
+  behaviour, set it to `declared` to have workflows carry the identity of whoever started
+  them. Off by default, because it changes where a running workflow's data goes.
 - **You can now choose who a skill is for.** The skill editor has a visibility setting -
   everyone, only you, or named people - the same one custom tools already had. It decides who
   sees the skill and who can use it, and now also whose agent may open the files bundled with

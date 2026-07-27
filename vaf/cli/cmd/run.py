@@ -323,7 +323,16 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
         from vaf.workflows.engine import WorkflowEngine
         
         # Create engine with agent's tools
-        engine = WorkflowEngine(agent.tools)
+        # The paused record carries the identity of whoever started the run; workflows/resume.py
+        # already reads it here, this lane simply never did.
+        from vaf.workflows.engine import identity_for_engine
+        engine = WorkflowEngine(
+            agent.tools,
+            **identity_for_engine(
+                getattr(paused_wf, "user_scope_id", None),
+                getattr(paused_wf, "username", None),
+            ),
+        )
         engine._workflow_name = paused_wf.workflow_name
         
         # Resume the workflow

@@ -547,6 +547,8 @@ class BrowserAgentTool(BaseTool):
     For simple fact lookups prefer web_search (faster, no browser overhead).
     """
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "browser_agent"
     permission_level = "write"
     side_effect_class = "irreversible"

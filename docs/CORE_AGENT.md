@@ -121,7 +121,9 @@ interaction gates and the confirmation gate (see
 [EMBEDDING.md](EMBEDDING.md) "Headless safety" and "Security posture"), the
 `tool_start` event, then schema validation/repair of `args` (invalid input
 returns `Tool Error: invalid arguments ...` without dispatch), runtime kwarg
-injection (identity, session, workspace), and bounded execution with per-tool
+injection (identity from the tool's own `identity_kwargs` declaration - see
+[TOOL_ROUTER_ARCHITECTURE.md](agents/TOOL_ROUTER_ARCHITECTURE.md); session and
+workspace per tool), and bounded execution with per-tool
 timeouts and stop polling. Event schema: the
 [event sink](OBSERVABILITY.md). Always returns a string (tool result or
 error text).

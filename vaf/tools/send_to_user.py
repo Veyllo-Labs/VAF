@@ -29,6 +29,7 @@ class SendToUserTool(BaseTool):
     their configured main messenger, whichever platform that is.
     """
     name = "send_to_user"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     channel_restrictions = ()

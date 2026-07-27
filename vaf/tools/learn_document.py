@@ -460,6 +460,7 @@ async def ingest_document_knowledge(
 
 class LearnDocumentTool(BaseTool):
     name = "learn_document"
+    identity_kwargs = ("user_scope_id",)
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

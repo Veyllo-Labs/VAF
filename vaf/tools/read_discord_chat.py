@@ -14,6 +14,7 @@ class ReadDiscordChatTool(BaseTool):
     DM, so 'what did we talk about on Discord' works without an id.
     """
     name = "read_discord_chat"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (

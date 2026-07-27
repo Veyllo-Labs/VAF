@@ -15,6 +15,7 @@ class TelegramInboxTool(BaseTool):
     Use to discover which chats exist before calling read_telegram_chat.
     """
     name = "telegram_inbox"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (

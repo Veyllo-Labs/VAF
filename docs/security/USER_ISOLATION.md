@@ -342,7 +342,11 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
   (`get_session_attachments_dir`) - and cloud-synced files need none either, because
   `cloud_storage` is a separate tool that never hands out an absolute `cloud_sync` path.
   All jailed tools enter the jail through the shared `user_jail(...)` context manager, so the
-  reset-in-`finally` cannot be forgotten in one of them. Guarded by `tests/test_read_jail.py`.
+  reset-in-`finally` cannot be forgotten in one of them. Which tools receive the identity at
+  all is no longer a hardcoded list of names in the dispatcher: each tool DECLARES it via
+  `BaseTool.identity_kwargs`, so a tool registered by an embedder is treated exactly like a
+  built-in one. Both `BaseTool` and `user_jail` are on the public surface (`from vaf import
+  BaseTool, user_jail`); see [EMBEDDING.md](../EMBEDDING.md). Guarded by `tests/test_read_jail.py`.
 - **`send_mail` attachments** install the same jail (it is the only mail tool that resolves paths), and the two `VAF_Projects/<uid[:8]>` ownership gates on `GET /api/file` and `POST /api/image/describe` answer the same question through `is_admin_identity`. Before that, all three decided admin scope-only while the session check inside `/api/image/describe` — twenty-five lines below the file check in the same function — was already role-aware.
 
 ### Automations (`vaf/core/automation.py`)

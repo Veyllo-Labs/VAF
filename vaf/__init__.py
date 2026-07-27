@@ -11,8 +11,10 @@ if TYPE_CHECKING:
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .framework import Agent, CoreAgent
+    from .tools.base import BaseTool
+    from .tools.filesystem import user_jail
 
-__all__ = ["__version__", "Agent", "CoreAgent", "markers"]
+__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "markers", "user_jail"]
 
 
 def __getattr__(name):
@@ -23,6 +25,19 @@ def __getattr__(name):
     if name in ("Agent", "CoreAgent"):
         from .framework import Agent, CoreAgent
         return {"Agent": Agent, "CoreAgent": CoreAgent}[name]
+    if name == "BaseTool":
+        # What you subclass to add a tool, and where you declare identity_kwargs so the
+        # dispatcher hands your tool the caller's identity. Pure stdlib underneath, so it
+        # costs nothing on the slim base.
+        from .tools.base import BaseTool
+        return BaseTool
+    if name == "user_jail":
+        # Confine one tool run to the caller's own files. Declaring identity_kwargs tells
+        # the dispatcher WHO is calling; this turns that answer into an actual boundary.
+        # Enter it INSIDE your run(): tools are dispatched on a worker thread that a
+        # contextvar set outside would not reach. See docs/EMBEDDING.md.
+        from .tools.filesystem import user_jail
+        return user_jail
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

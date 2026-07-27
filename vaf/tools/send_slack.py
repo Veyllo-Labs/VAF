@@ -15,6 +15,7 @@ class SendSlackTool(BaseTool):
     Use when the user asked you to send them something and they prefer Slack or said "via Slack".
     """
     name = "send_slack"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

@@ -14,6 +14,7 @@ from vaf.tools.base import BaseTool
 
 class ListSkillsTool(BaseTool):
     name = "list_skills"
+    identity_kwargs = ("user_scope_id", "username")
     description = (
         "List the Skills available to you (reusable expert procedures). Returns each skill's "
         "id, name and short description; skills you OWN are flagged [yours] and can be changed "

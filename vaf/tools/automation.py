@@ -84,6 +84,8 @@ def _manager_for_scope(user_scope_id: Optional[str], user_role: Optional[str] = 
 class AutomationTool(BaseTool):
     """Tool for creating and managing automated tasks."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "create_automation"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -906,6 +908,8 @@ Return ONLY the name, no explanations, no quotes, no markdown, just the name:"""
 class ListAutomationsTool(BaseTool):
     """Tool for listing automation tasks."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "list_automations"
     permission_level = "read"
     side_effect_class = "none"
@@ -968,6 +972,8 @@ class ListAutomationsTool(BaseTool):
 class ReadAutomationTool(BaseTool):
     """Tool for reading the full content of a specific automation task."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "read_automation"
     permission_level = "read"
     side_effect_class = "none"
@@ -1037,6 +1043,8 @@ class ReadAutomationTool(BaseTool):
 class UpdateAutomationTool(BaseTool):
     """Tool for updating existing automation tasks."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "update_automation"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1190,6 +1198,8 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
 class DeleteAutomationTool(BaseTool):
     """Tool for deleting automation tasks (moves to trash for recovery)."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "delete_automation"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1247,6 +1257,8 @@ The automation has been moved to trash and can be restored using `restore_automa
 class RestoreAutomationTool(BaseTool):
     """Tool for restoring automation tasks from trash."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "restore_automation"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1303,6 +1315,8 @@ The automation has been restored and is now active again."""
 class ListTrashTool(BaseTool):
     """Tool for listing deleted automation tasks in trash."""
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "list_trash"
     permission_level = "read"
     side_effect_class = "none"

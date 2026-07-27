@@ -15,6 +15,7 @@ from vaf.tools.base import BaseTool
 
 class ReadSkillTool(BaseTool):
     name = "read_skill"
+    identity_kwargs = ("user_scope_id", "username")
     description = (
         "Show the raw SKILL.md source of a Skill you can see — its YAML frontmatter "
         "(name, description) plus the full instruction body. Use this to inspect a skill "

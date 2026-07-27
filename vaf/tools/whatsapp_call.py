@@ -14,6 +14,7 @@ class WhatsAppCallTool(BaseTool):
     Placeholder for WhatsApp voice or video calls. Not implemented yet.
     """
     name = "whatsapp_call"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

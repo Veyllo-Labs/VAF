@@ -14,6 +14,7 @@ from vaf.tools.base import BaseTool
 
 class DeleteSkillTool(BaseTool):
     name = "delete_skill"
+    identity_kwargs = ("user_scope_id", "username")
     description = (
         "Delete a Skill you own (removes its SKILL.md and bundled files permanently). You can "
         "only delete your own skills. This cannot be undone."

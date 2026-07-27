@@ -119,24 +119,47 @@ def test_write_file_stays_jailed_for_a_user_whose_role_is_not_admin(tmp_path, mo
 
 @pytest.mark.parametrize("tool", ["librarian_agent", "write_file", "send_mail"])
 def test_the_dispatcher_assigns_the_role_it_never_defaults_it(tool):
-    """tool_args starts life as the arguments the MODEL produced. Every jailed tool's
-    injection must therefore ASSIGN user_role from the session context, so a
-    prompt-injected ``user_role: "admin"`` is overwritten before the tool sees it.
-    A setdefault here would turn the jail into a suggestion."""
-    # The tool name appears in several dispatch branches; the injection is the block that
-    # writes tool_args (matching the first occurrence blindly picks the wrong one).
-    blocks = [
-        m.group(1) for m in re.finditer(
-            rf'if name == "{tool}":\n(.*?)(?=\n                if name\b)', AGENT_SRC, re.S,
-        )
-        if 'tool_args[' in m.group(1)
-    ]
-    assert blocks, f"{tool} injection block not found in execute_tool"
-    for block in blocks:
-        assert 'tool_args["user_role"] = getattr(self, "_current_user_role"' in block, (
-            f"{tool} must assign user_role from the session's JWT-derived role"
-        )
-        assert "setdefault" not in block, f"{tool} must overwrite, never default"
+    """tool_args starts life as the arguments the MODEL produced, so the role must be
+    ASSIGNED from the session context - a setdefault would turn the jail into a suggestion.
+
+    The mechanism moved: instead of a branch keyed on each tool's NAME, the tool DECLARES
+    that it needs the role and execute_tool assigns it generically. Pinned in two halves -
+    the tool still asks for the role, and the dispatcher still overwrites rather than
+    defaults (the runtime proof lives in tests/test_identity_kwargs_declaration.py)."""
+    from vaf.tools.base import BaseTool
+
+    cls = next(
+        (c for c in _all_subclasses(BaseTool) if getattr(c, "name", None) == tool), None
+    )
+    assert cls is not None, f"{tool} no longer resolves to a tool class"
+    assert "user_role" in (getattr(cls, "identity_kwargs", ()) or ()), (
+        f"{tool} must declare user_role to stay role-aware"
+    )
+
+    region = AGENT_SRC[AGENT_SRC.index("_ident_src = {"):]
+    region = region[:region.index("if name in SUBAGENT_TOOLS:")]
+    assert "tool_args[_ik] = _get()" in region, "identity is no longer assigned generically"
+    assert "setdefault" not in region, "identity must be assigned, never defaulted"
+
+
+def _all_subclasses(base):
+    import importlib
+    import inspect
+    import pkgutil
+
+    import vaf.core
+    import vaf.tools
+    out = []
+    for pkg in (vaf.tools, vaf.core):
+        for m in pkgutil.iter_modules(pkg.__path__, pkg.__name__ + "."):
+            try:
+                mod = importlib.import_module(m.name)
+            except Exception:
+                continue
+            for _, obj in inspect.getmembers(mod, inspect.isclass):
+                if issubclass(obj, base) and obj is not base:
+                    out.append(obj)
+    return out
 
 
 def test_the_jailed_tools_read_the_role_from_the_injected_argument():

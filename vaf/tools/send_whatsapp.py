@@ -32,6 +32,7 @@ class SendWhatsAppTool(BaseTool):
     Use to_phone when the user asks to send a message to someone (e.g. Alice); get the number from get_contact(name='Alice').
     """
     name = "send_whatsapp"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

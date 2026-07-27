@@ -38,6 +38,8 @@ class DocumentViewerTool(BaseTool):
     user and agent can see its content in the right panel (list of documents).
     """
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "document_viewer"
     permission_level = "read"
     side_effect_class = "none"
@@ -150,6 +152,8 @@ class DocumentEditorTool(BaseTool):
     Use when the user asks to "open" or "edit" a document in the editor.
     """
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "document_editor"
     permission_level = "read"
     side_effect_class = "none"
@@ -204,6 +208,8 @@ class ReplaceEditorSelectionTool(BaseTool):
     selection_index is 0-based: 0 = first marked region, 1 = second, etc.
     """
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "replace_editor_selection"
     permission_level = "write"
     side_effect_class = "reversible"

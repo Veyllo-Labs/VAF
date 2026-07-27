@@ -83,6 +83,8 @@ class LibrarianTool(BaseTool):
     Only complex queries go through the LLM reasoning loop.
     """
     
+    
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "librarian_agent"
     permission_level = "write"
     side_effect_class = "reversible"

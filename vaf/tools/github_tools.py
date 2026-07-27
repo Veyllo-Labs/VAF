@@ -80,6 +80,7 @@ def _no_github_message() -> str:
 class GitHubListReposTool(BaseTool):
     """List the user's GitHub repositories."""
     name = "github_list_repos"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -143,6 +144,7 @@ class GitHubListReposTool(BaseTool):
 class GitHubGetFileTool(BaseTool):
     """Get the content of a file from a GitHub repository, with optional line-range support for large files."""
     name = "github_get_file"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -278,6 +280,7 @@ class GitHubGetFileTool(BaseTool):
 class GitHubListDirectoryTool(BaseTool):
     """List the contents of a directory in a GitHub repository."""
     name = "github_list_directory"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -346,6 +349,7 @@ class GitHubListDirectoryTool(BaseTool):
 class GitHubSearchFilesTool(BaseTool):
     """Search for files in a GitHub repository."""
     name = "github_search_files"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -410,6 +414,7 @@ class GitHubSearchFilesTool(BaseTool):
 class GitHubGetTreeTool(BaseTool):
     """Get the full file tree of a GitHub repository (recursive)."""
     name = "github_get_tree"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -482,6 +487,7 @@ class GitHubGetTreeTool(BaseTool):
 class GitHubListIssuesTool(BaseTool):
     """List issues for a GitHub repository."""
     name = "github_list_issues"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -549,6 +555,7 @@ class GitHubListIssuesTool(BaseTool):
 class GitHubListPullsTool(BaseTool):
     """List pull requests for a GitHub repository."""
     name = "github_list_pulls"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
@@ -614,6 +621,7 @@ class GitHubListPullsTool(BaseTool):
 class GitHubCreateIssueTool(BaseTool):
     """Create a new issue in a GitHub repository."""
     name = "github_create_issue"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     category = "github"
@@ -672,6 +680,7 @@ class GitHubCreateIssueTool(BaseTool):
 class GitHubUpdateFileTool(BaseTool):
     """Create or update a file in a GitHub repository."""
     name = "github_update_file"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     category = "github"
@@ -760,6 +769,7 @@ class GitHubUpdateFileTool(BaseTool):
 class GitHubGetFileStructureTool(BaseTool):
     """Analyze the top-level structure of a code file (classes, functions, methods with line numbers)."""
     name = "github_get_file_structure"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     category = "github"

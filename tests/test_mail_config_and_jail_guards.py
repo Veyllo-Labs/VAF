@@ -146,16 +146,37 @@ def test_mail_tool_registry_copies_stay_in_sync():
     agent_src = (root / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
     engine_src = (root / "vaf" / "workflows" / "engine.py").read_text(encoding="utf-8")
 
-    def _tuple(src):
-        m = _re.search(r'\("mail_inbox", "read_mail"[^)]*\)', src)
-        assert m, "mail kwargs-injection tuple not found"
-        return set(_re.findall(r'"([a-z_]+)"', m.group(0)))
+    # The two lanes now express the same thing differently: the AGENT dispatcher reads each
+    # tool's BaseTool.identity_kwargs declaration, while the workflow ENGINE still carries a
+    # hardcoded name tuple (its migration is deliberately deferred to the step that also adds
+    # the missing policy checks - see the plan). Until then this is exactly the Rule-2 drift
+    # worth guarding: every mail tool the engine lists must also declare, or the same mail
+    # tool would reach its store with an identity in one lane and without one in the other.
+    m = _re.search(r'\("mail_inbox", "read_mail"[^)]*\)', engine_src)
+    assert m, "mail kwargs-injection tuple not found in engine.py"
+    engine_tools = set(_re.findall(r'"([a-z_]+)"', m.group(0)))
 
-    agent_tools, engine_tools = _tuple(agent_src), _tuple(engine_src)
-    assert agent_tools == engine_tools, (
-        f"agent.py vs engine.py mail tuple drift: {agent_tools ^ engine_tools}")
+    from vaf.tools.base import BaseTool as _BT
+
+    def _declared(tool_name):
+        import importlib, inspect, pkgutil
+        import vaf.tools
+        for mod_info in pkgutil.iter_modules(vaf.tools.__path__, "vaf.tools."):
+            try:
+                mod = importlib.import_module(mod_info.name)
+            except Exception:
+                continue
+            for _, obj in inspect.getmembers(mod, inspect.isclass):
+                if issubclass(obj, _BT) and getattr(obj, "name", None) == tool_name:
+                    return tuple(getattr(obj, "identity_kwargs", ()) or ())
+        return None
+
+    undeclared = [t for t in sorted(engine_tools) if not _declared(t)]
+    assert not undeclared, (
+        f"engine.py injects identity for {undeclared}, but those tools declare none - "
+        "the agent lane would hand them nothing")
     for tool in ("reply_mail", "forward_mail", "archive_mail", "delete_mail"):
-        assert tool in agent_tools, f"{tool} missing from kwargs injection"
+        assert _declared(tool), f"{tool} lost its identity declaration"
 
     thinking_src = (root / "vaf" / "core" / "thinking_mode.py").read_text(encoding="utf-8")
     m = _re.search(r"_SENT_TOOLS = \{[^}]*\}", thinking_src)

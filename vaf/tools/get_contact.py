@@ -17,6 +17,7 @@ class GetContactTool(BaseTool):
     Use the contact's whatsapp_phone with read_whatsapp_chat(chat_id=...) or find_whatsapp_messages(chat_id=...) to check if they wrote; use email with find_mail.
     """
     name = "get_contact"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (

@@ -135,7 +135,13 @@ def test_wiring_thinking_exclusion_injection_scheduler_hook():
     assert '"set_timer", "schedule_reminder",' in a, (
         "thinking runs must not schedule reminders (propose-only lane)"
     )
-    assert 'if name == "schedule_reminder":' in a, "dispatch lost the owner-scope injection"
+    # The owner scope no longer arrives via a named dispatch branch: the tool DECLARES it
+    # (BaseTool.identity_kwargs) and execute_tool obeys the declaration. Same guarantee,
+    # one mechanism - see tests/test_identity_kwargs_declaration.py.
+    from vaf.tools.schedule_reminder import ScheduleReminderTool
+    assert "user_scope_id" in (ScheduleReminderTool.identity_kwargs or ()), (
+        "schedule_reminder lost the owner-scope declaration"
+    )
     assert "fire_due_reminders()" in Path(auto_mod.__file__).read_text(encoding="utf-8"), (
         "scheduler loop lost the reminder tick"
     )

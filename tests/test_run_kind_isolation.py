@@ -95,7 +95,10 @@ def test_load_tools_registration_gates_use_instance_truth():
 
 def test_dispatch_always_injects_agent_into_ask_user():
     src = Path(agent_mod.__file__).read_text(encoding="utf-8")
-    m = re.search(r'if name == "ask_user":.*?if name in \("update_intent"', src, re.DOTALL)
+    # End anchor is the NEXT dispatch branch. ask_user stays hand-written (its identity
+    # injection is conditional on the run kind) while most branches became
+    # BaseTool.identity_kwargs declarations - so anchor on a branch that still exists.
+    m = re.search(r'if name == "ask_user":.*?if name in \("set_timer"', src, re.DOTALL)
     assert m, "ask_user dispatch block not found"
     block = m.group(0)
     assert 'tool_args["_agent"] = self' in block

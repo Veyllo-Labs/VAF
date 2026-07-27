@@ -19,6 +19,8 @@ def _scope_str(user_scope_id) -> Optional[str]:
 class ThinkingWorkspaceReadTool(BaseTool):
     """Read-only access to per-user thinking workspace."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_read"
     permission_level = "read"
     side_effect_class = "none"

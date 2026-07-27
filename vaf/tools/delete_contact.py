@@ -15,6 +15,7 @@ class DeleteContactTool(BaseTool):
     If get_contact returns multiple contacts with the same name, do NOT guess – tell the user there are multiple contacts with that name, list them (with contact_id and a short label like phone/email), and ask which one to delete. Only call delete_contact with the contact_id the user confirmed.
     """
     name = "delete_contact"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

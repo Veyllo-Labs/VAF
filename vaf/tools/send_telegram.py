@@ -36,6 +36,7 @@ class SendTelegramTool(BaseTool):
     For documents (invoices, contracts, PDFs): pass file_path after creating/finding the file.
     """
     name = "send_telegram"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

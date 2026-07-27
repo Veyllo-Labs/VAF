@@ -10594,9 +10594,27 @@ class Agent:
                             pass
                 except Exception:
                     _ti_errors = []
+                # Identity: the tool DECLARES what it needs (BaseTool.identity_kwargs) and the
+                # dispatcher hands it over. This replaced ~40 hardcoded name lists, which had two
+                # costs: they drifted (a tool added to one list and not the sibling one), and a
+                # tool registered by an embedder via Agent.add_tool() could never receive an
+                # identity at all - the dispatcher only knew OUR names. See
+                # docs/agents/TOOL_ROUTER_ARCHITECTURE.md and docs/EMBEDDING.md.
+                #
+                # ASSIGNED, never defaulted: tool_args starts out as the arguments the MODEL
+                # produced, so a prompt-injected user_role="admin" is overwritten with the
+                # session's real role instead of being honored.
+                _ident_src = {
+                    "user_scope_id": lambda: getattr(self, "_current_user_scope_id", None),
+                    "username": lambda: getattr(self, "_current_username", None) or "admin",
+                    "user_role": lambda: getattr(self, "_current_user_role", None),
+                }
+                for _ik in (getattr(tool_instance, "identity_kwargs", ()) or ()):
+                    _get = _ident_src.get(_ik)
+                    if _get is not None:
+                        tool_args[_ik] = _get()
                 if name in ("memory_save", "memory_search"):
                     scope_id = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_scope_id"] = scope_id
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
                 if name == "ask_user":
@@ -10616,21 +10634,12 @@ class Agent:
                     # never take the automation-handoff path because some other
                     # run's env var happened to be set (incident 2026-07-13).
                     tool_args["_agent"] = self
-                if name in ("update_intent", "update_working_memory"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("set_timer", "list_timers", "cancel_timer"):
                     # Timer tools read the live session/source/identity off the agent.
                     tool_args["_agent"] = self
-                if name == "schedule_reminder":
-                    # Reminders are stored per user scope and fired with the OWNER's
-                    # identity - never the process-global fallback (Rule 4.4).
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "learn_document":
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self
                 if name == "learn_attached_knowledge":
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["session_id"] = getattr(self, "current_session_id", None)
                     tool_args["_agent"] = self
                 if name == "analyze_image":
@@ -10641,44 +10650,21 @@ class Agent:
                     # (covers images that aged out of history via compaction but remain on disk).
                     tool_args["_agent"] = self
                     tool_args["session_id"] = getattr(self, "current_session_id", None)
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name == "librarian_agent":
-                    # Drives the per-user filesystem jail (is_safe_path) so the librarian only reads the
-                    # caller's own data, never another user's VAF_Projects/<uid8>. Both keys are ASSIGNED,
-                    # never defaulted: tool_args starts out as the arguments the MODEL produced, so a
-                    # prompt-injected user_role="admin" must be overwritten with the session's real one.
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
-                if name == "browser_agent":
-                    # Scope the persistent cookie/login store per user so one user's browser logins are
-                    # never shared with or readable by another (the store dir is keyed by user_scope_id).
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name == "use_skill":
-                    # Scope skill visibility to the calling user (None = admin).
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("list_skills", "read_skill", "create_skill", "update_skill", "delete_skill"):
-                    # Self-service skill management is user-isolated: list/read/create/edit/delete operate
-                    # on the caller's own (or visible) skills only. None scope = admin (sees/edits all).
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                if name == "update_user_identity":
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name == "document_writer":
                     # Same session race as write_file: the tool resolves the chat
                     # workspace itself - it must key on THIS session, never the
                     # process-global fallback (parallel workers).
                     tool_args["_session_id"] = getattr(self, "current_session_id", None)
                 if name == "write_file":
-                    # Main-agent file writes: relative paths resolve into THIS chat's workspace,
-                    # the Web-UI file_created/document_created emits carry THIS session (emit-site
-                    # scoping - never the process-global fallback), and non-admin (remote) users
-                    # are jailed to their own VAF_Projects/<uid8> via the shared filesystem jail.
-                    # The jail is applied inside WriteFileTool.run (contextvars do not propagate
-                    # into the bounded-run worker thread). Direct WriteFileTool() consumers
-                    # (coder, workflow engine, librarian, automations) pass none of these kwargs
-                    # and keep their exact legacy behavior.
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
+                    # Main-agent file writes need the SESSION on top of the identity: relative
+                    # paths resolve into THIS chat's workspace, and the Web-UI
+                    # file_created/document_created emits carry THIS session (emit-site scoping -
+                    # never the process-global fallback). The identity itself arrives through the
+                    # tool's identity_kwargs declaration above; WriteFileTool.run turns it into the
+                    # per-user jail inside the tool, because a contextvar set out here would not
+                    # reach the bounded-run worker thread. Direct WriteFileTool() consumers (coder,
+                    # workflow engine, librarian, automations) pass none of this and keep their
+                    # exact legacy behavior.
                     tool_args["_session_id"] = getattr(self, "current_session_id", None)
                     try:
                         from vaf.core.platform import Platform as _PlatWF
@@ -10689,27 +10675,7 @@ class Agent:
                         ))
                     except Exception:
                         pass
-                if name in ("read_file", "list_files", "tree", "find_files", "folder_size"):
-                    # The READ half of the file surface. write_file and edit_file were jailed
-                    # while these were not, so a tenant confined for writing could still READ
-                    # any path the static checks allow - including another tenant's tree. Read
-                    # mode is deliberately wider than write mode: it also allows the folders of
-                    # skills visible to this user, because use_skill hands out their absolute
-                    # paths. ASSIGNED, never defaulted (see the write_file block below).
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
-                if name == "edit_file":
-                    # edit_file is the other half of the main agent's file-writing surface and
-                    # needs the same jail as write_file: it READS the target (its miss path
-                    # answers with a slice of the file) and then WRITES through a nested
-                    # WriteFileTool call that carries no scope of its own. Without this the
-                    # tool ran unconfined while write_file next to it was jailed.
-                    # ASSIGNED, never defaulted (see the write_file block above).
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
                 if name in ("python_sandbox", "python_exec"):
                     # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
@@ -10723,9 +10689,6 @@ class Agent:
                         # main-agent run landed in the shared prefix regardless of user.
                         # Direct assignment on purpose: model-supplied args must never
                         # override the server-side identity (spoof guard, like host_bash).
-                        tool_args["user_scope_id"] = getattr(
-                            self, "_current_user_scope_id", None
-                        )
                     if name == "python_sandbox" and is_channel_session:
                         # Non-main channel sessions must not bridge host tools from sandbox code.
                         tool_args["with_vaf_tools"] = False
@@ -10752,40 +10715,6 @@ class Agent:
                 if name == "checkpoint_context":
                     # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
                     tool_args["_agent"] = self
-                if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("telegram_inbox", "find_telegram_messages", "read_telegram_chat"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("discord_inbox", "find_discord_messages", "read_discord_chat"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail", "reply_mail", "forward_mail", "archive_mail", "delete_mail"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name == "send_mail":
-                    # send_mail is the only mail tool that resolves attachment paths, so it is the
-                    # only one that installs the filesystem jail. ASSIGNED, not defaulted (see above).
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
-                if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("create_automation", "list_automations", "read_automation", "update_automation", "delete_automation", "restore_automation", "list_trash"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
-                if name in ("thinking_workspace_read", "thinking_workspace_write", "thinking_workspace_handoff"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("document_viewer", "document_editor", "replace_editor_selection"):
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("github_list_repos", "github_get_file", "github_get_file_structure", "github_list_directory", "github_get_tree", "github_search_files", "github_list_issues", "github_list_pulls", "github_create_issue", "github_update_file"):
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
                 # HARD anti-re-delegation guard: while a sub-agent of the SAME type genuinely

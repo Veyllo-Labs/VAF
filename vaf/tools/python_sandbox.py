@@ -66,6 +66,8 @@ class PythonSandboxTool(BaseTool):
     - Running untrusted code safely
     """
     
+    
+    identity_kwargs = ("user_scope_id",)
     name = "python_sandbox"
     permission_level = "write"
     side_effect_class = "reversible"

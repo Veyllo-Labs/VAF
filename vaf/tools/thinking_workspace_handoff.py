@@ -19,6 +19,8 @@ def _scope_str(user_scope_id) -> Optional[str]:
 class ThinkingWorkspaceHandoffTool(BaseTool):
     """Create approval-required handoff proposals in Thinking Workspace."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_handoff"
     permission_level = "system"
     side_effect_class = "reversible"

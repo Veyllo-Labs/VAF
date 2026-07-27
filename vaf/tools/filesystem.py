@@ -344,6 +344,7 @@ def is_safe_path(path):
 
 class ListFilesTool(BaseTool):
     name = "list_files"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "read"
     side_effect_class = "none"
     description = "Lists files in a directory."
@@ -431,6 +432,7 @@ class ListFilesTool(BaseTool):
 
 class FolderSizeTool(BaseTool):
     name = "folder_size"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "read"
     side_effect_class = "none"
     description = "Calculates the total size of a folder (recursive), with optional largest-files preview."
@@ -537,6 +539,7 @@ class FolderSizeTool(BaseTool):
 
 class ReadFileTool(BaseTool):
     name = "read_file"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "read"
     side_effect_class = "none"
     description = """Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).
@@ -753,6 +756,7 @@ For detailed analysis of large files, consider using librarian_agent instead."""
 
 class WriteFileTool(BaseTool):
     name = "write_file"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "write"
     side_effect_class = "reversible"
     description = (
@@ -1116,6 +1120,8 @@ class EditFileTool(BaseTool):
     around the whole body - it cannot be left to the inner WriteFileTool call, which is
     handed no scope and would run unconfined."""
 
+
+    identity_kwargs = ("user_role", "user_scope_id")
     name = "edit_file"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1341,6 +1347,7 @@ class MoveFileTool(BaseTool):
 
 class TreeTool(BaseTool):
     name = "tree"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "read"
     side_effect_class = "none"
     description = "Generates an ASCII tree view of a directory structure."
@@ -1401,6 +1408,7 @@ class TreeTool(BaseTool):
 
 class FinderTool(BaseTool):
     name = "find_files"
+    identity_kwargs = ("user_role", "user_scope_id")
     permission_level = "read"
     side_effect_class = "none"
     description = "Finds files matching a glob pattern (e.g. *.py) recursively."

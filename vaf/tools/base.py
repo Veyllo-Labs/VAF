@@ -102,6 +102,26 @@ class BaseTool(ABC):
     # The check runs before the tool executes — no confirmation, hard block.
     channel_restrictions: tuple[str, ...] = ()
 
+    # identity_kwargs: which parts of the CALLER's identity the dispatcher passes
+    # into run(). Declare what the tool actually consumes; execute_tool assigns
+    # exactly these keys before dispatch:
+    #   "user_scope_id" — the caller's scope UUID (None = local admin / no scope)
+    #   "username"      — the caller's account name
+    #   "user_role"     — the caller's DB role, e.g. "admin"
+    #
+    # This is the ONLY supported way for a tool to learn who is calling it, and it
+    # works the same for a tool you register yourself via Agent.add_tool() as for a
+    # built-in one — the dispatcher reads this declaration, not a list of names it
+    # knows. A tool that touches per-user data and does NOT declare gets nothing,
+    # which is the safe direction.
+    #
+    # The values are ASSIGNED, never defaulted: the arguments reaching a tool start
+    # out as whatever the MODEL produced, so a prompt-injected user_role="admin"
+    # must be overwritten with the session's real one rather than honored.
+    # For file access, resolve the declaration with vaf.tools.filesystem.user_jail
+    # (see docs/security/USER_ISOLATION.md); declaring alone confines nothing.
+    identity_kwargs: tuple[str, ...] = ()
+
     # input_aliases: {canonical_param: [synonyms]}. Weak models often use a
     # synonym for a parameter name (write_file: file_path -> path,
     # message -> content). The input-repair layer (R0, see

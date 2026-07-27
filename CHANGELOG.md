@@ -17,6 +17,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   sees the skill and who can use it, and now also whose agent may open the files bundled with
   it. Existing skills keep the setting they have; a new one starts as visible to everyone.
 
+### Added
+- **Tools you write yourself can now be told who is calling them.** VAF only handed the
+  current user's identity to its own built-in tools, which meant a tool added through the
+  framework could not tell one person from another - and the documentation could only warn
+  about it. A tool now states what it needs and receives exactly that, whether it ships with
+  VAF or you wrote it. Nothing changes for existing tools.
+
 ### Fixed
 - **The failover setting looked navy in dark mode.** Its slider track and the step markers
   now use the same neutral tone as the other controls.

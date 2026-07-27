@@ -427,10 +427,39 @@ Hard limits you must respect (they are architecture, not fine print):
 - **Do not rely on database-level isolation**: the memory DB's row-level
   security is not an independent backstop yet ([USER_ISOLATION.md](security/USER_ISOLATION.md));
   the app-side fail-closed filters are the active enforcement.
-- **Custom tools receive no scope automatically**: a tool you register via
-  `add_tool()` that touches per-user data must accept and honor a
-  `user_scope_id` argument passed by your own code; the engine's automatic
-  injection covers only its built-in tools.
+- **A tool that touches per-user data must DECLARE what it needs.** The dispatcher
+  used to hand identity out from a hardcoded list of its own tool names, so a tool
+  you registered could never receive one. It now reads a declaration, and yours is
+  read exactly like a built-in one:
+
+  ```python
+  from vaf import BaseTool, user_jail
+
+  class TenantNotes(BaseTool):
+      name = "tenant_notes"
+      description = "Read the calling user's notes."
+      parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+      # Ask for exactly what you consume. Valid keys: "user_scope_id",
+      # "username", "user_role". Declaring nothing means receiving nothing.
+      identity_kwargs = ("user_scope_id", "user_role")
+
+      def run(self, **kwargs):
+          scope = kwargs.get("user_scope_id")     # assigned by the dispatcher,
+          role = kwargs.get("user_role")          # never taken from the model
+          # Declaring tells you WHO is calling. It does not confine anything by
+          # itself - for file access, turn the answer into a boundary. Enter the
+          # jail INSIDE run(): tools are dispatched on a worker thread that a
+          # contextvar set outside would not reach.
+          with user_jail(scope, role, mode="read"):
+              return read_notes(kwargs.get("path"))
+  ```
+
+  Two properties worth relying on. The values are **assigned, never defaulted**: the
+  arguments reaching `run()` start out as whatever the model produced, so a
+  prompt-injected `user_role="admin"` is overwritten with the session's real role
+  rather than honored. And a tool that declares nothing gets nothing - the safe
+  direction, so forgetting the declaration cannot hand a tool an identity by accident.
 - Passing the local admin's scope id IS full admin (tools and files) - hand
   it out deliberately or never.
 

@@ -150,9 +150,12 @@ def test_the_whole_file_rescue_branch_is_inside_the_jail(home):
 def test_the_dispatcher_injects_scope_and_role_for_edit_file():
     """An injection nobody performs leaves the tool unjailed no matter what run() does.
     ASSIGNED, never defaulted: tool_args starts out as the arguments the model produced."""
-    m = re.search(r'if name == "edit_file":\n(.*?)(?=\n                if name\b)', AGENT_SRC, re.S)
-    assert m, "edit_file injection block not found in execute_tool"
-    block = m.group(1)
-    assert 'tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id"' in block
-    assert 'tool_args["user_role"] = getattr(self, "_current_user_role"' in block
-    assert "setdefault" not in block
+    # Identity no longer arrives from a branch keyed on this tool's NAME - the tool DECLARES
+    # what it needs (BaseTool.identity_kwargs) and execute_tool obeys the declaration for any
+    # tool, including one an embedder registers. The guarantee is unchanged and the
+    # behaviour-neutrality of that migration is pinned in
+    # tests/test_identity_kwargs_declaration.py; here we pin THIS tool's requirement.
+    declared = set(getattr(EditFileTool, "identity_kwargs", ()) or ())
+    assert {"user_scope_id", "user_role"} <= declared, (
+        f"edit_file lost its identity declaration: {declared}"
+    )

@@ -19,6 +19,8 @@ def _scope_str(user_scope_id) -> Optional[str]:
 class ThinkingWorkspaceWriteTool(BaseTool):
     """Create tasks and write files in Thinking Workspace."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_write"
     permission_level = "system"
     side_effect_class = "reversible"

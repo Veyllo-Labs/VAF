@@ -20,6 +20,7 @@ class UpdateUserIdentityTool(BaseTool):
     so you can greet them correctly (e.g. "Hey Mert") and respect their preferences.
     """
     name = "update_user_identity"
+    identity_kwargs = ("username",)
     permission_level = "write"
     side_effect_class = "reversible"
     description = (

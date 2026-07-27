@@ -73,11 +73,15 @@ def test_execute_tool_injection_block_present():
     m = re.search(r'if name == "write_file":(.*?)\n                if name in \(', AGENT_SRC, re.S)
     assert m, "write_file injection block missing in execute_tool"
     block = m.group(1)
-    for needle in ('tool_args["user_scope_id"]',
-                   'tool_args["user_role"]',
-                   'tool_args["_session_id"]',
-                   'tool_args["_session_workspace"]'):
+    # The SESSION keys still come from this branch - they are per-call plumbing, not identity.
+    for needle in ('tool_args["_session_id"]', 'tool_args["_session_workspace"]'):
         assert needle in block, f"injection block lost {needle}"
+    # The IDENTITY now comes from the tool's own declaration, which execute_tool honours for
+    # any tool (see tests/test_identity_kwargs_declaration.py for the migration guard).
+    declared = set(getattr(WriteFileTool, "identity_kwargs", ()) or ())
+    assert {"user_scope_id", "user_role"} <= declared, (
+        f"write_file lost its identity declaration: {declared}"
+    )
 
 
 # ── Workspace join (relative paths) vs explicit targets ─────────────────────

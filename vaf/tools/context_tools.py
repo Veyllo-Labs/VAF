@@ -55,6 +55,7 @@ class UpdateIntentTool(BaseTool):
     Do NOT use for preferences like language or "remember that..." – use memory_save for long-term facts.
     """
     name = "update_intent"
+    identity_kwargs = ("user_scope_id",)
     permission_level = "system"
     side_effect_class = "reversible"
     description = (
@@ -101,6 +102,7 @@ class UpdateWorkingMemoryTool(BaseTool):
     Use for multi-step tasks: save your plan, notes, and checkable tasks (pending/done; done removed after 12h).
     """
     name = "update_working_memory"
+    identity_kwargs = ("user_scope_id",)
     permission_level = "system"
     side_effect_class = "reversible"
     description = (
@@ -450,6 +452,7 @@ class MemorySearchTool(BaseTool):
     Do NOT use memory_save for lookup – memory_save only saves new facts.
     """
     name = "memory_search"
+    identity_kwargs = ("user_scope_id",)
     permission_level = "read"
     side_effect_class = "none"
     description = (
@@ -517,6 +520,7 @@ class MemorySaveTool(BaseTool):
     Do NOT use for 'who am I?' or 'what do you remember?' – use memory_search or the Memory context block for that.
     """
     name = "memory_save"
+    identity_kwargs = ("user_scope_id",)
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

@@ -24,6 +24,7 @@ _MAX_BODY_CHARS = 14000
 
 class UseSkillTool(BaseTool):
     name = "use_skill"
+    identity_kwargs = ("user_scope_id",)
     description = (
         "Load the full instructions for a named Skill. Skills are reusable expert "
         "procedures contributed by the user. You only see each skill's short "

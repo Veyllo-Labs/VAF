@@ -30,6 +30,7 @@ class FindMailTool(BaseTool):
     body so you can answer without calling read_mail.
     """
     name = "find_mail"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (

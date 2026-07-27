@@ -28,6 +28,8 @@ def _scope_str(user_scope_id) -> Optional[str]:
 class AddAutomationNoteTool(BaseTool):
     """Add a note to the automation calendar. User sees it in the Note section."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "add_automation_note"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -59,6 +61,8 @@ class AddAutomationNoteTool(BaseTool):
 class AddAutomationTodoTool(BaseTool):
     """Add a to-do to the automation calendar. User sees it in the To-do list."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "add_automation_todo"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -90,6 +94,8 @@ class AddAutomationTodoTool(BaseTool):
 class ListAutomationNotesTool(BaseTool):
     """List automation notes for the current user."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "list_automation_notes"
     permission_level = "read"
     side_effect_class = "none"
@@ -116,6 +122,8 @@ class ListAutomationNotesTool(BaseTool):
 class ListAutomationTodosTool(BaseTool):
     """List automation to-dos for the current user."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "list_automation_todos"
     permission_level = "read"
     side_effect_class = "none"
@@ -142,6 +150,8 @@ class ListAutomationTodosTool(BaseTool):
 class DeleteAutomationNoteTool(BaseTool):
     """Delete an automation note by id."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "delete_automation_note"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -171,6 +181,8 @@ class DeleteAutomationNoteTool(BaseTool):
 class DeleteAutomationTodoTool(BaseTool):
     """Delete an automation to-do by id."""
 
+
+    identity_kwargs = ("user_scope_id",)
     name = "delete_automation_todo"
     permission_level = "write"
     side_effect_class = "reversible"

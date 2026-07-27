@@ -17,9 +17,26 @@ from vaf.tools.base import BaseTool
 
 
 def test_facade_exports_exactly_the_documented_surface():
+    """The public surface is a promise, so it is spelled out here rather than derived.
+
+    BaseTool and user_jail joined it when tool identity became declarative: a tool an
+    embedder registers needs to subclass BaseTool and declare identity_kwargs, and turning
+    the identity it then receives into an actual file boundary needs user_jail. Documented
+    in docs/EMBEDDING.md; both are stdlib-only underneath, so the slim base is unaffected
+    (tests/test_slim_base_import.py)."""
     assert vaf.__version__
-    assert sorted(vaf.__all__) == ["Agent", "CoreAgent", "__version__", "markers"]
+    assert sorted(vaf.__all__) == [
+        "Agent", "BaseTool", "CoreAgent", "__version__", "markers", "user_jail",
+    ]
     assert dir(vaf) == sorted(vaf.__all__)
+
+
+def test_the_newly_public_names_actually_resolve():
+    """A name in __all__ that __getattr__ does not serve would be a broken promise."""
+    assert vaf.BaseTool.__name__ == "BaseTool"
+    assert callable(vaf.user_jail)
+    # The declaration field a third-party tool is told to set must exist on the base class.
+    assert isinstance(vaf.BaseTool.identity_kwargs, tuple)
 
 
 def test_agent_constructor_signature_is_stable():

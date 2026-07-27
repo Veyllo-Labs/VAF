@@ -43,6 +43,7 @@ def _write_note() -> str:
 class ForwardMailTool(BaseTool):
     """Forward an email to someone. Original attachments are not included."""
     name = "forward_mail"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
@@ -118,6 +119,7 @@ class ForwardMailTool(BaseTool):
 class ArchiveMailTool(BaseTool):
     """Archive an email (move out of the inbox)."""
     name = "archive_mail"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "reversible"
     description = (
@@ -147,6 +149,7 @@ class ArchiveMailTool(BaseTool):
 class DeleteMailTool(BaseTool):
     """Move an email to the trash folder (never permanently deletes)."""
     name = "delete_mail"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "reversible"
     description = (

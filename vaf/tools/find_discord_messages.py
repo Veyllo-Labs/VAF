@@ -14,6 +14,7 @@ class FindDiscordMessagesTool(BaseTool):
     Use when the user asks 'find the Discord message about X' or 'what did I send on Discord'.
     """
     name = "find_discord_messages"
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (

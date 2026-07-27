@@ -356,6 +356,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   test now isolates all side-effect stores and the debris has been removed.
 
 ### Security
+- Whether an account counts as an administrator is now decided the same way everywhere.
+  The check that lets administrators use restricted tools compared the stored role
+  letter for letter, while the check that decides which files may be opened accepts the
+  role regardless of capitalisation. An account whose role was stored as "Admin" would
+  therefore have been given administrator access to files while still being refused
+  restricted tools. Accounts created or edited in VAF always store the role in lower
+  case, so this could not be triggered through the app; the two checks now share one
+  rule regardless.
 - Mail: a request carrying a user name but no user scope could be served from the
   local administrator's mailbox by the new mail engine (read and write). Such
   callers now stay on their own mail store, matching the isolation rule the other

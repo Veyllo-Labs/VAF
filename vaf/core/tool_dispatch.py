@@ -71,25 +71,19 @@ def is_channel_session(source: str | None, session_id: str | None) -> bool:
 def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
     """Whether tool POLICY treats this identity as admin (drives ``admin_only``).
 
-    Two halves, whichever is set: the DB role from the verified session, and the local-admin
-    scope for the machine owner who has no role claim at all (tokenless desktop, CLI,
-    automations). Fail-closed: anything unexpected resolves to False.
+    Delegates to ``vaf.core.config.is_admin_identity``, the one definition the file jail and
+    roughly thirty other gates already use, so "is this caller an admin" has a single answer
+    across VAF. Fail-closed: anything unexpected resolves to False.
 
-    KNOWN DRIFT, preserved deliberately rather than silently repaired. This compares the role
-    EXACTLY, while ``vaf.core.config.is_admin_identity`` - the shared definition used by the
-    file jail and roughly thirty other gates - strips and lowercases it first. So for a role
-    spelled "Admin", the file jail lifts while ``admin_only`` tools stay blocked: the same
-    person, two answers. Not reachable through the API today (``user_routes`` lowercases the
-    role on create and on update), and the DB column constrains nothing, so it is a latent
-    inconsistency rather than a live hole. Aligning it GRANTS access, which makes it a
-    deliberate security decision and not part of a behaviour-neutral extraction - it is
-    frozen here so the drift is visible instead of buried in a 600-line method.
+    It did not always. This spot compared the role EXACTLY while the shared definition strips
+    and lowercases first, so for a role spelled "Admin" the file jail lifted while
+    ``admin_only`` tools stayed blocked - the same person, two answers, in the one place that
+    decides whether a tool may run at all. It survived the round that gave the file gates the
+    shared rule because it sat inline in a 600-line method rather than behind a name.
     """
     try:
-        from vaf.core.config import get_local_admin_scope_id
-        return role == "admin" or (
-            scope_id is not None and str(scope_id) == str(get_local_admin_scope_id())
-        )
+        from vaf.core.config import is_admin_identity
+        return is_admin_identity(role, scope_id)
     except Exception:
         return False
 

@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The agent could read files belonging to other people using the same VAF.** Writing was
+  already confined to your own project folder, but reading was not, so the agent could open -
+  or simply list - files in someone else's folder or elsewhere on the machine. Reading is now
+  confined the same way. It is deliberately a little wider than writing: skills shared with
+  you stay readable, because a skill may point the agent at its own reference files. A skill
+  somebody kept private is not, which it previously was. Your own files, your uploads, and
+  everything an administrator does are unaffected.
 - **The local model stayed on your graphics card after switching to a cloud provider.** VAF
   already frees it in that situation, but two rules were holding it back for users who could
   never benefit from it. Background thinking asked to keep the model without checking that

@@ -110,6 +110,13 @@ Visibility uses the same rules as custom tools (see
 - `shared_with: []` - admin only.
 - `shared_with: ["<scope_id>", ...]` - those users plus admin.
 
+`shared_with` also decides which skill FOLDERS a user's file tools may open. All skills live
+in one directory, so the per-user read jail admits only the folders of the skills visible to
+that caller (`get_visible_skill_ids_for_user`, see
+[USER_ISOLATION.md](../security/USER_ISOLATION.md)); a skill kept private to one user is not
+readable by another, even though `use_skill` prints bundled files as absolute paths. Those
+roots are read-only - editing stays with `can_user_edit_skill`.
+
 **Quarantine overrides `shared_with`**: a quarantined skill is invisible on
 every agent path (routing, `list_skills`, `read_skill`, `use_skill`) for ALL
 users, including admin agent sessions, until an admin resolves it in the

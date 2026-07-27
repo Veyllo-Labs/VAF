@@ -317,13 +317,32 @@ Each chat session has a **stable workspace root** stored in `Session.project_pat
 
 ### Librarian agent (`vaf/tools/librarian.py`, `vaf/tools/filesystem.py`)
 
-The `librarian_agent` reads the local filesystem to answer "find / list / summarize my files" tasks. By default `is_safe_path` (`vaf/tools/filesystem.py`) only blocks the VAF program tree and a few system directories — it is not user-aware — so without an extra guard the librarian could read across every user's `VAF_Projects/<uid[:8]>/` tree and the whole home directory. A **per-user jail** is therefore layered on top of `is_safe_path`:
+The `librarian_agent` reads the local filesystem to answer "find / list / summarize my files" tasks. By default `is_safe_path` (`vaf/tools/filesystem.py`) only blocks the VAF program tree and a few system directories — it is not user-aware — so without an extra guard the librarian - and the main agent's own read tools - could read across every user's `VAF_Projects/<uid[:8]>/` tree and the whole home directory. A **per-user jail** is therefore layered on top of `is_safe_path`:
 
 - The agent's tool dispatcher injects the caller's `user_scope_id` **and `user_role`** into the `librarian_agent` call (`vaf/core/agent.py`); `LibrarianTool.run` installs it as a **contextvar** (`set_librarian_scope`) for the duration of the run only, so every other caller (coder, document tools) is unaffected. When the librarian runs in a separate sub-agent terminal, both values travel to the child as `VAF_USER_SCOPE_ID` / `VAF_USER_ROLE` so the two lanes reach the same verdict.
 - While the jail is active, `is_safe_path` additionally enforces: a **non-admin user** may read only inside their own `VAF_Projects/<uid[:8]>/`; an **admin** (see `is_admin_identity` above - the DB role or the local-admin scope) keeps full access (their personal `Downloads`/`Documents`/… included). Any path under another user's `VAF_Projects/<other-uid[:8]>/` is **always denied**.
 - The check is **fail-closed**: if the scope cannot be resolved, access is denied. The contextvar is reset in a `finally`, so the jail never leaks into a later run.
 - **The main agent's `write_file` reuses the same jail:** `execute_tool` injects the caller's `user_scope_id` and `user_role` (plus the chat workspace for relative paths and the session id for the Web-UI emits) into main-agent `write_file` calls; `WriteFileTool.run` installs the jail contextvar itself — inside the tool, because the bounded-run dispatcher executes tools in a worker thread where a dispatcher-set contextvar would not propagate. A non-admin user can therefore only write inside their own `VAF_Projects/<uid[:8]>/`; an **admin keeps home-wide access** — decided by the shared `compute_user_jail`, so the librarian, `write_file` and `send_mail` attachments cannot disagree about who an admin is. Both injected keys are **assigned, never defaulted**: `tool_args` starts out as the arguments the model produced, so a prompt-injected `user_role: "admin"` is overwritten with the session's real role before the tool runs. Direct `WriteFileTool()` consumers (coder, workflow engine, librarian, automations) pass none of these kwargs and are unaffected.
 - **`edit_file` is jailed the same way, around its WHOLE body.** It is the other half of the main agent's file-writing surface (surgical search/replace on an existing file) and delegates the actual write to a nested `WriteFileTool()` call that carries no scope of its own - so for a while the jailed and the unjailed path sat next to each other in the same tool list, and a tenant confined to their own tree could rewrite anyone's file. Editing is the sharper end of that: the denied `write_file` could only have created a new file in a foreign tree, while `edit_file` silently changes content that is already there. It is also a **read** primitive - when a search block misses, the tool answers with a "nearest region" slice of the file to help the model retarget - so the contextvar is installed in `EditFileTool.run` before the target is opened, not merely around the delegate. Guarded by `tests/test_edit_file_jail.py`.
+- **The read tools are jailed too, and their allowed roots are WIDER.** `read_file`,
+  `list_files`, `tree`, `find_files` and `folder_size` were the unjailed half of the file
+  surface: a tenant who could not write outside their own tree could still read any path the
+  static checks allow, another tenant's included. Reading is also where listing leaks - a
+  folder's file names are a leak without a single file being opened. `compute_user_jail` now
+  takes a `mode`: `write` (the default, and what every earlier caller keeps) stays at the
+  caller's own `VAF_Projects/<uid[:8]>/`, while `read` adds **the folders of the skills
+  visible to that user**. That addition is required, not generous: `use_skill` prints a
+  skill's bundled files as absolute paths and tells the model to open them with `read_file`.
+  It is also carefully bounded - every skill folder lives in one directory, so allowing
+  "skills" wholesale would hand over a skill kept private to somebody else;
+  `get_visible_skill_ids_for_user` (the `shared_with` manifest) decides which folders enter
+  the jail, and the lookup fails closed to none of them. Those roots stay out of `write`
+  mode: seeing a shared skill is not authority to rewrite it (that is `can_user_edit_skill`).
+  Uploaded attachments need no special case - they land inside the caller's own root
+  (`get_session_attachments_dir`) - and cloud-synced files need none either, because
+  `cloud_storage` is a separate tool that never hands out an absolute `cloud_sync` path.
+  All jailed tools enter the jail through the shared `user_jail(...)` context manager, so the
+  reset-in-`finally` cannot be forgotten in one of them. Guarded by `tests/test_read_jail.py`.
 - **`send_mail` attachments** install the same jail (it is the only mail tool that resolves paths), and the two `VAF_Projects/<uid[:8]>` ownership gates on `GET /api/file` and `POST /api/image/describe` answer the same question through `is_admin_identity`. Before that, all three decided admin scope-only while the session check inside `/api/image/describe` — twenty-five lines below the file check in the same function — was already role-aware.
 
 ### Automations (`vaf/core/automation.py`)
@@ -421,7 +440,7 @@ The `/api/security/*` surface (overview, events, skill actions) is admin-only (`
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |
 | Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |
 | Central Data Explorer (`/api/workspaces`) | Per-user root derived from authenticated scope; lists/searches/renames/deletes only the caller's own workspaces (incl. orphans); opaque handles, not paths; search takes only a query string, never a path | Application |
-| Librarian agent (filesystem read) | Per-user jail (contextvar over `is_safe_path`): non-admin confined to own `VAF_Projects/<uid[:8]>/`, admin (`is_admin_identity`) full; another user's tree always denied, fail-closed | OS |
+| File tools (read AND write) | Per-user jail (contextvar over `is_safe_path`, entered via `user_jail`): non-admin confined to own `VAF_Projects/<uid[:8]>/` - plus, for READS only, the folders of skills visible to them; admin (`is_admin_identity`) full; another user's tree always denied, fail-closed | OS |
 | Sandbox | Per-user working directory in Docker | Container |
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |

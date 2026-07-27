@@ -25,6 +25,7 @@ _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # set_librarian_scope/reset_librarian_scope; the jail info comes from compute_user_jail (single
 # source - do not re-derive it per tool). Installers today: LibrarianTool.run, WriteFileTool.run,
 # SendMailTool attachment resolution.
+import contextlib as _contextlib
 import contextvars as _contextvars
 _librarian_scope_ctx = _contextvars.ContextVar("vaf_librarian_scope", default=None)
 
@@ -42,9 +43,39 @@ def reset_librarian_scope(token):
         pass
 
 
-def compute_user_jail(user_scope_id, user_role=None):
+def _visible_skill_roots(user_scope_id):
+    """Folders of the skills this user may see, for the READ jail only.
+
+    use_skill hands the model absolute paths to a skill's bundled files and tells it to
+    open them with read_file, so a read jail that allowed only the user's own project
+    tree would break every skill shipping reference material. Visibility is per user and
+    already has an authority - the manifest's shared_with, via
+    get_visible_skill_ids_for_user - but the FOLDERS all sit in one directory, so without
+    this list "allow skills" would mean "allow everyone's skills", including a skill kept
+    private to another user.
+
+    Read-only on purpose: editing authority is a different question with a different
+    answer (can_user_edit_skill), so these roots never enter the write jail.
+    Fail-closed to an empty list - the caller keeps their own root and loses skill reads,
+    rather than the lookup failure widening anything."""
+    try:
+        from vaf.core.skills_registry import get_skills_dir, get_visible_skill_ids_for_user
+        base = get_skills_dir()
+        return [base / sid for sid in get_visible_skill_ids_for_user(user_scope_id)]
+    except Exception:
+        return []
+
+
+def compute_user_jail(user_scope_id, user_role=None, *, mode="write"):
     """Jail info for set_librarian_scope, shared by every tool that confines file
-    access to the caller (librarian, write_file, send_mail attachments).
+    access to the caller (librarian, write_file, edit_file, read tools, send_mail
+    attachments).
+
+    `mode` picks the allowed roots, because reading legitimately reaches further than
+    writing: "read" adds the folders of the skills visible to this user (see
+    _visible_skill_roots). "write" - the default, and what every existing caller gets -
+    stays at the caller's own project tree. A tool installs the jail for the operation it
+    performs; is_safe_path itself cannot tell a read from a write.
 
     Admin means the same thing here as everywhere else in VAF (is_admin_identity):
     the DB role, OR the configured local-admin scope. The scope half is not
@@ -66,10 +97,36 @@ def compute_user_jail(user_scope_id, user_role=None):
         if (not scope) or is_admin_identity(user_role, scope):
             return {"is_admin": True, "uid8": None, "allowed_roots": []}
         own_root = get_user_projects_root(scope)
+        roots = [own_root] if own_root else []
+        if mode == "read":
+            roots = roots + _visible_skill_roots(scope)
         return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
-                "allowed_roots": [own_root] if own_root else []}
+                "allowed_roots": roots}
     except Exception:
         return {"is_admin": False, "uid8": "", "allowed_roots": []}
+
+
+@_contextlib.contextmanager
+def user_jail(user_scope_id, user_role=None, *, mode="write"):
+    """Install the per-user jail for the duration of one tool body.
+
+    Every jailed tool needs the same four steps (resolve, skip for an admin, set the
+    contextvar, reset it in a finally) and each hand-written copy is a chance to forget
+    the finally. It must be entered INSIDE the tool: execute_tool dispatches through a
+    bounded-run worker thread, and a contextvar set in the dispatcher would not reach it.
+
+    A falsy scope means a direct consumer (coder, workflow engine, automations) - no jail,
+    exactly as before this existed."""
+    token = None
+    if user_scope_id:
+        info = compute_user_jail(user_scope_id, user_role, mode=mode)
+        if not info.get("is_admin"):
+            token = set_librarian_scope(info)
+    try:
+        yield
+    finally:
+        if token is not None:
+            reset_librarian_scope(token)
 
 
 def _librarian_jail_ok(abs_path) -> bool:
@@ -302,6 +359,16 @@ class ListFilesTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
+        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
+        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
+        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # user: use_skill hands out their absolute paths and asks for read_file.
+        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
+                       mode="read"):
+            return self._run_body(**kwargs)
+
+    def _run_body(self, **kwargs) -> str:
         path = kwargs.get('path', '.')
         sort_by = kwargs.get('sort_by', 'name')
         limit = kwargs.get('limit', 100)
@@ -379,6 +446,16 @@ class FolderSizeTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
+        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
+        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
+        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # user: use_skill hands out their absolute paths and asks for read_file.
+        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
+                       mode="read"):
+            return self._run_body(**kwargs)
+
+    def _run_body(self, **kwargs) -> str:
         path = kwargs.get("path", "")
         top_n = int(kwargs.get("top_n", 10) or 10)
         max_files = int(kwargs.get("max_files", 200000) or 200000)
@@ -485,6 +562,16 @@ For detailed analysis of large files, consider using librarian_agent instead."""
     }
 
     def run(self, **kwargs) -> str:
+        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
+        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
+        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
+        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # user: use_skill hands out their absolute paths and asks for read_file.
+        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
+                       mode="read"):
+            return self._run_body(**kwargs)
+
+    def _run_body(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         start_line = kwargs.get('start_line')
         end_line = kwargs.get('end_line')
@@ -1268,6 +1355,16 @@ class TreeTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
+        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
+        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
+        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # user: use_skill hands out their absolute paths and asks for read_file.
+        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
+                       mode="read"):
+            return self._run_body(**kwargs)
+
+    def _run_body(self, **kwargs) -> str:
         path = kwargs.get('path', '.')
         try:
             depth = int(kwargs.get('depth', 2))
@@ -1318,6 +1415,16 @@ class FinderTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
+        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
+        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
+        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # user: use_skill hands out their absolute paths and asks for read_file.
+        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
+                       mode="read"):
+            return self._run_body(**kwargs)
+
+    def _run_body(self, **kwargs) -> str:
         import fnmatch
         path = kwargs.get('path', '.')
         pattern = kwargs.get('pattern', '*')

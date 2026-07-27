@@ -10689,6 +10689,15 @@ class Agent:
                         ))
                     except Exception:
                         pass
+                if name in ("read_file", "list_files", "tree", "find_files", "folder_size"):
+                    # The READ half of the file surface. write_file and edit_file were jailed
+                    # while these were not, so a tenant confined for writing could still READ
+                    # any path the static checks allow - including another tenant's tree. Read
+                    # mode is deliberately wider than write mode: it also allows the folders of
+                    # skills visible to this user, because use_skill hands out their absolute
+                    # paths. ASSIGNED, never defaulted (see the write_file block below).
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["user_role"] = getattr(self, "_current_user_role", None)
                 if name == "edit_file":
                     # edit_file is the other half of the main agent's file-writing surface and
                     # needs the same jail as write_file: it READS the target (its miss path

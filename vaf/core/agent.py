@@ -28,6 +28,12 @@ from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
+from vaf.core.tool_dispatch import (
+    is_channel_session as _is_channel_session,
+    make_json_serializable,
+    normalize_tool_name,
+    policy_admin_flag as _policy_admin_flag,
+)
 from vaf.tools.search import WebSearchTool, get_web_search_results
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
 
@@ -10335,37 +10341,15 @@ class Agent:
         except Exception:
             pass
 
+        # Both derivations live in tool_dispatch.py: they are pure functions of the caller's
+        # identity, and every lane that runs a tool needs the same two answers. See
+        # policy_admin_flag's docstring for the documented drift against is_admin_identity.
         current_source = str(getattr(self, "_current_chat_source", "") or "").strip().lower()
-        channel_sources = {"telegram", "whatsapp", "discord"}
-        channel_session_prefixes = ("telegram_", "whatsapp_", "discord_")
-        is_channel_session = (
-            current_source in channel_sources
-            or (isinstance(sid, str) and sid.startswith(channel_session_prefixes))
+        is_channel_session = _is_channel_session(current_source, sid)
+        is_admin = _policy_admin_flag(
+            getattr(self, "_current_user_role", None),
+            getattr(self, "_current_user_scope_id", None),
         )
-
-        # Determine whether the current session belongs to an admin user.
-        # Two sources are checked — whichever is set takes precedence:
-        #   1. _current_user_role   — set from the WebSocket session metadata
-        #      (e.g. "admin" / "user") when the user is authenticated via the DB.
-        #   2. _current_user_scope_id vs get_local_admin_scope_id() — covers the
-        #      single-user / local-admin case where no DB role is stored.
-        # This value is passed into evaluate_tool_policy() so tools with
-        # admin_only=True are hard-blocked for regular users before they run.
-        try:
-            from vaf.core.config import get_local_admin_scope_id as _get_local_admin
-            _current_role  = getattr(self, "_current_user_role", None)
-            _current_scope = getattr(self, "_current_user_scope_id", None)
-            _local_admin   = _get_local_admin()
-            is_admin = (
-                _current_role == "admin"
-                or (
-                    _current_scope is not None
-                    and str(_current_scope) == str(_local_admin)
-                )
-            )
-        except Exception:
-            # If we cannot determine admin status, default to False (safer).
-            is_admin = False
 
         tool_instance = self.tools.get(name)
         policy_decision = evaluate_tool_policy(
@@ -10424,30 +10408,6 @@ class Agent:
             except Exception:
                 pass
         
-        def make_json_serializable(obj):
-            """
-            Recursively convert Path objects and other non-serializable types to strings.
-            OS-independent: works with WindowsPath, PosixPath, and PurePath.
-            """
-            import uuid as _uuid
-
-            if isinstance(obj, (Path, _uuid.UUID)):
-                return str(obj)
-            elif isinstance(obj, dict):
-                return {k: make_json_serializable(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [make_json_serializable(item) for item in obj]
-            else:
-                return obj
-
-        def normalize_tool_name(raw_name: str | None) -> str | None:
-            if not raw_name:
-                return None
-            cleaned = raw_name.strip()
-            if cleaned.startswith("functions."):
-                cleaned = cleaned[len("functions."):]
-            return cleaned or None
-
         def run_multi_tool_use(call_args: dict | None) -> str:
             tool_uses = (call_args or {}).get("tool_uses", [])
             if not tool_uses:

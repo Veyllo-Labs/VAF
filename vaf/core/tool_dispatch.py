@@ -198,7 +198,8 @@ def with_subagent_debug_mirror(sink):
 
 def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               trust_dir, allow_once: set, interactive: bool,
-                              decide=None, emit=None, on_gate_required=None) -> str | None:
+                              decide=None, emit=None, on_gate_required=None,
+                              ignore_standing_grants: bool = False) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
@@ -222,10 +223,19 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     directory at call time - "always" trusts that directory and its whole subtree, so which
     directory it was has to be the caller's answer, and the same value must be used for the
     check, the event and the grant.
+
+    ``ignore_standing_grants=True`` is what an authorizer's ``ask()`` means: a previous
+    "always" was an answer to a question nobody is asking any more, so this call is put to a
+    person again. Without it, ``ask()`` would be a suggestion rather than a decision - the
+    first standing grant would silence it forever, which is precisely the situation an
+    application overrides the default for.
     """
     from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
 
-    if get_tool_policy(tool_name) == "allow" or is_trusted_dir(trust_dir) or tool_name in allow_once:
+    if not ignore_standing_grants and (
+        get_tool_policy(tool_name) == "allow" or is_trusted_dir(trust_dir)
+        or tool_name in allow_once
+    ):
         return None
 
     try:
@@ -361,6 +371,101 @@ class ToolCallHooks:
         self.after_emit = after_emit
 
 
+class ToolRequest:
+    """One tool call, put to an authorizer before anything happens.
+
+    The split down the middle of this object is the whole point. Everything about WHO is
+    calling comes from the caller's own context and can be relied on; ``args`` is whatever a
+    model produced and can be anything at all. An authorizer that reads an identity out of
+    ``args`` has been handed the attacker's own answer, so the identity is never in there.
+
+    It is a SNAPSHOT: ``args`` is a plain-JSON copy taken before dispatch, so an authorizer
+    cannot change what the tool receives. Deciding is not the same as editing, and a hook that
+    could quietly rewrite a call would be a far larger surface than one that answers yes or no.
+    (Non-JSON values such as paths appear as strings; that is enough to inspect them.)
+
+    THREE METHODS, NOT A RETURN VALUE. A callback that forgot to return would otherwise mean
+    "None", and None has to mean something. Here it means "no opinion" - the call proceeds
+    exactly as it would have without an authorizer at all. Forgetting is therefore the status
+    quo rather than a silent approval.
+
+    - ``deny(reason)`` - refuse. The caller gets ``Security Error: <reason>`` and nothing runs.
+    - ``ask(reason)`` - force the confirmation gate, even where a standing grant (a trusted
+      directory, a policy of "allow") would normally skip it silently. With nobody to ask, the
+      call is refused rather than run.
+    - ``allow()`` - skip the confirmation gate for THIS call only. Nothing is written to
+      ``trust.json``, so it never widens into a standing grant, and it cannot defeat a hard
+      policy block: those are decided before an authorizer is consulted at all.
+
+    Say two of them and the more restrictive one wins (deny over ask over allow), so the order
+    of the calls cannot change the outcome.
+    """
+
+    __slots__ = ("tool_name", "args", "user_scope_id", "username", "user_role", "source",
+                 "session_id", "permission_level", "side_effect_class", "admin_only",
+                 "channel_restrictions", "_decision", "_reason")
+
+    _RANK = {"allow": 1, "ask": 2, "deny": 3}
+
+    def __init__(self, *, tool_name, tool, args, user_scope_id, username, user_role,
+                 source, session_id):
+        self.tool_name = tool_name
+        self.args = make_json_serializable(args) if args else {}
+        self.user_scope_id = user_scope_id
+        self.username = username
+        self.user_role = user_role
+        self.source = source
+        self.session_id = session_id
+        self.permission_level = getattr(tool, "permission_level", None)
+        self.side_effect_class = getattr(tool, "side_effect_class", None)
+        self.admin_only = bool(getattr(tool, "admin_only", False))
+        self.channel_restrictions = tuple(getattr(tool, "channel_restrictions", ()) or ())
+        self._decision = None
+        self._reason = ""
+
+    def _record(self, kind: str, reason: str) -> None:
+        if self._decision is not None and self._RANK[self._decision] >= self._RANK[kind]:
+            return
+        self._decision = kind
+        self._reason = str(reason or "")
+
+    def deny(self, reason: str = "refused by the application") -> None:
+        self._record("deny", reason)
+
+    def ask(self, reason: str = "the application asked for confirmation") -> None:
+        self._record("ask", reason)
+
+    def allow(self) -> None:
+        self._record("allow", "")
+
+    @property
+    def decision(self) -> str | None:
+        """``"deny"`` / ``"ask"`` / ``"allow"``, or None for no opinion."""
+        return self._decision
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
+def consult_authorizer(authorize, request: "ToolRequest") -> "ToolRequest":
+    """Run an embedder's authorizer over one request. FAIL-CLOSED on any exception.
+
+    Deliberately the opposite polarity from the event sink, which swallows failures: a broken
+    OBSERVER must not fail a run it only watches, while a broken GUARD must not degrade into
+    "allowed". A crash here is indistinguishable from a guard that never ran, and a guard that
+    never ran is exactly the state an attacker wants.
+    """
+    if not callable(authorize):
+        return request
+    try:
+        authorize(request)
+    except Exception as exc:                                      # noqa: BLE001
+        request._decision = "deny"
+        request._reason = f"the authorizer raised and was treated as a refusal: {exc}"
+    return request
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 
@@ -400,6 +505,7 @@ class ToolCaller:
         stop_check=None,
         poll: float | None = None,
         max_result_chars: int | None = 2000,
+        authorize=None,
         # PLUMBING
         on_event=None,
         hooks: "ToolCallHooks | None" = None,
@@ -428,6 +534,9 @@ class ToolCaller:
         self.stop_check = stop_check
         self.poll = poll
         self.max_result_chars = max_result_chars
+        # The application's veto. In-process only: a callable cannot cross into a subprocess,
+        # which is why the per-user tool allowlist is DATA and this is not.
+        self.authorize = authorize
         self.on_event = on_event
         self.hooks = hooks or ToolCallHooks()
         self.model_name = model_name
@@ -455,14 +564,26 @@ class ToolCaller:
         if decision.blocked:
             return f"Security Error: {decision.reason}"
 
+        # The application's own say, AFTER the hard block (an allow() must not be able to
+        # defeat admin_only) and BEFORE everything else. Before the chat gates in particular:
+        # whether an embedder's authorizer is consulted must not depend on turn bookkeeping it
+        # cannot see, so it sees every call that got past policy. And before the confirmation
+        # gate, so a deny answers immediately instead of parking a refused call on a dialog.
+        verdict = self._authorized(name, tool, args)
+        if verdict.decision == "deny":
+            return f"Security Error: {verdict.reason}"
+
         if callable(self.hooks.after_policy):
             gate_msg = self.hooks.after_policy(name, tool, args)
             if gate_msg is not None:
                 return gate_msg
 
-        if decision.requires_confirmation and self.gate_enabled:
+        forced_ask = verdict.decision == "ask"
+        needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
+        if needs_gate and self.gate_enabled:
             refusal = resolve_confirmation_gate(
-                name, reason=decision.reason, args=args,
+                name, reason=(verdict.reason if forced_ask else decision.reason), args=args,
+                ignore_standing_grants=forced_ask,
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
                 allow_once=self.allow_once, interactive=self.interactive,
                 decide=self.decide, emit=self.on_event,
@@ -493,6 +614,14 @@ class ToolCaller:
         return self._truncate(result)
 
     # ── stages ───────────────────────────────────────────────────────────────
+
+    def _authorized(self, name, tool, args) -> ToolRequest:
+        """Put this call to the application's authorizer, if it set one."""
+        return consult_authorizer(self.authorize, ToolRequest(
+            tool_name=name, tool=tool, args=args,
+            user_scope_id=self.user_scope_id, username=self.username,
+            user_role=self.user_role, source=self.source, session_id=self.session_id,
+        ))
 
     def _policy(self, name, tool):
         from vaf.core.tool_contract import evaluate_tool_policy

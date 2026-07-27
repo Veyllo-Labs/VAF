@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **An application built on VAF can now decide about each tool call itself.** Until now the
+  only way to keep a tool away from someone was to leave it out entirely - a choice made once
+  at startup, for everybody. `set_tool_authorizer` is asked before every call and can refuse
+  it, insist on a confirmation question, or let one through without the question. It sees who
+  is calling and what the call would do, so decisions like "this customer's plan has no shell
+  access" or "not that file, it belongs to someone else" are finally expressible. Refusing is
+  the safe direction throughout: an authorizer that answers nothing changes nothing, and one
+  that crashes refuses rather than waving the call through.
 - **You can now run a single tool without starting a conversation.** Building something on
   VAF that just needs a tool done - a scheduled job, a queue worker, your own agent loop -
   meant either wrapping a whole chat agent around it or rebuilding the safety checks by

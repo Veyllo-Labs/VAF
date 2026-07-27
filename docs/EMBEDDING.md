@@ -299,8 +299,13 @@ so the façade sets `VAF_NONINTERACTIVE=1` by default: gated tools return an
 error instead of hanging. To opt out, set `VAF_NONINTERACTIVE=0` before
 constructing the agent.
 
-To let specific dangerous tools run unattended, use the trust mechanisms instead
-of disabling the gate:
+To decide per call - which tool, which user, which arguments - use
+`set_tool_authorizer` (below): `req.allow()` lets one call past the question
+without granting anything durable, and `req.ask()` insists on the question even
+where a standing grant would have skipped it.
+
+To let specific dangerous tools run unattended for good, use the trust mechanisms
+instead of disabling the gate:
 
 - mark a working directory trusted (`mark_trusted_dir`),
 - set a per-tool policy to allow (`set_tool_policy`),
@@ -572,6 +577,7 @@ The supported arguments:
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
+| `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.set_event_sink`, documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
 
 Two limits, stated plainly:
@@ -582,6 +588,76 @@ Two limits, stated plainly:
 - **The constructor takes further arguments that are not part of this
   contract.** They exist for VAF's own lanes and may change without a major
   version; the table above is what is kept.
+
+---
+
+## Deciding about a tool call: `set_tool_authorizer`
+
+VAF answers three questions before a tool runs: may this caller use it at all
+(`admin_only`, `channel_restrictions`), does a person have to confirm it
+(`permission_level`), and who is calling (`identity_kwargs`). All three are
+answered from what the *tool* declares. Your application knows things the tool
+cannot: which tenant is on which plan, which paths this customer owns, that this
+account is thirty seconds from its quota.
+
+`set_tool_authorizer` is where you say so. It runs on every call that got past
+policy, on both the agent and a bare `ToolCaller`:
+
+```python
+def authorize(req):
+    if req.tool_name == "bash" and req.user_role != "admin":
+        req.deny("shell access is not part of this plan")
+    elif req.tool_name == "write_file" and not owns(req.user_scope_id, req.args.get("path")):
+        req.deny("that file belongs to another tenant")
+    elif req.side_effect_class == "irreversible":
+        req.ask("this cannot be undone")
+
+agent = Agent(config={"provider": "deepseek"})
+agent.set_tool_authorizer(authorize)
+```
+
+**You answer with a method, not a return value.** A callback that returns
+nothing would force `None` to mean something, and the tempting meaning ("no
+objection") turns every forgotten `return` into an approval. Here, saying nothing
+means having no opinion and the call proceeds exactly as it would without you.
+
+| Method | What happens |
+|---|---|
+| `req.deny(reason)` | The call is refused with `Security Error: <reason>`. Nothing runs, and nothing is emitted, so an observer never sees a refused call reported as one that ran. |
+| `req.ask(reason)` | The confirmation gate is put to a person, **even where a standing grant would normally skip it** - a trusted directory or a policy of `allow` does not silence you. With nobody to ask, the call is refused rather than run. |
+| `req.allow()` | The confirmation gate is skipped for **this call only**. Nothing is written to `trust.json`, so it never widens into a standing grant. |
+
+Say two of them and the more restrictive wins (deny over ask over allow), so the
+order you call them in cannot change the outcome.
+
+**What the request tells you** splits cleanly in two, and the split is the point:
+
+- **Trustworthy**, from the caller's context: `user_scope_id`, `username`,
+  `user_role`, `source`, `session_id`, plus what the tool declares -
+  `tool_name`, `permission_level`, `side_effect_class`, `admin_only`,
+  `channel_restrictions`.
+- **Not trustworthy**: `args`, which is whatever the model produced. Read it to
+  decide - that is the whole reason for per-call authorization - but never read
+  an identity out of it. The identity is on the request precisely so you do not
+  have to, and an `args["user_role"]` is the attacker's own answer.
+
+`args` is a snapshot, so writing to it changes nothing: deciding is not editing.
+
+Four limits worth knowing before you rely on it:
+
+- **It cannot escalate.** `allow()` skips a confirmation question, never a policy
+  block. An `admin_only` tool is refused before you are asked, so there is
+  nothing for `allow()` to override. It is a second lock, not a master key.
+- **A raising callback is a refusal.** This is the opposite of the event sink,
+  which swallows failures on purpose: a broken observer must not fail a run it
+  only watches, while a broken guard must not quietly become no guard.
+- **In-process only.** The coder sub-agent runs in its own process, and a Python
+  callable does not cross that boundary. Tool calls made *inside* the coder are
+  not put to your authorizer.
+- **The workflow engine does not consult it yet.** A saved workflow's steps run
+  through the shared execution path but not yet through the full pipeline, so
+  they are not authorized. If that matters to your deployment, do not enable
+  workflows for those users.
 
 ---
 
@@ -679,6 +755,8 @@ Stable public surface (safe to build on):
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;
   the constructor's remaining parameters exist for VAF's internal lanes and are
   not.
+- `set_tool_authorizer(fn)` on both `Agent` and `CoreAgent`, and `vaf.ToolRequest`
+  with `deny()` / `ask()` / `allow()` and its context fields.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.

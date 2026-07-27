@@ -36,7 +36,7 @@ Design notes
 from __future__ import annotations
 
 import os
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 # Re-export the full internal engine for advanced users who need direct access.
 # Imported lazily on attribute access would be cleaner, but this module is itself
@@ -88,6 +88,8 @@ class Agent:
         self._pending_tools: list = []
         # Structured-event callback registered before the engine exists.
         self._event_cb: Optional[Callable[[dict], None]] = None
+        # Same, for the tool authorizer.
+        self._authorize_cb: Optional[Callable[[Any], None]] = None
         # Multi-tenant identity (docs/EMBEDDING.md "Multi-tenant embedding"):
         # user_scope is an ASSERTION by the embedder - the library performs no
         # authentication (the process boundary is the trust boundary, same as
@@ -229,6 +231,8 @@ class Agent:
                 agent.init_chat()
             if self._event_cb is not None:
                 agent.set_event_sink(self._event_cb)
+            if self._authorize_cb is not None:
+                agent.set_tool_authorizer(self._authorize_cb)
             # Local mode has no lazy load inside chat_step: without a backend
             # the turn aborts ("Agent not initialized") and run() would return
             # an empty string. Mirror chat_step's own guard and load here, so
@@ -238,6 +242,24 @@ class Agent:
                 agent.load_model()
             self._agent = agent
         return self._agent
+
+    def set_tool_authorizer(self, authorize) -> None:
+        """Decide about each tool call before it runs (or None to detach).
+
+        ``authorize(request)`` receives a ``vaf.ToolRequest`` and answers with
+        ``request.deny(reason)``, ``request.ask(reason)`` or ``request.allow()``. Answering
+        nothing means having no opinion: the call proceeds exactly as it would without an
+        authorizer, so a forgotten answer is the status quo and never a silent approval.
+        Full semantics and the position in the pipeline: ``CoreAgent.set_tool_authorizer``
+        and docs/EMBEDDING.md. Safe to call before or after the first run.
+
+        Deliberately the SAME NAME as on the engine. The facade's ``on_event`` wrapping
+        ``set_event_sink`` is a wart from before that rule; it is kept for compatibility and
+        not repeated.
+        """
+        self._authorize_cb = authorize
+        if self._agent is not None:
+            self._agent.set_tool_authorizer(authorize)
 
     def on_event(self, callback: Optional[Callable[[dict], None]]) -> None:
         """Attach a structured-event callback (or None to detach).

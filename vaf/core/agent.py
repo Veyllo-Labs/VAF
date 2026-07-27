@@ -818,6 +818,8 @@ class Agent:
 
         # Trust gating state (session-only)
         self._allow_once_tools = set()
+        # Optional application-supplied authorizer; see set_tool_authorizer().
+        self._tool_authorizer = None
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
         self._anti_spin_streak = 0  # consecutive bookkeeping (plan/intent) calls; anti-spin guard
         # Task-stuck guard (complement to anti-spin): a weak model can finish a step's work but never
@@ -10417,6 +10419,7 @@ class Agent:
             decide=self._ask_user_about_gate,
             on_gate_required=self._push_gate_to_websocket,
             stop_check=_session_stop_check(sid),
+            authorize=getattr(self, "_tool_authorizer", None),
             on_event=emit,
             model_name=getattr(self, "model_display_name", None),
             hooks=_ToolCallHooks(
@@ -10783,6 +10786,27 @@ class Agent:
             "ok": True,  # the wrapper itself; each inner tool reports its own ok
         })
         return result
+
+    def set_tool_authorizer(self, authorize):
+        """Let the application decide about each tool call. ``None`` detaches.
+
+        ``authorize(request)`` is handed a ``vaf.ToolRequest`` before anything happens and
+        answers with ``request.deny(reason)``, ``request.ask(reason)`` or ``request.allow()``.
+        Saying nothing means having no opinion, and the call proceeds exactly as it would
+        without an authorizer - so a callback that forgets to answer is the status quo rather
+        than a silent approval.
+
+        It runs AFTER the hard policy block, so ``allow()`` cannot reach an ``admin_only``
+        tool, and BEFORE the confirmation gate, so a refusal answers at once rather than
+        parking a call nobody intends to run on a dialog. An exception inside the callback is
+        treated as a refusal (see ``consult_authorizer``): unlike the event sink, which
+        swallows failures because a broken observer must not fail a run, a broken guard must
+        not degrade into "allowed".
+
+        In-process only. It cannot cross into the coder's subprocess, which is why a per-user
+        tool allowlist has to travel as data rather than as this.
+        """
+        self._tool_authorizer = authorize
 
     def set_event_sink(self, sink):
         """Set an optional event sink for structured outputs (e.g. stream-json).

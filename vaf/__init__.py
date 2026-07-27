@@ -10,13 +10,13 @@ if TYPE_CHECKING:
     # API to the real classes so `from vaf import Agent` autocompletes and type-checks.
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
-    from .core.tool_dispatch import ToolCaller
+    from .core.tool_dispatch import ToolCaller, ToolRequest
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
-__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "markers",
-           "user_jail"]
+__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest",
+           "markers", "user_jail"]
 
 
 def __getattr__(name):
@@ -40,13 +40,19 @@ def __getattr__(name):
         # dispatcher to have set it. See docs/EMBEDDING.md.
         from .tools.filesystem import user_jail
         return user_jail
+    if name == "ToolRequest":
+        # What an authorizer is handed: the caller's identity, which is trustworthy, and the
+        # model's arguments, which are not. Exported so an application can type-annotate its
+        # authorizer and, in tests, build one without an agent.
+        from .core.tool_dispatch import ToolRequest
+        return ToolRequest
     if name == "ToolCaller":
         # Run a tool the way the agent runs one - policy, confirmation gate, declared
         # identity, bounded execution, events - without an Agent, a session or a chat turn.
         # This is the same object the agent's own dispatch uses; there is not a second
         # implementation for embedders. Stdlib-only underneath, so the slim base is
         # unaffected. See docs/EMBEDDING.md.
-        from .core.tool_dispatch import ToolCaller
+        from .core.tool_dispatch import ToolCaller, ToolRequest
         return ToolCaller
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this

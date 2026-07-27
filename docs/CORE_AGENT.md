@@ -8,7 +8,7 @@ control. Design map of the turn loop: [AGENT_LOOP.md](agents/AGENT_LOOP.md).
 
 Stability: `CoreAgent` is part of the declared stable surface at the level
 documented HERE (constructor, lifecycle, `chat_step`, `execute_tool`,
-`set_event_sink`, the accessors below). Underscore-prefixed attributes are
+`set_tool_authorizer`, `set_event_sink`, the accessors below). Underscore-prefixed attributes are
 internal; the ones listed at the end are known extension points that may
 change with a changelog note.
 
@@ -135,6 +135,23 @@ whichever of them called it. What `execute_tool` adds on top are the stages that
 belong to a chat turn specifically - the plan and reply gates, the session
 plumbing, the router bookkeeping - and it adds them as hooks into the shared
 pipeline rather than as a dispatcher of its own.
+
+## Deciding about a tool call
+
+```python
+set_tool_authorizer(authorize: Callable[[ToolRequest], None] | None) -> None
+```
+
+Consulted on every dispatch that got past policy, before the confirmation gate.
+The callback answers with `request.deny(reason)`, `request.ask(reason)` or
+`request.allow()`; answering nothing means having no opinion and the call
+proceeds unchanged, so a forgotten answer is the status quo rather than a silent
+approval. `allow()` skips the confirmation question for that one call and cannot
+reach a policy-blocked tool. An exception inside the callback is treated as a
+refusal - the opposite polarity from the event sink, deliberately: a broken
+observer must not fail a run, a broken guard must not become no guard. In-process
+only; it does not cross into the coder sub-agent. Semantics and the full request
+shape: [EMBEDDING.md](EMBEDDING.md).
 
 ## Observability and accessors
 

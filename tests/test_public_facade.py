@@ -26,7 +26,8 @@ def test_facade_exports_exactly_the_documented_surface():
     (tests/test_slim_base_import.py)."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BaseTool", "CoreAgent", "ToolCaller", "__version__", "markers", "user_jail",
+        "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "__version__",
+        "markers", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
 
@@ -39,6 +40,45 @@ def test_the_newly_public_names_actually_resolve():
     assert isinstance(vaf.BaseTool.identity_kwargs, tuple)
     assert vaf.ToolCaller.__name__ == "ToolCaller"
     assert callable(vaf.ToolCaller.execute)
+    assert vaf.ToolRequest.__name__ == "ToolRequest"
+    for method in ("deny", "ask", "allow"):
+        assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
+
+
+def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():
+    """A rule taken from a mistake: `on_event` on the facade wraps `set_event_sink` on the
+    engine, so a reader who learns one name has to learn the other. Kept for compatibility,
+    never repeated - anything new is spelled identically on both."""
+    assert callable(Agent.set_tool_authorizer)
+    assert callable(CoreAgent.set_tool_authorizer)
+
+
+def test_an_authorizer_survives_being_set_before_the_engine_exists():
+    """Applications wire their callbacks up at construction time, before anything has run.
+    The facade builds its engine lazily, so a callback set early has to be REPLAYED onto it -
+    the same guarantee `on_event` documents. Asserting the cache alone would pass even if the
+    replay were missing, which is the only way this can actually break."""
+    from unittest.mock import MagicMock, patch
+
+    def _authorize(request):
+        pass
+
+    agent = Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    agent.set_tool_authorizer(_authorize)
+    with patch("vaf.framework.CoreAgent", return_value=MagicMock()) as built:
+        engine = agent.core
+    assert built.called, "the facade did not build an engine"
+    engine.set_tool_authorizer.assert_called_once_with(_authorize)
+
+
+def test_detaching_an_authorizer_reaches_a_live_engine():
+    from unittest.mock import MagicMock, patch
+
+    agent = Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    with patch("vaf.framework.CoreAgent", return_value=MagicMock()):
+        engine = agent.core
+    agent.set_tool_authorizer(None)
+    engine.set_tool_authorizer.assert_called_with(None)
 
 
 def test_tool_caller_keeps_the_arguments_embedding_md_documents():

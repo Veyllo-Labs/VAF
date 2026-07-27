@@ -172,6 +172,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `run_async`.
 
 ### Fixed
+- **A tool the agent had just written for itself only worked after a restart.** When the
+  agent creates a new tool, it is supposed to become usable straight away in the same
+  conversation. The step that makes it live was never actually reached, so the tool was
+  written correctly but stayed invisible until VAF was restarted next. It now appears
+  immediately, as intended.
 - **Mail did not work at all on some Windows and macOS installations.** The search index
   used a feature that needs a recent SQLite, and it was created together with the rest of
   the mail database - so on an older SQLite the whole mail store failed to be created, not

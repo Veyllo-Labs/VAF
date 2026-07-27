@@ -152,6 +152,16 @@ class AgentToolBuilderTool(BaseTool):
             update_tool_source,
         )
 
+        # Pick up the live agent the dispatcher injects. Without this line the class
+        # attribute stays None for the tool's whole life, and _hot_reload() below quietly
+        # does nothing - which is what happened until now, so a newly created tool only
+        # appeared after a restart despite the comment promising otherwise. Guarded against
+        # None so a direct call (tests, a non-dispatch caller) does not wipe an agent that
+        # was set earlier; mirrors agent_workflow_builder.
+        _injected = kwargs.get("_agent")
+        if _injected is not None:
+            self._agent = _injected
+
         action    = (kwargs.get("action") or "").strip().lower()
         tool_name = (kwargs.get("tool_name") or "").strip()
         code      = (kwargs.get("code") or "").strip()

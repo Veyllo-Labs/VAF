@@ -912,17 +912,21 @@ class WorkflowEngine:
                 # the user's Stop flag during the call so a hung step can't freeze the
                 # backend and the Stop button works mid-step. See vaf/core/bounded_run.py.
                 from vaf.core.bounded_run import (
-                    run_bounded, is_abort_sentinel, SELF_SUPERVISED_TOOLS, agent_timeout_seconds,
+                    is_abort_sentinel, SELF_SUPERVISED_TOOLS, agent_timeout_seconds,
                 )
                 from vaf.core.config import Config as _CfgTO
+                from vaf.core.tool_dispatch import run_tool_bounded
                 # As a WORKFLOW STEP, browser_agent must be BOUNDED: it runs in-process and
                 # blocks the workflow, so leaving it unbounded lets a hung browser freeze the
                 # whole workflow (and the main agent waiting on it). It gets a generous budget
                 # (browser_timeout_seconds) + its own _stop_monitor/max_steps. Only the
                 # workflow orchestrators stay self-supervised here (they are never steps in
                 # practice). Standalone browser_agent (via execute_tool) stays self-supervised.
-                _self_supervised = (step.tool in SELF_SUPERVISED_TOOLS) and step.tool != "browser_agent"
-                _step_timeout = _workflow_step_timeout(step.tool)  # per-agent budget (workflow floor for heavy agents)
+                # The exempt set this lane uses, as a value rather than a branch - it is one of
+                # the three arguments run_tool_bounded takes precisely so a second caller does
+                # not have to reimplement execution control.
+                _workflow_self_supervised = SELF_SUPERVISED_TOOLS - {"browser_agent"}
+                _step_timeout = _workflow_step_timeout(step.tool)  # still needed by the spawn branch below
                 _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
 
                 while retry_count < max_retries:
@@ -940,15 +944,15 @@ class WorkflowEngine:
                             result = self._await_subagent(
                                 _spawn_out, step.tool, check_stop, _step_timeout, _stop_poll,
                             )
-                        elif _self_supervised:
-                            result = tool.run(**args)   # self-managed stop + internal limits
                         else:
-                            result = run_bounded(
-                                lambda: tool.run(**args),
-                                timeout=_step_timeout,
+                            # Same execution path the chat lane uses; this lane's three
+                            # differences travel as arguments instead of as a second copy.
+                            result = run_tool_bounded(
+                                tool, args, tool_name=step.tool,
+                                timeout_for=_workflow_step_timeout,
+                                self_supervised=_workflow_self_supervised,
                                 stop_check=check_stop,
                                 poll=_stop_poll,
-                                label=step.tool,
                             )
                         
                         # Check if result contains context overflow error (like main agent)

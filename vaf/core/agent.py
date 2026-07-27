@@ -35,6 +35,8 @@ from vaf.core.tool_dispatch import (
     normalize_tool_name,
     policy_admin_flag as _policy_admin_flag,
     repair_arguments as _repair_arguments,
+    run_tool_bounded as _run_tool_bounded,
+    session_stop_check as _session_stop_check,
 )
 from vaf.tools.search import WebSearchTool, get_web_search_results
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
@@ -10695,43 +10697,24 @@ class Agent:
                     goal = self._extract_subagent_goal(name, tool_args)
                     if intent or goal:
                         self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
-                # Self-supervised tools (browser_agent + workflow orchestrators) manage their
-                # own cancellation/lifecycle and are legitimately long-running — bounding them
-                # here would abandon them mid-work (zombie) while they're still making progress.
-                # Run them directly; they handle their own Stop + internal limits.
-                from vaf.core.bounded_run import SELF_SUPERVISED_TOOLS as _SELF_SUPERVISED
                 if _ti_errors:
                     # Args still violate the tool's declared schema after repair:
                     # return a localized error to the model instead of dispatching
                     # with invalid input. Keep the "Tool Error:" prefix so is_err and
                     # the Whare Wananga reactive-retry keep recognising it unchanged.
+                    # Checked BEFORE the duplicate guard: a schema error is about this call,
+                    # the duplicate message is about another one already running.
                     result = "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(_ti_errors))
                 elif _subagent_dup_msg is not None:
                     # Anti-re-delegation: a same-type sub-agent already runs for this session.
                     result = _subagent_dup_msg
-                elif name in _SELF_SUPERVISED:
-                    result = self.tools[name].run(**tool_args)
                 else:
-                    # Bounded execution: never let a single in-process tool block the worker
-                    # forever, and poll the user's Stop flag *during* the call so the Stop
-                    # button actually works. See vaf/core/bounded_run.py.
-                    from vaf.core.bounded_run import run_bounded as _run_bounded, agent_timeout_seconds as _agent_to
-                    from vaf.core.config import Config as _CfgTT
-                    _tool_to = _agent_to(name)   # per-agent budget
-                    def _tool_stop_check():
-                        try:
-                            if not sid:
-                                return False
-                            from vaf.core.task_queue import TaskQueue as _TQ
-                            return bool(_TQ().should_stop(sid))
-                        except Exception:
-                            return False
-                    result = _run_bounded(
-                        lambda: self.tools[name].run(**tool_args),
-                        timeout=_tool_to,
-                        stop_check=_tool_stop_check,
-                        poll=float(_CfgTT.get("tool_stop_poll_seconds", 0.5)),
-                        label=name,
+                    # Bounded unless the tool supervises itself; the Stop flag is polled
+                    # DURING the call so the Stop button works mid-tool. Defaults here are the
+                    # chat lane's - see run_tool_bounded for what other callers vary.
+                    result = _run_tool_bounded(
+                        self.tools[name], tool_args, tool_name=name,
+                        stop_check=_session_stop_check(sid),
                     )
             else:
                 result = f"Error: Unknown tool '{name}'"

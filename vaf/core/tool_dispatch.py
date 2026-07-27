@@ -156,6 +156,68 @@ def repair_arguments(tool: Any, args: dict, *, tool_name: str,
     return args, errors
 
 
+def session_stop_check(session_id: str | None):
+    """A stop predicate for one session, or a never-stop one when there is no session.
+
+    The Stop button is a per-session flag in the task queue; polling it DURING a call is what
+    makes the button work at all, since a tool that has already started would otherwise run
+    to completion. Fully defensive: if the queue cannot be reached the answer is "do not
+    stop", because a false stop kills work the user did not cancel.
+    """
+    def _check() -> bool:
+        try:
+            if not session_id:
+                return False
+            from vaf.core.task_queue import TaskQueue
+            return bool(TaskQueue().should_stop(session_id))
+        except Exception:
+            return False
+    return _check
+
+
+def run_tool_bounded(tool: Any, args: dict, *, tool_name: str,
+                     timeout_for=None, self_supervised=None, stop_check=None,
+                     poll: float | None = None):
+    """Run one tool call, bounded in wall-clock time unless the tool supervises itself.
+
+    Three things differ per caller, and each is an argument rather than a second copy of this
+    function:
+
+    - ``timeout_for(name) -> seconds``. Defaults to the per-agent budget. The workflow engine
+      passes its own, which raises a floor for heavy sub-agent steps: the generic cap once
+      killed a healthy coder mid-loop at minute five.
+    - ``self_supervised``: the names that must NOT be wrapped, because a hard timeout would
+      abandon them mid-work while they are still making progress. The engine deliberately
+      excludes ``browser_agent`` from its own set - a workflow must not stall forever on one
+      browsing step, even though a standalone call may.
+    - ``stop_check``: how this caller learns the user pressed Stop. The chat lane polls the
+      task queue by session; the workflow engine is handed a callback from outside.
+
+    Returns whatever the tool returns, or one of the abort sentinels from
+    ``vaf/core/bounded_run.py`` on timeout or stop.
+    """
+    from vaf.core.bounded_run import (
+        SELF_SUPERVISED_TOOLS,
+        agent_timeout_seconds,
+        run_bounded,
+    )
+    supervised = SELF_SUPERVISED_TOOLS if self_supervised is None else self_supervised
+    if tool_name in supervised:
+        return tool.run(**args)
+
+    if poll is None:
+        from vaf.core.config import Config
+        poll = float(Config.get("tool_stop_poll_seconds", 0.5))
+    resolve_timeout = timeout_for or agent_timeout_seconds
+    return run_bounded(
+        lambda: tool.run(**args),
+        timeout=resolve_timeout(tool_name),
+        stop_check=stop_check,
+        poll=poll,
+        label=tool_name,
+    )
+
+
 def normalize_tool_name(raw_name: str | None) -> str | None:
     """Strip the ``functions.`` prefix some providers put in front of a tool name.
 

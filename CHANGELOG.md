@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **Workflows carrying an identity now pass it to far more tools.** The setting introduced
+  in 0.1.0a19 only reached a fixed list of tools; set to `declared` it now asks each tool
+  what it needs, the same way a normal chat message already did. In practice that means
+  files, GitHub, the browser, skills and automations finally know who is running the
+  workflow, and mail learns the person's role rather than only their name. Nothing loses
+  access - every tool that had an identity before keeps exactly the one it had. Still off
+  by default (`legacy`).
+
 ## [0.1.0a19] - 2026-07-27
 
 ### Added

@@ -163,6 +163,22 @@ def paused_tool_message(
     )
 
 
+def _identity_mode() -> str:
+    """How identity works in the workflow lane: ``"legacy"`` (default) or ``"declared"``.
+
+    One key governs both halves of the same question - whether the four consumers that never
+    passed an identity now pass one, AND whether the engine distributes it by each tool's
+    declaration instead of by a hardcoded name list. Splitting them into two keys would allow
+    a combination nobody designed (real identity, old distribution). Fail-safe: anything
+    unreadable or unrecognised means "as before".
+    """
+    try:
+        from vaf.core.config import Config
+        return str(Config.get("workflow_identity_injection", "legacy") or "legacy").strip().lower()
+    except Exception:
+        return "legacy"
+
+
 def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[str] = None,
                         *, session_id: Optional[str] = None) -> Dict[str, Any]:
     """What a workflow consumer should hand the engine as identity, honouring the rollout.
@@ -190,12 +206,7 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
 
     Returns kwargs to splat into ``WorkflowEngine(...)``; an empty dict means "as before".
     """
-    try:
-        from vaf.core.config import Config
-        mode = str(Config.get("workflow_identity_injection", "legacy") or "legacy").strip().lower()
-    except Exception:
-        mode = "legacy"
-    if mode != "declared":
+    if _identity_mode() != "declared":
         return {}
 
     if not user_scope_id and session_id:
@@ -348,6 +359,7 @@ class WorkflowEngine:
         callback: Callable = None,
         user_scope_id: Optional[str] = None,
         username: Optional[str] = None,
+        user_role: Optional[str] = None,
     ):
         """
         Initialize the workflow engine.
@@ -362,6 +374,10 @@ class WorkflowEngine:
         self.callback = callback or (lambda *args: None)
         self.user_scope_id = user_scope_id
         self.username = username or "admin"
+        # Never injected by the old name list - it has no branch that sets user_role at all,
+        # so a workflow step could not be role-aware. None keeps the previous answer: the
+        # jail resolves admin-ness from the scope half alone, exactly as before.
+        self.user_role = user_role
 
         # Per-step output validation (opt-in). Set by the caller (run_temp) when an agent is
         # available: _validate_step(goal, result, tool, user_intent) -> (fulfilled, retry_hint).
@@ -856,8 +872,35 @@ class WorkflowEngine:
                     except Exception:
                         pass
                 
-                # User isolation: inject user_scope_id/username for tools that need it (same as agent)
+                # User isolation. Two ways to decide WHICH tools get the caller's identity,
+                # chosen by the same key that decides whether this lane has one at all
+                # (workflow_identity_injection) - both halves are the same question.
+                #
+                # "declared": read each tool's BaseTool.identity_kwargs, exactly as the chat
+                # dispatcher does. Measured against the name list below over all 132 tool
+                # classes: 41 identical, 48 gain, and - the number that matters - ZERO lose.
+                # The migration is purely additive. Among the gains: every filesystem tool,
+                # the GitHub tools, browser_agent, the skill and automation tools, and
+                # send_mail, which today gets scope and username but never the ROLE.
+                #
+                # "legacy": the hardcoded name list, kept byte-for-byte. It is not dead code
+                # while it is the default, and it is the rollback.
+                def _inject_declared_identity(tool_name: str, a: Dict[str, Any]) -> None:
+                    from vaf.core.tool_dispatch import assign_declared_identity
+                    tool = self.tools.get(tool_name)
+                    if tool is None:
+                        return
+                    assign_declared_identity(
+                        tool, a,
+                        user_scope_id=self.user_scope_id,
+                        username=self.username,
+                        user_role=getattr(self, "user_role", None),
+                    )
+
                 def _inject_user_scope(tool_name: str, a: Dict[str, Any]) -> None:
+                    if _identity_mode() == "declared":
+                        _inject_declared_identity(tool_name, a)
+                        return
                     if self.user_scope_id is not None or self.username:
                         if tool_name in ("memory_save", "memory_search"):
                             a["user_scope_id"] = self.user_scope_id

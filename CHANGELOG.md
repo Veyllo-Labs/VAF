@@ -18,6 +18,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it. Existing skills keep the setting they have; a new one starts as visible to everyone.
 
 ### Fixed
+- **The failover slider looked navy in dark mode.** It now uses the same neutral tone as
+  the other controls.
 - **The agent could read files belonging to other people using the same VAF.** Writing was
   already confined to your own project folder, but reading was not, so the agent could open -
   or simply list - files in someone else's folder or elsewhere on the machine. Reading is now

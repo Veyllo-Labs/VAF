@@ -3678,7 +3678,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 type="range" min={0} max={120} step={5}
                                                                 value={timeoutVal}
                                                                 onChange={(e) => handleChange('failover_timeout_s', parseInt(e.target.value, 10))}
-                                                                className="w-full accent-gray-900"
+                                                                className="w-full accent-gray-900 dark:accent-[#d9d9d9]"
                                                             />
                                                             <span className="text-xs font-semibold text-gray-800 w-10 text-right">{timeoutVal}s</span>
                                                         </div>

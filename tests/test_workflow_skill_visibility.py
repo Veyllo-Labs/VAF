@@ -36,14 +36,43 @@ TENANT = "deadbeef-0000-0000-0000-000000000000"
 OTHER_TENANT = "cafe1234-0000-0000-0000-000000000000"
 
 
+def _real_declaration(tool_name):
+    """What the REAL tool asks for. Taken from the class rather than written down here.
+
+    Under the declared distribution the engine hands a tool exactly what it declares, so a
+    stand-in that declares nothing would receive nothing and this file would measure its own
+    fake instead of the engine. Reading the live class also means a tool that loses its
+    declaration fails HERE, which is the interesting failure.
+    """
+    import importlib
+    import inspect
+    import pkgutil
+
+    import vaf.tools
+    from vaf.tools.base import BaseTool
+
+    for mod in pkgutil.iter_modules(vaf.tools.__path__):
+        try:
+            module = importlib.import_module("vaf.tools." + mod.name)
+        except Exception:
+            continue
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            if issubclass(cls, BaseTool) and getattr(cls, "name", None) == tool_name:
+                return tuple(getattr(cls, "identity_kwargs", ()) or ())
+    raise AssertionError(tool_name + " is not registered any more")
+
+
 class _RecordingSkillTool:
     """Stands in for use_skill/read_skill: records the scope the engine handed it."""
 
-    def __init__(self):
+    def __init__(self, tool_name):
         self.seen = "<never called>"
+        self.seen_username = "<never called>"
+        self.identity_kwargs = _real_declaration(tool_name)
 
     def run(self, **kwargs):
         self.seen = kwargs.get("user_scope_id", "<absent>")
+        self.seen_username = kwargs.get("username", "<absent>")
         return "skill output"
 
 
@@ -61,7 +90,7 @@ def _run_step(tool_name, tool, **engine_kwargs):
 @pytest.mark.parametrize("tool_name", ["use_skill", "read_skill"])
 def test_a_workflow_step_carries_the_callers_scope_into_the_skill_gate(tool_name):
     """THE regression: without this the gate saw None and treated the step as admin."""
-    tool = _RecordingSkillTool()
+    tool = _RecordingSkillTool(tool_name)
     seen = _run_step(tool_name, tool, user_scope_id=TENANT, username="tenant")
     assert seen == TENANT, (
         f"{tool_name} ran with {seen!r} instead of the caller's scope - the skill "
@@ -72,26 +101,20 @@ def test_a_workflow_step_carries_the_callers_scope_into_the_skill_gate(tool_name
 def test_read_skill_also_gets_the_username_it_declares():
     """read_skill declares ("user_scope_id", "username"); the engine must supply both or the
     editable-flag half of its answer is computed for the wrong person."""
-    seen_kwargs = {}
-
-    class _Tool:
-        def run(self, **kwargs):
-            seen_kwargs.update(kwargs)
-            return "ok"
-
-    engine = WorkflowEngine(tools={"read_skill": _Tool()}, callback=lambda *a, **k: None,
-                            user_scope_id=TENANT, username="tenant")
-    engine.execute([WorkflowStep(tool="read_skill", input_template="x", output_name="o")],
-                   variables={})
-    assert seen_kwargs.get("user_scope_id") == TENANT
-    assert seen_kwargs.get("username") == "tenant"
+    assert _real_declaration("read_skill") == ("user_scope_id", "username"), (
+        "read_skill changed what it asks for; this test's claim is about both keys"
+    )
+    tool = _RecordingSkillTool("read_skill")
+    _run_step("read_skill", tool, user_scope_id=TENANT, username="tenant")
+    assert tool.seen == TENANT
+    assert tool.seen_username == "tenant"
 
 
 @pytest.mark.parametrize("tool_name", ["use_skill", "read_skill"])
 def test_a_model_authored_step_arg_cannot_spoof_the_scope(tool_name):
     """The step args come from a MODEL (run_temp authors them per turn), so the injection
     must ASSIGN over whatever the step template carried - never defer to it."""
-    tool = _RecordingSkillTool()
+    tool = _RecordingSkillTool(tool_name)
     engine = WorkflowEngine(tools={tool_name: tool}, callback=lambda *a, **k: None,
                             user_scope_id=TENANT, username="tenant")
     engine.execute(
@@ -107,7 +130,7 @@ def test_a_direct_consumer_without_an_identity_is_unchanged(tool_name):
     """The CLI workflow subprocess and the @workflow_id lane construct the engine with no
     identity at all. Their behavior must be exactly what it was before - the admin reading
     documented in skills_registry.get_visible_skill_ids_for_user."""
-    tool = _RecordingSkillTool()
+    tool = _RecordingSkillTool(tool_name)
     seen = _run_step(tool_name, tool)
     assert seen in (None, "<absent>"), (
         "an identity-less lane suddenly carries a scope; that is a behavior change, not "

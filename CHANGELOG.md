@@ -29,6 +29,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Changed
+- **A workflow now runs as the person who started it, by default.** Until this release a
+  saved workflow always acted as the machine owner, whoever ran it: its files went to the
+  owner's folders, its GitHub calls used the owner's account, and anything it created was
+  filed under the owner. That was switchable before and is now the default. What changes in
+  practice is that 47 further tools finally learn who is running the workflow - files,
+  GitHub, automations, skills and reading messages among them - and none of them lose an
+  identity they already had. If a workflow of yours relied on reaching the owner's files by
+  an absolute path or a folder name like `Desktop/...`, that step will now be refused for
+  anyone who is not an administrator; the setting `workflow_identity_injection` set to
+  `legacy` restores the previous behaviour.
 - **Workflows carrying an identity now pass it to far more tools.** The setting introduced
   in 0.1.0a19 only reached a fixed list of tools; set to `declared` it now asks each tool
   what it needs, the same way a normal chat message already did. In practice that means

@@ -5927,6 +5927,7 @@ class Agent:
                 **identity_for_engine(
                     getattr(self, "_current_user_scope_id", None),
                     getattr(self, "_current_username", None),
+                    user_role=getattr(self, "_current_user_role", None),
                 ),
             )
 

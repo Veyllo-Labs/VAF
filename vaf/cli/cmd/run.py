@@ -331,6 +331,7 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
             **identity_for_engine(
                 getattr(paused_wf, "user_scope_id", None),
                 getattr(paused_wf, "username", None),
+                user_role=getattr(paused_wf, "user_role", None),
             ),
         )
         engine._workflow_name = paused_wf.workflow_name

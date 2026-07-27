@@ -78,9 +78,16 @@ def test_a_tool_on_the_name_list_is_unchanged_under_legacy():
     assert _step("memory_save", ("user_scope_id",), "legacy") == {"user_scope_id": SCOPE}
 
 
-@pytest.mark.parametrize("mode", ["legacy", "off", "", None, "something-else"])
-def test_only_declared_switches_the_distribution(mode):
+@pytest.mark.parametrize("mode", ["legacy", "off", "LEGACY", " off "])
+def test_an_explicit_rollback_keeps_the_name_list(mode):
     assert _step("read_file", ("user_role", "user_scope_id"), mode) == {}
+
+
+@pytest.mark.parametrize("mode", ["", None, "something-else", "declaered"])
+def test_anything_that_is_not_a_rollback_distributes_by_declaration(mode):
+    """A mistyped setting must not silently restore the name list - under it a workflow's
+    file tools carry no identity at all, so they are not jailed."""
+    assert _step("read_file", ("user_role", "user_scope_id"), mode) != {}
 
 
 # ── what declared changes ────────────────────────────────────────────────────
@@ -140,9 +147,14 @@ def test_one_key_governs_both_halves():
     a combination nobody designed and nobody would test."""
     import inspect
 
-    from vaf.workflows.engine import _identity_mode, identity_for_engine
+    from vaf.workflows.engine import _identity_is_declared, _identity_mode, identity_for_engine
 
-    assert "_identity_mode()" in inspect.getsource(identity_for_engine)
+    # Both halves ask the same predicate, and the predicate reads the one key. The gate used
+    # to be an inline `== "declared"` in each half; it became a named helper when the default
+    # flipped, because an unrecognised value had to start meaning declared rather than legacy
+    # and two literal comparisons would have had to agree about that on their own.
+    assert "_identity_is_declared()" in inspect.getsource(identity_for_engine)
+    assert "_identity_mode()" in inspect.getsource(_identity_is_declared)
     assert "workflow_identity_injection" in inspect.getsource(_identity_mode)
 
 

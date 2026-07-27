@@ -492,6 +492,7 @@ class ExecuteWorkflowTool(BaseTool):
                 **identity_for_engine(
                     getattr(_agent, "_current_user_scope_id", None),
                     getattr(_agent, "_current_username", None),
+                    user_role=getattr(_agent, "_current_user_role", None),
                     session_id=session_id,
                 ),
             )

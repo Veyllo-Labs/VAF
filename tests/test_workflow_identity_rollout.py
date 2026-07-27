@@ -42,11 +42,22 @@ def _with_mode(mode):
 
 # ── the switch ───────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("mode", ["legacy", "off", "", None, "anything-else"])
-def test_anything_but_declared_keeps_todays_behaviour(mode):
-    """Default and rollback both mean: these consumers pass nothing, exactly as before."""
+@pytest.mark.parametrize("mode", ["legacy", "off", "LEGACY", " off "])
+def test_only_an_explicit_rollback_keeps_the_old_behaviour(mode):
+    """Rolling back is a deliberate act and has exactly two spellings."""
     with _with_mode(mode):
         assert identity_for_engine(SCOPE, "tenant") == {}
+
+
+@pytest.mark.parametrize("mode", ["", None, "anything-else", "declaered"])
+def test_a_value_that_is_not_a_rollback_means_declared(mode):
+    """The polarity flipped with the default. While "legacy" was the default an unrecognised
+    value could safely mean "as before"; now "as before" is the leaky state, so a typo must
+    fall towards the strict side. A mistyped ROLLBACK fails visibly instead - the person sees
+    the behaviour they were trying to turn off."""
+    with _with_mode(mode):
+        assert identity_for_engine(SCOPE, "tenant") == {
+            "user_scope_id": SCOPE, "username": "tenant"}
 
 
 @pytest.mark.parametrize("mode", ["declared", "DECLARED", " declared "])
@@ -57,18 +68,41 @@ def test_declared_passes_the_real_identity(mode):
             "user_scope_id": SCOPE, "username": "tenant"}
 
 
-def test_the_default_is_off():
-    """Shipping it on would flip behaviour for every existing install on update."""
+def test_the_default_is_declared():
+    """It shipped off for one release so the switch could be turned on deliberately, and it
+    is on now. Leaving it off would have meant leaving the hole open by default: a saved
+    workflow acting as the machine owner is not a preference, it is the bug."""
     from vaf.core.config import Config
 
-    assert Config.DEFAULTS["workflow_identity_injection"] == "legacy"
+    assert Config.DEFAULTS["workflow_identity_injection"] == "declared"
 
 
-def test_an_unreadable_config_falls_back_to_legacy():
-    """Fail-safe direction: if the setting cannot be read, behave as before rather than
-    changing what a running workflow does."""
+def test_flipping_the_default_actually_moves_the_switch():
+    """The default has to be the thing that decides, which is not automatic: a resolver that
+    passed its own fallback to Config.get would shadow DEFAULTS and the flip would be
+    decorative. Checked by moving the default and watching the answer follow."""
+    from unittest.mock import patch
+
+    from vaf.core.config import Config
+    from vaf.workflows.engine import _identity_mode
+
+    for value in ("legacy", "declared"):
+        with patch.dict(Config.DEFAULTS, {"workflow_identity_injection": value}):
+            Config._cache = None
+            assert _identity_mode() == value
+    Config._cache = None
+
+
+def test_an_unreadable_config_falls_back_to_declared():
+    """The fail-safe direction moved with the default. "As before" is the state in which a
+    workflow acts as the machine owner, so falling back to it would hand a non-admin's
+    workflow the owner's files and tokens whenever the config could not be read. Falling
+    back to declared costs nothing when identity resolution is failing too - unresolved
+    identity is falsy, and a falsy scope takes the same no-jail exemption a direct caller
+    does - and refuses to leak when it is not."""
     with patch("vaf.core.config.Config.get", side_effect=RuntimeError("config gone")):
-        assert identity_for_engine(SCOPE, "tenant") == {}
+        assert identity_for_engine(SCOPE, "tenant") == {
+            "user_scope_id": SCOPE, "username": "tenant"}
 
 
 # ── what it passes ───────────────────────────────────────────────────────────
@@ -149,3 +183,46 @@ def test_the_three_lanes_that_always_passed_one_are_untouched():
             f"rollout switch means 'off' would take it away"
         )
         assert "user_scope_id" in src
+
+
+# ── the role, which the file jail cannot form without ────────────────────────
+
+def test_the_role_travels_too():
+    """Scope alone is not an identity for the file jail.
+
+    ``is_admin_identity(role, scope)`` says yes for an admin ROLE or for the local admin's
+    SCOPE. A second administrator has the role but not that scope, so dropping the role
+    silently demotes them to a tenant inside their own workflows - the exact asymmetry that
+    was fixed for the chat lane, reappearing one lane over. The engine has taken a
+    ``user_role`` since the identity round; nothing filled it.
+
+    Direction matters for how urgent this is: a missing role RESTRICTS (someone is jailed who
+    should not be), it never frees. That is why it is a defect and not an incident."""
+    out = identity_for_engine(SCOPE, "tenant", user_role="admin")
+    assert out == {"user_scope_id": SCOPE, "username": "tenant", "user_role": "admin"}
+
+
+def test_an_absent_role_is_absent_rather_than_guessed():
+    """No role must never become a default role: "user" would jail a local admin and "admin"
+    would free everyone."""
+    assert "user_role" not in identity_for_engine(SCOPE, "tenant")
+
+
+def test_the_lanes_with_a_role_in_reach_actually_pass_it():
+    """The wiring, separately from the resolver. Three construction sites hold a live agent
+    or a stored record and can therefore answer; a resolver that accepts a role nobody hands
+    it is the same dead field this test exists to close."""
+    import inspect
+
+    import vaf.cli.cmd.run as run_cmd
+    import vaf.core.agent as agent_mod
+    import vaf.tools.workflow_executor as wf_exec
+
+    for module, needle in (
+        (wf_exec, 'user_role=getattr(_agent, "_current_user_role", None)'),
+        (agent_mod, 'user_role=getattr(self, "_current_user_role", None)'),
+        (run_cmd, 'user_role=getattr(paused_wf, "user_role", None)'),
+    ):
+        assert needle in inspect.getsource(module), (
+            module.__name__ + " constructs a workflow engine without passing the caller's role"
+        )

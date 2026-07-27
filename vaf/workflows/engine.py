@@ -164,23 +164,47 @@ def paused_tool_message(
 
 
 def _identity_mode() -> str:
-    """How identity works in the workflow lane: ``"legacy"`` (default) or ``"declared"``.
+    """How identity works in the workflow lane: ``"declared"`` (default), ``"legacy"``, ``"off"``.
 
     One key governs both halves of the same question - whether the four consumers that never
     passed an identity now pass one, AND whether the engine distributes it by each tool's
     declaration instead of by a hardcoded name list. Splitting them into two keys would allow
-    a combination nobody designed (real identity, old distribution). Fail-safe: anything
-    unreadable or unrecognised means "as before".
+    a combination nobody designed (real identity, old distribution).
+
+    The fallback follows the DEFAULT, and it changed when the default did. It used to be
+    "legacy", which was the cautious direction while that was also the default. It no longer
+    is: under "legacy" a workflow acts as the machine owner whoever started it, so a config
+    that cannot be read would have quietly handed a non-admin's workflow the owner's files and
+    tokens. Falling back to "declared" costs nothing in the case where identity resolution is
+    failing too - unresolved identity is falsy, and a falsy scope takes the same no-jail
+    exemption a direct caller does - and it refuses to leak in the case where it is not.
     """
     try:
         from vaf.core.config import Config
-        return str(Config.get("workflow_identity_injection", "legacy") or "legacy").strip().lower()
+        return str(Config.get("workflow_identity_injection") or "declared").strip().lower()
     except Exception:
-        return "legacy"
+        return "declared"
+
+
+ROLLBACK_MODES = ("legacy", "off")
+
+
+def _identity_is_declared() -> bool:
+    """True unless the setting explicitly names one of the two rollback modes.
+
+    Anything else - a typo, a value from a newer version, whitespace - means "declared". That
+    polarity flipped with the default. While "legacy" was the default, an unrecognised value
+    could safely mean "as before"; now "as before" is the leaky state, and a mistyped
+    "declaered" would silently hand a non-admin's workflow the machine owner's files and
+    tokens. A mistyped ROLLBACK, by contrast, fails visibly: the person sees the strict
+    behaviour they were trying to turn off and looks at their config again.
+    """
+    return _identity_mode() not in ROLLBACK_MODES
 
 
 def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[str] = None,
-                        *, session_id: Optional[str] = None) -> Dict[str, Any]:
+                        *, user_role: Optional[str] = None,
+                        session_id: Optional[str] = None) -> Dict[str, Any]:
     """What a workflow consumer should hand the engine as identity, honouring the rollout.
 
     Seven places construct a WorkflowEngine. Three have always passed an identity: the chat
@@ -193,8 +217,8 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
     Closing that is a behaviour change by definition; it is the point. So it rolls out behind
     ``workflow_identity_injection``:
 
-      ``"legacy"`` (default)  the four keep passing nothing, byte-for-byte as before
-      ``"declared"``          they pass the real identity
+      ``"declared"`` (default)  they pass the real identity
+      ``"legacy"``              the four keep passing nothing, byte-for-byte as before
 
     Three values rather than a boolean, deliberately: "off" is NOT the old state. The three
     lanes that always passed an identity keep doing so under every setting - this resolver
@@ -204,9 +228,17 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
     subprocess): it resolves the scope from the session's own metadata, the same way the
     engine already derives the project path.
 
+    ``user_role`` is the half the file jail cannot form without, and it does not reach every
+    caller. ``is_admin_identity`` says yes for an admin ROLE or for the local admin's SCOPE,
+    so the role only decides for a SECOND administrator - role yes, that scope no. Callers
+    holding a live agent or a stored record pass it; the two that resolve from a store
+    (session metadata, the paused record) have no role to pass, and a second administrator is
+    therefore jailed to their own tree there. Restrictive, never permissive: a missing role
+    frees nobody. See docs/security/USER_ISOLATION.md.
+
     Returns kwargs to splat into ``WorkflowEngine(...)``; an empty dict means "as before".
     """
-    if _identity_mode() != "declared":
+    if not _identity_is_declared():
         return {}
 
     if not user_scope_id and session_id:
@@ -215,6 +247,7 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
             meta = (SessionManager().load(session_id).metadata or {})
             user_scope_id = meta.get("user_scope_id") or None
             username = username or meta.get("username") or None
+            user_role = user_role or meta.get("user_role") or None
         except Exception:
             pass
     if not user_scope_id and not username:
@@ -224,6 +257,8 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
         out["user_scope_id"] = user_scope_id
     if username:
         out["username"] = username
+    if user_role:
+        out["user_role"] = user_role
     return out
 
 
@@ -898,7 +933,7 @@ class WorkflowEngine:
                     )
 
                 def _inject_user_scope(tool_name: str, a: Dict[str, Any]) -> None:
-                    if _identity_mode() == "declared":
+                    if _identity_is_declared():
                         _inject_declared_identity(tool_name, a)
                         return
                     if self.user_scope_id is not None or self.username:

@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a19] - 2026-07-27
+
 ### Added
 - **Workflows can now run as the person who started them.** Until now a saved workflow always
   acted as the machine owner, no matter who ran it - so anything it did with memory, mail,

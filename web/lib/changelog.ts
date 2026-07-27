@@ -31,6 +31,43 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a19',
+    date: '2026-07-27',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'You can now choose who a skill is for. The skill editor has a visibility setting - everyone, only you, or named people - the same one custom tools already had. It decides who sees the skill, who can use it, and whose agent may open the files bundled with it.',
+          'Workflows can run as the person who started them. Until now a saved workflow always acted as the machine owner, so anything it did with memory, mail, messages, the calendar or contacts was filed under the owner. The new `workflow_identity_injection` setting switches this over; it is off by default because it changes where a running workflow’s data goes.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'The per-user tool and workflow selection now says what it actually does. The wording read as though the choice were already in force; it is stored but not yet checked while the agent runs, so the dialog says so plainly instead of implying a restriction that is not there yet.',
+          'Adding an MCP server no longer needs scrolling to reach Save - the test-connection button moved into the footer and the dialog is taller.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Mail did not work at all on some Windows and macOS installations. The search index used a feature that needs a recent database version, and because it was created together with the rest of the mail storage, the whole thing failed rather than just search.',
+          'A tool the agent had just written for itself only worked after a restart. It now becomes usable straight away, as intended.',
+          'A workflow could open a skill somebody had kept private. Workflow steps now carry the identity of the person who started them.',
+          'The agent could read files belonging to other people using the same VAF. Reading is now confined the same way writing already was.',
+          'A device on the network could reach VAF without signing in, and privileges meant only for the local machine applied across the network.',
+          'The failover setting looked navy instead of neutral in dark mode.',
+        ],
+      },
+      {
+        kind: 'removed',
+        items: [
+          'The `batch` tool is gone. It was listed as available but could never actually be called, and what it offered - running several tools at once - is what the agent already does in a single turn.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a18',
     date: '2026-07-23',
     sections: [

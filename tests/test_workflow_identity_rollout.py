@@ -77,20 +77,38 @@ def test_the_default_is_declared():
     assert Config.DEFAULTS["workflow_identity_injection"] == "declared"
 
 
-def test_flipping_the_default_actually_moves_the_switch():
-    """The default has to be the thing that decides, which is not automatic: a resolver that
-    passed its own fallback to Config.get would shadow DEFAULTS and the flip would be
-    decorative. Checked by moving the default and watching the answer follow."""
+def test_the_resolver_does_not_shadow_the_default():
+    """The default has to be the thing that decides, and that is not automatic.
+
+    ``Config.get(key, fallback)`` prefers a NON-None fallback over ``Config.DEFAULTS``, so a
+    resolver passing its own would shadow the shipped default and moving that default would be
+    decorative. Asserted on the CALL rather than on the answer: an earlier version of this test
+    moved DEFAULTS and watched the result, which passes or fails depending on whether a
+    ``~/.vaf/config.json`` happens to exist - `Config.load()` merges the file OVER the defaults
+    (`{**DEFAULTS, **data}`), so on a machine whose config carries the key, no patch of DEFAULTS
+    can be seen. It passed here and failed on every CI runner."""
     from unittest.mock import patch
 
-    from vaf.core.config import Config
     from vaf.workflows.engine import _identity_mode
 
-    for value in ("legacy", "declared"):
-        with patch.dict(Config.DEFAULTS, {"workflow_identity_injection": value}):
-            Config._cache = None
-            assert _identity_mode() == value
-    Config._cache = None
+    seen = []
+    with patch("vaf.core.config.Config.get",
+               side_effect=lambda *a, **k: seen.append((a, k)) or "declared"):
+        _identity_mode()
+    assert seen == [(("workflow_identity_injection",), {})], (
+        "the resolver passed its own fallback to Config.get, which shadows Config.DEFAULTS - "
+        f"moving the shipped default would then change nothing. Called with: {seen}"
+    )
+
+
+def test_a_missing_value_everywhere_still_means_declared():
+    """The other half: if nothing answers at all, the strict mode is what is left."""
+    from unittest.mock import patch
+
+    from vaf.workflows.engine import _identity_mode
+
+    with patch("vaf.core.config.Config.get", return_value=None):
+        assert _identity_mode() == "declared"
 
 
 def test_an_unreadable_config_falls_back_to_declared():

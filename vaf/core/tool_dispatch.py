@@ -325,6 +325,216 @@ def run_tool_bounded(tool: Any, args: dict, *, tool_name: str,
     )
 
 
+class ToolCallHooks:
+    """Where a caller's own machinery interleaves with the shared pipeline.
+
+    Four points, and each is a MEASURED position rather than an extension point invented on
+    spec. They exist because the chat lane genuinely has stages in the middle of the pipeline,
+    and moving any of them to the edge changes an event order, a precedence or a side effect
+    that something already depends on. A caller with no such stages passes ``ToolCallHooks()``
+    and gets the bare pipeline.
+
+    - ``after_policy(name, tool, args) -> str | None`` - the chat gates (plan, note firewall,
+      proactive reply, ask-first). Returning a string ends the call with it. Runs AFTER the
+      hard policy block, never before: a blocked tool must not reach a soft gate.
+    - ``before_dispatch(name, tool_args) -> str | None`` - may mutate ``tool_args`` (the chat
+      lane's session plumbing) and may refuse (its duplicate sub-agent guard). Runs after
+      identity assignment, so what it adds is not validated against the tool's schema.
+    - ``after_dispatch(name, tool_args, result) -> str`` - may replace the result. The chat
+      lane discovers tools from a ``search_tools`` answer here and runs its python_exec
+      fallback, which emits its own event pair.
+    - ``after_emit(name) -> None`` - only on paths that actually dispatched. The chat lane
+      records router recency here, and deliberately NOT for a blocked or refused call.
+    """
+
+    __slots__ = ("after_policy", "before_dispatch", "after_dispatch", "after_emit")
+
+    def __init__(self, after_policy=None, before_dispatch=None, after_dispatch=None,
+                 after_emit=None):
+        self.after_policy = after_policy
+        self.before_dispatch = before_dispatch
+        self.after_dispatch = after_dispatch
+        self.after_emit = after_emit
+
+
+class ToolCaller:
+    """Run a tool through the full pipeline, configured for one caller.
+
+    VAF had five places that ran a tool and only one of them evaluated policy, honoured the
+    confirmation gate or read a tool's identity declaration. This is the one path they share,
+    so that "which door did the caller come through" stops being a security answer.
+
+    What differs per caller are ARGUMENTS, not forks - that distinction is the whole design.
+    Whether a human can answer a gate, which timeout budget applies, which tools supervise
+    themselves, how Stop arrives, whose identity this is: all parameters. If a second caller
+    ever needs a fork instead, the parameter list is wrong.
+
+    A caller with no agent, no web server and no terminal gets the same pipeline as the
+    product's chat loop. That is the point, and it is checked: this module imports neither.
+    """
+
+    def __init__(
+        self,
+        tools,
+        *,
+        # WHO is calling
+        user_scope_id: str | None = None,
+        username: str | None = None,
+        user_role: str | None = None,
+        source: str = "",
+        session_id: str | None = None,
+        # UNDER WHICH RULES
+        interactive: bool = False,
+        trust_dir=None,
+        allow_once: set | None = None,
+        decide=None,
+        on_gate_required=None,
+        # RUNTIME CONTROL
+        timeout_for=None,
+        self_supervised=None,
+        stop_check=None,
+        poll: float | None = None,
+        max_result_chars: int | None = 2000,
+        # PLUMBING
+        on_event=None,
+        hooks: "ToolCallHooks | None" = None,
+        model_name: str | None = None,
+    ):
+        self.tools = tools
+        self.user_scope_id = user_scope_id
+        self.username = username
+        self.user_role = user_role
+        self.source = source
+        self.session_id = session_id
+        self.interactive = interactive
+        self.trust_dir = trust_dir
+        self.allow_once = allow_once if allow_once is not None else set()
+        self.decide = decide
+        self.on_gate_required = on_gate_required
+        self.timeout_for = timeout_for
+        self.self_supervised = self_supervised
+        self.stop_check = stop_check
+        self.poll = poll
+        self.max_result_chars = max_result_chars
+        self.on_event = on_event
+        self.hooks = hooks or ToolCallHooks()
+        self.model_name = model_name
+
+    # ── the pipeline ─────────────────────────────────────────────────────────
+
+    def execute(self, name: str, args: dict | None = None) -> str:
+        """Dispatch one tool call. Always returns a string; never raises for tool failures.
+
+        The ORDER below is contract, not convenience, and three parts of it were only
+        discovered by measuring (tests/test_dispatch_event_baseline.py):
+
+        - a hard policy block and a refused gate emit NOTHING and dispatch nothing, so a
+          consumer never sees a blocked tool reported as run;
+        - a schema error is about THIS call while the duplicate-guard message is about
+          another one already running, so the schema error wins;
+        - the result is truncated LAST, after any hook has had its say, because
+          ``search_tools`` caps itself just under this limit.
+        """
+        import time
+
+        tool = self.tools.get(name)
+
+        decision = self._policy(name, tool)
+        if decision.blocked:
+            return f"Security Error: {decision.reason}"
+
+        if callable(self.hooks.after_policy):
+            gate_msg = self.hooks.after_policy(name, tool, args)
+            if gate_msg is not None:
+                return gate_msg
+
+        if decision.requires_confirmation:
+            refusal = resolve_confirmation_gate(
+                name, reason=decision.reason, args=args,
+                trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
+                allow_once=self.allow_once, interactive=self.interactive,
+                decide=self.decide, emit=self.on_event,
+                on_gate_required=self.on_gate_required,
+            )
+            if refusal is not None:
+                return refusal
+
+        emit_event(self.on_event, {"type": "tool_start", "tool": name,
+                                   "args": self._preview(name, args)})
+        started = time.monotonic()
+        try:
+            result = self._dispatch(name, tool, args)
+        except Exception as exc:                                  # noqa: BLE001
+            result = f"Tool Error: {exc}"
+
+        if callable(self.hooks.after_dispatch):
+            result = self.hooks.after_dispatch(name, args, result)
+
+        emit_event(self.on_event, {
+            "type": "tool_end", "tool": name,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "ok": not (isinstance(result, str) and (
+                result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))),
+        })
+        if callable(self.hooks.after_emit):
+            self.hooks.after_emit(name)
+        return self._truncate(result)
+
+    # ── stages ───────────────────────────────────────────────────────────────
+
+    def _policy(self, name, tool):
+        from vaf.core.tool_contract import evaluate_tool_policy
+        return evaluate_tool_policy(
+            tool_name=name, tool=tool, current_source=self.source,
+            is_channel_session=is_channel_session(self.source, self.session_id),
+            is_admin=policy_admin_flag(self.user_role, self.user_scope_id),
+        )
+
+    def _preview(self, name, args):
+        """Argument preview for the event stream - heavy fields stripped, Paths stringified."""
+        serializable = make_json_serializable(args) if args else {}
+        try:
+            from vaf.core.subagent_debug import sanitize_args
+            return sanitize_args(name, serializable)
+        except Exception:
+            return serializable
+
+    def _dispatch(self, name, tool, args):
+        if tool is None:
+            return f"Error: Unknown tool '{name}'"
+        tool_args = dict(args) if args else {}
+        tool_args, errors = repair_arguments(tool, tool_args, tool_name=name,
+                                             model_name=self.model_name)
+        assign_declared_identity(
+            tool, tool_args, user_scope_id=self.user_scope_id,
+            username=self.username, user_role=self.user_role,
+        )
+        if callable(self.hooks.before_dispatch):
+            refusal = self.hooks.before_dispatch(name, tool_args)
+            if refusal is not None and errors:
+                # A schema error is about THIS call; the hook's refusal is about another one
+                # already in flight. The call that cannot even be formed loses first.
+                return "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(errors))
+            if refusal is not None:
+                return refusal
+        if errors:
+            return "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(errors))
+        return run_tool_bounded(
+            tool, tool_args, tool_name=name, timeout_for=self.timeout_for,
+            self_supervised=self.self_supervised, stop_check=self.stop_check, poll=self.poll,
+        )
+
+    def _truncate(self, result):
+        limit = self.max_result_chars
+        if limit is None:
+            return result
+        text = str(result)
+        if len(text) <= limit:
+            return result
+        return (f"{text[:limit]}\n... [Output Truncated. Total length: {len(text)} chars. "
+                f"Use specific filters or read sub-parts.]")
+
+
 def normalize_tool_name(raw_name: str | None) -> str | None:
     """Strip the ``functions.`` prefix some providers put in front of a tool name.
 

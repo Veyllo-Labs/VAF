@@ -554,6 +554,10 @@ caller = ToolCaller(
 print(caller.execute("tenant_notes", {"path": "todo.md"}))
 ```
 
+Runnable version, including the authorizer below:
+[examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).
+It is the one example that needs no provider and no network.
+
 What one `execute()` does, in order: evaluate policy (`admin_only`,
 `channel_restrictions`), consult the confirmation gate, emit `tool_start`,
 validate and repair the arguments against the tool's schema, assign the declared

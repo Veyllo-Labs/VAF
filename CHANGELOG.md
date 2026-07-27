@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A new example runs without needing a model at all.**
+  `examples/07_tool_caller_and_authorizer.py` shows the two pieces below in one runnable
+  script: running a tool with VAF's rules but no conversation, and deciding about each call.
+  It needs no API key, no provider and no network, which makes it the quickest way to check
+  a fresh install actually works.
 - **An application built on VAF can now decide about each tool call itself.** Until now the
   only way to keep a tool away from someone was to leave it out entirely - a choice made once
   at startup, for everybody. `set_tool_authorizer` is asked before every call and can refuse

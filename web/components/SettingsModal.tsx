@@ -3603,7 +3603,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     {/* track between the first and last dot centers (12.5% .. 87.5%) */}
                                                     <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-200" />
                                                     <div
-                                                        className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 transition-all"
+                                                        className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 dark:bg-[#d9d9d9] transition-all"
                                                         style={{ width: `${(75 * idx) / 3}%` }}
                                                     />
                                                     {/* relative z-10: paint the dots ABOVE the absolute track lines so the
@@ -3617,7 +3617,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 aria-pressed={i === idx}
                                                                 className="flex cursor-pointer flex-col items-center gap-1.5"
                                                             >
-                                                                <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= idx ? 'border-gray-900 bg-gray-900' : 'border-gray-300 bg-white')} />
+                                                                <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= idx ? 'border-gray-900 bg-gray-900 dark:border-[#d9d9d9] dark:bg-[#d9d9d9]' : 'border-gray-300 bg-white')} />
                                                                 <span className={cn('whitespace-nowrap text-[11px]', i === idx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
                                                             </button>
                                                         ))}

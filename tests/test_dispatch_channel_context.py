@@ -34,6 +34,7 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.base import BaseTool
 
@@ -99,7 +100,7 @@ def _dispatch(tool_name, context):
     cls = _tool_class(tool_name)
     stub = _stub(cls)
     model_args = _required(getattr(cls, "parameters", None))
-    fake = SimpleNamespace(
+    fake = bind_chat_stages(SimpleNamespace(
         tools={tool_name: stub}, _event_sink=None, _allow_once_tools={tool_name},
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=session_id,
@@ -113,7 +114,7 @@ def _dispatch(tool_name, context):
         _ask_first_gate_decision=lambda n, t: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
-    )
+    ))
     with patch("vaf.core.trust.get_tool_policy", return_value="always"), \
          patch("vaf.core.trust.is_trusted_dir", return_value=True), \
          patch("vaf.core.config.Config.get",
@@ -169,7 +170,7 @@ def test_a_model_cannot_ask_for_the_bridge_back_on_a_channel():
     source, session_id = CONTEXTS["channel_by_source"]
     cls = _tool_class("python_sandbox")
     stub = _stub(cls)
-    fake = SimpleNamespace(
+    fake = bind_chat_stages(SimpleNamespace(
         tools={"python_sandbox": stub}, _event_sink=None, _allow_once_tools={"python_sandbox"},
         _noninteractive=True, _current_turn_thinking_mode=False,
         _current_chat_source=source, current_session_id=session_id,
@@ -183,7 +184,7 @@ def test_a_model_cannot_ask_for_the_bridge_back_on_a_channel():
         _ask_first_gate_decision=lambda n, t: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
-    )
+    ))
     args = dict(_required(getattr(cls, "parameters", None)))
     args["with_vaf_tools"] = True
     with patch("vaf.core.trust.get_tool_policy", return_value="always"), \

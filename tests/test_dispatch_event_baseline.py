@@ -42,6 +42,7 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.base import BaseTool
 
@@ -135,6 +136,8 @@ def _tool(name, fn=None, **attrs):
     return t
 
 
+
+
 def _fake(tools, events, **over):
     base = dict(
         tools={t.name: t for t in tools}, _event_sink=events.append,
@@ -152,7 +155,7 @@ def _fake(tools, events, **over):
         model_display_name="probe",
     )
     base.update(over)
-    return SimpleNamespace(**base)
+    return bind_chat_stages(SimpleNamespace(**base))
 
 
 _PREFIXES = ("Security Error:", "Tool Error:", "Error: Unknown tool", "[CANCELLED]",

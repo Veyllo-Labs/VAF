@@ -57,6 +57,15 @@ def _gate(trust_dir=Path("/tmp/project"), allow_once=None, interactive=True,
     )
 
 
+def test_the_asker_is_told_which_tool_and_why(trust):
+    """The reason is computed inside the gate, from the policy decision. A prompt that only
+    knew the tool name could not say WHY it is being asked, and the terminal prompt and the
+    web dialog both print it - so it travels as an argument rather than being re-derived."""
+    seen = []
+    _gate(decide=lambda n, r: seen.append((n, r)) or "cancel")
+    assert seen == [("dangerous_probe", REASON)]
+
+
 # ── standing grants are silent ───────────────────────────────────────────────
 
 def test_a_tool_whose_policy_allows_runs_without_a_word(trust):
@@ -137,7 +146,7 @@ def test_an_unserialisable_argument_does_not_break_the_gate(trust):
 def test_allow_once_stays_in_memory(trust):
     once = set()
     events = []
-    assert _gate(allow_once=once, decide=lambda: "allow_once", events=events) is None
+    assert _gate(allow_once=once, decide=lambda n, r: "allow_once", events=events) is None
     assert once == {"dangerous_probe"}
     assert trust["writes"] == [], "a single approval was persisted into a standing one"
     assert [e["type"] for e in events] == ["gate_required", "gate_decision"]
@@ -147,7 +156,7 @@ def test_allow_once_stays_in_memory(trust):
 def test_allow_always_writes_both_halves_of_the_grant(trust):
     """As documented to embedders: the directory subtree AND the tool policy, at once."""
     once = set()
-    assert _gate(allow_once=once, decide=lambda: "allow_always") is None
+    assert _gate(allow_once=once, decide=lambda n, r: "allow_always") is None
     assert trust["writes"] == [
         ("mark_trusted_dir", str(Path("/tmp/project"))),
         ("set_tool_policy", "dangerous_probe", "allow"),
@@ -159,14 +168,14 @@ def test_the_directory_that_is_trusted_is_the_one_that_was_checked(trust):
     """One value for the check, the event and the grant - three reads of Path.cwd() could
     disagree, and the user would be trusting a directory they were never shown."""
     events = []
-    _gate(trust_dir=Path("/srv/work"), decide=lambda: "allow_always", events=events)
+    _gate(trust_dir=Path("/srv/work"), decide=lambda n, r: "allow_always", events=events)
     assert events[0]["cwd"] == str(Path("/srv/work"))
     assert trust["writes"][0] == ("mark_trusted_dir", str(Path("/srv/work")))
 
 
 def test_cancel_returns_the_cancelled_marker(trust):
     events = []
-    result = _gate(decide=lambda: "cancel", events=events)
+    result = _gate(decide=lambda n, r: "cancel", events=events)
     assert result.startswith("[CANCELLED]")
     assert events[-1]["decision"] == "cancel"
     assert trust["writes"] == []
@@ -175,7 +184,7 @@ def test_cancel_returns_the_cancelled_marker(trust):
 @pytest.mark.parametrize("answer", ["", "maybe", None, "ALLOW_ONCE", "yes"])
 def test_anything_that_is_not_an_exact_grant_cancels(trust, answer):
     """Fail-closed: an unrecognised answer must never be read as approval."""
-    assert _gate(decide=lambda: answer).startswith("[CANCELLED]")
+    assert _gate(decide=lambda n, r: answer).startswith("[CANCELLED]")
     assert trust["writes"] == []
 
 

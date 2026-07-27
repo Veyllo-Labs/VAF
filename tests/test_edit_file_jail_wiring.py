@@ -21,6 +21,7 @@ never reached and the untouched target file said nothing about the fix.
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.filesystem import EditFileTool
 
@@ -42,7 +43,7 @@ class SpyEditFileTool(EditFileTool):
 
 def _dispatch(model_args: dict, *, scope=TENANT, role="user"):
     spy = SpyEditFileTool()
-    fake_agent = SimpleNamespace(
+    fake_agent = bind_chat_stages(SimpleNamespace(
         tools={"edit_file": spy},
         _event_sink=None,
         _allow_once_tools={"edit_file"},
@@ -57,7 +58,7 @@ def _dispatch(model_args: dict, *, scope=TENANT, role="user"):
         _plan_gate_decision=lambda name, tool, tool_args=None: None,
         _proactive_reply_gate_decision=lambda name, tool, args: None,
         _ask_first_gate_decision=lambda name, tool: None,
-    )
+    ))
     with patch("vaf.core.trust.get_tool_policy", return_value="always"), patch(
         "vaf.core.trust.is_trusted_dir", return_value=True
     ):

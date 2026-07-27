@@ -70,8 +70,15 @@ def test_write_file_excluded_in_thinking_mode():
 def test_execute_tool_injection_block_present():
     # Losing this branch would leave every unit test green while the workspace
     # join, emit scoping and jail silently die - guard the wiring itself.
-    m = re.search(r'if name == "write_file":(.*?)\n                if name in \(', AGENT_SRC, re.S)
-    assert m, "write_file injection block missing in execute_tool"
+    # Scoped to the method that owns the branch rather than to the whole file: the
+    # previous version matched a hardcoded 16-space indent inside execute_tool and went
+    # red purely because the block moved out to its own method at a shallower depth.
+    import inspect
+
+    import vaf.core.agent as agent_mod
+    plumbing = inspect.getsource(agent_mod.Agent._chat_session_plumbing)
+    m = re.search(r'if name == "write_file":(.*?)\n\s+if name in \(', plumbing, re.S)
+    assert m, "write_file injection block missing from the chat session plumbing"
     block = m.group(1)
     # The SESSION keys still come from this branch - they are per-call plumbing, not identity.
     for needle in ('tool_args["_session_id"]', 'tool_args["_session_workspace"]'):

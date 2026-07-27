@@ -128,6 +128,14 @@ timeouts and stop polling. Event schema: the
 [event sink](OBSERVABILITY.md). Always returns a string (tool result or
 error text).
 
+That pipeline is not private to the chat turn: it lives in
+`vaf/core/tool_dispatch.py` and is shared with the workflow engine, so a tool
+sees the same policy evaluation, the same gate and the same identity assignment
+whichever of them called it. What `execute_tool` adds on top are the stages that
+belong to a chat turn specifically - the plan and reply gates, the session
+plumbing, the router bookkeeping - and it adds them as hooks into the shared
+pipeline rather than as a dispatcher of its own.
+
 ## Observability and accessors
 
 - `set_event_sink(callable)` - structured `tool_start`/`tool_end`/

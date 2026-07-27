@@ -35,6 +35,7 @@ from unittest.mock import patch
 import pytest
 
 import vaf.core.agent as agent_mod
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.base import BaseTool
 
@@ -235,7 +236,7 @@ class _SpyTool(BaseTool):
 
 def _dispatch(tool, model_args, *, scope="deadbeef-0000-0000-0000-000000000000",
               role="user", username="tenant"):
-    fake = SimpleNamespace(
+    fake = bind_chat_stages(SimpleNamespace(
         tools={tool.name: tool}, _event_sink=None, _allow_once_tools={tool.name},
         _noninteractive=True, _current_turn_thinking_mode=False, _current_chat_source="web",
         current_session_id=None, _current_user_scope_id=scope, _current_user_role=role,
@@ -243,7 +244,7 @@ def _dispatch(tool, model_args, *, scope="deadbeef-0000-0000-0000-000000000000",
         _plan_gate_decision=lambda name, tool, tool_args=None: None,
         _proactive_reply_gate_decision=lambda name, tool, args: None,
         _ask_first_gate_decision=lambda name, tool: None,
-    )
+    ))
     with patch("vaf.core.trust.get_tool_policy", return_value="always"), patch(
         "vaf.core.trust.is_trusted_dir", return_value=True
     ):

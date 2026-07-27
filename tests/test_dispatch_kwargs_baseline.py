@@ -40,6 +40,7 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.base import BaseTool
 
@@ -245,10 +246,12 @@ def _required_args(schema):
     return out
 
 
+
+
 def _fake_agent(tools, *, thinking=False):
     """The fixed context described in the module docstring. Every attribute here is one the
     dispatcher reads; validated against a real Agent over all 117 tools with 0 differences."""
-    return SimpleNamespace(
+    return bind_chat_stages(SimpleNamespace(
         tools=tools,
         _event_sink=None,
         _allow_once_tools=set(tools),
@@ -274,7 +277,7 @@ def _fake_agent(tools, *, thinking=False):
         get_live_session_subagents=lambda: [],
         _extract_subagent_goal=lambda args: "",
         model_display_name="probe",
-    )
+    ))
 
 
 def _all_tool_classes():

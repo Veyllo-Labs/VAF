@@ -6,10 +6,11 @@ models make before the tool runs. This sits at the dispatch boundary, behind the
 stable tool contract (Layer 2 in [ARCHITECTURE.md](../ARCHITECTURE.md)).
 
 Module: `vaf/core/tool_input_repair.py` (pure, side-effect free).
-Call site: `Agent.execute_tool` in `vaf/core/agent.py`, immediately after the
-model arguments are taken and **before** any runtime kwargs are injected — so the
-validator compares exactly the model-supplied arguments against the declared
-`parameters` schema.
+Call site: `repair_arguments` in `vaf/core/tool_dispatch.py`, run by the shared
+`ToolCaller` pipeline immediately after the model arguments are taken and
+**before** any runtime kwargs are injected - so the validator compares exactly the
+model-supplied arguments against the declared `parameters` schema. Every caller
+that goes through that pipeline gets it; `Agent.execute_tool` is one of them.
 
 ## Why
 
@@ -116,9 +117,12 @@ This shows which models mis-shape which tool inputs, and how often.
 - Set `input_aliases = {canonical: [synonyms]}` on the tool class to catch
   common synonym mistakes (e.g. `path` <- `file_path`). Kept off the schema so
   it is never sent to a model. The alias remap (R0) does the rest.
-- Repair (and therefore R0) runs only on the MAIN agent / sub-agent dispatch
-  path (`Agent.execute_tool`). The coder and the workflow engine have their
-  own tool loops and do not call it, so aliases do not help there.
+- Repair (and therefore R0) runs wherever the shared `ToolCaller` pipeline runs:
+  today the MAIN agent / sub-agent dispatch path. The coder has its own tool loop
+  and does not call it. The workflow engine shares the pipeline's bounded
+  execution and identity assignment but not yet its argument repair, so aliases do
+  not help in a workflow step either - steps carry author-written arguments rather
+  than model-guessed ones, which is why that half was left for later.
 
 ## Notes
 
@@ -129,5 +133,5 @@ This shows which models mis-shape which tool inputs, and how often.
   attachment path locally as well.
 
 See also: [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) for where
-this sits in `execute_tool`, and [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md) for
+this sits in the dispatch pipeline, and [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md) for
 tool execution bounds and the error conventions.

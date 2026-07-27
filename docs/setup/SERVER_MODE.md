@@ -147,10 +147,11 @@ VRAM; the cap prevents oversubscribing the GPU. API providers have no local GPU 
 to stay within provider rate limits.
 
 **Isolation under concurrency.** Each worker builds its own `Agent`, and the queue never hands the same
-session to two workers at once. So a single user's turns always run in order while *different* users run in
-parallel; `weighted_fair` additionally schedules the interactive / automation / background task classes
-fairly. The per-session guarantee holds under the `legacy` policy too — `weighted_fair` only adds lane
-fairness.
+session to two workers at once. The guarantee is therefore **per session, not per user**: the in-flight set
+is keyed on the session id alone (`vaf/core/task_queue.py`), so one person's web session and their
+`telegram_...` session can occupy two workers simultaneously, while turns *within* one session always run in
+order. `weighted_fair` additionally schedules the interactive / automation / background task classes fairly.
+The per-session guarantee holds under the `legacy` policy too — `weighted_fair` only adds lane fairness.
 
 **Rate limits.** With several workers hitting one provider, transient `429`s are expected. VAF retries them
 for every provider, honoring a `Retry-After` header capped by `api_retry_after_max` — see

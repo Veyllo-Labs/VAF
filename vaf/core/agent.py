@@ -29,6 +29,8 @@ from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.tool_dispatch import (
+    ToolCallHooks as _ToolCallHooks,
+    ToolCaller as _ToolCaller,
     assign_declared_identity as _assign_declared_identity,
     is_channel_session as _is_channel_session,
     make_json_serializable,
@@ -36,7 +38,6 @@ from vaf.core.tool_dispatch import (
     policy_admin_flag as _policy_admin_flag,
     repair_arguments as _repair_arguments,
     resolve_confirmation_gate as _resolve_confirmation_gate,
-    run_tool_bounded as _run_tool_bounded,
     session_stop_check as _session_stop_check,
     with_subagent_debug_mirror as _with_subagent_debug_mirror,
 )
@@ -10321,22 +10322,54 @@ class Agent:
         # The raw response is already stored in history, so we don't lose information.
         return self._clean_reasoning(full_response)
 
+    def _dispatch_session_id(self):
+        """Which session this dispatch belongs to. Contextvar FIRST, attribute second.
+
+        Both signals exist and neither is sufficient alone. `current_session_id` is written
+        only by `load_session_context`, so an Agent built for an automation
+        (`vaf/core/automation.py`) never has it at all; the contextvar is what a worker
+        thread carries for the turn it is serving. With several main workers in one process
+        (`parallel_main_workers`), the contextvar is also the only one of the two that is
+        per-turn rather than per-object.
+
+        There is exactly one resolution because there used to be several: splitting the
+        dispatcher briefly left the tool-level channel guards reading the attribute alone
+        while the policy stage read both, and the two then disagreed for a drained or
+        resumed channel session. That disagreement is fail-OPEN - `host_bash` reads
+        `_is_channel_session` as plain truthiness. Guard:
+        tests/test_channel_session_resolution.py.
+        """
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            return get_current_session_id() or getattr(self, "current_session_id", None)
+        except Exception:
+            return getattr(self, "current_session_id", None)
+
+    def _is_channel_turn(self):
+        """Is this dispatch happening on a messaging channel? One answer, one source."""
+        return _is_channel_session(
+            str(getattr(self, "_current_chat_source", "") or "").strip().lower(),
+            self._dispatch_session_id(),
+        )
+
     def execute_tool(self, name, args):
         """Dispatch one tool call through the full pipeline; returns a string.
 
-        Pipeline: argument validation/repair -> policy evaluation (admin-only,
-        channel blocks -> "Security Error: ...") -> confirmation gate (in
-        noninteractive mode gated tools return an "[ERROR] ... requires
-        confirmation" string instead of blocking) -> per-tool kwarg injection
-        (identity/session/workspace) -> bounded execution with timeout and
-        stop polling. Emits tool_start/tool_end/gate_* events to the optional
-        event sink (schema: docs/OBSERVABILITY.md). Never raises for tool
-        failures - errors come back as the result string.
+        The pipeline itself lives in ``vaf/core/tool_dispatch.py`` and is shared with every
+        other lane that runs a tool: policy evaluation (admin-only and channel blocks ->
+        "Security Error: ...") -> confirmation gate (headless, a gated tool returns an
+        "[ERROR] ... requires confirmation" string rather than blocking on a person) ->
+        argument repair -> declared identity -> bounded execution with timeout and stop
+        polling -> tool_start/tool_end events (schema: docs/OBSERVABILITY.md). Never raises
+        for tool failures; errors come back as the result string.
+
+        What stays HERE is the chat turn: the thinking-only guard, the four turn gates, the
+        session plumbing those tools expect, the anti-re-delegation guard, the search_tools
+        discovery hook, the python_exec fallback and the router bookkeeping. Each of them is
+        a property of this lane, not of dispatching, and each travels to the shared pipeline
+        as a hook at the point where it actually belongs.
         """
-        from vaf.cli.ui import UI
         from pathlib import Path
-        from vaf.core.trust import get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir
-        from vaf.core.tool_contract import evaluate_tool_policy
 
         # Thinking-only tool guard (runtime): never allow these in normal chat turns.
         is_thinking_turn = bool(getattr(self, "_current_turn_thinking_mode", False))
@@ -10346,361 +10379,275 @@ class Agent:
             return "Error: thinking_workspace tools are only available in background thinking mode."
 
         # So tools (e.g. document_writer) can notify Web UI; needed when run directly or via workflow in same process
-        sid = None
-        try:
-            from vaf.core.subagent_ipc import get_current_session_id
-            sid = get_current_session_id() or getattr(self, "current_session_id", None)
-            if sid:
-                os.environ["VAF_SESSION_ID"] = str(sid)
-        except Exception:
-            pass
+        sid = self._dispatch_session_id()
+        if sid:
+            os.environ["VAF_SESSION_ID"] = str(sid)
 
-        # Both derivations live in tool_dispatch.py: they are pure functions of the caller's
-        # identity, and every lane that runs a tool needs the same two answers. See
-        # policy_admin_flag's docstring for the documented drift against is_admin_identity.
+        # Everything below is CHAT-TURN machinery; the pipeline itself is shared.
         current_source = str(getattr(self, "_current_chat_source", "") or "").strip().lower()
-        is_channel_session = _is_channel_session(current_source, sid)
-        is_admin = _policy_admin_flag(
-            getattr(self, "_current_user_role", None),
-            getattr(self, "_current_user_scope_id", None),
-        )
-
-        tool_instance = self.tools.get(name)
-        policy_decision = evaluate_tool_policy(
-            tool_name=name,
-            tool=tool_instance,
-            current_source=current_source,
-            is_channel_session=is_channel_session,
-            is_admin=is_admin,
-        )
-        if policy_decision.blocked:
-            return f"Security Error: {policy_decision.reason}"
-
-        # Plan gate (main agent only): require a plan before a state-changing tool runs.
-        # Whare Wananga offline training probes the tool directly to learn its contract. The
-        # interactive plan / confirmation gates below are live-chat UX (headless they return
-        # [CANCELLED]/[ERROR], which would corrupt the probe and mislead the learner). The trainer
-        # has its own safety tiering (error-path / declare / gated), so skip these gates while it
-        # drives. Hard security blocks (policy_decision.blocked above) are NOT skipped.
-        _ww = getattr(self, "_ww_training", False)
-        if not _ww:
-            gate_msg = self._plan_gate_decision(name, tool_instance, tool_args=args)
-            if gate_msg is not None:
-                return gate_msg
-            # Turn-local progress flag + note firewall: bookkeeping never counts
-            # as progress; an outcome-claiming note before any real tool ran is
-            # refused (self-poisoning guard - see _working_memory_note_gate).
-            if name == "update_working_memory":
-                _note_block = self._working_memory_note_gate(args)
-                if _note_block is not None:
-                    return _note_block
-            elif name not in _BOOKKEEPING_TOOLS:
-                self._turn_ran_progress_tool = True
-            # Incident 2026-07-13 gates (order after the plan gate, before execution):
-            # (a) a non-affirmative reply to a background question must not mutate state,
-            # (c) while the agent awaits the user's answer, drain turns must not start
-            # new write work. Both return confirm-style RESULTS (never raise/prompt).
-            gate_msg = self._proactive_reply_gate_decision(name, tool_instance, args)
-            if gate_msg is not None:
-                return gate_msg
-            gate_msg = self._ask_first_gate_decision(name, tool_instance)
-            if gate_msg is not None:
-                return gate_msg
-
-        # The chat lane's emitter: the caller's sink PLUS the sub-agent debug mirror. The
-        # mirror is deliberately applied here and not inside the shared dispatch path - it
-        # writes events.jsonl whenever this process runs as a sub-agent terminal, which is a
-        # property of this lane. Built per call because _event_sink can be reattached (see
-        # reload_api_backend).
         emit = _with_subagent_debug_mirror(self._event_sink)
 
-        def run_multi_tool_use(call_args: dict | None) -> str:
-            tool_uses = (call_args or {}).get("tool_uses", [])
-            if not tool_uses:
-                return "Error: No tool_uses provided."
-
-            results = []
-            for item in tool_uses:
-                if not isinstance(item, dict):
-                    results.append({"tool": "?", "success": False, "result": "Invalid tool entry (not a dict)."})
-                    continue
-
-                raw_tool_name = item.get("recipient_name") or item.get("tool") or item.get("name")
-                tool_name = normalize_tool_name(raw_tool_name)
-                if not tool_name or tool_name == "multi_tool_use.parallel":
-                    results.append({"tool": raw_tool_name or "?", "success": False, "result": "Invalid tool name."})
-                    continue
-
-                tool_args = item.get("parameters") or item.get("args") or {}
-                if isinstance(tool_args, str):
-                    try:
-                        tool_args = json.loads(tool_args)
-                    except Exception:
-                        tool_args = {}
-
-                # Run sequentially to preserve tool gating/UI prompts.
-                result = self.execute_tool(tool_name, tool_args)
-                is_err = isinstance(result, str) and result.lower().startswith(("error", "tool error"))
-                results.append({"tool": tool_name, "success": not is_err, "result": result})
-
-            output = ["==== MULTI TOOL RESULTS ====", ""]
-            for i, res in enumerate(results, 1):
-                status = "OK" if res.get("success") else "ERR"
-                output.append(f"[{i}] {status} {res.get('tool')}")
-                result_text = str(res.get("result", ""))
-                if len(result_text) > 200:
-                    result_text = result_text[:200] + "..."
-                output.append(f"    {result_text}")
-                output.append("")
-
-            return "\n".join(output).strip()
+        # Whare Wananga probes tools directly to learn their contracts, so the turn gates and
+        # the confirmation gate are skipped while it drives - a [CANCELLED] would corrupt the
+        # probe rather than teach anything. Hard policy blocks are NOT skipped.
+        _ww = getattr(self, "_ww_training", False)
 
         if name == "multi_tool_use.parallel":
-            emit({"type": "tool_start", "tool": name, "args": make_json_serializable(args or {})})
-            _mt_t0 = time.monotonic()
-            result = run_multi_tool_use(args if isinstance(args, dict) else {})
-            emit({
-                "type": "tool_end", "tool": name,
-                "duration_ms": int((time.monotonic() - _mt_t0) * 1000),
-                "ok": True,  # the wrapper itself; each inner tool reports its own ok
-            })
-            return result
+            # The wrapper is not a tool and has no registry entry, so it cannot take the
+            # shared pipeline - but it IS a step of this turn, and the turn gates ran for it
+            # before the split. Skipping them would silently stop the wrapper from counting
+            # as progress, which the anti-spin guard reads.
+            if not _ww:
+                gate_msg = self._chat_turn_gates(name, None, args)
+                if gate_msg is not None:
+                    return gate_msg
+            return self._run_multi_tool_use(args, emit)
 
-        # Gate risky tools with once/always/cancel (no persistent deny). Skipped during Whare
-        # Wananga training (see _ww_training note above) so probes reach the tool's own validation.
-        if policy_decision.requires_confirmation and not _ww:
-            def _ask_the_user() -> str:
-                """How THIS lane reaches a human. Prefer the WebSocket gate when a web
-                session is live (pywebview / browser), else prompt the terminal."""
-                _session = getattr(self, "current_session_id", None)
-                if _session:
-                    try:
-                        from vaf.core.web_interface import get_web_interface as _gwi
-                        _gate_event, _decision_box = _gwi().register_gate(_session)
-                        _granted = _gate_event.wait(timeout=300)  # 5-minute user timeout
-                        return _decision_box[0] if _granted else "cancel"
-                    except Exception:
-                        return "cancel"
-                UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
-                _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
-                return {"o": "allow_once", "once": "allow_once",
-                        "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+        caller = _ToolCaller(
+            self.tools,
+            user_scope_id=getattr(self, "_current_user_scope_id", None),
+            username=getattr(self, "_current_username", None),
+            user_role=getattr(self, "_current_user_role", None),
+            source=current_source,
+            session_id=sid,
+            interactive=not self._noninteractive,
+            gate_enabled=not _ww,
+            trust_dir=Path.cwd(),
+            allow_once=self._allow_once_tools,
+            decide=self._ask_user_about_gate,
+            on_gate_required=self._push_gate_to_websocket,
+            stop_check=_session_stop_check(sid),
+            on_event=emit,
+            model_name=getattr(self, "model_display_name", None),
+            hooks=_ToolCallHooks(
+                after_policy=(None if _ww else self._chat_turn_gates),
+                before_dispatch=self._chat_session_plumbing,
+                after_dispatch=self._chat_post_dispatch,
+                after_emit=self._chat_after_dispatch_bookkeeping,
+            ),
+        )
+        return caller.execute(name, args)
 
-            def _push_to_websocket(evt: dict) -> None:
-                """The web UI's dialog does not arrive through _event_sink - that is None in
-                the web context - so the gate request is pushed to the session directly."""
-                from vaf.core.web_interface import get_web_interface as _gwi2
-                _gwi2()._push_session_update(getattr(self, "current_session_id", None), evt)
+    # ── the chat turn's own stages, handed to the pipeline as hooks ──────────────
 
-            _gate_msg = _resolve_confirmation_gate(
-                name, reason=policy_decision.reason, args=args,
-                trust_dir=Path.cwd(), allow_once=self._allow_once_tools,
-                interactive=not self._noninteractive,
-                decide=_ask_the_user, emit=emit, on_gate_required=_push_to_websocket,
-            )
-            if _gate_msg is not None:
-                return _gate_msg
+    def _chat_turn_gates(self, name, tool_instance, args):
+        """The four turn gates. Each returns a RESULT string rather than prompting or
+        raising (Rule 4.1), and all of them run after the hard policy block, never before."""
+        gate_msg = self._plan_gate_decision(name, tool_instance, tool_args=args)
+        if gate_msg is not None:
+            return gate_msg
+        # Turn-local progress flag + note firewall: bookkeeping never counts
+        # as progress; an outcome-claiming note before any real tool ran is
+        # refused (self-poisoning guard - see _working_memory_note_gate).
+        if name == "update_working_memory":
+            _note_block = self._working_memory_note_gate(args)
+            if _note_block is not None:
+                return _note_block
+        elif name not in _BOOKKEEPING_TOOLS:
+            self._turn_ran_progress_tool = True
+        # Incident 2026-07-13 gates (order after the plan gate, before execution):
+        # (a) a non-affirmative reply to a background question must not mutate state,
+        # (c) while the agent awaits the user's answer, drain turns must not start
+        # new write work. Both return confirm-style RESULTS (never raise/prompt).
+        gate_msg = self._proactive_reply_gate_decision(name, tool_instance, args)
+        if gate_msg is not None:
+            return gate_msg
+        gate_msg = self._ask_first_gate_decision(name, tool_instance)
+        if gate_msg is not None:
+            return gate_msg
+        return None
 
-        # Convert Path objects in args to strings for JSON serialization (OS-independent)
-        serializable_args = make_json_serializable(args) if args else {}
-        # Sanitize heavy fields (content/code/command) before logging
-        try:
-            from vaf.core.subagent_debug import sanitize_args
-            dbg_args = sanitize_args(name, serializable_args)
-        except Exception:
-            dbg_args = serializable_args
-        emit({"type": "tool_start", "tool": name, "args": dbg_args})
-        _tool_t0 = time.monotonic()
-        try:
-            if name in self.tools:
-                tool_args = dict(args) if args else {}
-                # --- Input validation & repair (before runtime-kwarg injection) ---
-                # Validate model-supplied args against the tool's declared schema and
-                # repair common weak-model shape mistakes (bare string for an array,
-                # stringified array, null on an optional field, single-key placeholder).
-                # Runs on raw model args only; injected runtime kwargs are added below.
-                # Fully defensive: any failure here is a no-op and dispatch proceeds.
-                tool_args, _ti_errors = _repair_arguments(
-                    self.tools[name], tool_args, tool_name=name,
-                    model_name=getattr(self, "model_display_name", None),
-                )
-                # The tool declares the identity it needs; the dispatcher obeys the
-                # declaration. See assign_declared_identity in tool_dispatch.py for why this
-                # is a declaration rather than a name list, and why it assigns.
-                _assign_declared_identity(
-                    tool_instance, tool_args,
-                    user_scope_id=getattr(self, "_current_user_scope_id", None),
-                    username=getattr(self, "_current_username", None),
-                    user_role=getattr(self, "_current_user_role", None),
-                )
-                if name in ("memory_save", "memory_search"):
-                    scope_id = getattr(self, "_current_user_scope_id", None)
-                    # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
-                    append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
-                if name == "ask_user":
-                    # Both background runs must deliver to the RUNNING user's real scope/username: on a
-                    # multi-user server a non-admin thinking run that left these blank fell back to the
-                    # LOCAL ADMIN inside deliver_tracked_message — which, now that delivery goes to the
-                    # configured main_messenger, would push that non-admin's private question to the
-                    # admin's Telegram/WhatsApp/Discord. Inject the real scope/username in thinking mode
-                    # AND automation; the handoff-bundle `_agent` is automation-only.
-                    _au = getattr(self, "_run_kind", None) == "automation"
-                    _th = getattr(self, "_run_kind", None) == "thinking"
-                    if _au or _th:
-                        tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                        tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    # ALWAYS pass the live agent: the tool branches on the CALLER's
-                    # run kind itself (instance truth), so a thinking question can
-                    # never take the automation-handoff path because some other
-                    # run's env var happened to be set (incident 2026-07-13).
-                    tool_args["_agent"] = self
-                if name in ("set_timer", "list_timers", "cancel_timer"):
-                    # Timer tools read the live session/source/identity off the agent.
-                    tool_args["_agent"] = self
-                if name == "learn_document":
-                    tool_args["_agent"] = self
-                if name == "learn_attached_knowledge":
-                    tool_args["session_id"] = getattr(self, "current_session_id", None)
-                    tool_args["_agent"] = self
-                if name == "analyze_image":
-                    # The vision tool re-inspects the image attached to THIS session on demand.
-                    # Pass the LIVE agent: on the upload turn the image lives in agent.history but
-                    # is not persisted to disk until the turn ends, so a disk-only read would miss
-                    # it (the primary "look closer on turn 1" case). session_id is the disk fallback
-                    # (covers images that aged out of history via compaction but remain on disk).
-                    tool_args["_agent"] = self
-                    tool_args["session_id"] = getattr(self, "current_session_id", None)
-                if name == "document_writer":
-                    # Same session race as write_file: the tool resolves the chat
-                    # workspace itself - it must key on THIS session, never the
-                    # process-global fallback (parallel workers).
-                    tool_args["_session_id"] = getattr(self, "current_session_id", None)
-                if name == "write_file":
-                    # Main-agent file writes need the SESSION on top of the identity: relative
-                    # paths resolve into THIS chat's workspace, and the Web-UI
-                    # file_created/document_created emits carry THIS session (emit-site scoping -
-                    # never the process-global fallback). The identity itself arrives through the
-                    # tool's identity_kwargs declaration above; WriteFileTool.run turns it into the
-                    # per-user jail inside the tool, because a contextvar set out here would not
-                    # reach the bounded-run worker thread. Direct WriteFileTool() consumers (coder,
-                    # workflow engine, librarian, automations) pass none of this and keep their
-                    # exact legacy behavior.
-                    tool_args["_session_id"] = getattr(self, "current_session_id", None)
-                    try:
-                        from vaf.core.platform import Platform as _PlatWF
-                        from vaf.core.session import resolve_agent_output_dir as _resolve_out
-                        tool_args["_session_workspace"] = str(_resolve_out(
-                            _PlatWF.documents_dir() / "VAF_Projects",
-                            session_id=getattr(self, "current_session_id", None),
-                        ))
-                    except Exception:
-                        pass
-                if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
-                    tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
-                if name in ("python_sandbox", "python_exec"):
-                    # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
-                    tool_args["_agent"] = self
-                    if name == "python_sandbox":
-                        # export_files copies artifacts into THIS chat's workspace -
-                        # key on the session, never the process-global pointer.
-                        tool_args["_session_id"] = getattr(self, "current_session_id", None)
-                        # Per-user container workdir (/tmp/vaf_<scope12>_<exec>): the tool
-                        # reads this kwarg, but the dispatcher never injected it, so every
-                        # main-agent run landed in the shared prefix regardless of user.
-                        # Direct assignment on purpose: model-supplied args must never
-                        # override the server-side identity (spoof guard, like host_bash).
-                    if name == "python_sandbox" and is_channel_session:
-                        # Non-main channel sessions must not bridge host tools from sandbox code.
-                        tool_args["with_vaf_tools"] = False
-                if name == "host_bash":
-                    # Authoritative channel flag for host_bash's own non-liftable guard. Set
-                    # unconditionally so an LLM-supplied value cannot spoof it. host_bash refuses
-                    # on channels even when channel_tools_unrestricted lifts the policy block.
-                    tool_args["_is_channel_session"] = is_channel_session
-                if name == "create_agent_tool":
-                    # Inject agent reference so the tool can call reload_custom_tools()
-                    # after writing the file — making the new tool live immediately
-                    # without a server restart.
-                    tool_args["_agent"] = self
-                if name == "create_agent_workflow":
-                    # Inject agent reference so the tool can:
-                    #   - use the live tool registry for run_temp execution
-                    #   - check admin status for create/delete actions
-                    #   - pass user_scope_id / username to WorkflowEngine
-                    tool_args["_agent"] = self
-                if name == "execute_workflow":
-                    # Inject agent so the tool can reliably get current_session_id
-                    # for WebSocket pushes (module-global fallback is unreliable in threads)
-                    tool_args["_agent"] = self
-                if name == "checkpoint_context":
-                    # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
-                    tool_args["_agent"] = self
-                # Pre-write intent/goal before sub-agent invocation for validation/retry
-                SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
-                # HARD anti-re-delegation guard: while a sub-agent of the SAME type genuinely
-                # runs for this session (heartbeat-verified via the shared liveness helper),
-                # refuse to spawn a duplicate. The prompt-level prohibition is soft; the
-                # repeated-tool-call dedup is bypassed after any user message — so chatting
-                # while a coder runs could otherwise spawn a second coder into the same
-                # workspace. Same-type-only: mixed delegation (e.g. research while coding)
-                # stays possible. Also skips the intent pre-write below so a refused spawn
-                # cannot clobber the RUNNING task's delegation-intent slot.
-                _subagent_dup_msg = None
-                if name in SUBAGENT_TOOLS:
-                    try:
-                        _live_same = [
-                            t for t in self.get_live_session_subagents()
-                            if t.get("agent_type") == name
-                        ]
-                        if _live_same:
-                            _t0 = _live_same[0]
-                            _subagent_dup_msg = (
-                                f"⚠️ A {name} is ALREADY RUNNING on: "
-                                f"{(_t0.get('task_description') or 'the delegated task')[:200]} "
-                                f"(running {max(0, int(_t0.get('running_seconds', 0)) // 60)} min).\n"
-                                "Not starting a duplicate — the result will arrive automatically "
-                                "when it finishes. Tell the user the task is already in progress."
-                            )
-                    except Exception:
-                        _subagent_dup_msg = None
-                if name in SUBAGENT_TOOLS and _subagent_dup_msg is None and hasattr(self, "main_persistence") and self.main_persistence:
-                    intent = ""
-                    try:
-                        intent = self.main_persistence.get_user_intent() or ""
-                    except Exception:
-                        pass
-                    if not intent and self.history:
-                        for msg in reversed(self.history):
-                            if isinstance(msg, dict) and msg.get("role") == "user":
-                                intent = msg.get("content", "") or ""
-                                break
-                    goal = self._extract_subagent_goal(name, tool_args)
-                    if intent or goal:
-                        self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
-                if _ti_errors:
-                    # Args still violate the tool's declared schema after repair:
-                    # return a localized error to the model instead of dispatching
-                    # with invalid input. Keep the "Tool Error:" prefix so is_err and
-                    # the Whare Wananga reactive-retry keep recognising it unchanged.
-                    # Checked BEFORE the duplicate guard: a schema error is about this call,
-                    # the duplicate message is about another one already running.
-                    result = "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(_ti_errors))
-                elif _subagent_dup_msg is not None:
-                    # Anti-re-delegation: a same-type sub-agent already runs for this session.
-                    result = _subagent_dup_msg
-                else:
-                    # Bounded unless the tool supervises itself; the Stop flag is polled
-                    # DURING the call so the Stop button works mid-tool. Defaults here are the
-                    # chat lane's - see run_tool_bounded for what other callers vary.
-                    result = _run_tool_bounded(
-                        self.tools[name], tool_args, tool_name=name,
-                        stop_check=_session_stop_check(sid),
+    def _ask_user_about_gate(self, name, reason):
+        """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is
+        live (pywebview / browser), else prompt the terminal."""
+        from vaf.cli.ui import UI
+
+        _session = getattr(self, "current_session_id", None)
+        if _session:
+            try:
+                from vaf.core.web_interface import get_web_interface as _gwi
+                _gate_event, _decision_box = _gwi().register_gate(_session)
+                _granted = _gate_event.wait(timeout=300)  # 5-minute user timeout
+                return _decision_box[0] if _granted else "cancel"
+            except Exception:
+                return "cancel"
+        UI.event("Security", f"Tool '{name}' requires confirmation. {reason}", style="warning")
+        _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+        return {"o": "allow_once", "once": "allow_once",
+                "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+
+    def _push_gate_to_websocket(self, evt):
+        """The web UI's dialog does not arrive through _event_sink - that is None in the web
+        context - so the gate request is pushed to the session directly."""
+        from vaf.core.web_interface import get_web_interface as _gwi2
+        _gwi2()._push_session_update(getattr(self, "current_session_id", None), evt)
+
+    def _chat_session_plumbing(self, name, tool_args):
+        """Session-scoped kwargs a chat turn owns, plus the anti-re-delegation guard.
+
+        Runs AFTER identity assignment, so what it adds is never validated against the
+        tool's declared schema. Returns a refusal string, or None to dispatch.
+        """
+        is_channel_session = self._is_channel_turn()
+        args = tool_args
+        if name in ("memory_save", "memory_search"):
+            scope_id = getattr(self, "_current_user_scope_id", None)
+            # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
+            append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
+        if name == "ask_user":
+            # Both background runs must deliver to the RUNNING user's real scope/username: on a
+            # multi-user server a non-admin thinking run that left these blank fell back to the
+            # LOCAL ADMIN inside deliver_tracked_message — which, now that delivery goes to the
+            # configured main_messenger, would push that non-admin's private question to the
+            # admin's Telegram/WhatsApp/Discord. Inject the real scope/username in thinking mode
+            # AND automation; the handoff-bundle `_agent` is automation-only.
+            _au = getattr(self, "_run_kind", None) == "automation"
+            _th = getattr(self, "_run_kind", None) == "thinking"
+            if _au or _th:
+                tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+            # ALWAYS pass the live agent: the tool branches on the CALLER's
+            # run kind itself (instance truth), so a thinking question can
+            # never take the automation-handoff path because some other
+            # run's env var happened to be set (incident 2026-07-13).
+            tool_args["_agent"] = self
+        if name in ("set_timer", "list_timers", "cancel_timer"):
+            # Timer tools read the live session/source/identity off the agent.
+            tool_args["_agent"] = self
+        if name == "learn_document":
+            tool_args["_agent"] = self
+        if name == "learn_attached_knowledge":
+            tool_args["session_id"] = getattr(self, "current_session_id", None)
+            tool_args["_agent"] = self
+        if name == "analyze_image":
+            # The vision tool re-inspects the image attached to THIS session on demand.
+            # Pass the LIVE agent: on the upload turn the image lives in agent.history but
+            # is not persisted to disk until the turn ends, so a disk-only read would miss
+            # it (the primary "look closer on turn 1" case). session_id is the disk fallback
+            # (covers images that aged out of history via compaction but remain on disk).
+            tool_args["_agent"] = self
+            tool_args["session_id"] = getattr(self, "current_session_id", None)
+        if name == "document_writer":
+            # Same session race as write_file: the tool resolves the chat
+            # workspace itself - it must key on THIS session, never the
+            # process-global fallback (parallel workers).
+            tool_args["_session_id"] = getattr(self, "current_session_id", None)
+        if name == "write_file":
+            # Main-agent file writes need the SESSION on top of the identity: relative
+            # paths resolve into THIS chat's workspace, and the Web-UI
+            # file_created/document_created emits carry THIS session (emit-site scoping -
+            # never the process-global fallback). The identity itself arrives through the
+            # tool's identity_kwargs declaration above; WriteFileTool.run turns it into the
+            # per-user jail inside the tool, because a contextvar set out here would not
+            # reach the bounded-run worker thread. Direct WriteFileTool() consumers (coder,
+            # workflow engine, librarian, automations) pass none of this and keep their
+            # exact legacy behavior.
+            tool_args["_session_id"] = getattr(self, "current_session_id", None)
+            try:
+                from vaf.core.platform import Platform as _PlatWF
+                from vaf.core.session import resolve_agent_output_dir as _resolve_out
+                tool_args["_session_workspace"] = str(_resolve_out(
+                    _PlatWF.documents_dir() / "VAF_Projects",
+                    session_id=getattr(self, "current_session_id", None),
+                ))
+            except Exception:
+                pass
+        if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
+            tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode
+        if name in ("python_sandbox", "python_exec"):
+            # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
+            tool_args["_agent"] = self
+            if name == "python_sandbox":
+                # export_files copies artifacts into THIS chat's workspace -
+                # key on the session, never the process-global pointer.
+                tool_args["_session_id"] = getattr(self, "current_session_id", None)
+                # Per-user container workdir (/tmp/vaf_<scope12>_<exec>): the tool
+                # reads this kwarg, but the dispatcher never injected it, so every
+                # main-agent run landed in the shared prefix regardless of user.
+                # Direct assignment on purpose: model-supplied args must never
+                # override the server-side identity (spoof guard, like host_bash).
+            if name == "python_sandbox" and is_channel_session:
+                # Non-main channel sessions must not bridge host tools from sandbox code.
+                tool_args["with_vaf_tools"] = False
+        if name == "host_bash":
+            # Authoritative channel flag for host_bash's own non-liftable guard. Set
+            # unconditionally so an LLM-supplied value cannot spoof it. host_bash refuses
+            # on channels even when channel_tools_unrestricted lifts the policy block.
+            tool_args["_is_channel_session"] = is_channel_session
+        if name == "create_agent_tool":
+            # Inject agent reference so the tool can call reload_custom_tools()
+            # after writing the file — making the new tool live immediately
+            # without a server restart.
+            tool_args["_agent"] = self
+        if name == "create_agent_workflow":
+            # Inject agent reference so the tool can:
+            #   - use the live tool registry for run_temp execution
+            #   - check admin status for create/delete actions
+            #   - pass user_scope_id / username to WorkflowEngine
+            tool_args["_agent"] = self
+        if name == "execute_workflow":
+            # Inject agent so the tool can reliably get current_session_id
+            # for WebSocket pushes (module-global fallback is unreliable in threads)
+            tool_args["_agent"] = self
+        if name == "checkpoint_context":
+            # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()
+            tool_args["_agent"] = self
+        # Pre-write intent/goal before sub-agent invocation for validation/retry
+        SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
+        # HARD anti-re-delegation guard: while a sub-agent of the SAME type genuinely
+        # runs for this session (heartbeat-verified via the shared liveness helper),
+        # refuse to spawn a duplicate. The prompt-level prohibition is soft; the
+        # repeated-tool-call dedup is bypassed after any user message — so chatting
+        # while a coder runs could otherwise spawn a second coder into the same
+        # workspace. Same-type-only: mixed delegation (e.g. research while coding)
+        # stays possible. Also skips the intent pre-write below so a refused spawn
+        # cannot clobber the RUNNING task's delegation-intent slot.
+        _subagent_dup_msg = None
+        if name in SUBAGENT_TOOLS:
+            try:
+                _live_same = [
+                    t for t in self.get_live_session_subagents()
+                    if t.get("agent_type") == name
+                ]
+                if _live_same:
+                    _t0 = _live_same[0]
+                    _subagent_dup_msg = (
+                        f"⚠️ A {name} is ALREADY RUNNING on: "
+                        f"{(_t0.get('task_description') or 'the delegated task')[:200]} "
+                        f"(running {max(0, int(_t0.get('running_seconds', 0)) // 60)} min).\n"
+                        "Not starting a duplicate — the result will arrive automatically "
+                        "when it finishes. Tell the user the task is already in progress."
                     )
-            else:
-                result = f"Error: Unknown tool '{name}'"
-        except Exception as e:
-            result = f"Tool Error: {e}"
+            except Exception:
+                _subagent_dup_msg = None
+        if name in SUBAGENT_TOOLS and _subagent_dup_msg is None and hasattr(self, "main_persistence") and self.main_persistence:
+            intent = ""
+            try:
+                intent = self.main_persistence.get_user_intent() or ""
+            except Exception:
+                pass
+            if not intent and self.history:
+                for msg in reversed(self.history):
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        intent = msg.get("content", "") or ""
+                        break
+            goal = self._extract_subagent_goal(name, tool_args)
+            if intent or goal:
+                self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
+        if _subagent_dup_msg is not None:
+            return _subagent_dup_msg
+        return None
 
+    def _chat_post_dispatch(self, name, args, result):
+        """Router discovery and the python_exec fallback - both may replace or extend the
+        result, and both run before it is truncated."""
+        from pathlib import Path
+
+        from vaf.cli.ui import UI
+        from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
+
+        emit = _with_subagent_debug_mirror(self._event_sink)
+        is_channel_session = self._is_channel_turn()
         # search_tools post-hook: expand _active_tools with discovered tool names so the
         # model can call them in the very next turn without a router round-trip.
         # The parser is SHARED with the tool module (and its format tests), so the
@@ -10767,23 +10714,12 @@ class Agent:
                     })
                     self._record_tool_used("python_exec")
                     result = unsafe_result
+        return result
 
-        # ok reflects DISPATCH-level failure (exception -> "Tool Error:", or an
-        # unknown tool name) - NOT the semantic success of the tool's output, so
-        # this stays an explicit narrow check rather than the broad
-        # tool_result_is_error helper (which also flags "Failed..."-style
-        # semantic outputs the observability contract must not mark not-ok).
-        _tool_ok = not (
-            isinstance(result, str)
-            and (result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))
-        )
-        emit({
-            "type": "tool_end", "tool": name,
-            "duration_ms": int((time.monotonic() - _tool_t0) * 1000),
-            "ok": _tool_ok,
-        })
+    def _chat_after_dispatch_bookkeeping(self, name, result):
+        """Router recency plus the sub-agent debug log. Only on paths that dispatched: a
+        blocked or refused call must not count as the model having used the tool."""
         self._record_tool_used(name)
-        # Log system reaction (result summary only)
         try:
             from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result
             lg = get_subagent_logger_from_env()
@@ -10792,12 +10728,60 @@ class Agent:
         except Exception:
             pass
 
-        # TRUNCATION: Limit context usage for massive outputs (e.g. list_files on Downloads)
-        MAX_LEN = 2000
-        if len(str(result)) > MAX_LEN:
-            truncated = str(result)[:MAX_LEN]
-            result = f"{truncated}\n... [Output Truncated. Total length: {len(str(result))} chars. Use specific filters or read sub-parts.]"
-        
+    def _run_multi_tool_use(self, args, emit):
+        """Provider artefact: a wrapper whose payload is a list of other tool calls.
+        Recurses through execute_tool SEQUENTIALLY on purpose - dispatching them in parallel
+        would bypass the gating and the UI prompts each inner call is entitled to."""
+        def run_multi_tool_use(call_args: dict | None) -> str:
+            tool_uses = (call_args or {}).get("tool_uses", [])
+            if not tool_uses:
+                return "Error: No tool_uses provided."
+
+            results = []
+            for item in tool_uses:
+                if not isinstance(item, dict):
+                    results.append({"tool": "?", "success": False, "result": "Invalid tool entry (not a dict)."})
+                    continue
+
+                raw_tool_name = item.get("recipient_name") or item.get("tool") or item.get("name")
+                tool_name = normalize_tool_name(raw_tool_name)
+                if not tool_name or tool_name == "multi_tool_use.parallel":
+                    results.append({"tool": raw_tool_name or "?", "success": False, "result": "Invalid tool name."})
+                    continue
+
+                tool_args = item.get("parameters") or item.get("args") or {}
+                if isinstance(tool_args, str):
+                    try:
+                        tool_args = json.loads(tool_args)
+                    except Exception:
+                        tool_args = {}
+
+                # Run sequentially to preserve tool gating/UI prompts.
+                result = self.execute_tool(tool_name, tool_args)
+                is_err = isinstance(result, str) and result.lower().startswith(("error", "tool error"))
+                results.append({"tool": tool_name, "success": not is_err, "result": result})
+
+            output = ["==== MULTI TOOL RESULTS ====", ""]
+            for i, res in enumerate(results, 1):
+                status = "OK" if res.get("success") else "ERR"
+                output.append(f"[{i}] {status} {res.get('tool')}")
+                result_text = str(res.get("result", ""))
+                if len(result_text) > 200:
+                    result_text = result_text[:200] + "..."
+                output.append(f"    {result_text}")
+                output.append("")
+
+            return "\n".join(output).strip()
+
+        emit({"type": "tool_start", "tool": "multi_tool_use.parallel",
+              "args": make_json_serializable(args or {})})
+        _mt_t0 = time.monotonic()
+        result = run_multi_tool_use(args if isinstance(args, dict) else {})
+        emit({
+            "type": "tool_end", "tool": "multi_tool_use.parallel",
+            "duration_ms": int((time.monotonic() - _mt_t0) * 1000),
+            "ok": True,  # the wrapper itself; each inner tool reports its own ok
+        })
         return result
 
     def set_event_sink(self, sink):

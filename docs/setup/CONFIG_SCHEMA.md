@@ -126,7 +126,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `top_k` | `40` | Top-k sampling. |
 | `max_generation_tokens` | `10000` | Per-call output cap on local generation. |
 | `model_unload_idle_minutes` | `30` | Unload the local model after this idle time. |
-| `parallel_main_workers` | `1` | Concurrent main-agent workers (admin-only). `1` = serialized (default). When > 1, the effective count is clamped per provider (see the two keys below) and different users' turns run concurrently while a single user's turns stay serialized. Pair with `queue_policy: weighted_fair` for lane fairness. |
+| `parallel_main_workers` | `1` | Concurrent main-agent workers (admin-only). `1` = serialized (default). When > 1, the effective count is clamped per provider (see the two keys below) and turns from different SESSIONS run concurrently while turns within one session stay serialized. The queue keys on the session id, not the user, so one person's web and messaging sessions can run at the same time. Pair with `queue_policy: weighted_fair` for lane fairness. |
 | `max_parallel_api_workers` | `5` | Effective worker cap for API providers (admin-only). |
 | `max_parallel_local_workers` | `2` | Effective worker cap for `provider=local` (admin-only); also clamped to the llama-server `--parallel` slots (`n_parallel`) to avoid VRAM exhaustion. |
 

@@ -107,5 +107,5 @@ def test_the_dispatcher_still_injects_the_agent_for_both(tool_name):
     baseline pins this too, but from the other side."""
     import vaf.core.agent as agent_mod
 
-    src = inspect.getsource(agent_mod.Agent.execute_tool)
+    src = inspect.getsource(agent_mod.Agent._chat_session_plumbing)
     assert f'if name == "{tool_name}":' in src

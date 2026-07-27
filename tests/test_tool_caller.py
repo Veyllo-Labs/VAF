@@ -256,7 +256,7 @@ def test_after_dispatch_runs_before_truncation():
 def test_after_emit_fires_only_when_something_was_dispatched():
     """Router recency: a blocked call must not count as the model having used the tool."""
     seen = []
-    hooks = ToolCallHooks(after_emit=seen.append)
+    hooks = ToolCallHooks(after_emit=lambda n, r: seen.append(n))
     _caller(_tool(), hooks=hooks).execute("probe", {})
     assert seen == ["probe"]
     seen.clear()

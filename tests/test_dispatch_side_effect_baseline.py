@@ -44,6 +44,7 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import bind_chat_stages
 from vaf.core.agent import Agent
 from vaf.tools.base import BaseTool
 
@@ -149,6 +150,8 @@ def _tool(name, fn=None, **attrs):
     return t
 
 
+
+
 def _probe(tools, call, pre_approved=True, **over):
     """Run one dispatch and report only what it changed around itself."""
     recorded, trust_writes = [], []
@@ -170,7 +173,7 @@ def _probe(tools, call, pre_approved=True, **over):
         model_display_name="probe",
     )
     base.update(over)
-    fake = SimpleNamespace(**base)
+    fake = bind_chat_stages(SimpleNamespace(**base))
 
     env_before = os.environ.get("VAF_SESSION_ID", "<unset>")
     policy = "always" if pre_approved else "ask"

@@ -245,7 +245,9 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
         return (f"[ERROR] Tool '{tool_name}' requires confirmation ({reason}). "
                 f"Re-run interactively or mark folder trusted.")
 
-    choice = decide() if callable(decide) else "cancel"
+    # decide(tool_name, reason): the reason is what a terminal prompt shows the person, and
+    # only this function knows it - the caller cannot close over a value computed here.
+    choice = decide(tool_name, reason) if callable(decide) else "cancel"
     if choice == "allow_once":
         # In memory, for this agent only. Persisting a single approval would silently widen
         # it into a standing one.
@@ -343,8 +345,10 @@ class ToolCallHooks:
     - ``after_dispatch(name, tool_args, result) -> str`` - may replace the result. The chat
       lane discovers tools from a ``search_tools`` answer here and runs its python_exec
       fallback, which emits its own event pair.
-    - ``after_emit(name) -> None`` - only on paths that actually dispatched. The chat lane
-      records router recency here, and deliberately NOT for a blocked or refused call.
+    - ``after_emit(name, result) -> None`` - only on paths that actually dispatched. The chat
+      lane records router recency here, and deliberately NOT for a blocked or refused call.
+      It receives the UNTRUNCATED result, because its debug log summarises what the tool
+      really produced rather than what the model will be shown.
     """
 
     __slots__ = ("after_policy", "before_dispatch", "after_dispatch", "after_emit")
@@ -385,6 +389,7 @@ class ToolCaller:
         session_id: str | None = None,
         # UNDER WHICH RULES
         interactive: bool = False,
+        gate_enabled: bool = True,
         trust_dir=None,
         allow_once: set | None = None,
         decide=None,
@@ -407,6 +412,13 @@ class ToolCaller:
         self.source = source
         self.session_id = session_id
         self.interactive = interactive
+        # Off means the gate stage is skipped SILENTLY - no event, no decision, no refusal.
+        # Two callers need that and neither is served by "interactive": the Whare Wananga
+        # trainer probes tools directly to learn their contracts, and a [CANCELLED] would
+        # corrupt the probe rather than teach anything; the workflow lane has run gated tools
+        # without asking since it existed, and taking that away is a separate decision.
+        # Hard policy blocks are NOT affected - those are not a gate.
+        self.gate_enabled = gate_enabled
         self.trust_dir = trust_dir
         self.allow_once = allow_once if allow_once is not None else set()
         self.decide = decide
@@ -448,7 +460,7 @@ class ToolCaller:
             if gate_msg is not None:
                 return gate_msg
 
-        if decision.requires_confirmation:
+        if decision.requires_confirmation and self.gate_enabled:
             refusal = resolve_confirmation_gate(
                 name, reason=decision.reason, args=args,
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
@@ -477,7 +489,7 @@ class ToolCaller:
                 result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))),
         })
         if callable(self.hooks.after_emit):
-            self.hooks.after_emit(name)
+            self.hooks.after_emit(name, result)
         return self._truncate(result)
 
     # ── stages ───────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ size cannot be reviewed by reading it.
 """
 from __future__ import annotations
 
+import json
 import uuid as _uuid
 from pathlib import Path
 from typing import Any
@@ -193,6 +194,73 @@ def with_subagent_debug_mirror(sink):
         except Exception:
             pass
     return _mirrored
+
+
+def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
+                              trust_dir, allow_once: set, interactive: bool,
+                              decide=None, emit=None, on_gate_required=None) -> str | None:
+    """Decide whether a confirmation-gated tool may run.
+
+    Returns ``None`` when it may proceed, or the string to hand back to the model. Never
+    raises and never returns a partial state: the caller either dispatches or returns this.
+
+    Standing grants are checked first and silently - a tool whose policy is "allow", or any
+    tool under a trusted directory, or one already allowed once this turn, produces no event
+    at all. Only an actual gate is worth telling anyone about.
+
+    The one thing callers genuinely differ on is HOW a decision is obtained, so that is a
+    callback rather than a branch here. Keeping it out means this module does not depend on
+    the web server or the CLI interface, which is what lets a non-chat caller use it.
+
+    ``interactive=False`` returns the refusal string and emits NO ``gate_decision``. That
+    asymmetry is published (docs/OBSERVABILITY.md) and load-bearing for embedders, whose
+    documented guarantee is that a gated tool returns a string rather than blocking on a human
+    (docs/EMBEDDING.md, "Gated tools never hang or raise"). The prefix is matched by callers
+    via ``vaf.markers.TOOL_CONFIRMATION_REQUIRED``, so its wording is contract, not prose.
+
+    ``trust_dir`` is passed in rather than read here because it is the HOST PROCESS's working
+    directory at call time - "always" trusts that directory and its whole subtree, so which
+    directory it was has to be the caller's answer, and the same value must be used for the
+    check, the event and the grant.
+    """
+    from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
+
+    if get_tool_policy(tool_name) == "allow" or is_trusted_dir(trust_dir) or tool_name in allow_once:
+        return None
+
+    try:
+        preview = json.dumps(make_json_serializable(args or {}), ensure_ascii=False)[:300]
+    except Exception:
+        preview = ""
+    event = {"type": "gate_required", "tool": tool_name, "cwd": str(trust_dir),
+             "reason": reason, "args_preview": preview}
+    emit_event(emit, event)
+    if callable(on_gate_required):
+        try:
+            on_gate_required(event)
+        except Exception:
+            pass
+
+    if not interactive:
+        return (f"[ERROR] Tool '{tool_name}' requires confirmation ({reason}). "
+                f"Re-run interactively or mark folder trusted.")
+
+    choice = decide() if callable(decide) else "cancel"
+    if choice == "allow_once":
+        # In memory, for this agent only. Persisting a single approval would silently widen
+        # it into a standing one.
+        allow_once.add(tool_name)
+        emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_once"})
+        return None
+    if choice == "allow_always":
+        # Both at once, as documented: the directory subtree AND the tool. Outlives the
+        # process and is machine-global - the only persistent write on any dispatch path.
+        mark_trusted_dir(trust_dir)
+        set_tool_policy(tool_name, "allow")
+        emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_always"})
+        return None
+    emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "cancel"})
+    return f"[CANCELLED] Tool '{tool_name}' cancelled by user."
 
 
 def session_stop_check(session_id: str | None):

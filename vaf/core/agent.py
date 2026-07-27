@@ -35,6 +35,7 @@ from vaf.core.tool_dispatch import (
     normalize_tool_name,
     policy_admin_flag as _policy_admin_flag,
     repair_arguments as _repair_arguments,
+    resolve_confirmation_gate as _resolve_confirmation_gate,
     run_tool_bounded as _run_tool_bounded,
     session_stop_check as _session_stop_check,
     with_subagent_debug_mirror as _with_subagent_debug_mirror,
@@ -10460,59 +10461,37 @@ class Agent:
         # Gate risky tools with once/always/cancel (no persistent deny). Skipped during Whare
         # Wananga training (see _ww_training note above) so probes reach the tool's own validation.
         if policy_decision.requires_confirmation and not _ww:
-            policy = get_tool_policy(name)
-            cwd = Path.cwd()
-            trusted = is_trusted_dir(cwd)
-            allowed_once = name in self._allow_once_tools
-
-            if policy != "allow" and not trusted and not allowed_once:
-                # Build args preview for the Web UI dialog (truncated, no secrets)
-                try:
-                    _gate_args_preview = json.dumps(make_json_serializable(args or {}), ensure_ascii=False)[:300]
-                except Exception:
-                    _gate_args_preview = ""
-                _gate_evt = {"type": "gate_required", "tool": name, "cwd": str(cwd),
-                             "reason": policy_decision.reason, "args_preview": _gate_args_preview}
-                emit(_gate_evt)
-                # Also push directly via web_interface so it reaches the WebSocket
-                # (emit/_event_sink is None in web context — tool events use this path instead)
-                try:
-                    from vaf.core.web_interface import get_web_interface as _gwi2
-                    _gwi2()._push_session_update(getattr(self, "current_session_id", None), _gate_evt)
-                except Exception:
-                    pass
-
-                if self._noninteractive:
-                    return f"[ERROR] Tool '{name}' requires confirmation ({policy_decision.reason}). Re-run interactively or mark folder trusted."
-
-                # Prefer WebSocket gate when a web session is active (pywebview / browser)
+            def _ask_the_user() -> str:
+                """How THIS lane reaches a human. Prefer the WebSocket gate when a web
+                session is live (pywebview / browser), else prompt the terminal."""
                 _session = getattr(self, "current_session_id", None)
-                _choice = None
                 if _session:
                     try:
                         from vaf.core.web_interface import get_web_interface as _gwi
                         _gate_event, _decision_box = _gwi().register_gate(_session)
                         _granted = _gate_event.wait(timeout=300)  # 5-minute user timeout
-                        _choice = _decision_box[0] if _granted else "cancel"
+                        return _decision_box[0] if _granted else "cancel"
                     except Exception:
-                        _choice = "cancel"
-                else:
-                    # Fallback: terminal prompt (CLI / headless mode)
-                    UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
-                    _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
-                    _choice = {"o": "allow_once", "once": "allow_once",
-                               "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+                        return "cancel"
+                UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
+                _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+                return {"o": "allow_once", "once": "allow_once",
+                        "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
 
-                if _choice == "allow_once":
-                    self._allow_once_tools.add(name)
-                    emit({"type": "gate_decision", "tool": name, "decision": "allow_once"})
-                elif _choice == "allow_always":
-                    mark_trusted_dir(cwd)
-                    set_tool_policy(name, "allow")
-                    emit({"type": "gate_decision", "tool": name, "decision": "allow_always"})
-                else:
-                    emit({"type": "gate_decision", "tool": name, "decision": "cancel"})
-                    return f"[CANCELLED] Tool '{name}' cancelled by user."
+            def _push_to_websocket(evt: dict) -> None:
+                """The web UI's dialog does not arrive through _event_sink - that is None in
+                the web context - so the gate request is pushed to the session directly."""
+                from vaf.core.web_interface import get_web_interface as _gwi2
+                _gwi2()._push_session_update(getattr(self, "current_session_id", None), evt)
+
+            _gate_msg = _resolve_confirmation_gate(
+                name, reason=policy_decision.reason, args=args,
+                trust_dir=Path.cwd(), allow_once=self._allow_once_tools,
+                interactive=not self._noninteractive,
+                decide=_ask_the_user, emit=emit, on_gate_required=_push_to_websocket,
+            )
+            if _gate_msg is not None:
+                return _gate_msg
 
         # Convert Path objects in args to strings for JSON serialization (OS-independent)
         serializable_args = make_json_serializable(args) if args else {}

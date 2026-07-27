@@ -21,6 +21,155 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   framework could not tell one person from another - and the documentation could only warn
   about it. A tool now states what it needs and receives exactly that, whether it ships with
   VAF or you wrote it. Nothing changes for existing tools.
+- A completely new built-in mail client, and it is now the only one
+  (design doc `docs/integrations/EMAIL_CLIENT.md`). VAF has a real mail engine:
+  a per-user local mail store (SQLite with full-text search over
+  subject/sender/recipients/BODY, threaded conversations, encrypted-at-rest
+  cached bodies, configurable retention with headers kept forever) and an
+  RFC 4549 incremental IMAP sync engine (UID-based, UIDVALIDITY-safe, batched
+  fetches, IMAP IDLE push on the inbox plus periodic sweeps, native Gmail
+  thread/label handling). The mail window is a three-pane client: folder sidebar
+  with unread counts and collapsible labels, conversation view, HTML mail
+  rendered sanitized in a sandboxed frame with remote images blocked by default
+  for tracking protection, attachment download, and search over message bodies.
+  Mail opens offline from the local store. New permissive-licensed dependencies
+  (in the `mail` extra): IMAPClient (BSD-3-Clause), nh3 (MIT),
+  zstandard (BSD-3-Clause), listed in `THIRD_PARTY.md` and the About tab's
+  third-party license list.
+- Mail can be acted on, not just read: read/unread, star, archive and trash in
+  the mail window (trash-only delete semantics, nothing is ever expunged),
+  reply/reply-all/forward with proper quoting and threading, compose with a
+  15-second undo window (the mail is held locally and can be withdrawn before it
+  leaves the machine), and automatic filing of sent mail into the Sent folder.
+  Changes apply locally first and replay to the mail server through a durable
+  operation queue once `mail_engine_write_enabled` is on. The agent gains
+  `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` tools (all
+  excluded from the front-office contact lane by design).
+- Outgoing mail is sent natively over SMTP (password or OAuth XOAUTH2), so it no
+  longer depends on the provider REST APIs; an ambiguous failure after the message
+  is handed to the server is parked, never re-sent, so a mail is never delivered
+  twice. IMAP/SMTP server presets added for GMX, web.de, T-Online and outlook.de
+  addresses.
+- Blocked remote images in mail can now be loaded on explicit opt-in through
+  a privacy proxy: the sender's server never sees the reader's address, SVG
+  and non-image responses are refused, and refused hosts are logged to the
+  security event log.
+- The mail client warns about suspicious (possible phishing) messages: the
+  conversation list shows a warning badge and the reader a warning banner on mails
+  the agent's phishing filter would hide, so nothing dangerous is silently
+  surfaced only to the human.
+- The mail client shows which mail has already been answered: a reply marker with
+  the date in the reader and a marker on answered conversations in the list, so a
+  reply is not accidentally sent twice.
+- Gmail-style categories: a category chip on Promotions/Social conversations and a
+  relabel picker in the reader. Relabeling also teaches the category - VAF
+  remembers a rule for that sender and labels every other mail from them, past and
+  future. All of it is local; nothing is changed on the mail server.
+- Mail Composer: the compose window can now write the reply for you, or rewrite
+  what you typed. The window is wider now, with the message on the left and the
+  Composer beside it on the right: a chat where you say what the reply should say,
+  ask for changes ("shorter", "now more formal") and it refines what it just wrote,
+  with Stop while it writes and an Undo that restores your text exactly. Draft and
+  Rewrite sit in the footer next to Send. It puts a suggestion in the text field and stops there, so nothing is
+  ever sent without you reading it and pressing Send, and it tells you how much of
+  the conversation it actually read. It refuses to draft from a message flagged as
+  possible phishing, and it can use what VAF remembers about you when you say what
+  the reply should be about. New: a light-mode button in compose, so you can read
+  the draft the way the recipient will. Admins can turn all of it off or change how
+  much of a thread it reads (`mail_composer_*` settings). If the local model is not
+  running yet, it is started for you instead of asking you to do it, with a note
+  while it loads. Admins can additionally allow the Composer to quote older mail
+  from other conversations (`mail_composer_mailbox_search_enabled`, off by default).
+  The Composer knows what VAF remembers about you the same way the chat does, every
+  time rather than only when you phrase a request a certain way, and it now writes a
+  complete message (greeting, the point, a closing) in the language of the mail it is
+  answering instead of a single bare sentence. It also tells apart which messages in
+  a conversation you wrote and which the other person wrote, and writes in YOUR tone
+  by following how you replied earlier in the same thread; if there is nothing of
+  yours to go by it says so and stays neutral instead of inventing a style.
+- The mail window's gear opens a built-in account panel: see your mail accounts,
+  connect a new Gmail/Microsoft or IMAP account (with a Test button), reconnect,
+  verify a connection, rename an account, toggle auto-sync, and remove an account.
+  Removing an account that also powers your Calendar keeps it connected for
+  Calendar.
+- Library embedders can now set the agent's persona directly:
+  `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
+  for that instance only, while the engine's technical instructions are kept.
+  Previously the persona was a global on-disk file with no public API.
+  Documented in EMBEDDING.md with a runnable example (examples/06_custom_persona.py).
+- EMBEDDING.md now has a "Sub-agents as a library" section explaining that
+  sub-agents run inline in a bare library process, while their windowed/async
+  modes and the coder's sandbox need the full product's services.
+- The skill scanner module gained a dependency-free content-hashing facility
+  (SHA-2 and SHA-3): `hash_bytes` / `hash_text` and a deterministic,
+  tamper-evident `hash_skill_folder` fingerprint, on a strong-only algorithm
+  allow-list. Available for later integrity checks; not yet wired into the
+  scan result.
+
+### Changed
+- The wording around mail image loading was corrected in the documentation. It
+  protects the reader's browser identity (no cookies, referrer or browser
+  fingerprint reach the sender) but it does NOT hide the reader's IP address, and
+  it does not stop open-tracking: a tracking pixel's address is unique per
+  recipient, so loading it still tells the sender the message was opened and when.
+  Blocking images by default is the protection. `docs/integrations/EMAIL_CLIENT.md`
+  now states both halves for privacy reviews.
+- Server-side mailbox changes (read/unread, archive and delete replayed to the
+  mail server) stay behind `mail_engine_write_enabled`, still off by default. Note
+  that SENDING is deliberately NOT gated by it: a queued mail must be able to
+  leave, so the agent's `reply_mail` and `forward_mail` verbs are live regardless
+  (each still passes the high-risk send gate).
+- Removed the dead Apple OAuth lane (provider entry, config keys
+  `email_oauth_apple_client_id`/`_secret`, admin settings inputs and their
+  locale strings, a dead sign-in URL branch in the setup wizard): Apple
+  offers no OAuth mail API. iCloud Mail continues to connect via IMAP with
+  an app-specific password, unchanged.
+
+### Removed
+- The `batch` tool is gone. It was listed as a Coder tool but could never be called: it was
+  not registered for the main agent and not part of the Coder's tool set either. What it
+  offered - running several tools at once - is what the agent already does in a single turn.
+- The old mail dashboard and the separate email setup wizard are gone. Everything
+  they did is in the mail window: reading mail, and the account panel behind its
+  gear for connecting, reconnecting, testing, renaming, auto-sync and removing
+  accounts (including the IMAP and SMTP server overrides the wizard offered, and
+  the same hiding of sign-in buttons for providers an admin has not configured).
+  The Overview security page reads its mail data from the new engine now.
+- The old mail REST endpoints under `/api/email` are gone (message list, search,
+  body, categories, category change, sender-rule backfill and the per-account
+  sync). Mail is served from `/api/mail`. Sign-in and account management under
+  `/api/email` are unchanged, because Calendar and the Connections page use them.
+- The 30-minute background mail sync was removed. The mail engine's own sync
+  (continuous, with push updates) is now the only one, so every mailbox was being
+  fetched twice.
+- The old mail transport (its own IMAP, Gmail API and Microsoft Graph paths for
+  fetching, reading and sending) is gone; the mail engine handles all of it. An
+  account that has not been connected for the engine can no longer send through the
+  old path - it is refused with a message telling you to reconnect it, rather than
+  failing quietly.
+- The `mail_engine_v2_enabled` setting is gone. The mail engine is simply how mail
+  works now, so there is nothing left to switch. `mail_engine_write_enabled` is
+  unchanged and still off by default: it remains the separate switch for changes
+  written back to the mail server (read/unread, archive, delete).
+- Mail: with several accounts, only the first one kept its labels and "answered"
+  markers when moving to the new mail engine. Every account now carries its own
+  over, including labels belonging to mail that only arrives on a later sync, and
+  it also happens when you sync manually rather than waiting for the background
+  sync.
+- Mail: adding an account with a password for an address that is already connected
+  through sign-in is now refused with an explanation, instead of silently replacing
+  the connection and disconnecting that account's calendar.
+- The Logs page no longer dead-ends when debug logging is off. Three fixes
+  from a live incident on a macOS install where a legacy config had
+  `debug_logs_enabled: false`: the chain badge no longer claims "Chain
+  intact" for an empty or missing timeline (an empty chain is vacuously
+  intact; it now shows a neutral "No data yet" state), the timeline empty
+  state is localized instead of hardcoded English, and the Debug Logs
+  switch is back in Settings → Advanced - the empty states tell the user to
+  enable it, so the switch has to exist in the UI.
+- Corrected stale embedder docs: the FAQ said VAF was "not yet on PyPI" (it is,
+  as a prerelease) and three docs claimed "no async API" despite the shipped
+  `run_async`.
 
 ### Fixed
 - **Mail did not work at all on some Windows and macOS installations.** The search index
@@ -119,90 +268,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   that ties a connected account (for example Gmail or a cloud drive) to the person who
   started the connection. The proxy now removes any claimed sender information before
   adding its own.
-
-### Added
-- A completely new built-in mail client, and it is now the only one
-  (design doc `docs/integrations/EMAIL_CLIENT.md`). VAF has a real mail engine:
-  a per-user local mail store (SQLite with full-text search over
-  subject/sender/recipients/BODY, threaded conversations, encrypted-at-rest
-  cached bodies, configurable retention with headers kept forever) and an
-  RFC 4549 incremental IMAP sync engine (UID-based, UIDVALIDITY-safe, batched
-  fetches, IMAP IDLE push on the inbox plus periodic sweeps, native Gmail
-  thread/label handling). The mail window is a three-pane client: folder sidebar
-  with unread counts and collapsible labels, conversation view, HTML mail
-  rendered sanitized in a sandboxed frame with remote images blocked by default
-  for tracking protection, attachment download, and search over message bodies.
-  Mail opens offline from the local store. New permissive-licensed dependencies
-  (in the `mail` extra): IMAPClient (BSD-3-Clause), nh3 (MIT),
-  zstandard (BSD-3-Clause), listed in `THIRD_PARTY.md` and the About tab's
-  third-party license list.
-- Mail can be acted on, not just read: read/unread, star, archive and trash in
-  the mail window (trash-only delete semantics, nothing is ever expunged),
-  reply/reply-all/forward with proper quoting and threading, compose with a
-  15-second undo window (the mail is held locally and can be withdrawn before it
-  leaves the machine), and automatic filing of sent mail into the Sent folder.
-  Changes apply locally first and replay to the mail server through a durable
-  operation queue once `mail_engine_write_enabled` is on. The agent gains
-  `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` tools (all
-  excluded from the front-office contact lane by design).
-- Outgoing mail is sent natively over SMTP (password or OAuth XOAUTH2), so it no
-  longer depends on the provider REST APIs; an ambiguous failure after the message
-  is handed to the server is parked, never re-sent, so a mail is never delivered
-  twice. IMAP/SMTP server presets added for GMX, web.de, T-Online and outlook.de
-  addresses.
-- Blocked remote images in mail can now be loaded on explicit opt-in through
-  a privacy proxy: the sender's server never sees the reader's address, SVG
-  and non-image responses are refused, and refused hosts are logged to the
-  security event log.
-- The mail client warns about suspicious (possible phishing) messages: the
-  conversation list shows a warning badge and the reader a warning banner on mails
-  the agent's phishing filter would hide, so nothing dangerous is silently
-  surfaced only to the human.
-- The mail client shows which mail has already been answered: a reply marker with
-  the date in the reader and a marker on answered conversations in the list, so a
-  reply is not accidentally sent twice.
-- Gmail-style categories: a category chip on Promotions/Social conversations and a
-  relabel picker in the reader. Relabeling also teaches the category - VAF
-  remembers a rule for that sender and labels every other mail from them, past and
-  future. All of it is local; nothing is changed on the mail server.
-- Mail Composer: the compose window can now write the reply for you, or rewrite
-  what you typed. The window is wider now, with the message on the left and the
-  Composer beside it on the right: a chat where you say what the reply should say,
-  ask for changes ("shorter", "now more formal") and it refines what it just wrote,
-  with Stop while it writes and an Undo that restores your text exactly. Draft and
-  Rewrite sit in the footer next to Send. It puts a suggestion in the text field and stops there, so nothing is
-  ever sent without you reading it and pressing Send, and it tells you how much of
-  the conversation it actually read. It refuses to draft from a message flagged as
-  possible phishing, and it can use what VAF remembers about you when you say what
-  the reply should be about. New: a light-mode button in compose, so you can read
-  the draft the way the recipient will. Admins can turn all of it off or change how
-  much of a thread it reads (`mail_composer_*` settings). If the local model is not
-  running yet, it is started for you instead of asking you to do it, with a note
-  while it loads. Admins can additionally allow the Composer to quote older mail
-  from other conversations (`mail_composer_mailbox_search_enabled`, off by default).
-  The Composer knows what VAF remembers about you the same way the chat does, every
-  time rather than only when you phrase a request a certain way, and it now writes a
-  complete message (greeting, the point, a closing) in the language of the mail it is
-  answering instead of a single bare sentence. It also tells apart which messages in
-  a conversation you wrote and which the other person wrote, and writes in YOUR tone
-  by following how you replied earlier in the same thread; if there is nothing of
-  yours to go by it says so and stays neutral instead of inventing a style.
-- The mail window's gear opens a built-in account panel: see your mail accounts,
-  connect a new Gmail/Microsoft or IMAP account (with a Test button), reconnect,
-  verify a connection, rename an account, toggle auto-sync, and remove an account.
-  Removing an account that also powers your Calendar keeps it connected for
-  Calendar.
-
-- Library embedders can now set the agent's persona directly:
-  `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
-  for that instance only, while the engine's technical instructions are kept.
-  Previously the persona was a global on-disk file with no public API.
-  Documented in EMBEDDING.md with a runnable example (examples/06_custom_persona.py).
-- EMBEDDING.md now has a "Sub-agents as a library" section explaining that
-  sub-agents run inline in a bare library process, while their windowed/async
-  modes and the coder's sandbox need the full product's services.
-
-### Fixed
 - Mail: an account the new mail engine does not sync yet (a Gmail or Microsoft
   account that has not completed the IMAP sign-in) is no longer reported as an
   empty mailbox. It stays visible in the mail client with a hint that it needs to
@@ -258,52 +323,37 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (`https_proxy`/`http_proxy`, honouring `no_proxy`). In managed networks that
   forbid direct internet access, loading images previously just failed, and the
   organisation could not see or filter what the mail view fetched.
-
-### Removed
-- The `batch` tool is gone. It was listed as a Coder tool but could never be called: it was
-  not registered for the main agent and not part of the Coder's tool set either. What it
-  offered - running several tools at once - is what the agent already does in a single turn.
-- The old mail dashboard and the separate email setup wizard are gone. Everything
-  they did is in the mail window: reading mail, and the account panel behind its
-  gear for connecting, reconnecting, testing, renaming, auto-sync and removing
-  accounts (including the IMAP and SMTP server overrides the wizard offered, and
-  the same hiding of sign-in buttons for providers an admin has not configured).
-  The Overview security page reads its mail data from the new engine now.
-- The old mail REST endpoints under `/api/email` are gone (message list, search,
-  body, categories, category change, sender-rule backfill and the per-account
-  sync). Mail is served from `/api/mail`. Sign-in and account management under
-  `/api/email` are unchanged, because Calendar and the Connections page use them.
-- The 30-minute background mail sync was removed. The mail engine's own sync
-  (continuous, with push updates) is now the only one, so every mailbox was being
-  fetched twice.
-- The old mail transport (its own IMAP, Gmail API and Microsoft Graph paths for
-  fetching, reading and sending) is gone; the mail engine handles all of it. An
-  account that has not been connected for the engine can no longer send through the
-  old path - it is refused with a message telling you to reconnect it, rather than
-  failing quietly.
-- The `mail_engine_v2_enabled` setting is gone. The mail engine is simply how mail
-  works now, so there is nothing left to switch. `mail_engine_write_enabled` is
-  unchanged and still off by default: it remains the separate switch for changes
-  written back to the mail server (read/unread, archive, delete).
-- Mail: with several accounts, only the first one kept its labels and "answered"
-  markers when moving to the new mail engine. Every account now carries its own
-  over, including labels belonging to mail that only arrives on a later sync, and
-  it also happens when you sync manually rather than waiting for the background
-  sync.
-- Mail: adding an account with a password for an address that is already connected
-  through sign-in is now refused with an explanation, instead of silently replacing
-  the connection and disconnecting that account's calendar.
-- The Logs page no longer dead-ends when debug logging is off. Three fixes
-  from a live incident on a macOS install where a legacy config had
-  `debug_logs_enabled: false`: the chain badge no longer claims "Chain
-  intact" for an empty or missing timeline (an empty chain is vacuously
-  intact; it now shows a neutral "No data yet" state), the timeline empty
-  state is localized instead of hardcoded English, and the Debug Logs
-  switch is back in Settings → Advanced - the empty states tell the user to
-  enable it, so the switch has to exist in the UI.
-- Corrected stale embedder docs: the FAQ said VAF was "not yet on PyPI" (it is,
-  as a prerelease) and three docs claimed "no async API" despite the shipped
-  `run_async`.
+- Testing or verifying a mail account no longer freezes the whole backend. The
+  IMAP credential test/verify and OAuth token-exchange endpoints ran blocking
+  network IO directly on the uvicorn event loop, so every other API request hung
+  until the provider round-trip finished. All provider IO in the email routes now
+  runs in worker threads.
+- The Logs window no longer crashes with a blank "This page couldn't load"
+  after a rebuild. A calendar-follow effect had been placed after the modal's
+  early return, so the number of React hooks changed when the window opened
+  (React error #310); the effect is back above the guard.
+- A timed-out or stopped sandbox execution is now actually terminated inside
+  the container. Slim sandbox images ship no pkill, so the old kill path
+  silently did nothing: a timed-out package install kept running blind,
+  finished after the workspace cleanup and left a 229MB orphan directory
+  behind. The kill is also scoped to the single run's process tree, so it can
+  never take down another user's concurrent sandbox execution in the shared
+  container.
+- The Logs window now follows the calendar: after midnight the audit chain,
+  hero and activity panels advance to the new day as soon as it has events,
+  instead of silently continuing to show yesterday (fresh tool runs appeared
+  to be missing from the audit chain). Date handling also switched from UTC
+  to local time, which had marked the previous day as "Today" until 02:00
+  CEST - the same fix applies to the sidebar chain-alert probe. Explicitly
+  picking an older day in the date selector still pins it.
+- Running the test suite on a development machine no longer writes fake
+  "Message sent via Discord" entries into the live Activity feed and channel
+  history. A unit test executed the real send tool with only the network call
+  mocked, so its bookkeeping side effects (activity notification, channel
+  store row, outbound session stub for a placeholder recipient) landed in the
+  real stores on every run - hundreds of entries had accumulated and looked
+  like a compromise at first glance. No message ever left the machine; the
+  test now isolates all side-effect stores and the debris has been removed.
 
 ### Security
 - Mail: a request carrying a user name but no user scope could be served from the
@@ -345,67 +395,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   otherwise be replayed by anyone who read the terminal or the tray log. The
   same mask also covers `access_token` / `api_key` / `password` if they ever
   appear in a logged URL.
-
-### Changed
-- The wording around mail image loading was corrected in the documentation. It
-  protects the reader's browser identity (no cookies, referrer or browser
-  fingerprint reach the sender) but it does NOT hide the reader's IP address, and
-  it does not stop open-tracking: a tracking pixel's address is unique per
-  recipient, so loading it still tells the sender the message was opened and when.
-  Blocking images by default is the protection. `docs/integrations/EMAIL_CLIENT.md`
-  now states both halves for privacy reviews.
-- Server-side mailbox changes (read/unread, archive and delete replayed to the
-  mail server) stay behind `mail_engine_write_enabled`, still off by default. Note
-  that SENDING is deliberately NOT gated by it: a queued mail must be able to
-  leave, so the agent's `reply_mail` and `forward_mail` verbs are live regardless
-  (each still passes the high-risk send gate).
-- Removed the dead Apple OAuth lane (provider entry, config keys
-  `email_oauth_apple_client_id`/`_secret`, admin settings inputs and their
-  locale strings, a dead sign-in URL branch in the setup wizard): Apple
-  offers no OAuth mail API. iCloud Mail continues to connect via IMAP with
-  an app-specific password, unchanged.
-
-### Fixed
-- Testing or verifying a mail account no longer freezes the whole backend. The
-  IMAP credential test/verify and OAuth token-exchange endpoints ran blocking
-  network IO directly on the uvicorn event loop, so every other API request hung
-  until the provider round-trip finished. All provider IO in the email routes now
-  runs in worker threads.
-- The Logs window no longer crashes with a blank "This page couldn't load"
-  after a rebuild. A calendar-follow effect had been placed after the modal's
-  early return, so the number of React hooks changed when the window opened
-  (React error #310); the effect is back above the guard.
-
-### Added
-- The skill scanner module gained a dependency-free content-hashing facility
-  (SHA-2 and SHA-3): `hash_bytes` / `hash_text` and a deterministic,
-  tamper-evident `hash_skill_folder` fingerprint, on a strong-only algorithm
-  allow-list. Available for later integrity checks; not yet wired into the
-  scan result.
-
-### Fixed
-- A timed-out or stopped sandbox execution is now actually terminated inside
-  the container. Slim sandbox images ship no pkill, so the old kill path
-  silently did nothing: a timed-out package install kept running blind,
-  finished after the workspace cleanup and left a 229MB orphan directory
-  behind. The kill is also scoped to the single run's process tree, so it can
-  never take down another user's concurrent sandbox execution in the shared
-  container.
-- The Logs window now follows the calendar: after midnight the audit chain,
-  hero and activity panels advance to the new day as soon as it has events,
-  instead of silently continuing to show yesterday (fresh tool runs appeared
-  to be missing from the audit chain). Date handling also switched from UTC
-  to local time, which had marked the previous day as "Today" until 02:00
-  CEST - the same fix applies to the sidebar chain-alert probe. Explicitly
-  picking an older day in the date selector still pins it.
-- Running the test suite on a development machine no longer writes fake
-  "Message sent via Discord" entries into the live Activity feed and channel
-  history. A unit test executed the real send tool with only the network call
-  mocked, so its bookkeeping side effects (activity notification, channel
-  store row, outbound session stub for a placeholder recipient) landed in the
-  real stores on every run - hundreds of entries had accumulated and looked
-  like a compromise at first glance. No message ever left the machine; the
-  test now isolates all side-effect stores and the debris has been removed.
 
 ## [0.1.0a18] - 2026-07-23
 

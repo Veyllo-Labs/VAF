@@ -118,14 +118,24 @@ This is the contract. Treat it as a stable API.
 - `vaf.CoreAgent`
 - `BaseTool` and its declared attributes (`name`, `description`, `parameters`,
   `permission_level`, `side_effect_class`, `admin_only`, `channel_restrictions`,
-  `coder_only`, `run`)
+  `coder_only`, `identity_kwargs`, `run`)
+- `vaf.markers` - the special-return-value constants
+- `vaf.user_jail` - turning a declared identity into a file boundary
+- `vaf.ToolCaller` and `vaf.ToolRequest`, plus `set_tool_authorizer` on both
+  `Agent` and `CoreAgent` - running and vetoing a tool call. Their documented
+  arguments are in [EMBEDDING.md](EMBEDDING.md); `ToolCaller`'s remaining
+  constructor parameters are not part of the promise.
 - the `vaf.tools` entry-point group
 - documented config keys
+
+The authoritative list is `vaf.__all__` plus that page; this one is a summary.
 
 **Internal (may change between releases; do not depend on it from outside):**
 
 - everything else under `vaf.core.*` (including `chat_step` internals,
-  `_clean_reasoning`, context/compaction internals, sub-agent IPC, web server)
+  `_clean_reasoning`, context/compaction internals, sub-agent IPC, web server).
+  The two names above that live in `vaf.core` but are re-exported on the façade
+  are the deliberate exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 
 **What "stable" means during the alpha.** VAF is currently a `0.1.0aN`
@@ -136,8 +146,10 @@ backward-compatibility rules in [setup/RELEASING.md](setup/RELEASING.md), and
 any change to it is announced in `CHANGELOG.md`. Everything listed as internal
 carries no such commitment and may change between releases without notice. The
 surface itself is guarded by a CI test (`tests/test_public_facade.py`) that
-fails when the facade, the `Agent` signatures, or the `BaseTool` contract
-drift from what is documented here.
+fails when the facade, the `Agent` signatures, or the `BaseTool` contract drift.
+Note which way that guard points: it pins `vaf.__all__` and cites
+[EMBEDDING.md](EMBEDDING.md), so it stays green while THIS summary is out of
+date. If the two disagree, `vaf.__all__` is right.
 
 When the engine needs to change, change it freely *behind* Layer 2. When Layer 2
 needs to change, that is a deliberate, versioned event.

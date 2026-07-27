@@ -10542,10 +10542,12 @@ class Agent:
             # file_created/document_created emits carry THIS session (emit-site scoping -
             # never the process-global fallback). The identity itself arrives through the
             # tool's identity_kwargs declaration above; WriteFileTool.run turns it into the
-            # per-user jail inside the tool, because a contextvar set out here would not
-            # reach the bounded-run worker thread. Direct WriteFileTool() consumers (coder,
-            # workflow engine, librarian, automations) pass none of this and keep their
-            # exact legacy behavior.
+            # per-user jail inside the tool, because a dispatcher is not always in the
+            # picture - the coder, the librarian and automations call WriteFileTool()
+            # directly. (Not because a contextvar could not reach a worker thread: the
+            # bounded run copies the caller's context on purpose.) Those direct consumers
+            # pass none of this and keep their exact legacy behavior; the workflow engine is
+            # no longer one of them - it assigns the declared identity itself.
             tool_args["_session_id"] = getattr(self, "current_session_id", None)
             try:
                 from vaf.core.platform import Platform as _PlatWF

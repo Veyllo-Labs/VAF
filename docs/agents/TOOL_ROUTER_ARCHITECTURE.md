@@ -139,7 +139,7 @@ Model: search_tools(query="calendar appointment")
 
 **Format contract:** the post-hook parser is the shared `extract_discovered_tool_names()` in `vaf/tools/search_tools.py` — match lines stay `name: desc`; signature lines sit on their own indented line and their pre-colon part contains `(`, so they can never be mistaken for a tool name. The query echo in the header is capped and the total output self-caps under `execute_tool`'s 2000-char truncation (signature lines are dropped first). Round-trip guard: `tests/test_search_tools_signatures.py`.
 
-**Post-execution hook in `execute_tool()`:** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
+**Post-execution hook (`Agent._chat_post_dispatch`, wired into the pipeline as the chat lane's `after_dispatch`):** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 
 **Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list — so the model always has a discovery path.
 
@@ -293,17 +293,27 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 ### Evaluation order
 
 Two things happen on a tool call, and they belong to different owners. The **shared
-pipeline** (`ToolCaller` in `vaf/core/tool_dispatch.py`) is what every caller gets: the chat
-turn, the workflow engine, and an embedder holding nothing but a tool registry. The **chat
-lane** adds turn-specific stages on top, and it adds them as hooks at the points below
-rather than by keeping a dispatcher of its own - a second dispatcher is how identity
-assignment came to exist in five places and be correct in one.
+pipeline** (`ToolCaller` in `vaf/core/tool_dispatch.py`) is what the chat turn gets, and what
+an embedder holding nothing but a tool registry gets. The **chat lane** adds turn-specific
+stages on top, and it adds them as hooks at the points below rather than by keeping a
+dispatcher of its own - a second dispatcher is how identity assignment came to exist in five
+places and be correct in one.
+
+**The workflow engine is NOT on this pipeline yet, and the difference is security-relevant.**
+It builds no `ToolCaller`; it imports two pieces of it - `run_tool_bounded` for execution
+bounds and `assign_declared_identity` for identity - and calls the tool itself. A workflow
+step therefore gets no `admin_only` block, no `channel_restrictions` check, no confirmation
+gate, no argument repair, no authorizer and no `tool_start`/`tool_end` pair. Do not read the
+order below as describing what a workflow step does. Bringing that lane onto the pipeline is
+open work; until it lands, "which door did the caller come through" is still a security
+answer for workflows.
 
 **The shared pipeline, in order:**
 
 1. **`admin_only` check** - if `admin_only == True` and the caller is not an admin, the tool is hard-blocked and **nothing is emitted**: no `tool_start`, no `tool_end`. A consumer must never see a blocked tool reported as having run. `is_admin` comes from the caller's role and scope through the shared `is_admin_identity` rule.
 2. **Channel check** — if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role) — **unless** `channel_tools_unrestricted` is set (default on), which grants messaging-channel sessions the same tools as the main agent (channel restrictions **and** the per-call confirmation gate are lifted; the `admin_only` check above still applies).
-3. **Confirmation gate** - if `permission_level == "dangerous"`, the caller is asked (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line. `permission_level == "system"` bypasses the gate entirely. A standing grant (`policy == "allow"`, or a trusted directory) runs the tool **silently** - no gate event at all. When nobody can answer (headless, or an embedder that passed no asker) the call is refused with a string rather than blocking on a person who is not there.
+2a. **The application's authorizer** - if the embedder attached one with `set_tool_authorizer`, it is consulted here: after the hard blocks, so an `allow()` cannot reach a tool policy already refused, and before the gate, so a `deny()` answers at once instead of parking a refused call on a dialog. `deny()` ends the call with `Security Error: ...` and emits nothing at all. `ask()` and `allow()` both reach into step 3 and are described there. See [EMBEDDING.md](../EMBEDDING.md).
+3. **Confirmation gate** - if `permission_level == "dangerous"`, the caller is asked (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line. `permission_level == "system"` bypasses the gate entirely. A standing grant (`policy == "allow"`, or a trusted directory) runs the tool **silently** - no gate event at all. Both halves of that sentence are conditional on there being no authorizer: `req.ask()` gates a tool of ANY permission level and ignores standing grants, while `req.allow()` skips the gate for a `dangerous` tool without writing anything durable. When nobody can answer (headless, or an embedder that passed no asker) the call is refused with a string rather than blocking on a person who is not there.
 4. **`tool_start` event.**
 5. **Input validation & repair** - the model-supplied arguments are validated against the tool's `parameters` schema and common weak-model shape mistakes are repaired (bare string for an array, stringified array, `null` on an optional field, single-key placeholder). Runs on the raw model arguments, before runtime kwargs are injected. See [TOOL_INPUT_REPAIR.md](TOOL_INPUT_REPAIR.md).
 6. **Identity injection** - the keys named in the tool's `identity_kwargs` are ASSIGNED from the caller's context, overwriting anything the model supplied under those names. A tool that declares nothing receives nothing. If arguments still violate the schema after repair, the tool is not run and a localized `Tool Error: invalid arguments for '<tool>': <detail>` is returned; that error outranks any refusal a hook raises about a *different* call already in flight.

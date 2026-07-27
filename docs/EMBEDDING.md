@@ -293,8 +293,11 @@ Notes:
 
 ## Headless safety: tool confirmation
 
-VAF gates dangerous tools (shell, file writes, unsandboxed Python) behind a
-confirmation prompt. An embedded library must never block waiting for a human,
+VAF gates its dangerous tools behind a confirmation prompt: anything declaring
+`permission_level = "dangerous"`, plus the by-name legacy set `bash`,
+`run_command`, `move_file` and `python_exec`. Ordinary file writes are **not**
+among them - `write_file` and `edit_file` are `"write"`, and what confines them
+is the per-user jail, not the gate. An embedded library must never block waiting for a human,
 so the façade sets `VAF_NONINTERACTIVE=1` by default: gated tools return an
 error instead of hanging. To opt out, set `VAF_NONINTERACTIVE=0` before
 constructing the agent.
@@ -570,7 +573,7 @@ The supported arguments:
 | Argument | What it is for |
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
-| `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. |
+| `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant**: it falls back to `"admin"`, the machine owner, because the tokenless desktop and the CLI have no username and the stores keyed on it treat that as the owner. Scope and role without a username therefore run every tenant against the owner's username-keyed data. |
 | `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`; leave them out if you have no messaging channels. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
@@ -578,7 +581,7 @@ The supported arguments:
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. |
-| `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.set_event_sink`, documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
+| `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
 
 Two limits, stated plainly:
 
@@ -651,9 +654,12 @@ Four limits worth knowing before you rely on it:
 - **A raising callback is a refusal.** This is the opposite of the event sink,
   which swallows failures on purpose: a broken observer must not fail a run it
   only watches, while a broken guard must not quietly become no guard.
-- **In-process only.** The coder sub-agent runs in its own process, and a Python
-  callable does not cross that boundary. Tool calls made *inside* the coder are
-  not put to your authorizer.
+- **The coder does not consult it.** Tool calls made *inside* the coder sub-agent
+  are not put to your authorizer - not because of the process boundary (embedded,
+  the coder runs inline in yours) but because its own loop calls `tool.run()`
+  directly instead of going through the dispatcher. A callable also cannot cross
+  into the terminal-spawned coder, which is why a per-user tool allowlist has to
+  travel as data rather than as a callback.
 - **The workflow engine does not consult it yet.** A saved workflow's steps run
   through the shared execution path but not yet through the full pipeline, so
   they are not authorized. If that matters to your deployment, do not enable
@@ -760,5 +766,6 @@ Stable public surface (safe to build on):
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
-`vaf.ToolCaller` is the one deliberate exception: it lives in `vaf.core` but is
-re-exported on the façade, and the façade name is the one to import.
+`vaf.ToolCaller` and `vaf.ToolRequest` are the deliberate exceptions: both live in
+`vaf.core` but are re-exported on the façade, and the façade names are the ones to
+import.

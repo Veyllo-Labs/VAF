@@ -18,9 +18,11 @@ Design notes
 ------------
 - `Agent` here is the *façade*. The full internal engine remains importable as
   `vaf.core.agent.Agent` (re-exported below as `CoreAgent`) for advanced use.
-- The core engine is imported lazily (inside `run()`), so merely constructing a
-  façade `Agent` — or doing `import vaf` — never pays the cost of loading the
-  ~9k-line core module and its dependency chain.
+- `import vaf` never pays the cost of loading the ~9k-line core module and its
+  dependency chain: `vaf/__init__.py` serves the public names lazily (PEP 562),
+  and THIS module is only imported on first `vaf.Agent` access. Touching that
+  name does load the core - it is imported at module level below - so the saving
+  is in `import vaf`, not in constructing a façade `Agent`.
 - Embedding-safe by default: we set `VAF_NONINTERACTIVE=1` (via `setdefault`, so
   an explicit caller still wins). That makes the tool-confirmation gates return
   an error instead of blocking on stdin/WebSocket — an embedded library must

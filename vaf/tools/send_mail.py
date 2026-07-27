@@ -220,7 +220,8 @@ class SendMailTool(BaseTool):
         # Per-user filesystem jail while resolving attachment paths: a non-admin
         # user's agent must not be able to attach (= exfiltrate) files outside
         # their own data. Same mechanism as LibrarianTool/WriteFileTool; the
-        # contextvar must be set here in the tool's own worker thread.
+        # contextvar is set here, in the tool itself, because a dispatcher is not always
+        # in the picture - direct consumers call run() with none.
         attachments = []      # {path, filename} - for the high-risk gate + delegate tail
         att_bytes = []        # {filename, content_type, payload} - read INSIDE the jail
         if attachment_paths:

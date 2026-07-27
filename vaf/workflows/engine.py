@@ -230,11 +230,14 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
 
     ``user_role`` is the half the file jail cannot form without, and it does not reach every
     caller. ``is_admin_identity`` says yes for an admin ROLE or for the local admin's SCOPE,
-    so the role only decides for a SECOND administrator - role yes, that scope no. Callers
-    holding a live agent or a stored record pass it; the two that resolve from a store
-    (session metadata, the paused record) have no role to pass, and a second administrator is
-    therefore jailed to their own tree there. Restrictive, never permissive: a missing role
-    frees nobody. See docs/security/USER_ISOLATION.md.
+    so the role only decides for a SECOND administrator - role yes, that scope no. TWO of the
+    seven construction sites pass it, the two holding a live agent (``execute_workflow`` and
+    the router lane). The other five resolve identity from a store that carries no role -
+    session metadata, the paused record (``PausedWorkflow`` has no such field at all, so that
+    ``getattr`` is always None), and the builder and automation lanes, which pass scope and
+    username only. A second administrator is therefore jailed to their own tree in those
+    five. Restrictive, never permissive: a missing role frees nobody.
+    See docs/security/USER_ISOLATION.md.
 
     Returns kwargs to splat into ``WorkflowEngine(...)``; an empty dict means "as before".
     """

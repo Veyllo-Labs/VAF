@@ -129,12 +129,20 @@ timeouts and stop polling. Event schema: the
 error text).
 
 That pipeline is not private to the chat turn: it lives in
-`vaf/core/tool_dispatch.py` and is shared with the workflow engine, so a tool
-sees the same policy evaluation, the same gate and the same identity assignment
-whichever of them called it. What `execute_tool` adds on top are the stages that
-belong to a chat turn specifically - the plan and reply gates, the session
-plumbing, the router bookkeeping - and it adds them as hooks into the shared
-pipeline rather than as a dispatcher of its own.
+`vaf/core/tool_dispatch.py` as `ToolCaller`, and an embedder can run a tool
+through the very same object (see [EMBEDDING.md](EMBEDDING.md), "Running a tool
+yourself"). What `execute_tool` adds on top are the stages that belong to a chat
+turn specifically - the plan and reply gates, the session plumbing, the router
+bookkeeping - and it adds them as hooks into the shared pipeline rather than as a
+dispatcher of its own.
+
+The workflow engine is a **partial** adopter and it is worth being exact about
+which parts, because the missing ones are the security ones. It shares bounded
+execution (`run_tool_bounded`) and identity assignment
+(`assign_declared_identity`, in `declared` mode, and only where its caller
+supplied an identity at all). It does **not** build a `ToolCaller`, so a workflow
+step is not policy-checked, not gated, not argument-repaired, and emits no
+tool events.
 
 ## Deciding about a tool call
 

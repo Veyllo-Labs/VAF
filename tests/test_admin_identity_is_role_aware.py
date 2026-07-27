@@ -136,9 +136,14 @@ def test_the_dispatcher_assigns_the_role_it_never_defaults_it(tool):
         f"{tool} must declare user_role to stay role-aware"
     )
 
-    region = AGENT_SRC[AGENT_SRC.index("_ident_src = {"):]
-    region = region[:region.index("if name in SUBAGENT_TOOLS:")]
-    assert "tool_args[_ik] = _get()" in region, "identity is no longer assigned generically"
+    # The assignment moved out of the dispatcher into the shared funnel module, so this
+    # anchors on the function that performs it rather than on a region of agent.py.
+    import inspect
+
+    from vaf.core.tool_dispatch import assign_declared_identity
+
+    region = inspect.getsource(assign_declared_identity)
+    assert "args[key] = available[key]" in region, "identity is no longer assigned generically"
     assert "setdefault" not in region, "identity must be assigned, never defaulted"
 
 

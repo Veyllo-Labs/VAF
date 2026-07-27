@@ -29,10 +29,12 @@ from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.tool_dispatch import (
+    assign_declared_identity as _assign_declared_identity,
     is_channel_session as _is_channel_session,
     make_json_serializable,
     normalize_tool_name,
     policy_admin_flag as _policy_admin_flag,
+    repair_arguments as _repair_arguments,
 )
 from vaf.tools.search import WebSearchTool, get_web_search_results
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
@@ -10536,42 +10538,19 @@ class Agent:
                 # stringified array, null on an optional field, single-key placeholder).
                 # Runs on raw model args only; injected runtime kwargs are added below.
                 # Fully defensive: any failure here is a no-op and dispatch proceeds.
-                _ti_errors = []
-                try:
-                    from vaf.core.tool_input_repair import repair_tool_input
-                    tool_args, _ti_applied, _ti_errors = repair_tool_input(
-                        getattr(self.tools[name], "parameters", None), tool_args,
-                        getattr(self.tools[name], "input_aliases", None),
-                    )
-                    if _ti_applied:
-                        try:
-                            from vaf.core.log_helper import log_timeline_event as _lte
-                            _lte('tool_input_repaired', tool=name,
-                                 model=getattr(self, 'model_display_name', None),
-                                 repairs=_ti_applied)
-                        except Exception:
-                            pass
-                except Exception:
-                    _ti_errors = []
-                # Identity: the tool DECLARES what it needs (BaseTool.identity_kwargs) and the
-                # dispatcher hands it over. This replaced ~40 hardcoded name lists, which had two
-                # costs: they drifted (a tool added to one list and not the sibling one), and a
-                # tool registered by an embedder via Agent.add_tool() could never receive an
-                # identity at all - the dispatcher only knew OUR names. See
-                # docs/agents/TOOL_ROUTER_ARCHITECTURE.md and docs/EMBEDDING.md.
-                #
-                # ASSIGNED, never defaulted: tool_args starts out as the arguments the MODEL
-                # produced, so a prompt-injected user_role="admin" is overwritten with the
-                # session's real role instead of being honored.
-                _ident_src = {
-                    "user_scope_id": lambda: getattr(self, "_current_user_scope_id", None),
-                    "username": lambda: getattr(self, "_current_username", None) or "admin",
-                    "user_role": lambda: getattr(self, "_current_user_role", None),
-                }
-                for _ik in (getattr(tool_instance, "identity_kwargs", ()) or ()):
-                    _get = _ident_src.get(_ik)
-                    if _get is not None:
-                        tool_args[_ik] = _get()
+                tool_args, _ti_errors = _repair_arguments(
+                    self.tools[name], tool_args, tool_name=name,
+                    model_name=getattr(self, "model_display_name", None),
+                )
+                # The tool declares the identity it needs; the dispatcher obeys the
+                # declaration. See assign_declared_identity in tool_dispatch.py for why this
+                # is a declaration rather than a name list, and why it assigns.
+                _assign_declared_identity(
+                    tool_instance, tool_args,
+                    user_scope_id=getattr(self, "_current_user_scope_id", None),
+                    username=getattr(self, "_current_username", None),
+                    user_role=getattr(self, "_current_user_role", None),
+                )
                 if name in ("memory_save", "memory_search"):
                     scope_id = getattr(self, "_current_user_scope_id", None)
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)

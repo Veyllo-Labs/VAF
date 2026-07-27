@@ -88,6 +88,74 @@ def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
         return False
 
 
+IDENTITY_KEYS = ("user_scope_id", "username", "user_role")
+
+
+def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None,
+                             username: str | None, user_role: str | None) -> dict:
+    """Give a tool exactly the identity keys it declares, and nothing else.
+
+    A tool states its needs through ``BaseTool.identity_kwargs``. That declaration replaced
+    roughly forty hardcoded name lists, which had two costs: they drifted apart (a tool added
+    to one list and not its sibling), and a tool registered by an embedder through
+    ``Agent.add_tool()`` could never receive an identity at all, because the dispatcher only
+    knew VAF's own names.
+
+    ASSIGNED, never defaulted. ``args`` starts out as whatever the MODEL produced, so a
+    prompt-injected ``user_role="admin"`` is overwritten with the caller's real role rather
+    than honoured. Declaring nothing gets nothing - the safe direction.
+
+    The ``username`` fallback to "admin" is deliberate and load-bearing: the tokenless
+    desktop, the CLI and automations carry no username, and the stores keyed on it treat that
+    as the machine owner. Mutates and returns ``args``.
+    """
+    available = {
+        "user_scope_id": user_scope_id,
+        "username": username or "admin",
+        "user_role": user_role,
+    }
+    for key in (getattr(tool, "identity_kwargs", ()) or ()):
+        if key in available:
+            args[key] = available[key]
+    return args
+
+
+def repair_arguments(tool: Any, args: dict, *, tool_name: str,
+                     model_name: str | None = None) -> tuple[dict, list]:
+    """Validate the model's arguments against the tool's schema and repair weak shapes.
+
+    Handles the mistakes small models make with tool schemas - a bare string where an array
+    belongs, a stringified array, null on an optional field, a single-key placeholder - and
+    reports what could not be repaired so the caller can refuse rather than dispatch with
+    invalid input.
+
+    Runs on the RAW model arguments only, before any runtime kwarg is injected: the injected
+    keys are not in the tool's declared schema, and validating them would reject every call.
+    Fully defensive - any failure here is a no-op and dispatch proceeds, because a broken
+    repair pass must not become a broken dispatcher.
+
+    Returns ``(args, errors)``; a non-empty ``errors`` means the arguments still violate the
+    schema.
+    """
+    errors: list = []
+    try:
+        from vaf.core.tool_input_repair import repair_tool_input
+        args, applied, errors = repair_tool_input(
+            getattr(tool, "parameters", None), args,
+            getattr(tool, "input_aliases", None),
+        )
+        if applied:
+            try:
+                from vaf.core.log_helper import log_timeline_event
+                log_timeline_event("tool_input_repaired", tool=tool_name,
+                                   model=model_name, repairs=applied)
+            except Exception:
+                pass
+    except Exception:
+        errors = []
+    return args, errors
+
+
 def normalize_tool_name(raw_name: str | None) -> str | None:
     """Strip the ``functions.`` prefix some providers put in front of a tool name.
 

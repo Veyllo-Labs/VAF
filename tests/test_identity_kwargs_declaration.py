@@ -197,12 +197,21 @@ def test_no_tool_declares_a_key_the_dispatcher_cannot_supply():
 
 def test_the_dispatcher_no_longer_hands_out_identity_by_tool_name():
     """The deletion this change is for. A leftover name list would drift again, and would
-    still leave a third-party tool with nothing."""
-    src = Path(agent_mod.__file__).read_text(encoding="utf-8")
-    region = src[src.index("_ident_src = {"):src.index("if name in SUBAGENT_TOOLS:")]
-    leftovers = re.findall(r'tool_args\["(user_scope_id|username|user_role)"\]\s*=', region)
-    # ask_user's conditional branch is the single sanctioned exception (2 keys).
-    assert len(leftovers) <= 2, f"identity is still assigned by name in {len(leftovers)} places"
+    still leave a third-party tool with nothing.
+
+    Scans the WHOLE of execute_tool rather than a delimited region: the assignment has since
+    moved into vaf/core/tool_dispatch.py, and a guard anchored on two markers inside a method
+    stops guarding the moment either marker moves. Whole-method is both simpler and stricter.
+    """
+    import inspect
+
+    src = inspect.getsource(agent_mod.Agent.execute_tool)
+    leftovers = re.findall(r'tool_args\["(user_scope_id|username|user_role)"\]\s*=', src)
+    # ask_user's conditional branch is the single sanctioned exception (2 keys) - its
+    # injection depends on the run kind, so it cannot become a declaration.
+    assert len(leftovers) <= 2, (
+        f"identity is assigned by tool NAME in {len(leftovers)} places: {leftovers}"
+    )
 
 
 # ── Runtime: the declaration is actually honoured, for anyone ────────────────

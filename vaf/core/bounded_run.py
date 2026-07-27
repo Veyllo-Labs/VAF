@@ -103,7 +103,10 @@ def agent_timeout_seconds(tool_name: str) -> float:
         # Browsing is legitimately slow (page loads, multi-step). Generous budget so a
         # normal task is never cut off, but bounded so a hung browser can't block a
         # workflow forever. (browser-use also caps itself via max_steps.)
-        return float(Config.get("browser_timeout_seconds", 300))
+        # The literal must match Config.DEFAULTS: DEFAULTS wins over this fallback, so a
+        # divergent number here is unreachable AND misleading - a reader (or an audit) takes
+        # it for the effective default and concludes the docs are wrong.
+        return float(Config.get("browser_timeout_seconds", 1800))
     if tool_name in ("coding_agent", "research_agent", "document_agent"):
         return float(Config.get("subagent_timeout_seconds", 300))
     return float(Config.get("tool_timeout_seconds", 120))

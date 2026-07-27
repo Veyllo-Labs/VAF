@@ -17,7 +17,6 @@ CODER_SUBAGENT_TOOLS = [
     ("list_files", "List files in directory", "Coder Sub-Agent"),
     ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),
     ("codesearch", "Search for code patterns/symbols", "Coder Sub-Agent"),
-    ("batch", "Execute multiple tools in parallel", "Coder Sub-Agent"),
 ]
 
 

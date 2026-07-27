@@ -288,19 +288,13 @@ class PythonSandboxTool(BaseTool):
                     return f"[ERROR] {exc}"
             return _call_via_agent, list(agent.tools.keys())
 
-        # Fallback: use the tool registry from available_tools if set
-        registry: Dict[str, Any] = getattr(self, "available_tools", {}) or {}
-        if registry:
-            def _call_via_registry(tool_name: str, args: Dict[str, Any]) -> str:
-                tool = registry.get(tool_name)
-                if tool is None:
-                    return f"[ERROR] Unknown tool '{tool_name}'"
-                try:
-                    return str(tool.run(**args))
-                except Exception as exc:
-                    return f"[ERROR] {exc}"
-            return _call_via_registry, list(registry.keys())
-
+        # No agent, no bridge - deliberately. There used to be a fallback here that looked up
+        # `self.available_tools` and called `tool.run(**args)` directly, which skipped the whole
+        # pipeline: no policy evaluation, no confirmation gate, no identity assignment. It could
+        # never actually fire (this class does not declare `available_tools`, and every injection
+        # site in agent.py/framework.py guards on `hasattr`), but a bridge that quietly downgrades
+        # to an unchecked dispatcher is the wrong shape to leave lying around. Without an agent the
+        # caller gets the honest refusal in run() instead.
         return None, []
 
     # ------------------------------------------------------------------ #

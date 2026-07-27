@@ -421,6 +421,12 @@ function AccessPresetSection({
                     <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.access')}</h4>
                     <p className="text-xs text-gray-400">{tModals('addUser.accessDesc')}</p>
                 </div>
+                {/* The selection is persisted to LocalUser.permissions but no dispatch path reads it yet
+                    (see docs/web-ui/NETWORK_TAB.md). Say so here rather than let the labels imply a gate
+                    that does not exist. Amber 50/200/700 fold for dark mode via tailwind.config.ts. */}
+                <div className="text-xs text-amber-700 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                    {tModals('addUser.accessNotEnforced')}
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {(['standard', 'full', 'readonly', 'custom'] as const).map(p => (
                         <button

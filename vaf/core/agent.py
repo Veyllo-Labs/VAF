@@ -2339,7 +2339,6 @@ class Agent:
                             "folder_size",   # Deterministic sizing (prefer via librarian_agent)
                             "bash",           # Shell commands (for build/test)
                             "codesearch",     # Code navigation
-                            "batch",          # Parallel operations
                             "save_thinking_suggestion",  # Removed: agent asks user via main_messenger when unsure
                         ]
                         

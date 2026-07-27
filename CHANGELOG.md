@@ -16,8 +16,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   everyone, only you, or named people - the same one custom tools already had. It decides who
   sees the skill and who can use it, and now also whose agent may open the files bundled with
   it. Existing skills keep the setting they have; a new one starts as visible to everyone.
-
-### Added
 - **Tools you write yourself can now be told who is calling them.** VAF only handed the
   current user's identity to its own built-in tools, which meant a tool added through the
   framework could not tell one person from another - and the documentation could only warn
@@ -32,6 +30,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   carry the identity of the person who started them. This closes the case for workflows you
   run from chat, for automations, and for a resumed workflow; saved workflows started from the
   library are covered by a broader fix still in progress.
+- **The per-user tool and workflow selection said more than it does.** When creating or
+  editing a user you can pick which tools and workflows they should have, and the wording read
+  as though the choice were already in force. It is stored but not yet checked while the agent
+  runs, so "Read-only" did not actually stop anything. The dialog now says so plainly instead
+  of implying a restriction that is not there yet. The selection itself is unchanged and is
+  kept for when it takes effect.
 - **The failover setting looked navy in dark mode.** Its slider track and the step markers
   now use the same neutral tone as the other controls.
 - **The agent could read files belonging to other people using the same VAF.** Writing was
@@ -246,6 +250,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   organisation could not see or filter what the mail view fetched.
 
 ### Removed
+- The `batch` tool is gone. It was listed as a Coder tool but could never be called: it was
+  not registered for the main agent and not part of the Coder's tool set either. What it
+  offered - running several tools at once - is what the agent already does in a single turn.
 - The old mail dashboard and the separate email setup wizard are gone. Everything
   they did is in the mail window: reading mail, and the account panel behind its
   gear for connecting, reconnecting, testing, renaming, auto-sync and removing

@@ -359,14 +359,13 @@ class BashTool(BaseTool):
 | Tool | Reason |
 |---|---|
 | `bash` | Raw shell — Main Agent delegates to Coder instead |
-| `batch` | Low-level batching — Coder-specific |
 | `codesearch` | Code-aware search — Coder-specific |
 | `linter` | Linting — Coder-specific |
 | `context_tools` | Internal Coder context management |
 
 The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. In addition, a
 hardcoded `MAIN_AGENT_EXCLUDED_TOOLS` list inside `_load_tools()` excludes a few tools by
-NAME (`move_file`, `folder_size`, `bash`, `codesearch`, `batch`,
+NAME (`move_file`, `folder_size`, `bash`, `codesearch`,
 `save_thinking_suggestion`) - `write_file` was removed from that list (tool-friction audit):
 the main agent now writes single-file artifacts directly, workspace-anchored and
 per-user jailed (see `docs/security/USER_ISOLATION.md`). The Coder loads its tools

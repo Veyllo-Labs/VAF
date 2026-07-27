@@ -37,9 +37,17 @@ The per-call budget is chosen per agent by `agent_timeout_seconds(tool_name)`: a
 is not forced to wait the full research budget. A small set of tools manage their own lifecycle and
 are deliberately **not** wrapped (`SELF_SUPERVISED_TOOLS`): `browser_agent` (its own stop monitor +
 `max_steps`), the workflow orchestrators `create_agent_workflow` / `execute_workflow` (the engine
-already bounds each step, so bounding them again would double-bound), and `python_sandbox` (it runs
+already bounds each step, so bounding them again would double-bound), `python_sandbox` (it runs
 a stop-aware poll loop with its own deadline that kills the Docker exec the moment Stop is requested
-— being abandoned by `run_bounded` would race that kill against the stop flag being cleared).
+— being abandoned by `run_bounded` would race that kill against the stop flag being cleared), and
+`coding_agent` (a large edit legitimately takes many minutes; its loop polls `should_stop` each
+iteration and commits on every exit path, so a flat timeout would abandon it mid-edit and leave the
+file half-written).
+
+**The workflow engine reverses this for one tool.** A workflow step computes
+`step.tool in SELF_SUPERVISED_TOOLS and step.tool != "browser_agent"`, so `browser_agent` *is*
+bounded inside a workflow while it stays self-supervised as a standalone `execute_tool` call. A
+workflow must not be able to stall forever on one browsing step.
 
 ### Cooperative cancel
 
@@ -173,6 +181,7 @@ delivery.
 | `tool_timeout_seconds` | 120 | generic in-process tool call |
 | `librarian_timeout_seconds` | 60 | filesystem agent (should be fast) |
 | `subagent_timeout_seconds` | 300 | coding / research / document sub-agent |
+| `workflow_agent_step_timeout_seconds` | 1800 | **floor** for a coding/research/document step inside a workflow |
 | `browser_timeout_seconds` | 1800 | worst-case browser ceiling (liveness is the real guard) |
 | `subagent_liveness_timeout_seconds` | 60 | no-heartbeat window before a child is reaped |
 | `tool_stop_poll_seconds` | 0.5 | how often the bounded wait checks stop/deadline |

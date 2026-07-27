@@ -410,7 +410,7 @@ def run(self, **kwargs) -> str:
 Use `coder_only = True` for:
 - **File Operations**: `read_file`, `write_file`, `list_files`
 - **Shell Commands**: `bash`, `python_exec`
-- **Code-specific Tools**: `codesearch`, `batch`
+- **Code-specific Tools**: `codesearch`
 
 **Why?** These tools are too "low-level" for the Main Agent and are better used by Sub-Agents (e.g., `coding_agent`).
 

@@ -452,7 +452,6 @@ def show_tools_menu(agent):
         ("list_files", "List files in directory", "Coder Sub-Agent"),
         ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),
         ("codesearch", "Search for code patterns/symbols", "Coder Sub-Agent"),
-        ("batch", "Execute multiple tools in parallel", "Coder Sub-Agent"),
     ]
     for name, desc, available_to in CODER_SUBAGENT_TOOLS:
         table.add_row(f"[dim]{name}[/dim]", f"[dim]{desc}[/dim]", f"[yellow]{available_to}[/yellow]")

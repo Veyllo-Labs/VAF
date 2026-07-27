@@ -156,6 +156,45 @@ def repair_arguments(tool: Any, args: dict, *, tool_name: str,
     return args, errors
 
 
+def emit_event(sink, evt: dict) -> None:
+    """Hand one event to a caller's sink, and never let the sink break the dispatch.
+
+    Observation is fail-OPEN on purpose, and that is the opposite of how a gate behaves: a
+    broken observer must not take a tool call down with it, while a broken guard must not
+    degrade to "allowed". The sink's return value is ignored - this is a notification, not a
+    veto. A caller wanting a say gets it before dispatch, not here.
+    """
+    if callable(sink):
+        try:
+            sink(evt)
+        except Exception:
+            pass
+
+
+def with_subagent_debug_mirror(sink):
+    """Wrap a sink so its events are ALSO written to the sub-agent debug log.
+
+    Deliberately separate from ``emit_event`` rather than folded into it. The mirror is a
+    property of the chat lane, not of dispatching: it writes to ``events.jsonl`` whenever the
+    process is running as a sub-agent terminal. Folding it into the shared path would hand
+    every future caller - the workflow engine first - a debug artifact it does not produce
+    today, which is a behaviour change smuggled in through a refactor.
+
+    Note the wrapper mirrors even when there is NO sink, which is what the chat lane does
+    today: in the web app ``_event_sink`` is often None while the debug log is still wanted.
+    """
+    def _mirrored(evt: dict) -> None:
+        emit_event(sink, evt)
+        try:
+            from vaf.core.subagent_debug import get_subagent_logger_from_env
+            lg = get_subagent_logger_from_env()
+            if lg:
+                lg.event("agent_event", payload=evt)
+        except Exception:
+            pass
+    return _mirrored
+
+
 def session_stop_check(session_id: str | None):
     """A stop predicate for one session, or a never-stop one when there is no session.
 

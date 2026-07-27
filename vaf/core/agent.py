@@ -37,6 +37,7 @@ from vaf.core.tool_dispatch import (
     repair_arguments as _repair_arguments,
     run_tool_bounded as _run_tool_bounded,
     session_stop_check as _session_stop_check,
+    with_subagent_debug_mirror as _with_subagent_debug_mirror,
 )
 from vaf.tools.search import WebSearchTool, get_web_search_results
 from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, MoveFileTool
@@ -10397,21 +10398,13 @@ class Agent:
             if gate_msg is not None:
                 return gate_msg
 
-        def emit(evt: dict):
-            if callable(self._event_sink):
-                try:
-                    self._event_sink(evt)
-                except Exception:
-                    pass
-            # Sub-agent debug logging (actions + system reactions, no thoughts/prompts)
-            try:
-                from vaf.core.subagent_debug import get_subagent_logger_from_env
-                lg = get_subagent_logger_from_env()
-                if lg:
-                    lg.event("agent_event", payload=evt)
-            except Exception:
-                pass
-        
+        # The chat lane's emitter: the caller's sink PLUS the sub-agent debug mirror. The
+        # mirror is deliberately applied here and not inside the shared dispatch path - it
+        # writes events.jsonl whenever this process runs as a sub-agent terminal, which is a
+        # property of this lane. Built per call because _event_sink can be reattached (see
+        # reload_api_backend).
+        emit = _with_subagent_debug_mirror(self._event_sink)
+
         def run_multi_tool_use(call_args: dict | None) -> str:
             tool_uses = (call_args or {}).get("tool_uses", [])
             if not tool_uses:

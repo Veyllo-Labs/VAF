@@ -25,6 +25,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   VAF or you wrote it. Nothing changes for existing tools.
 
 ### Fixed
+- **A workflow could open a skill somebody kept private.** Skills have a visibility setting,
+  and in chat the agent respects it: a skill shared only with certain people stays closed to
+  everyone else. A workflow step, however, was never told who had started it, so it acted as
+  if an administrator were asking and could read any skill on the machine. Workflow steps now
+  carry the identity of the person who started them. This closes the case for workflows you
+  run from chat, for automations, and for a resumed workflow; saved workflows started from the
+  library are covered by a broader fix still in progress.
 - **The failover setting looked navy in dark mode.** Its slider track and the step markers
   now use the same neutral tone as the other controls.
 - **The agent could read files belonging to other people using the same VAF.** Writing was

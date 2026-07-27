@@ -835,6 +835,19 @@ class WorkflowEngine:
                             # model-authored step arg can never spoof the scope
                             # (mirrors the agent dispatcher, agent.py execute_tool).
                             a["user_scope_id"] = self.user_scope_id
+                        elif tool_name in ("use_skill", "read_skill"):
+                            # Skill visibility is a REAL gate (skills_registry.is_skill_visible_to_user),
+                            # and an ABSENT user_scope_id reads as "admin" there - so a workflow step
+                            # that carries no scope could open another tenant's private skill. Every
+                            # other gate in this list protects data; this one protected nothing because
+                            # the tool was simply never listed.
+                            # Partial by construction: three of the seven engine construction sites pass
+                            # no identity at all (execute_workflow among them), so those still resolve to
+                            # admin. That gap is not skill-specific and is closed where identity is
+                            # supplied, not here.
+                            a["user_scope_id"] = self.user_scope_id
+                            if tool_name == "read_skill":
+                                a["username"] = self.username
 
                 # Retry logic for context errors (like main agent)
                 max_retries = 3

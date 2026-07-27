@@ -109,11 +109,22 @@ class BaseTool(ABC):
     #   "username"      — the caller's account name
     #   "user_role"     — the caller's DB role, e.g. "admin"
     #
-    # This is the ONLY supported way for a tool to learn who is calling it, and it
+    # This is the only SUPPORTED way for a tool to learn who is calling it, and it
     # works the same for a tool you register yourself via Agent.add_tool() as for a
     # built-in one — the dispatcher reads this declaration, not a list of names it
     # knows. A tool that touches per-user data and does NOT declare gets nothing,
     # which is the safe direction.
+    #
+    # It is not the only way that EXISTS, and pretending otherwise would be a lie in
+    # the one place an embedder looks. A handful of built-ins are handed the live
+    # agent object as an `_agent` kwarg — chat-lane plumbing for things that need the
+    # running session, e.g. the timer tools reading the current source — and anything
+    # holding that object can read `_current_user_scope_id` and friends straight off
+    # it, declaration or not. That back door is deliberately NOT part of this
+    # contract: the dispatcher hands `_agent` to a fixed set of built-in names, there
+    # is no declaration for it, and a tool registered through Agent.add_tool() never
+    # receives it. Treat it as an internal detail that may disappear; build on
+    # identity_kwargs, which is the surface that is kept.
     #
     # The values are ASSIGNED, never defaulted: the arguments reaching a tool start
     # out as whatever the MODEL produced, so a prompt-injected user_role="admin"

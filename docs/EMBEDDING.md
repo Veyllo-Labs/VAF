@@ -460,6 +460,15 @@ Hard limits you must respect (they are architecture, not fine print):
   prompt-injected `user_role="admin"` is overwritten with the session's real role
   rather than honored. And a tool that declares nothing gets nothing - the safe
   direction, so forgetting the declaration cannot hand a tool an identity by accident.
+
+  One caveat, stated because you will see it if you read the built-ins. A handful of
+  them are also handed the live agent object as an `_agent` kwarg, and anything holding
+  that object can read the caller's scope, name and role straight off it - the timer
+  tools do exactly that. This is chat-lane plumbing for tools that need the running
+  session, **not** a second supported way to learn who is calling: the dispatcher hands
+  `_agent` to a fixed set of built-in NAMES, there is no declaration for it, and a tool
+  you register never receives it. Do not reach for it; it may disappear without a
+  major version. `identity_kwargs` is the surface that is kept.
 - Passing the local admin's scope id IS full admin (tools and files) - hand
   it out deliberately or never.
 

@@ -276,6 +276,24 @@ def test_a_model_supplied_identity_is_overwritten_not_honored():
     assert spy.seen.get("user_scope_id") == "deadbeef-0000-0000-0000-000000000000"
 
 
+def test_a_third_party_tool_never_receives_the_agent_back_door():
+    """`_agent` is a second, undeclared way to learn who is calling - anything holding the
+    live agent reads scope, name and role straight off it, and the timer tools do.
+
+    vaf/tools/base.py and docs/EMBEDDING.md now say plainly that this is chat-lane plumbing
+    handed to a fixed set of built-in NAMES, not a supported surface. That sentence is only
+    worth writing if it stays true, and the way it would stop being true is someone making
+    `_agent` conditional on something other than the name - a declaration, a capability flag,
+    a default. Then a registered tool could ask for the engine and walk around the whole
+    identity contract, which is the opposite of what identity_kwargs is for."""
+    spy = _SpyTool()
+    _dispatch(spy, {})
+    assert "_agent" not in spy.seen, (
+        "a tool the dispatcher has never heard of received the live agent object - that is "
+        "an identity back door, and EMBEDDING.md promises it does not exist"
+    )
+
+
 def test_a_tool_that_declares_nothing_receives_nothing():
     """The safe direction: not declaring means not getting, rather than getting by accident."""
     class _Quiet(_SpyTool):

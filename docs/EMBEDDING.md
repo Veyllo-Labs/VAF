@@ -449,8 +449,8 @@ Hard limits you must respect (they are architecture, not fine print):
           role = kwargs.get("user_role")          # never taken from the model
           # Declaring tells you WHO is calling. It does not confine anything by
           # itself - for file access, turn the answer into a boundary. Enter the
-          # jail INSIDE run(): tools are dispatched on a worker thread that a
-          # contextvar set outside would not reach.
+          # jail INSIDE run(): your tool can also be called directly, with no
+          # dispatcher to have set anything up for it.
           with user_jail(scope, role, mode="read"):
               return read_notes(kwargs.get("path"))
   ```
@@ -521,6 +521,67 @@ Key declarative rules the runtime enforces:
   built-ins `move_file`, `bash`, `run_command`, `python_exec`).
 - `side_effect_class` — surfaced to the model so it knows what is reversible.
 - `admin_only`, `channel_restrictions`, `coder_only` — visibility/scoping.
+
+---
+
+## Running a tool yourself: `ToolCaller`
+
+Sometimes you want a tool run, not a conversation: a job queue, a scheduled
+task, your own agent loop with a different planner. Reaching into the engine for
+that would mean rebuilding the parts that make a tool call safe, and rebuilding
+them is how they come to disagree.
+
+`ToolCaller` is that path, and it is **the same object the agent's own dispatch
+uses** - there is no separate implementation for embedders:
+
+```python
+from vaf import BaseTool, ToolCaller
+
+caller = ToolCaller(
+    {"tenant_notes": TenantNotes()},        # your registry: {name: instance}
+    user_scope_id="6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    username="alice",
+    user_role="user",
+)
+print(caller.execute("tenant_notes", {"path": "todo.md"}))
+```
+
+What one `execute()` does, in order: evaluate policy (`admin_only`,
+`channel_restrictions`), consult the confirmation gate, emit `tool_start`,
+validate and repair the arguments against the tool's schema, assign the declared
+identity, run the tool under a timeout with stop polling, emit `tool_end`, and
+truncate. Same order, same rules, same event schema as a chat turn - the
+ordering is pinned by a measurement, not by convention.
+
+It never raises for a tool failure and never blocks on a human. Everything comes
+back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`
+for a schema failure or an exception inside the tool, and the
+`vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
+ask. A hard block emits **no events at all**, so an observer never sees a
+blocked tool reported as having run.
+
+The supported arguments:
+
+| Argument | What it is for |
+|---|---|
+| `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
+| `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`; leave them out if you have no messaging channels. |
+| `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. Left out, gated tools are refused rather than run. |
+| `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
+| `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |
+| `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
+| `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
+| `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.set_event_sink`, documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
+
+Two limits, stated plainly:
+
+- **It is a dispatcher, not an agent.** No model, no history, no planning, and
+  none of the chat-turn machinery (plan gate, session workspace, router
+  bookkeeping). If you want those, you want `Agent`.
+- **The constructor takes further arguments that are not part of this
+  contract.** They exist for VAF's own lanes and may change without a major
+  version; the table above is what is kept.
 
 ---
 
@@ -611,7 +672,15 @@ Stable public surface (safe to build on):
 - `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
-- `BaseTool` - the tool contract.
+- `BaseTool` - the tool contract, including the `identity_kwargs` declaration.
+- `vaf.user_jail` - turning a declared identity into a file boundary.
+- `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
+  and bounds, without an agent. Its **documented arguments** (the table under
+  "Running a tool yourself") and `execute(name, args) -> str` are the promise;
+  the constructor's remaining parameters exist for VAF's internal lanes and are
+  not.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
+`vaf.ToolCaller` is the one deliberate exception: it lives in `vaf.core` but is
+re-exported on the façade, and the façade name is the one to import.

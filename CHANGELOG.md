@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **You can now run a single tool without starting a conversation.** Building something on
+  VAF that just needs a tool done - a scheduled job, a queue worker, your own agent loop -
+  meant either wrapping a whole chat agent around it or rebuilding the safety checks by
+  hand, and rebuilt checks drift apart from the real ones. `ToolCaller` is now part of the
+  public interface, and it is the exact same one the agent itself uses: the same permission
+  rules, the same confirmation question, the same identity handling, the same time limits.
+  Documented in the embedding guide.
+
 ### Changed
 - **Workflows carrying an identity now pass it to far more tools.** The setting introduced
   in 0.1.0a19 only reached a fixed list of tools; set to `declared` it now asks each tool

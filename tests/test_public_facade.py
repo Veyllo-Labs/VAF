@@ -26,7 +26,7 @@ def test_facade_exports_exactly_the_documented_surface():
     (tests/test_slim_base_import.py)."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BaseTool", "CoreAgent", "__version__", "markers", "user_jail",
+        "Agent", "BaseTool", "CoreAgent", "ToolCaller", "__version__", "markers", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
 
@@ -37,6 +37,52 @@ def test_the_newly_public_names_actually_resolve():
     assert callable(vaf.user_jail)
     # The declaration field a third-party tool is told to set must exist on the base class.
     assert isinstance(vaf.BaseTool.identity_kwargs, tuple)
+    assert vaf.ToolCaller.__name__ == "ToolCaller"
+    assert callable(vaf.ToolCaller.execute)
+
+
+def test_tool_caller_keeps_the_arguments_embedding_md_documents():
+    """The constructor takes more than this, and EMBEDDING.md says so - the rest exists for
+    VAF's own lanes and may move. What is listed in that table is a promise, so it is spelled
+    out here: removing or renaming one of these is a breaking change, and renaming a private
+    one is not."""
+    params = inspect.signature(vaf.ToolCaller.__init__).parameters
+    documented = {
+        "tools": inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        "user_scope_id": inspect.Parameter.KEYWORD_ONLY,
+        "username": inspect.Parameter.KEYWORD_ONLY,
+        "user_role": inspect.Parameter.KEYWORD_ONLY,
+        "source": inspect.Parameter.KEYWORD_ONLY,
+        "session_id": inspect.Parameter.KEYWORD_ONLY,
+        "interactive": inspect.Parameter.KEYWORD_ONLY,
+        "decide": inspect.Parameter.KEYWORD_ONLY,
+        "trust_dir": inspect.Parameter.KEYWORD_ONLY,
+        "timeout_for": inspect.Parameter.KEYWORD_ONLY,
+        "stop_check": inspect.Parameter.KEYWORD_ONLY,
+        "max_result_chars": inspect.Parameter.KEYWORD_ONLY,
+        "on_event": inspect.Parameter.KEYWORD_ONLY,
+    }
+    for name, kind in documented.items():
+        assert name in params, f"ToolCaller lost the documented argument {name!r}"
+        assert params[name].kind is kind, f"{name} changed how it may be passed"
+
+    # Defaults that the documentation states outright.
+    assert params["max_result_chars"].default == 2000
+    assert params["interactive"].default is False
+
+
+def test_a_documented_tool_caller_run_needs_nothing_but_a_registry():
+    """The claim EMBEDDING.md opens with: no Agent, no session, no chat turn."""
+    class _Echo(vaf.BaseTool):
+        name = "facade_echo"
+        description = "echo"
+        permission_level = "read"
+        parameters = {"type": "object", "properties": {}}
+
+        def run(self, **kwargs):
+            return "echoed"
+
+    assert vaf.ToolCaller({"facade_echo": _Echo()}).execute("facade_echo", {}) == "echoed"
 
 
 def test_agent_constructor_signature_is_stable():

@@ -112,8 +112,11 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
 
     Every jailed tool needs the same four steps (resolve, skip for an admin, set the
     contextvar, reset it in a finally) and each hand-written copy is a chance to forget
-    the finally. It must be entered INSIDE the tool: execute_tool dispatches through a
-    bounded-run worker thread, and a contextvar set in the dispatcher would not reach it.
+    the finally. It must be entered INSIDE the tool, and the reason is NOT that the
+    dispatcher cannot reach it - the bounded run copies the caller's context into the worker
+    thread on purpose, so a contextvar set outside does arrive (vaf/core/bounded_run.py).
+    The reason is that the dispatcher is not always there: the coder, the workflow engine
+    and automations call these tools directly, so run() is the only place that always runs.
 
     A falsy scope means a direct consumer (coder, workflow engine, automations) - no jail,
     exactly as before this existed."""
@@ -362,8 +365,8 @@ class ListFilesTool(BaseTool):
     def run(self, **kwargs) -> str:
         # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
         # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
-        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # entered HERE because a dispatcher is not always in the picture - the coder, the
+        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
         # user: use_skill hands out their absolute paths and asks for read_file.
         with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
                        mode="read"):
@@ -450,8 +453,8 @@ class FolderSizeTool(BaseTool):
     def run(self, **kwargs) -> str:
         # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
         # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
-        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # entered HERE because a dispatcher is not always in the picture - the coder, the
+        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
         # user: use_skill hands out their absolute paths and asks for read_file.
         with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
                        mode="read"):
@@ -567,8 +570,8 @@ For detailed analysis of large files, consider using librarian_agent instead."""
     def run(self, **kwargs) -> str:
         # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
         # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
-        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # entered HERE because a dispatcher is not always in the picture - the coder, the
+        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
         # user: use_skill hands out their absolute paths and asks for read_file.
         with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
                        mode="read"):
@@ -798,9 +801,9 @@ class WriteFileTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         # Main-agent calls (identified by the injected kwargs from execute_tool) apply
-        # the per-user filesystem jail for non-admin users. It MUST be set here in the
-        # tool's own thread: execute_tool dispatches through a bounded-run worker
-        # thread and contextvars set in the dispatcher would not propagate into it.
+        # the per-user filesystem jail for non-admin users. It MUST be set here, in the
+        # tool itself, because a dispatcher is not always in the picture - the direct
+        # consumers below call run() with no dispatcher to have set anything.
         # Direct consumers (coder, workflow engine, librarian) pass no user_scope_id
         # and run the body unchanged.
         _jail_token = None
@@ -1194,8 +1197,8 @@ class EditFileTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         # Same contract as WriteFileTool.run: execute_tool injects the caller's scope and
-        # role, and the jail is installed HERE, in the tool's own thread, because the
-        # bounded-run dispatcher would not propagate a contextvar set outside it.
+        # role, and the jail is installed HERE, in the tool itself, because a dispatcher is
+        # not always in the picture - direct consumers call run() without one.
         #
         # It must wrap the WHOLE body, not just the write. edit_file reads the target to
         # compute the edit, and its miss path answers with a slice of the file ("nearest
@@ -1364,8 +1367,8 @@ class TreeTool(BaseTool):
     def run(self, **kwargs) -> str:
         # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
         # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
-        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # entered HERE because a dispatcher is not always in the picture - the coder, the
+        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
         # user: use_skill hands out their absolute paths and asks for read_file.
         with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
                        mode="read"):
@@ -1425,8 +1428,8 @@ class FinderTool(BaseTool):
     def run(self, **kwargs) -> str:
         # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
         # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because the dispatcher runs tools in a worker thread a contextvar set
-        # outside would not reach. Read mode also allows the folders of skills visible to this
+        # entered HERE because a dispatcher is not always in the picture - the coder, the
+        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
         # user: use_skill hands out their absolute paths and asks for read_file.
         with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
                        mode="read"):

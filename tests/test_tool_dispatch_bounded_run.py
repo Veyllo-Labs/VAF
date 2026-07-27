@@ -156,3 +156,44 @@ def test_the_stop_predicate_fails_safe_when_the_queue_is_unreachable(monkeypatch
 
     monkeypatch.setattr(tq, "TaskQueue", _Boom)
     assert session_stop_check("some-session")() is False
+
+
+# ── what actually crosses into the worker thread ─────────────────────────────
+
+def test_the_callers_context_reaches_the_worker_thread():
+    """A contextvar set before the call IS visible inside the tool.
+
+    Eleven places in the tree used to justify themselves with the opposite claim - that a
+    contextvar set in the dispatcher "would not reach" the tool, because tools run on a
+    worker thread. A bare `threading.Thread` would indeed start with a fresh context, but
+    `run_bounded` copies the caller's context on purpose (`vaf/core/bounded_run.py`), and it
+    does so for a reason worth keeping: an ABANDONED worker (freed on timeout but still
+    running) then keeps its OWN session, so its late writes are tagged with the session that
+    started it rather than whatever a later turn set process-globally.
+
+    The practice those comments describe - install the file jail inside `run()` - stays
+    correct; only the stated reason was wrong. The real reason is that a dispatcher is not
+    always in the picture: the coder, the workflow engine and automations call tools
+    directly. This test pins the fact so the false justification cannot come back, and so
+    that anything relying on identity crossing into the worker keeps working.
+    """
+    import contextvars
+
+    probe = contextvars.ContextVar("dispatch_probe", default="<did not cross>")
+    probe.set("set by the caller")
+    tool = _Tool(lambda **kw: probe.get())
+    assert run_tool_bounded(tool, {}, tool_name="probe") == "set by the caller"
+
+
+def test_the_worker_cannot_leak_its_context_back():
+    """The copy is one-way: a tool that sets a contextvar must not change the caller's."""
+    import contextvars
+
+    probe = contextvars.ContextVar("dispatch_probe_back", default="caller value")
+
+    def _mutate(**kw):
+        probe.set("worker value")
+        return "done"
+
+    run_tool_bounded(_Tool(_mutate), {}, tool_name="probe")
+    assert probe.get() == "caller value"

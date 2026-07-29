@@ -130,6 +130,8 @@ The `web_search` tool can use optional search APIs when keys are set. This avoid
 
 The final fallback consults VAF's own long-term memory when every web provider fails (rate limit, missing keys, network down) or genuinely finds nothing — useful for internal topics the web cannot know. Memory hits are labeled honestly: `memory://` hrefs, titles prefixed "Internes Wissen" with the relevance score, `source: internal_knowledge`. Provider failures are also collected (`get_search_provider_errors()` in `vaf/tools/search.py`) so callers like the research agent can report "search unavailable" instead of pretending there were no results.
 
+**Whose memory the fallback reads is the caller's.** `web_search` declares `user_scope_id` in its `identity_kwargs`, so the dispatcher assigns the calling user's scope and it travels down the chain as an argument. The tool does not resolve an identity of its own. It used to: the scope came from `os.environ["VAF_SESSION_ID"]` through that session's metadata, and that variable is process-global - with `parallel_main_workers` above one it could name another user's session at the moment of the fallback, and one person's web search would then answer with another person's memories. Note the shape: a MISSING scope was already safe (`run_memory_search_sync` refuses outright in server mode), so what leaked was a scope that was present, real and wrong. Direct callers that pass no scope get the same refusal as before.
+
 **Where to set:** Web UI → Settings → General → "Web Search (API)", or in `~/.vaf/config.json`:
 
 | Key | Description |

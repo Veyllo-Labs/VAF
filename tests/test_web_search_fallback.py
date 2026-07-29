@@ -35,7 +35,7 @@ def test_rag_fallback_does_not_defeat_the_unfiltered_retry(monkeypatch, tmp_path
     _intent(monkeypatch)
     seen = []
 
-    def scripted(q, n):
+    def scripted(q, n, **kw):
         seen.append(q)
         # Filtered pass: zero web hits, RAG fallback kicks in.
         # Plain pass: the real web answers.
@@ -53,7 +53,7 @@ def test_rag_results_kept_when_plain_query_also_finds_nothing(monkeypatch, tmp_p
     monkeypatch.setattr(Config, "APP_DIR", tmp_path)
     _intent(monkeypatch)
 
-    def scripted(q, n):
+    def scripted(q, n, **kw):
         return RAG if "site:" in q else EMPTY
 
     monkeypatch.setattr(search, "get_web_search_results", scripted)
@@ -64,7 +64,7 @@ def test_rag_results_kept_when_plain_query_also_finds_nothing(monkeypatch, tmp_p
 def test_rag_banner_says_no_results_without_provider_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "APP_DIR", tmp_path)
     _intent(monkeypatch)
-    monkeypatch.setattr(search, "get_web_search_results", lambda q, n: RAG)
+    monkeypatch.setattr(search, "get_web_search_results", lambda q, n, **kw: RAG)
 
     out = WebSearchTool().run(query="wetter morgen honesttest", deep=False)
     assert "NO results" in out
@@ -75,7 +75,7 @@ def test_rag_banner_claims_outage_only_on_recorded_provider_errors(monkeypatch, 
     monkeypatch.setattr(Config, "APP_DIR", tmp_path)
     _intent(monkeypatch)
 
-    def scripted(q, n):
+    def scripted(q, n, **kw):
         # A genuine outage records provider errors (run() resets them first).
         search._note_provider_error("DuckDuckGo failed after 3 attempts (HTTP timeout)")
         return RAG

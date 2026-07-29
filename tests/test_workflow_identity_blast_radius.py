@@ -135,6 +135,7 @@ NEWLY_IDENTIFIED = {
     "update_automation": ('user_role', 'user_scope_id'),
     "update_intent": ('user_scope_id',),
     "update_skill": ('user_scope_id', 'username'),
+    "web_search": ('user_scope_id',),
     "update_working_memory": ('user_scope_id',),
     "write_file": ('user_role', 'user_scope_id'),
 }

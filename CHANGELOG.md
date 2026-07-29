@@ -33,6 +33,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rules, the same confirmation question, the same identity handling, the same time limits.
   Documented in the embedding guide.
 
+### Fixed
+- **A failed web search could answer with someone else's memories.** When every web provider
+  is unavailable, VAF falls back to your own long-term memory - but on a server running
+  several conversations at once, it picked whose memory to read from a process-wide value
+  that any of them could have overwritten a moment earlier. The answer could therefore come
+  from another person's memories. The tool is now told who is asking, the same way every
+  other per-user tool already was. Single-user installations were never affected, and a
+  request with no user attached was already refused rather than answered broadly.
+
 ### Changed
 - **A workflow now runs as the person who started it, by default.** Until this release a
   saved workflow always acted as the machine owner, whoever ran it: its files went to the

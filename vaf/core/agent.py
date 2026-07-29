@@ -10827,7 +10827,8 @@ class Agent:
     def perform_web_search(self, query):
         try:
             # Same priority as WebSearchTool: Brave API -> Google CSE -> scrape Google -> DuckDuckGo
-            results, search_source, _ = get_web_search_results(query, 5)
+            results, search_source, _ = get_web_search_results(
+                query, 5, user_scope_id=getattr(self, "_current_user_scope_id", None))
             if not results:
                 return "No results found."
             summary = f"### Web Search Results (Deep Research – {search_source})\n"

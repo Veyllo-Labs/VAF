@@ -248,8 +248,12 @@ def get_search_provider_errors() -> list:
         return list(_PROVIDER_ERRORS)
 
 
-def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str | None]:
-    """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint)."""
+def get_web_search_results(query: str, max_results: int, *,
+                           user_scope_id: str | None = None) -> tuple[list, str, str | None]:
+    """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint).
+
+    ``user_scope_id`` is only consulted by the last-resort memory fallback, and only the
+    caller can know it - see ``_search_internal_knowledge``."""
     fallback_hint = None
 
     # 1) Brave API
@@ -286,31 +290,36 @@ def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str
     # 5) Last resort: VAF's own long-term memory (RAG). When every web provider
     # fails (rate limit, no API keys, network down) — or the topic is internal
     # and the web genuinely knows nothing — the knowledge base often does.
-    internal = _search_internal_knowledge(query, max_results)
+    internal = _search_internal_knowledge(query, max_results, user_scope_id=user_scope_id)
     if internal:
         UI.event("Web Search", f"Falling back to internal knowledge: {len(internal)} snippet(s)", style="dim")
         return (internal, "Internal Knowledge (RAG)", "Websuche nicht verfügbar — Treffer stammen aus dem internen Langzeitgedächtnis.")
     return (results, "DuckDuckGo", fallback_hint)
 
 
-def _search_internal_knowledge(query: str, max_results: int) -> list:
+def _search_internal_knowledge(query: str, max_results: int, *,
+                              user_scope_id: str | None = None) -> list:
     """Search VAF's long-term memory (RAG) and shape hits like web results.
 
     Results carry memory:// hrefs and an internal_knowledge marker so reports
     and the UI can label them honestly as memory, not web sources.
+
+    WHOSE memory is asked comes from the CALLER, handed down as an argument. It used to be
+    resolved here, from ``os.environ["VAF_SESSION_ID"]`` through that session's metadata -
+    and that variable is process-global, rewritten by every tool call of every worker. With
+    more than one main worker (``parallel_main_workers``), the session it named at this
+    moment could belong to someone else, and this fallback would then answer one user's web
+    search with another user's memories. Not a missing scope, which already fails closed in
+    server mode, but a real and wrong one.
     """
     try:
         scope = None
-        try:
-            from vaf.core.session import get_manager
-            sid = os.environ.get("VAF_SESSION_ID", "").strip()
-            if sid:
-                uid = (get_manager().load(sid).metadata or {}).get("user_scope_id")
-                if uid:
-                    from uuid import UUID
-                    scope = UUID(str(uid))
-        except Exception:
-            scope = None
+        if user_scope_id:
+            try:
+                from uuid import UUID
+                scope = UUID(str(user_scope_id))
+            except (ValueError, AttributeError, TypeError):
+                scope = None   # unparseable is no scope, never someone else's
 
         from vaf.memory.rag import run_memory_search_sync
         raw = run_memory_search_sync(
@@ -342,6 +351,10 @@ def _search_internal_knowledge(query: str, max_results: int) -> list:
 
 class WebSearchTool(BaseTool):
     name = "web_search"
+    # WHOSE memory the last-resort RAG fallback may read. Declared rather than resolved
+    # inside the tool: it used to come from a process-global env var, which with several
+    # main workers could name another user's session (see _search_internal_knowledge).
+    identity_kwargs = ("user_scope_id",)
     permission_level = "read"
     side_effect_class = "none"
     description = """Search the web for information. Automatically fetches full page content for accurate data extraction.
@@ -489,7 +502,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
             # 1) Search: Brave API -> Google CSE API -> scrape Google -> DuckDuckGo
             reset_search_provider_errors()
-            results, search_source, fallback_hint = get_web_search_results(query_with_filter, max_results)
+            results, search_source, fallback_hint = get_web_search_results(
+                query_with_filter, max_results, user_scope_id=kwargs.get('user_scope_id'))
             # If the filtered query found no real web results, retry without
             # the filter. A site: filter can legitimately have zero hits (live
             # incident: a weather query against a trusted-sources list without
@@ -502,7 +516,8 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                     not results or search_source == "Internal Knowledge (RAG)"):
                 UI.event("Smart Search", "No web results with source filter - retrying without filter", style="dim")
                 _filtered_pass = (results, search_source, fallback_hint)
-                results, search_source, fallback_hint = get_web_search_results(query, max_results)
+                results, search_source, fallback_hint = get_web_search_results(
+                    query, max_results, user_scope_id=kwargs.get('user_scope_id'))
                 if not results:
                     results, search_source, fallback_hint = _filtered_pass
             

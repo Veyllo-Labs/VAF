@@ -41,7 +41,7 @@ def test_identical_query_served_from_cache(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     calls = {"n": 0}
 
-    def fake_search(q, n):
+    def fake_search(q, n, **kw):
         calls["n"] += 1
         return ([{"title": "T", "href": "https://x", "body": "snippet"}], "DuckDuckGo", "")
 
@@ -60,7 +60,7 @@ def test_return_raw_bypasses_cache(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     calls = {"n": 0}
 
-    def fake_search(q, n):
+    def fake_search(q, n, **kw):
         calls["n"] += 1
         return ([{"title": "T", "href": "https://x", "body": "b"}], "DuckDuckGo", "")
 
@@ -77,7 +77,7 @@ def test_rag_fallback_not_cached(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     calls = {"n": 0}
 
-    def fake_search(q, n):
+    def fake_search(q, n, **kw):
         calls["n"] += 1
         return ([{"title": "T", "href": "", "body": "knowledge"}], "Internal Knowledge (RAG)", "")
 

@@ -179,7 +179,7 @@ KWARGS_BASELINE = {
     "update_user_identity":      ("chat", ["username"]),
     "update_working_memory":     ("chat", ["user_scope_id"]),
     "use_skill":                 ("chat", ["user_scope_id"]),
-    "web_search":                ("chat", []),
+    "web_search":                ("chat", ["user_scope_id"]),
     "webfetch":                  ("chat", []),
     "whatsapp_call":             ("chat", ["user_scope_id", "username"]),
     "whatsapp_inbox":            ("chat", ["user_scope_id", "username"]),

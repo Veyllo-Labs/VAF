@@ -48,7 +48,7 @@ def test_internal_results_get_unmistakable_header(monkeypatch):
     # scream "NOT WEB RESULTS" and instruct the agent to say so.
     monkeypatch.setattr(
         search_mod, "get_web_search_results",
-        lambda q, m: (
+        lambda q, m, **kw: (
             [{"title": "Internes Wissen: VAF Framework", "href": "memory://internal/1", "body": "snippet"}],
             "Internal Knowledge (RAG)",
             "hint",

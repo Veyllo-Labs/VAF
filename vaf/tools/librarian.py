@@ -342,7 +342,11 @@ You have access to this filesystem map for fast navigation:
             self._read_hint_for_llm = None
 
         # LLM path has its own animation
-        _res = self._execute_with_llm(task)
+        _res = self._execute_with_llm(
+            task,
+            user_scope_id=kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID"),
+            user_role=kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE"),
+        )
         self._emit_librarian_state(task, stage="done", result=_res)
         return _res
     
@@ -2224,9 +2228,61 @@ Remove duplicates and ensure smooth flow.
     # LLM EXECUTION (Slow Path - for complex queries)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _execute_with_llm(self, task: str) -> str:
+    def _execute_with_llm(self, task: str, *, user_scope_id: str | None = None,
+                          user_role: str | None = None) -> str:
         """Execute complex task using LLM reasoning."""
-        
+        # The librarian drives its own model loop, so it USED to call tools directly - which
+        # made its thirteen sub-tools the one place in VAF where a tool ran with no policy
+        # check, no declared identity and no bound. They go through the shared pipeline now,
+        # and the three ways this caller legitimately differs travel as ARGUMENTS:
+        #
+        #   max_result_chars=None  its results are directory listings and file contents the
+        #                          inner model reads in full; a 2000-char cut would silently
+        #                          truncate the answer it reasons about.
+        #   gate_enabled=False     there is no seam from this loop to the person who started
+        #                          it - the librarian is handed an identity but no way to ask.
+        #                          Routing through the pipeline is what makes that ONE
+        #                          ARGUMENT rather than a missing capability: wiring a
+        #                          `decide` through later is a change here, not a rebuild.
+        #   identity               assigned from the caller, per tool declaration. Passed in
+        #                          rather than stored on self: the tool instance is shared
+        #                          process-wide, so per-call identity on it would be a
+        #                          cross-user leak the moment a second worker exists.
+        #
+        # Six of the thirteen carry both jail keys, and the read ones now install their own
+        # read-mode jail instead of inheriting the librarian's write-mode one. Read mode
+        # reaches further by exactly the folders of the skills visible to this user - pinned
+        # by tests/test_librarian_shared_dispatch.py, which forces a visible skill to measure
+        # it, because a scope with no visible skills shows a delta of zero and would let a
+        # reader conclude the opposite. Convergence, not escalation: the same user already
+        # reaches those folders through the chat lane, where seeing a shared skill has
+        # deliberately never implied being able to overwrite it. Writing does not widen.
+        #
+        # session_id comes from the contextvar. `source` is NOT passed: it is only reachable
+        # off the injected `_agent`, the identity back door this round deliberately closed.
+        # Be precise about what that buys, because the obvious reading is too generous -
+        # `evaluate_tool_policy` intersects a tool's restrictions with `{"channel"} | {source}`,
+        # so WITHOUT a source only the generic `"channel"` sentinel can fire. A named
+        # restriction like `("telegram",)` does NOT block here, and anyone adding one to a
+        # librarian tool would be wrong to assume it applies. Measured, both directions, in
+        # tests/test_librarian_shared_dispatch.py.
+        #
+        # Today that decides nothing either way: none of the thirteen carries any
+        # channel_restrictions, and the only two tools in the tree with the generic sentinel
+        # (host_bash, python_exec) are not among them. So the stage is correctly wired and
+        # currently idle - which is worth writing down, because "wired" and "effective" are
+        # different claims and only the first one is true here.
+        from vaf.core.subagent_ipc import get_current_session_id
+        from vaf.core.tool_dispatch import ToolCaller
+        caller = ToolCaller(
+            self.tools,
+            user_scope_id=user_scope_id,
+            user_role=user_role,
+            session_id=get_current_session_id(),
+            max_result_chars=None,
+            gate_enabled=False,
+        )
+
         # Show animation (or static)
         # Disable animation by default for stability (matches Coder/Research agent)
         from vaf.cli.tui import _StaticHeader
@@ -2628,13 +2684,7 @@ home: {self.home}
                     icon = tool_icons.get(fn_name, "Calling")
                     UI.event("Librarian", f"{icon}: {fn_name}", style="bold green")
                     
-                    if fn_name in self.tools:
-                        try:
-                            result = self.tools[fn_name].run(**fn_args)
-                        except Exception as e:
-                            result = f"Error: {e}"
-                    else:
-                        result = f"Unknown tool: {fn_name}"
+                    result = caller.execute(fn_name, fn_args)
                     
                     history.append({
                         "role": "tool",

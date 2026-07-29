@@ -34,6 +34,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The file assistant's own tools now follow the same rules as everything else.** When you
+  ask VAF to work with your files, it hands the job to an assistant that runs its own small
+  agent - and that assistant called its thirteen tools directly, bypassing the checks every
+  other tool call goes through. In particular it did not tell them who was asking, so on a
+  multi-user machine their per-user file boundary could not form properly. It does now.
 - **A failed web search could answer with someone else's memories.** When every web provider
   is unavailable, VAF falls back to your own long-term memory - but on a server running
   several conversations at once, it picked whose memory to read from a process-wide value

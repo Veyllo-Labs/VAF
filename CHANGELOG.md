@@ -34,6 +34,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Opening a protected file in the document panel no longer showed its contents.** The
+  viewer read every file twice: once through the checked reader, and once raw to send the
+  original bytes to the browser. Only the first read was checked, and its refusal was not
+  acted on, so a file VAF protects for everyone - SSH keys, `.env` files, VAF's own settings
+  and credential store - was refused in the text pane while the panel received the real file,
+  and the tool reported it as opened. It is now one decision, taken before anything is read,
+  and it covers both the protected locations and each user's own boundary.
+  Its sibling, the document editor, now also reports honestly: it says it asked the
+  interface to open a file, because whether the file is actually served is decided
+  elsewhere and can still be refused. Claiming success for something that cannot
+  happen is the same problem one level up.
 - **The file assistant's own tools now follow the same rules as everything else.** When you
   ask VAF to work with your files, it hands the job to an assistant that runs its own small
   agent - and that assistant called its thirteen tools directly, bypassing the checks every

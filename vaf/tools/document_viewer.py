@@ -64,10 +64,52 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
             return "Error: path is required."
 
         path = _path_from_string(path_str)
-        if not path.exists():
-            return f"Error: File not found: {path}"
-        if not path.is_file():
-            return f"Error: Not a file: {path}"
+
+        # The access decision, ONCE, before anything is read or even probed.
+        #
+        # It used to be made twice and honoured neither time. `LibrarianTool._read_file`
+        # checks and returns "[ERROR] ..." as a STRING, so a refusal was never a control-flow
+        # event - execution carried on and opened the same path raw a few lines below, putting
+        # the bytes into `new_doc["data"]` and from there into the session and the Web UI. For
+        # a blocked file the panel therefore showed the refusal in `content` while `data`
+        # carried the real thing. That defeated the STATIC blocks too (`.ssh`, `.env`,
+        # `id_rsa`, `~/.vaf`), so it applied to the machine owner and not only to tenants.
+        #
+        # `is_safe_path` is the single authority: it answers the static blocks AND the
+        # per-user jail (`_librarian_jail_ok`), so entering the jail here and asking once
+        # covers both. Its RESOLVED path is what everything below uses, the same way
+        # `_read_file` does - checking one string and reading another is the other half of
+        # how this class of bug happens.
+        #
+        # Read mode, and no `user_role`: this tool declares only `user_scope_id`, so a second
+        # administrator is jailed to their own tree here. That is restrictive, never
+        # permissive, and widening access is not something to bundle into a fix for a leak.
+        from vaf.tools.filesystem import is_safe_path, user_jail
+
+        with user_jail(kwargs.get("user_scope_id"), kwargs.get("user_role"), mode="read"):
+            safe, resolved = is_safe_path(str(path))
+            if not safe:
+                return f"[ERROR] {resolved}"
+            path = Path(resolved)
+
+            # Existence is probed only AFTER the path is allowed: answering "not found" for a
+            # blocked path still tells the caller whether it exists.
+            if not path.exists():
+                return f"Error: File not found: {path}"
+            if not path.is_file():
+                return f"Error: Not a file: {path}"
+
+            return self._open_in_viewer(path, user_scope_id=kwargs.get("user_scope_id"))
+
+    def _open_in_viewer(self, path: Path, *, user_scope_id: str | None = None) -> str:
+        """Everything after the access decision. Split out so the guard above cannot be
+        stepped past by a later edit that adds a branch.
+
+        The scope travels as a PARAMETER. Reading it from a `kwargs` that no longer exists
+        in this scope was the mistake the split introduced, and the call below sits inside
+        an `except Exception: pass` - so the NameError would have been swallowed and
+        attachment indexing would have stopped SILENTLY instead of failing. Ruff's
+        undefined-name gate caught it; no test did."""
 
         try:
             from vaf.core.subagent_ipc import get_current_session_id
@@ -128,7 +170,7 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
                 from vaf.memory.attachment_rag import index_session_attachments_sync
                 index_session_attachments_sync(
                     session_id=session_id,
-                    user_scope_id=kwargs.get("user_scope_id"),
+                    user_scope_id=user_scope_id,
                     documents=sidebar,
                 )
             except Exception:
@@ -172,6 +214,18 @@ Pass the full file path. The document opens in the right-hand Document Editor (s
         "required": ["path"],
     }
 
+    # NO access check here, and that is deliberate rather than an oversight. This tool
+    # never reads the file - it hands a path to the Web UI, which fetches it through
+    # `GET /api/file`, and THAT is where the decision is made: four allowed roots
+    # (documents, downloads, the data dir, the VAF output dir) with a 403 otherwise, plus a
+    # `VAF_Projects/<uid8>` ownership check on top. Adding a second answer here is exactly
+    # what was just removed from the viewer next door, where two checks and one honoured
+    # refusal was the bug.
+    #
+    # What that means for anyone editing the endpoint: this tool's safety lives in
+    # `vaf/core/web_server.py`, in a file nobody would connect to it. Widening that
+    # allowlist - `Platform.home()` above all - turns this from harmless into a leak.
+    # Pinned by tests/test_api_file_allowed_roots.py, which exists for that reason.
     def run(self, **kwargs) -> str:
         path_str = kwargs.get("path") or ""
         if not path_str or not path_str.strip():
@@ -198,7 +252,11 @@ Pass the full file path. The document opens in the right-hand Document Editor (s
         except Exception as e:
             return f"Error: Could not open document in Web UI: {e}"
 
-        return f"Document \"{path.name}\" has been opened in the Document Editor. The user can view and edit it in the right panel."
+        # Reports what this tool DID, not what came of it. The fetch can still be
+        # refused by /api/file, and claiming success for something that cannot happen
+        # is a false statement in the model's context - the same shape as a cosmetic
+        # refusal, one level up, in the conversation instead of the filesystem.
+        return f'Asked the Web UI to open "{path.name}" in the Document Editor.'
 
 
 class ReplaceEditorSelectionTool(BaseTool):

@@ -34,6 +34,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Asking VAF to learn a document can no longer pull in files it protects.** This tool
+  carried its own idea of which files were readable, and it was wider than the one every
+  other file tool uses: anything in your home folder, including SSH keys, `.env` files and
+  VAF's own settings and credential store. Learning is also the worst place for that to go
+  wrong, because it keeps what it reads: the contents are summarised into long-term memory
+  and stay searchable long after the conversation ends. The tool's private rule is gone and
+  the shared one decides, which on a multi-user machine also applies the per-user boundary it
+  previously skipped. Together with the document panel fix below, a protected file is now
+  refused whether you ask to view it or to learn it.
 - **Opening a protected file in the document panel no longer showed its contents.** The
   viewer read every file twice: once through the checked reader, and once raw to send the
   original bytes to the browser. Only the first read was checked, and its refusal was not

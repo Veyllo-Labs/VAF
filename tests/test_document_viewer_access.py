@@ -171,6 +171,47 @@ def test_the_raw_read_happens_after_the_decision():
     assert "_open_in_viewer" in src
 
 
+def test_the_downstream_re_ask_runs_under_the_same_jail(tmp_path, monkeypatch, session):
+    """Why the `with` block here wraps the whole body, unlike the one in `learn_document`.
+
+    `_open_in_viewer` does not simply read the allowed path - it goes through
+    `LibrarianTool._read_file`, which asks `is_safe_path` AGAIN. Two askers, one path: if the
+    jail were only installed for the first, the second would answer without it, which is the
+    permissive direction. Holding it across the body is what keeps them in agreement.
+
+    `learn_document` is narrow for the opposite, equally measured reason: nothing downstream
+    re-asks there, and its ingestion runs in a separate thread the contextvar cannot reach.
+    """
+    from vaf.tools.filesystem import _librarian_scope_ctx, compute_user_jail
+    from vaf.tools.librarian import LibrarianTool
+
+    home = tmp_path / "home"
+    # Inside this scope's OWN tree: a path outside it is refused by the guard, and then the
+    # downstream reader is never reached - which would make this test silently measure nothing.
+    uid8 = compute_user_jail(SCOPE, "user")["uid8"]
+    doc = home / "Documents" / "VAF_Projects" / uid8 / "readable.txt"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("content")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: home))
+
+    seen = []
+    original = LibrarianTool._read_file
+
+    def _record(self, path, **kw):
+        seen.append(_librarian_scope_ctx.get(None))
+        return original(self, path, **kw)
+
+    monkeypatch.setattr(LibrarianTool, "_read_file", _record)
+    _open(doc, session, user_scope_id=SCOPE)
+
+    assert seen, "the downstream reader was never reached"
+    assert seen[0], (
+        "LibrarianTool._read_file re-asks is_safe_path, and it ran with no jail installed - so "
+        "it answers a different question than the guard that let the path through"
+    )
+
+
 def test_the_decision_is_asked_inside_the_jail():
     """`is_safe_path` answers the static blocks AND the per-user jail, but only if the jail
     is installed when it is asked - the jail is a contextvar, not an argument."""

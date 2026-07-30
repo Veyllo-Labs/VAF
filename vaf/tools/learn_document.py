@@ -8,7 +8,6 @@ produces a contextual summary (used as the memory title / embedding key) prepend
 text. Stores one memory per section (type=document) plus a single document_index root, all under one
 document tag (e.g. doc-tora). Shared with learn_attached_knowledge via ingest_document_knowledge().
 """
-import os
 import re
 from pathlib import Path
 from typing import List, Tuple
@@ -26,31 +25,6 @@ def _path_from_string(path_str: str) -> Path:
     if s.lower().startswith("file://"):
         s = url2pathname(urlparse(s).path)
     return Path(s).resolve()
-
-
-def _is_path_allowed(file_path: Path) -> bool:
-    """True if path is under an allowed root (home, cwd, VAF data/vaf dirs)."""
-    from vaf.core.platform import Platform
-    try:
-        real = file_path.resolve()
-        roots = [
-            Path.home(),
-            Path(os.getcwd()),
-            Platform.data_dir(),
-            Platform.vaf_dir(),
-        ]
-        for root in roots:
-            if not root.exists():
-                continue
-            try:
-                root_resolved = root.resolve()
-                if real == root_resolved or str(real).startswith(str(root_resolved) + os.sep):
-                    return True
-            except (OSError, ValueError):
-                continue
-    except (OSError, ValueError):
-        pass
-    return False
 
 
 def _normalize_doc_tag(title: str) -> str:
@@ -491,12 +465,50 @@ class LearnDocumentTool(BaseTool):
             return "Error: learn_document requires the agent (internal error: _agent not set)."
 
         path = _path_from_string(path_str)
+
+        # ONE authority for "may this be read", and it is the same one every other file tool
+        # uses. This tool used to carry its own, `_is_path_allowed`, which allowed anything
+        # under the home directory, the cwd, the data dir and VAF's own directory - measured,
+        # it said yes to ~/.ssh/id_rsa, ~/.env, ~/.vaf/config.json and ~/.vaf/secrets/, all of
+        # which `is_safe_path` refuses. A second, weaker policy is worse than none: it reads
+        # like a check.
+        #
+        # What made it sharp here rather than merely wrong: this tool does not display a file,
+        # it INGESTS it. The content is chunked, summarised and written into long-term memory
+        # under a scope, and is searchable afterwards. A credential pulled in this way outlives
+        # the session, the chat and any cleanup - which is the exact reasoning that closed
+        # ~/.vaf to the file tools in the first place.
+        #
+        # `is_safe_path` answers the static blocks AND the per-user jail, so asking it once
+        # inside the jail covers both. Asked BEFORE existence is probed, or the error message
+        # tells the caller what lives in directories they may not read.
+        #
+        # The jail is held for the DECISION ONLY, which is deliberately narrower than the same
+        # guard in `document_viewer`, where it wraps the whole body. The difference is not
+        # style, it is what sits downstream, and both halves were measured:
+        #
+        #   - the viewer's `_open_in_viewer` re-asks through `LibrarianTool._read_file`, which
+        #     calls `is_safe_path` itself. Holding the jail across it is what makes the second
+        #     asker get the same answer as the first.
+        #   - here nothing re-asks: `path.read_text()` and `extract_pdf_markdown` consult no
+        #     policy, and the ingestion runs via `_run_async_in_new_loop`, i.e. in a bare
+        #     `threading.Thread`. Contextvars do not cross into a new thread, so a `with` around
+        #     the whole body would NOT have covered the ingestion while looking exactly as if it
+        #     did. A guard that appears to cover and provably does not is worse than a narrow
+        #     one, so the decision is made here, up front, and the resolved path is what the
+        #     rest of the function uses.
+        from vaf.tools.filesystem import is_safe_path, user_jail
+
+        with user_jail(user_scope_id, kwargs.get("user_role"), mode="read"):
+            safe, resolved = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {resolved}"
+        path = Path(resolved)
+
         if not path.exists():
             return f"Error: File not found: {path}"
         if not path.is_file():
             return f"Error: Not a file: {path}"
-        if not _is_path_allowed(path):
-            return "Error: Path is outside allowed directories (home, cwd, or VAF data)."
 
         from vaf.core.config import Config
         from uuid import UUID

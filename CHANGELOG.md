@@ -45,6 +45,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **On a shared machine, one person could reach into another's chat session.** Three of the
+  commands the browser sends act on a session named in the message itself, and they never
+  checked that the session belonged to whoever sent it. The consequences differed: the
+  attachment panel of another user's chat could be emptied or filled with someone else's
+  documents, which they would then find there and could unknowingly teach to VAF; a voice call
+  could place a task into another person's chat queue; and a Stop press could interrupt
+  another person's running answer. All three now refuse to act on a session that is not
+  yours, the same way the other commands already did.
 - **Asking VAF to write a document can no longer put it outside your documents folder.**
   The tool takes a file NAME, but never checked that it got one: a name that was actually a
   path replaced the target folder entirely, so an absolute one wrote wherever it pointed. The

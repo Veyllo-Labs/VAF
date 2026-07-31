@@ -4494,6 +4494,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Use user-scoped default to prevent crosstalk
                         safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                         session_id = f"web-default-{safe_scope}"
+                    # OWNERSHIP. Without it this handler loads the named session, replaces its
+                    # sidebar_documents and saves the file - on BOTH paths, with no scope filter
+                    # anywhere: an empty payload wipes another user's sidebar, a full one plants
+                    # documents into it. The victim finds them on next load (nothing is pushed),
+                    # confirms, and learn_attached_knowledge ingests foreign content under THEIR
+                    # scope.
+                    # NOT via the attachment RAG, although that was the first reading: both RAG
+                    # calls below carry the CALLER's scope, and _scope_filters never yields an
+                    # empty filter (a None scope becomes `user_scope_id IS NULL`), so
+                    # caller-scope plus foreign-session matches zero rows. That filter is a real
+                    # backstop and is named here so nobody removes it as redundant - but it is
+                    # not what was broken. The session FILE was.
+                    allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                    if not allowed:
+                        log("API", f"Access denied: set_sidebar_documents {session_id} not owned by {user_scope_id}")
+                        continue
                     documents = cmd.get("documents") or []
                     from vaf.core.log_helper import log_attachment
                     log_attachment("WS_RECEIVED", session=session_id, doc_count=len(documents),
@@ -4540,6 +4556,25 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # Create a minimal in-memory session so sidebar_documents can be saved.
                                 log_attachment("SESSION_LOAD_FAILED", session=session_id, error=str(_load_err))
                                 log("WebServer", f"set_sidebar_documents: session load failed ({_load_err!r}), creating minimal session for {session_id}")
+                                # MEASURED REMAINING GAP, named rather than left to be found again.
+                                # WHAT GETS THROUGH: the ownership gate above runs with
+                                #   allow_missing=True, and _ws_session_owner_ok answers a LOAD
+                                #   FAILURE with (bool(allow_missing) or is_admin, None) - so a
+                                #   session that cannot be read passes the gate.
+                                # UNDER WHICH CONDITION: the session file is missing, corrupt or
+                                #   0 bytes - which is exactly the case this fallback exists for.
+                                # WHAT IT CAUSES: the minimal session created here is stamped with
+                                #   the CALLER's scope, so a stranger acquires the id. Takeover
+                                #   plus lock-out of the owner, delivered by the very gate added
+                                #   to prevent cross-user writes. Milder sibling: a not-yet-used
+                                #   id can be claimed in advance. Not a read leak - the file was
+                                #   already unreadable.
+                                # UNTESTED today, deliberately recorded as such.
+                                # Belongs with _open_report_in_viewer, which is the same family:
+                                # what is the authority when the usual one is absent - there
+                                # because no authenticated user exists (tokenless loopback IPC),
+                                # here because the session cannot be loaded. Solved apart they
+                                # become two special rules; measured together, probably one.
                                 loaded = Session(id=session_id, name=f"Session {session_id}")
                                 loaded.metadata["user_scope_id"] = str(user_scope_id or "")
                             if not getattr(loaded, "runtime_state", None):
@@ -6553,6 +6588,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if _call is None:
                             await websocket.send_json({"type": "voice_call_error", "error": "no_call"})
                             continue
+                        # OWNERSHIP. The call itself is keyed on the CONNECTION, so it cannot be
+                        # hijacked - but a `sessionId` from the payload is used twice deep in this
+                        # branch, and both uses act on whatever it names: a speaker-confirmation
+                        # request is routed into it, and a delegation is enqueued into it via
+                        # TaskQueue().add(session_id=...) carrying THIS caller's scope in the
+                        # metadata. That is an injection into another user's work queue, not
+                        # merely a misrouted prompt, which is why this branch is gated even though
+                        # it never loads a session.
+                        if cmd.get("sessionId"):
+                            _ok_vc, _ = _ws_session_owner_ok(websocket, cmd.get("sessionId"),
+                                                             allow_missing=True)
+                            if not _ok_vc:
+                                await websocket.send_json({"type": "voice_call_error",
+                                                           "error": "session_not_owned"})
+                                continue
                         import base64 as _b64v
                         _audio_b64 = cmd.get("audio") or ""
                         if cmd.get("format") != "wav" or not _audio_b64:
@@ -7415,6 +7465,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     from vaf.core.platform import Platform
                     tq = TaskQueue()
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    # OWNERSHIP. The id comes straight from the payload, and below it stops the
+                    # generation for that session and cancels its in-flight attachment indexing.
+                    # Without the gate that is a denial of service against another user's work -
+                    # no data is read or written, which is why this ranks below
+                    # set_sidebar_documents, but "only" interrupting someone else's run is still
+                    # acting on a session that is not yours.
+                    if session_id:
+                        _ok_stop, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                        if not _ok_stop:
+                            log("API", f"Access denied: stop_generation {session_id} not owned by caller")
+                            continue
                     # Scope (chat-while-subagent-runs): a Stop press while a sub-agent is
                     # active stops ONLY the generation — cancelling a throwaway chat reply
                     # must not destroy a 20-minute coder run. Killing the sub-agent needs

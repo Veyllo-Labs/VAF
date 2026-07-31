@@ -119,7 +119,13 @@ def _credential_key(
 ) -> str:
     """Mail/IMAP key. A thin adapter over the shared builder, kept because this lane's callers
     pass `provider` positionally in four places and the signature is not worth churning; the
-    KEY LOGIC lives in build_credential_key and exists once."""
+    KEY LOGIC lives in build_credential_key and exists once.
+
+    IT MUST STAY LOGIC-FREE. An adapter that survives is an invitation to put "just this one
+    special case" inside it, and at that moment there are two truths about how a credential is
+    addressed again - only disguised, because the file still looks consolidated. If this lane
+    ever needs a shape the builder cannot produce, that shape belongs in the builder's profile
+    table with the others, or the design is wrong."""
     return build_credential_key(account_id, namespace="email", provider=provider,
                                 username=username, user_scope_id=user_scope_id)
 

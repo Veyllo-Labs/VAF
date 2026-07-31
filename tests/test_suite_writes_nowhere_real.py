@@ -153,6 +153,37 @@ def test_the_env_axes_actually_point_into_the_session_temp_root():
         )
 
 
+def test_the_log_resolver_follows_the_redirected_variable():
+    """The variable being redirected is not the same claim as the resolver obeying it.
+
+    `VAF_LOG_DIR` has been redirected for the whole session since long before this file
+    existed, and the test above proves the variable is set - which is the stage, not the
+    wiring. What decides where a log line actually lands is `get_app_log_dir()`, and its
+    SECOND candidate, used whenever the variable is absent, is `<repo>/logs`. That
+    directory is not a scratch area: it is where a VAF running from this checkout keeps
+    its own logs, including `security_events_<date>.jsonl`, which backs the dashboard.
+
+    So a miss on this axis does not produce stray files, it produces FALSE SECURITY
+    READINGS. On 2026-07-31 the owner's Overview showed "1 threat blocked (today)" and
+    "1 admin override (today)"; all nine events in the live log that day were suite
+    output, traceable line by line to fixtures (`bad_skill`, the `danger` skill,
+    `internal.example` with `user=u`, the LAN addresses from the auth tests). The suite
+    as it stands writes nothing there - measured on three full runs - and this assertion
+    is what says so on every run instead of once.
+    """
+    from vaf.core.log_helper import get_app_log_dir
+
+    root = os.environ.get("VAF_TEST_STORE_ROOT")
+    assert root, "the session isolation fixture did not run"
+    resolved = get_app_log_dir()
+    assert resolved.is_relative_to(Path(root)), (
+        f"get_app_log_dir() resolves to {resolved!r}, outside the session temp root. "
+        f"Its fallback is the repository's own logs/ directory, which a VAF started from "
+        f"this checkout reads as live security data."
+    )
+    assert not resolved.is_relative_to(REPO / "logs"), "the suite is writing into the live log directory"
+
+
 def test_every_platform_axis_moves_with_the_mechanism_that_claims_it(tmp_path):
     """MEASURED, not declared: move each mechanism in turn and see what follows.
 

@@ -28,6 +28,24 @@ unjailed half of the write surface" (it was a third). A list in a document is re
 somebody goes looking. A red test is read when somebody breaks something, which is the only
 moment that finds the case a year from now.
 
+WHAT THIS FILE CAN SEE, measured rather than asserted. It reads tool classes under
+`vaf/tools/`, and that boundary falls differently on the two halves of the question:
+
+  ENTRY POINTS   31 of 31. Every tool class in the tree that declares a path-shaped parameter
+                 lives in `vaf/tools/`; there are zero elsewhere. Nothing enters unseen.
+  DECISIONS      1 of 4. Where containment is actually decided is mostly NOT in reach:
+                   `is_safe_path`        vaf/tools/filesystem.py          <- seen
+                   `_safe_join`          vaf/core/thinking_workspace.py   <- not seen
+                   automation runner     vaf/core/automation.py           <- not seen (no check)
+                   `/api/file` allowlist vaf/core/web_server.py           <- not seen
+
+That asymmetry cuts BOTH ways, and it is why `CONTAINED_ELSEWHERE` exists as its own set. The
+guard cannot see a hole that opens after the path leaves a tool - `create_automation` hands a
+model-written `output_path` to a runner that `mkdir`s it with no check at all - and it cannot
+see a containment that lives outside either, which is why the two thinking-workspace tools look
+unguarded here while `_safe_join` demonstrably contains them. Both entries had to be decided by
+measuring the receiving end, not by reading this file.
+
 HOW IT WORKS. Every tool class declaring a path-shaped parameter must reach `is_safe_path`,
 either in its own module or through a resolver it imports (`send_discord` and `send_to_user`
 import `send_telegram._resolve_path`, so counting occurrences per file reports 0 for them and
@@ -62,8 +80,8 @@ NOT_A_LOCAL_PATH = {
     ("github_update_file", "path"): "a path inside a GitHub repository",
 }
 
-# Tools that take a local path and do NOT ask. Every entry is a known gap with a reason, not
-# a permission. THIS SET MAY ONLY SHRINK.
+# Tools that take a local path and never reach a containment decision. Every entry is a known
+# GAP with a reason, not a permission. THIS SET MAY ONLY SHRINK.
 UNGUARDED = {
     "codesearch":
         "resolves a model-supplied path and walks it with rglob('*'). No jail, no declared "
@@ -78,19 +96,31 @@ UNGUARDED = {
         "declaration and the check - it declares no identity today, so is_safe_path alone "
         "would apply the static blocks and still write into another tenant's tree.",
     "create_automation":
-        "passes output_path onward rather than opening it; the receiving end has not been "
-        "measured yet. Declares an identity.",
+        "MEASURED 2026-07-30, and worse than 'hands it on': the tool itself never opens the "
+        "path, but the runner does - vaf/core/automation.py does expanduser() and then "
+        "mkdir(parents=True) on it, and that whole file contains is_safe_path, user_jail and "
+        "compute_user_jail zero times. The value is model-written ('e.g. Documents, Desktop'). "
+        "What is NOT yet measured is what gets written into the directory afterwards, which is "
+        "what decides the severity.",
     "update_automation":
-        "same shape as create_automation: output_path is handed on rather than opened here, "
-        "and the receiving end is unmeasured. Declares an identity.",
-    "thinking_workspace_read":
-        "resolves inside the thinking workspace rather than opening the given path directly; "
-        "not yet measured. Declares an identity.",
-    "thinking_workspace_write":
-        "same shape as thinking_workspace_read, but it WRITES, so it ranks above its sibling "
-        "once the workspace resolution has actually been measured. Declares an identity.",
+        "Same path, same runner, same absence of any check - it edits the value that "
+        "create_automation stored, so both feed one unguarded write site.",
 }
 
+# Tools that do NOT ask `is_safe_path` and are nevertheless contained, by a different mechanism
+# that was MEASURED rather than assumed. Separate from UNGUARDED on purpose: a list that mixes
+# "known hole" with "safe by another route" makes its own count meaningless, and the count is
+# the only thing that turns this lane from a search space into a finite set.
+CONTAINED_ELSEWHERE = {
+    "thinking_workspace_read":
+        "contained by `_safe_join` (vaf/core/thinking_workspace.py), verified by running it: "
+        "'/etc/passwd' and '../../../.ssh/id_rsa' raise ValueError('Path escapes workspace "
+        "boundary'), 'sub/ok.txt' resolves inside. The base is keyed per scope AND per task.",
+    "thinking_workspace_write":
+        "same `_safe_join`, same measurement. It writes rather than reads, which is why it was "
+        "ranked above its sibling while both were still unmeasured - the measurement cleared "
+        "both.",
+}
 
 def _tool_classes():
     """(tool_name, module_stem, [path-shaped params]) for every tool in vaf/tools."""
@@ -165,7 +195,7 @@ def test_every_local_path_tool_asks_or_is_named_here():
     """A new tool that takes a path and never asks is a red test on the day it is written,
     instead of an audit finding a year later."""
     missing = {name: params for name, stem, params in _local_path_tools()
-               if not _asks_the_shared_rule(stem) and name not in UNGUARDED}
+               if not _asks_the_shared_rule(stem) and name not in UNGUARDED and name not in CONTAINED_ELSEWHERE}
     assert not missing, (
         f"tool(s) take a local path without asking is_safe_path: {missing}. Either route the "
         "path through the shared rule, or add an entry to UNGUARDED explaining why not - and "
@@ -177,23 +207,25 @@ def test_the_unguarded_set_only_shrinks():
     """A name that stays in the list after being fixed is how a frozen set rots into a stale
     document. This is the half that makes it a ratchet rather than a snapshot."""
     stems = {name: stem for name, stem, _ in _local_path_tools()}
-    fixed = [n for n in UNGUARDED if n in stems and _asks_the_shared_rule(stems[n])]
+    listed = {**UNGUARDED, **CONTAINED_ELSEWHERE}
+    fixed = [n for n in listed if n in stems and _asks_the_shared_rule(stems[n])]
     assert not fixed, (
         f"{fixed} now ask(s) is_safe_path - remove the entry from UNGUARDED so the set keeps "
         "measuring what is actually left"
     )
-    gone = [n for n in UNGUARDED if n not in stems]
+    gone = [n for n in listed if n not in stems]
     assert not gone, (
         f"{gone} no longer exist(s) or no longer declare(s) a path parameter; remove the "
         "stale entry rather than leaving the count wrong"
     )
 
 
-@pytest.mark.parametrize("entry", sorted(UNGUARDED))
+@pytest.mark.parametrize("entry", sorted({**UNGUARDED, **CONTAINED_ELSEWHERE}))
 def test_each_exception_carries_a_reason(entry):
     """A bare name would turn this into a permission list. The reason is what a later reader
     needs in order to decide whether the exception still holds."""
-    assert len(UNGUARDED[entry]) > 40, f"{entry} is listed without a usable reason"
+    reasons = {**UNGUARDED, **CONTAINED_ELSEWHERE}
+    assert len(reasons[entry]) > 40, f"{entry} is listed without a usable reason"
 
 
 def test_the_exclusions_are_justified_individually():
@@ -218,7 +250,8 @@ def test_the_shape_of_the_lane_is_still_what_was_measured():
     asks = [n for n, stem, _ in local if _asks_the_shared_rule(stem)]
 
     assert len(all_params) >= 25, "far fewer path-shaped tools than when this was measured"
-    assert len(local) - len(asks) == len(UNGUARDED), (
-        f"{len(local) - len(asks)} tools do not ask but {len(UNGUARDED)} are listed - the set "
-        "and the code disagree"
+    assert len(local) - len(asks) == len(UNGUARDED) + len(CONTAINED_ELSEWHERE), (
+        f"{len(local) - len(asks)} tools do not ask, but {len(UNGUARDED)} gaps plus "
+        f"{len(CONTAINED_ELSEWHERE)} contained-elsewhere are listed - the sets and the code "
+        "disagree"
     )

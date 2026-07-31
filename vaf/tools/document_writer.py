@@ -70,6 +70,12 @@ For large/complex documents, use document_agent instead."""
     # rendered as "text" in the past (a .svg happened to survive, a .html spec
     # came out as an rst-like text file - tool-friction audit): now rejected with
     # a redirect to the right tool.
+    # The per-user boundary comes from the framework: declare the mode, BaseTool installs it
+    # around run(). This tool is the first CONSUMER of that declaration rather than another
+    # hand-built copy of it - which is the point of the primitive existing.
+    identity_kwargs = ("user_scope_id", "user_role")
+    file_access = "write"
+
     _ALLOWED_SUFFIXES = (".txt", ".md", ".docx")
 
     def run(self, **kwargs) -> str:
@@ -97,6 +103,20 @@ For large/complex documents, use document_agent instead."""
         vaf_docs_dir = resolve_agent_output_dir(
             Platform.documents_dir() / "VAF_Documents", session_id=_sid
         )
+
+        # `filename` is a NAME, and the schema says so ("Filename with extension"). It was
+        # only cast to str and then joined, and in pathlib an absolute path SWALLOWS the base:
+        # `base / "/etc/passwd"` is `/etc/passwd`, and `../` walks out. The suffix allowlist
+        # below limits WHAT is written, never WHERE. A live incident already put a path-shaped
+        # value in here - a variable extractor turned a video URL into
+        # filename="//www.youtube.com" (see tests/test_workflow_tool_overlay.py).
+        #
+        # Two guards, because they answer different questions. This one keeps the parameter to
+        # its meaning; the per-user boundary from `file_access` above is what stops a
+        # well-formed name from being written into another tenant's tree.
+        if Path(filename).is_absolute() or any(sep in filename for sep in ("/", "\\")):
+            return ("Tool Error: filename must be a bare file name, not a path "
+                    f"(got {filename!r}). Use write_file for a specific location.")
 
         file_path = vaf_docs_dir / Path(filename)
         suffix = file_path.suffix.lower()

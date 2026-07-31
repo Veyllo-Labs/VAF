@@ -84,7 +84,9 @@ KWARGS_BASELINE = {
     "document_editor":           ("chat", ["user_scope_id"]),
     # user_role joined 2026-07-31 with the file_access declaration (see below).
     "document_viewer":           ("chat", ["user_role", "user_scope_id"]),
-    "document_writer":           ("chat", ["_session_id"]),
+    # +user_role/+user_scope_id 2026-07-31: the first CONSUMER of the file_access
+    # declaration - it closed its gap by declaring rather than hand-building.
+    "document_writer":           ("chat", ["_session_id", "user_role", "user_scope_id"]),
     "edit_file":                 ("chat", ["user_role", "user_scope_id"]),
     "execute_workflow":          ("chat", ["_agent"]),
     "find_discord_messages":     ("chat", ["user_scope_id", "username"]),

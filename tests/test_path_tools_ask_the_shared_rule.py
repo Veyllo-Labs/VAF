@@ -89,12 +89,6 @@ UNGUARDED = {
     "linter":
         "resolves a model-supplied path and runs an external linter over it via subprocess. "
         "Found by the census on 2026-07-30, ranked, not yet fixed.",
-    "document_writer":
-        "THE SHARP ONE, and a WRITE: `filename` is only cast to str, then joined onto the "
-        "documents directory. In pathlib an absolute path swallows the base, so an absolute "
-        "filename writes wherever it points. Fixing it needs BOTH an identity_kwargs "
-        "declaration and the check - it declares no identity today, so is_safe_path alone "
-        "would apply the static blocks and still write into another tenant's tree.",
     "create_automation":
         "MEASURED 2026-07-30, and worse than 'hands it on': the tool itself never opens the "
         "path, but the runner does - vaf/core/automation.py does expanduser() and then "
@@ -112,6 +106,13 @@ UNGUARDED = {
 # "known hole" with "safe by another route" makes its own count meaningless, and the count is
 # the only thing that turns this lane from a search space into a finite set.
 CONTAINED_ELSEWHERE = {
+    "document_writer":
+        "contained by TWO mechanisms, neither of them is_safe_path, and both are needed. "
+        "Its `filename` is a NAME, so a path-shaped value is refused outright (an absolute "
+        "one used to swallow the base directory in the join); and `file_access = 'write'` "
+        "gives it the per-user boundary, which is what stops a well-formed name from "
+        "landing in another tenant's tree. Closed 2026-07-31 by DECLARING rather than "
+        "hand-building - the first consumer of that primitive.",
     "thinking_workspace_read":
         "contained by `_safe_join` (vaf/core/thinking_workspace.py), verified by running it: "
         "'/etc/passwd' and '../../../.ssh/id_rsa' raise ValueError('Path escapes workspace "

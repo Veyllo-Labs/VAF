@@ -45,6 +45,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Asking VAF to write a document can no longer put it outside your documents folder.**
+  The tool takes a file NAME, but never checked that it got one: a name that was actually a
+  path replaced the target folder entirely, so an absolute one wrote wherever it pointed. The
+  file-type restriction did not help - it limits which formats may be written, not where. A
+  name containing a path is now refused with a pointer to the tool that does take one, and
+  the document lands in the calling user's own folder on a shared machine rather than
+  wherever the name led.
 - **Asking VAF to learn a document can no longer pull in files it protects.** This tool
   carried its own idea of which files were readable, and it disagreed with the one every
   other file tool uses in both directions: it allowed anything in your home folder, including

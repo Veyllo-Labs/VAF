@@ -82,7 +82,11 @@ def _emitted_kinds() -> dict[str, set[str]]:
             if not kinds and isinstance(node.args[0], ast.Name):
                 kinds = bound.get(node.args[0].id, [])
             for kind in kinds:
-                found.setdefault(kind, set()).add(str(path.relative_to(REPO)))
+                # as_posix(), not str(): `relative_to` yields backslashes on Windows, so a
+                # plain string would only ever match on the developer's platform. This is
+                # the second time that has turned CI red in one round - the frozen paths in
+                # tests/test_api_key_baseline.py had it first.
+                found.setdefault(kind, set()).add(path.relative_to(REPO).as_posix())
     return found
 
 

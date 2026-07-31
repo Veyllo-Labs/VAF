@@ -217,8 +217,33 @@ def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=Fa
         try:
             loaded = session_mgr.load(session_id)
         except Exception:
-            # Session does not exist or is unreadable: a brand-new chat target is allowed; any other
-            # command (or a non-admin) is denied rather than acting on a phantom/foreign id.
+            # TWO different situations used to arrive here as one, and answering them alike was a
+            # takeover route:
+            #   file is NOT there            -> a not-yet-created id. `allow_missing` may pass it;
+            #                                   that is the chat's first-message-into-a-new-session
+            #                                   flow, and nobody owns it yet.
+            #   file IS there but unreadable -> an EXISTING session whose owner cannot be
+            #                                   established. Passing it let a caller reach the
+            #                                   fallback in set_sidebar_documents, which creates a
+            #                                   minimal session stamped with THAT caller's scope -
+            #                                   so whoever's file was corrupt or 0 bytes lost the id
+            #                                   to a stranger. Ownership of an unreadable file
+            #                                   cannot be determined, so it must not be assumed.
+            # Ordered so "exists" forces the RESTRICTIVE answer: this check and the load() above are
+            # two looks at the same file, so any doubt resolves to "it is there", i.e. deny.
+            # KNOWN, NOT SOLVED HERE: the real owner of a corrupted session is locked out by this
+            # too. That is the correct direction and still a dead end - recovery from a corrupt
+            # session is its own question, and the caller now gets a readable refusal rather than a
+            # silent no-op.
+            _exists = True
+            try:
+                _sdir = session_mgr.storage_dir
+                _exists = any((_sdir / f"{session_id}{ext}").exists()
+                              for ext in (".json", ".json.gz"))
+            except Exception:
+                _exists = True          # cannot tell -> treat as existing -> restrictive
+            if _exists:
+                return (is_admin, None)
             return (bool(allow_missing) or is_admin, None)
     if is_admin:
         return (True, loaded)
@@ -4509,6 +4534,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
                     if not allowed:
                         log("API", f"Access denied: set_sidebar_documents {session_id} not owned by {user_scope_id}")
+                        # Say so. A silent `continue` is indistinguishable from "attachments are
+                        # broken", and one legitimate caller lands here: the owner of a session
+                        # whose file went corrupt or 0-byte, who is refused because ownership of
+                        # an unreadable file cannot be established. They deserve to know why.
+                        await websocket.send_json({
+                            "type": "sidebar_documents_denied",
+                            "sessionId": session_id,
+                            "reason": "not_owned_or_unreadable",
+                        })
                         continue
                     documents = cmd.get("documents") or []
                     from vaf.core.log_helper import log_attachment

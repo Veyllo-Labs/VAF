@@ -139,3 +139,92 @@ def test_the_two_lower_severity_branches_are_gated_too(branch, reason):
     the damage."""
     body = _branch_bodies()[branch]
     assert "_ws_session_owner_ok" in body, f"{branch} is ungated: {reason}"
+
+# ── the two situations that used to be answered alike ────────────────────────
+
+def test_an_unreadable_session_is_denied_even_with_allow_missing():
+    """The takeover route, closed.
+
+    `allow_missing=True` is correct for a not-yet-created id - nobody owns it yet. It was also
+    the answer for a session whose file EXISTS but cannot be read, and that is a different
+    question: an existing session whose owner cannot be established. Letting it through reached
+    the fallback in set_sidebar_documents, which creates a minimal session stamped with the
+    CALLER's scope - so whoever's file was corrupt or 0 bytes lost the id to a stranger.
+
+    The check is ordered so that "exists" forces the restrictive answer: it and the load() are
+    two looks at the same file, so any doubt resolves to deny.
+    """
+    import tempfile
+    from unittest.mock import MagicMock, patch
+
+    import vaf.core.web_server as w
+
+    scope = "deadbeef-0000-0000-0000-000000000000"
+    with tempfile.TemporaryDirectory() as td:
+        sdir = Path(td)
+        (sdir / "corrupt.json").write_bytes(b"")          # exists, unreadable
+        ws = MagicMock()
+        with patch.object(w, "session_mgr") as sm, \
+             patch.object(w.manager, "get_connection_user", return_value=scope), \
+             patch.object(w.manager, "get_connection_user_role", return_value="user"):
+            sm.storage_dir = sdir
+            sm.load.side_effect = Exception("0-byte session file")
+
+            corrupt_ok, _ = w._ws_session_owner_ok(ws, "corrupt", allow_missing=True)
+            fresh_ok, _ = w._ws_session_owner_ok(ws, "never-used", allow_missing=True)
+
+    assert corrupt_ok is False, (
+        "an unreadable session still passes: its id can be taken over by whoever asks next"
+    )
+    assert fresh_ok is True, (
+        "a not-yet-created id is refused too - that breaks the first message into a new chat, "
+        "and it would make this fix look like it simply denies everything"
+    )
+
+
+def test_the_refusal_is_visible_to_the_caller():
+    """The owner of a corrupted session is refused by the rule above, which is correct and a
+    dead end for them. A silent `continue` would be indistinguishable from "attachments are
+    broken", so the handler answers."""
+    body = _branch_bodies()["set_sidebar_documents"]
+    assert "sidebar_documents_denied" in body, (
+        "the denial path is silent again; the one legitimate caller it catches cannot tell "
+        "refusal from malfunction"
+    )
+
+def test_doubt_about_the_file_resolves_to_deny():
+    """The ordering, which a first counter-proof round left unguarded.
+
+    The existence check and the `load()` above are two looks at the same file, so they can
+    disagree. If the check itself cannot answer - the storage directory is unreachable, the
+    attribute is missing, the filesystem errors - the gate must read that as "the file is
+    there", i.e. deny, and not as "nothing there, let it through". Flipping that default was a
+    mutation that stayed GREEN through eight tests: the permissive direction is invisible
+    unless something asks for it by name.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import vaf.core.web_server as w
+
+    scope = "deadbeef-0000-0000-0000-000000000000"
+    ws = MagicMock()
+
+    class _Unanswerable:
+        """Cannot say whether anything exists."""
+
+        @property
+        def storage_dir(self):
+            raise OSError("storage unreachable")
+
+        def load(self, sid):
+            raise Exception("unreadable")
+
+    with patch.object(w, "session_mgr", _Unanswerable()), \
+         patch.object(w.manager, "get_connection_user", return_value=scope), \
+         patch.object(w.manager, "get_connection_user_role", return_value="user"):
+        allowed, _ = w._ws_session_owner_ok(ws, "unknown", allow_missing=True)
+
+    assert allowed is False, (
+        "an unanswerable existence check resolved permissively; a caller could then claim any "
+        "id whenever the storage layer hiccups"
+    )

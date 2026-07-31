@@ -11,6 +11,8 @@ These tests pin the shared gate `_ws_session_owner_ok`:
   - STRICT legacy policy: a session with NO recorded scope is admin-only (not open to everyone);
   - missing session: allowed only with allow_missing (new-chat) or for admin, else denied.
 """
+import pathlib
+import tempfile
 import vaf.core.web_server as ws
 import vaf.core.config as cfg
 
@@ -29,8 +31,14 @@ class _FakeManager:
 
 
 class _FakeSessionMgr:
-    def __init__(self, sessions):
+    def __init__(self, sessions, storage_dir=None):
         self._s = sessions  # id -> metadata dict (absent id => not found)
+        # A REAL empty directory, because the gate now distinguishes "no file" from "file
+        # exists but will not load": the first is a new session and may pass with
+        # allow_missing, the second is an existing session whose owner cannot be established
+        # and must not. A fake without a storage_dir made that check raise, which the gate
+        # answers restrictively - correct behaviour, wrong test setup.
+        self.storage_dir = storage_dir or pathlib.Path(tempfile.mkdtemp())
 
     def load(self, sid):
         if sid not in self._s:

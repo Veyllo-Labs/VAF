@@ -51,7 +51,19 @@ def test_verification_and_benign_tasks_pass():
 
 def test_refusal_is_honest_and_not_retry_bait():
     lib = LibrarianTool.__new__(LibrarianTool)
-    out = LibrarianTool._try_direct_execution(lib, PAYLOAD_DELETE_DE)
+
+    # The fast path now dispatches through a caller. Hand it one that records, so this also
+    # pins that a refusal short-circuits BEFORE anything runs - a refusal that executes first
+    # and declines afterwards would read identically from the outside.
+    class _NeverCalled:
+        used = False
+
+        def execute(self, name, args=None):
+            _NeverCalled.used = True
+            return ""
+
+    out = LibrarianTool._try_direct_execution(lib, PAYLOAD_DELETE_DE, _NeverCalled())
+    assert _NeverCalled.used is False, "the refusal ran a tool before refusing"
     assert out is not None
     assert "cannot delete" in out.lower()
     assert "Nothing was deleted" in out

@@ -218,6 +218,46 @@ You have access to this filesystem map for fast navigation:
         from vaf.tools.filesystem import compute_user_jail
         return compute_user_jail(user_scope_id, user_role)
 
+    def _make_caller(self, **kwargs):
+        """The ONE shared-pipeline entry for this run. Both paths use it: the pattern-matching
+        fast path and the inner model loop.
+
+        RETURNED, never stored on `self`. This class lives in `agent.tools`, which is built once
+        per process and serves every user, so an identity parked on the instance outlives the
+        turn that set it (Rule 4.4). The caller is threaded through five call levels instead,
+        and that is deliberately the inconvenient option: `self._browse_path` next door already
+        keeps per-run state on the shared instance, and it is exactly the precedent someone
+        would cite to justify `self._caller = ...` later. Reading this comment is cheaper than
+        finding out why one user's librarian answered with another user's scope.
+
+        The identity cannot be recovered further down either: the jail contextvar carries only
+        `allowed_roots`, `is_admin` and `uid8` - `uid8` is a truncated prefix, so the full scope
+        UUID and the role are gone. Measured before threading was chosen.
+        """
+        from vaf.core.subagent_ipc import get_current_session_id
+        from vaf.core.tool_dispatch import ToolCaller
+        return ToolCaller(
+            self.tools,
+            user_scope_id=kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID"),
+            user_role=kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE"),
+            session_id=get_current_session_id(),
+            # Its results are directory listings and file contents. On the LLM path the inner
+            # model reads them in full; on the fast path they go STRAIGHT TO THE PERSON, and
+            # `_show_tree` wraps them in a code fence. A cut there does append a truncation
+            # notice, but the notice lands inside the fence, where it reads as one more line of
+            # the tree rather than as a system message - overlooked and ticked off as seen at
+            # the same time. That is worse than an invisible cut, not better.
+            max_result_chars=None,
+            # NAMED BOUNDARY, not an omission. The load-bearing reason is not "nobody is
+            # watching" - on the fast path somebody is. It is that the two paths would then
+            # gate differently for the same tool: the inner model loop has no seam to ask a
+            # person through, so enabling the gate here alone would make `move_file` prompt or
+            # not depending on whether a regex happened to match the request. Two paths without
+            # a gate are worse than one; two paths with DIFFERENT gates are worse than both.
+            # Giving the librarian a real way to ask is its own change.
+            gate_enabled=False,
+        )
+
     def _run_impl(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()
         if not task:
@@ -307,7 +347,8 @@ You have access to this filesystem map for fast navigation:
         self._emit_librarian_state(task, stage="scanning")
 
         # Try direct execution first (no animation needed for fast path)
-        direct_result = self._try_direct_execution(task)
+        caller = self._make_caller(**kwargs)
+        direct_result = self._try_direct_execution(task, caller)
         if direct_result:
             # Fast path succeeded - show brief static header
             from vaf.cli.tui import _StaticHeader
@@ -342,11 +383,7 @@ You have access to this filesystem map for fast navigation:
             self._read_hint_for_llm = None
 
         # LLM path has its own animation
-        _res = self._execute_with_llm(
-            task,
-            user_scope_id=kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID"),
-            user_role=kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE"),
-        )
+        _res = self._execute_with_llm(task, caller=caller)
         self._emit_librarian_state(task, stage="done", result=_res)
         return _res
     
@@ -665,7 +702,7 @@ Remove duplicates and ensure smooth flow.
     # DIRECT EXECUTION (Fast Path)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _try_direct_execution(self, task: str) -> Optional[str]:
+    def _try_direct_execution(self, task: str, caller) -> Optional[str]:
         """
         Try to execute simple tasks directly without LLM.
         Returns result string or None if task is too complex.
@@ -828,7 +865,7 @@ Remove duplicates and ensure smooth flow.
                     pass
 
                 # Compute size deterministically (no LLM)
-                return self.tools["folder_size"].run(path=str(path), top_n=10)
+                return caller.execute("folder_size", {"path": str(path), "top_n": 10})
         
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Count files ("how many files", "count files", "wie viele")
@@ -941,7 +978,7 @@ Remove duplicates and ensure smooth flow.
                 content_match = re.search(r'(?:with|content|text|inhalt)[:\s]+(.+?)(?:$|\.)', task_lower, re.IGNORECASE)
                 if content_match:
                     content = content_match.group(1).strip()
-                    return self._write_file(file_path, content)
+                    return self._write_file(file_path, content, caller)
                 # If no clear content, let LLM handle it
                 break
         
@@ -987,10 +1024,14 @@ Remove duplicates and ensure smooth flow.
                             f"The file you want to rename does not exist:\n`{res_src}`\n\n"
                             f"It may have been moved, deleted, or is in a different folder (e.g. user Downloads vs. project folder)."
                         )
-                    try:
-                        return self.tools["move_file"].run(src=str(res_src), dst=str(res_dst))
-                    except Exception as e:
-                        return f"[ERROR] Rename failed: {e}"
+                    # Say what is about to happen BEFORE doing it. The pipeline answers a
+                    # failure with a bare "Tool Error: ...", which on its own leaves the person
+                    # guessing which action failed - the old hand-written "[ERROR] Rename
+                    # failed:" carried that context. Recovering it by inspecting the returned
+                    # string would be guesswork and a second authority on what counts as an
+                    # error; announcing the intent costs nothing and cannot drift.
+                    UI.event("Librarian", f"Renaming {Path(res_src).name} to {Path(res_dst).name}...", style="dim")
+                    return caller.execute("move_file", {"src": str(res_src), "dst": str(res_dst)})
                 # Fallback: folder + filename (e.g. "rename file X in Downloads to Y")
                 old_name, new_name = self._extract_rename_parts(task)
                 if old_name and new_name:
@@ -1011,10 +1052,14 @@ Remove duplicates and ensure smooth flow.
                             f"The file you want to rename does not exist:\n`{res_src}`\n\n"
                             f"It may have been moved, deleted, or is in a different folder (e.g. user Downloads vs. project folder)."
                         )
-                    try:
-                        return self.tools["move_file"].run(src=str(res_src), dst=str(res_dst))
-                    except Exception as e:
-                        return f"[ERROR] Rename failed: {e}"
+                    # Say what is about to happen BEFORE doing it. The pipeline answers a
+                    # failure with a bare "Tool Error: ...", which on its own leaves the person
+                    # guessing which action failed - the old hand-written "[ERROR] Rename
+                    # failed:" carried that context. Recovering it by inspecting the returned
+                    # string would be guesswork and a second authority on what counts as an
+                    # error; announcing the intent costs nothing and cannot drift.
+                    UI.event("Librarian", f"Renaming {Path(res_src).name} to {Path(res_dst).name}...", style="dim")
+                    return caller.execute("move_file", {"src": str(res_src), "dst": str(res_dst)})
                 break  # Matched rename but couldn't extract - let LLM handle
 
         # ─────────────────────────────────────────────────────────────────────
@@ -1030,7 +1075,7 @@ Remove duplicates and ensure smooth flow.
 
         for pattern in tree_patterns:
             if re.search(pattern, task_lower):
-                return self._show_tree(path)
+                return self._show_tree(path, caller)
 
         # No direct pattern matched - needs LLM
         return None
@@ -1459,14 +1504,10 @@ Remove duplicates and ensure smooth flow.
         except Exception as e:
             return f"[ERROR] Error searching: {e}"
     
-    def _write_file(self, file_path: Path, content: str) -> str:
-        """Write content to a file."""
-        try:
-            # Use the write_file tool
-            result = self.tools["write_file"].run(path=str(file_path), content=content)
-            return result
-        except Exception as e:
-            return f"Error writing file: {str(e)}"
+    def _write_file(self, file_path: Path, content: str, caller) -> str:
+        """Write content to a file through the shared pipeline."""
+        UI.event("Librarian", f"Writing {file_path.name}...", style="dim")
+        return caller.execute("write_file", {"path": str(file_path), "content": content})
 
     def _pdf_ocr_fallback(self, file_path: Path, max_pages: int) -> str:
         """Thin wrapper -> shared OCR helper (single copy lives in vaf/core/pdf_extract.py)."""
@@ -1819,7 +1860,7 @@ Remove duplicates and ensure smooth flow.
             hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
             return f"[ERROR] Failed to read file in chunks: {e}{hint}"
     
-    def _show_tree(self, path: Path, max_depth: int = 3) -> str:
+    def _show_tree(self, path: Path, caller, max_depth: int = 3) -> str:
         """Show directory tree."""
         safe, res = is_safe_path(str(path))
         if not safe:
@@ -1831,11 +1872,11 @@ Remove duplicates and ensure smooth flow.
         if not path.exists():
             return f"[ERROR] Path does not exist: {path}"
         
-        try:
-            result = self.tools["tree"].run(path=str(path), depth=max_depth)
-            return f"### Directory Tree\n\n```\n{result}\n```"
-        except Exception as e:
-            return f"[ERROR] Error building tree: {e}"
+        # The fence is why `max_result_chars=None` is not a preference: a truncated result
+        # would land INSIDE it, where the pipeline's truncation notice reads as one more line
+        # of the tree instead of a system message.
+        result = caller.execute("tree", {"path": str(path), "depth": max_depth})
+        return f"### Directory Tree\n\n```\n{result}\n```"
     
     # ═══════════════════════════════════════════════════════════════════════════
     # DISK/STORAGE INFORMATION (Cross-Platform)
@@ -2228,9 +2269,10 @@ Remove duplicates and ensure smooth flow.
     # LLM EXECUTION (Slow Path - for complex queries)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _execute_with_llm(self, task: str, *, user_scope_id: str | None = None,
-                          user_role: str | None = None) -> str:
-        """Execute complex task using LLM reasoning."""
+    def _execute_with_llm(self, task: str, *, caller) -> str:
+        """Execute complex task using LLM reasoning, dispatching through the caller built once
+        in `_run_impl`. It used to build its own, which is how the fast path kept dispatching
+        raw for a whole release: one path was converted and the other was never counted."""
         # The librarian drives its own model loop, so it USED to call tools directly - which
         # made its thirteen sub-tools the one place in VAF where a tool ran with no policy
         # check, no declared identity and no bound. They go through the shared pipeline now,
@@ -2272,17 +2314,6 @@ Remove duplicates and ensure smooth flow.
         # (host_bash, python_exec) are not among them. So the stage is correctly wired and
         # currently idle - which is worth writing down, because "wired" and "effective" are
         # different claims and only the first one is true here.
-        from vaf.core.subagent_ipc import get_current_session_id
-        from vaf.core.tool_dispatch import ToolCaller
-        caller = ToolCaller(
-            self.tools,
-            user_scope_id=user_scope_id,
-            user_role=user_role,
-            session_id=get_current_session_id(),
-            max_result_chars=None,
-            gate_enabled=False,
-        )
-
         # Show animation (or static)
         # Disable animation by default for stability (matches Coder/Research agent)
         from vaf.cli.tui import _StaticHeader

@@ -35,9 +35,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 - **Asking VAF to learn a document can no longer pull in files it protects.** This tool
-  carried its own idea of which files were readable, and it was wider than the one every
-  other file tool uses: anything in your home folder, including SSH keys, `.env` files and
-  VAF's own settings and credential store. Learning is also the worst place for that to go
+  carried its own idea of which files were readable, and it disagreed with the one every
+  other file tool uses in both directions: it allowed anything in your home folder, including
+  SSH keys, `.env` files and VAF's own settings and credential store, while refusing ordinary
+  files kept outside it. Learning is also the worst place for that to go
   wrong, because it keeps what it reads: the contents are summarised into long-term memory
   and stay searchable long after the conversation ends. The tool's private rule is gone and
   the shared one decides, which on a multi-user machine also applies the per-user boundary it
@@ -54,11 +55,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   interface to open a file, because whether the file is actually served is decided
   elsewhere and can still be refused. Claiming success for something that cannot
   happen is the same problem one level up.
-- **The file assistant's own tools now follow the same rules as everything else.** When you
-  ask VAF to work with your files, it hands the job to an assistant that runs its own small
-  agent - and that assistant called its thirteen tools directly, bypassing the checks every
-  other tool call goes through. In particular it did not tell them who was asking, so on a
-  multi-user machine their per-user file boundary could not form properly. It does now.
+- **The file assistant's own tools now follow the same rules as everything else - this time
+  on both of its paths.** When you ask VAF to work with your files, it hands the job to an
+  assistant that runs its own small agent, and that agent called its thirteen tools directly,
+  bypassing the checks every other tool call goes through. An earlier entry said this was
+  fixed; it was fixed for one of the assistant's two paths. The other one answers simple
+  requests straight from the wording, without ever starting the inner agent - "how big is this
+  folder", "rename this to that", "show me the structure" - and it kept calling five tools
+  directly, including the one that moves files.
+  Both paths go through the shared checks now, which also means that for the first time these
+  actions appear in the activity log: previously the assistant could rename or write a file
+  and leave no record of it anywhere. Your files were never less protected on that path - the
+  per-user boundary applied throughout - but nothing recorded what happened.
+  One thing reads differently as a result: when one of those actions fails, the message is now
+  the same short one used everywhere else instead of a hand-written sentence, so the assistant
+  says what it is about to do beforehand ("Renaming X to Y...") to keep the context.
 - **A failed web search could answer with someone else's memories.** When every web provider
   is unavailable, VAF falls back to your own long-term memory - but on a server running
   several conversations at once, it picked whose memory to read from a process-wide value

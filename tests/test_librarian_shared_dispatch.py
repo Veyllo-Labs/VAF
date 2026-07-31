@@ -92,7 +92,9 @@ def _drive(tool, *, user_scope_id=SCOPE, user_role="user", tool_name=None):
     with patch("vaf.core.api_backend.APIBackendManager", _Backend), \
          patch("vaf.core.config.Config.load", classmethod(lambda cls: _API_CONFIG)):
         return librarian._execute_with_llm(
-            "do the thing", user_scope_id=user_scope_id, user_role=user_role)
+            "do the thing",
+            caller=librarian._make_caller(user_scope_id=user_scope_id, user_role=user_role),
+        )
 
 
 # ── the identity, which is the point ─────────────────────────────────────────
@@ -139,7 +141,8 @@ def test_the_model_cannot_supply_its_own_identity():
     librarian.tools = {name: tool}
     with patch("vaf.core.api_backend.APIBackendManager", _Backend), \
          patch("vaf.core.config.Config.load", classmethod(lambda cls: _API_CONFIG)):
-        librarian._execute_with_llm("go", user_scope_id=SCOPE, user_role="user")
+        librarian._execute_with_llm(
+            "go", caller=librarian._make_caller(user_scope_id=SCOPE, user_role="user"))
 
     assert tool.seen["user_scope_id"] == SCOPE
     assert tool.seen["user_role"] == "user"
@@ -209,11 +212,17 @@ def test_the_run_entrypoint_hands_the_identity_to_the_loop():
 
     src = inspect.getsource(LibrarianTool._run_impl)
     assert "_execute_with_llm(" in src
-    assert 'user_scope_id=kwargs.get("user_scope_id")' in src, (
-        "_run_impl calls the model loop without an identity, so every sub-tool would run "
-        "unscoped no matter how correct the loop itself is"
+    assert "_make_caller(**kwargs)" in src, (
+        "_run_impl no longer builds the caller from its own kwargs, so every sub-tool would "
+        "run unscoped no matter how correct the loop itself is"
     )
-    assert 'user_role=kwargs.get("user_role")' in src
+    assert "_try_direct_execution(task, caller)" in src, (
+        "the fast path is not being handed the caller - it dispatched raw for a whole release "
+        "exactly this way, while the LLM path was converted and looked like the whole lane"
+    )
+    factory = inspect.getsource(LibrarianTool._make_caller)
+    assert 'kwargs.get("user_scope_id")' in factory and 'kwargs.get("user_role")' in factory
+    assert 'kwargs.get("user_role")' in inspect.getsource(LibrarianTool._make_caller)
 
 
 def test_policy_now_applies_where_it_did_not_before():
@@ -242,8 +251,10 @@ def test_the_loop_dispatches_through_the_shared_pipeline():
 
     src = inspect.getsource(LibrarianTool._execute_with_llm)
     assert "caller.execute(" in src
-    assert "ToolCaller(" in src
     assert "self.tools[fn_name].run(" not in src
+    # The construction moved into _make_caller so BOTH paths share one; assert it there.
+    assert "ToolCaller(" in inspect.getsource(LibrarianTool._make_caller)
+    assert "ToolCaller(" not in src, "a second construction is back - that is how the two paths drifted"
 
 
 # ── the jail widening, measured rather than asserted in a comment ────────────
@@ -390,6 +401,17 @@ def test_the_session_comes_from_the_contextvar_not_from_the_instance():
     cross-user leak the identity avoids."""
     import inspect
 
-    src = inspect.getsource(LibrarianTool._execute_with_llm)
+    src = inspect.getsource(LibrarianTool._make_caller)
     assert "get_current_session_id()" in src
     assert "self._session_id" not in src
+    # Asked of the AST, not of the text: the factory's DOCSTRING names `self._caller` in order
+    # to warn against it, so a substring check reports the warning as the offence. (It did.)
+    import ast, textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(LibrarianTool)))
+    parked = [n for n in ast.walk(tree)
+              if isinstance(n, ast.Attribute) and n.attr == "_caller"
+              and isinstance(n.value, ast.Name) and n.value.id == "self"]
+    assert not parked, (
+        "the caller was parked on the shared tool instance; agent.tools is built once per "
+        "process and serves every user, so it would outlive the turn that set it"
+    )

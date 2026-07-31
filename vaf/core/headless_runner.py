@@ -2894,12 +2894,17 @@ def _handle_command(cmd_str, agent, session_mgr):
             # VRAM), the tokenizer reset and the model-name refresh. This runner used to
             # reimplement it and had none of that. force=True because RELOAD_CONFIG does
             # not know WHICH key changed - without it a pure API-key change is a no-op.
+            #
+            # Broadcast, because this command arrives on ONE worker's command loop while
+            # the pool may hold several agents; re-applying only to `agent` left the rest
+            # of the pool on the previous key until a restart.
             from vaf.core.config import Config
+            from vaf.core.agent import reload_all_api_backends
             agent.config = Config.load()   # non-provider keys, as before
             old_provider = getattr(agent, "provider", "local")
-            changed = agent.reload_api_backend(force=True)
+            changed = reload_all_api_backends(force=True)
             print(f"[Headless] RELOAD_CONFIG: old={old_provider} "
-                  f"new={getattr(agent, 'provider', 'local')} changed={changed}")
+                  f"new={getattr(agent, 'provider', 'local')} agents_changed={changed}")
             if changed:
                 # Reflect the (possibly) new backend in the UI. Gated on the agent's own
                 # verdict rather than a provider comparison, so a key-only swap counts too.

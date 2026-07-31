@@ -1502,18 +1502,23 @@ def on_config_changed(key, value, old_value=None):
     elif key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
         _schedule_network_restart(key, value)
 
-    # Provider or API key changed -> apply to the already-running agent live (no VAF restart),
-    # so finishing onboarding with a cloud key (or switching provider in Settings) takes effect
-    # immediately and no local GGUF is downloaded. The key VALUE is never logged.
+    # Provider or API key changed -> apply to the already-running agents live (no VAF
+    # restart), so finishing onboarding with a cloud key (or switching provider in
+    # Settings) takes effect immediately and no local GGUF is downloaded. The key VALUE
+    # is never logged.
+    #
+    # EVERY agent, not `web_interface.agent_instance`. That pointer is the harness's
+    # CONTROL channel and is assigned by the headless runner's worker 1 only; with
+    # `parallel_main_workers = 5` the other four kept the old key until a restart, which
+    # is exactly how a wrong key could be saved while the previous one kept answering.
     elif key == "provider" or key.startswith("api_key_"):
         def _apply_provider():
             time.sleep(0.5)  # let the config save finish
             try:
-                from vaf.core.web_interface import get_web_interface
-                ag = getattr(get_web_interface(), "agent_instance", None)
-                if ag is not None and hasattr(ag, "reload_api_backend"):
-                    if ag.reload_api_backend(force=key.startswith("api_key_")):
-                        log("Tray", "Provider/key change applied to the running agent.")
+                from vaf.core.agent import reload_all_api_backends
+                n = reload_all_api_backends(force=key.startswith("api_key_"))
+                if n:
+                    log("Tray", f"Provider/key change applied to {n} running agent(s).")
             except Exception as e:
                 log("Tray", f"Provider apply error: {e}")
         threading.Thread(target=_apply_provider, daemon=True).start()

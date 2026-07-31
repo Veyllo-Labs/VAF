@@ -23,7 +23,17 @@ def test_facade_exports_exactly_the_documented_surface():
     embedder registers needs to subclass BaseTool and declare identity_kwargs, and turning
     the identity it then receives into an actual file boundary needs user_jail. Documented
     in docs/EMBEDDING.md; both are stdlib-only underneath, so the slim base is unaffected
-    (tests/test_slim_base_import.py)."""
+    (tests/test_slim_base_import.py).
+
+    CONSIDERED AND LEFT OFF (2026-07-31), so it is not re-litigated blind:
+    `reload_all_api_backends`, the process-wide provider/key re-apply that fixed the
+    harness. It stays internal in `vaf.core.agent` for two reasons that only look like
+    one. It refuses for any agent constructed with config overrides - which is every
+    agent an embedder builds the documented way - so publishing it would have handed the
+    intended audience a name that does nothing for them. And the facade exposes no
+    single-agent reload either, so the broadcast alone would have been a surface with no
+    floor under it. The harness has proven the primitive with five call sites; embedders
+    have proven nothing yet, and that is the measurement that decides."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
         "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "__version__",

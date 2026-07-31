@@ -12,6 +12,7 @@ import requests
 import warnings
 import atexit
 import threading
+import weakref
 from datetime import datetime
 import re
 from typing import List, Dict, Any, Optional, Tuple
@@ -585,6 +586,73 @@ def _get_debug_log_dir():
             continue
     return Path.cwd()
 
+
+# ── Live agents in THIS process ──────────────────────────────────────────────────
+#
+# `Agent.reload_api_backend` re-applies the on-disk provider + key to ONE instance.
+# That is the right unit of work and the wrong unit of reach: a process routinely
+# holds several agents, and until this registry existed there was no way to ask which.
+# Five call sites hand-rolled the answer by re-applying to whatever single agent they
+# happened to hold a pointer to, and the harness answered it with ONE pointer on its
+# web interface, assigned by `worker_id == 1` only.
+#
+# THE DEFECT THAT MEASURED IT (2026-07-31, live, owner-found). With
+# `parallel_main_workers = 5` and a cloud provider the headless runner builds FIVE chat
+# agents; exactly one registers. Saving a new API key reloaded that one, the other four
+# answered with the old key, and only a full restart fixed it: the user changed the key,
+# the UI said saved, and the agent kept the old one. Same class as the scope leak in
+# docs/llm/API_INTEGRATION.md - a process-global assumption that holds at
+# `parallel_main_workers = 1` and silently breaks above it.
+#
+# The broadcast needs NO policy of its own, and that is why this is a merge and not a
+# new mechanism: `reload_api_backend` already refuses for a sub-agent pinned via
+# VAF_PROVIDER and for an embedded agent whose caller supplied config overrides. Those
+# per-instance guards compose, so a broadcast reaches exactly the agents that are meant
+# to follow the file and no others.
+_LIVE_AGENTS: "weakref.WeakSet" = weakref.WeakSet()
+_LIVE_AGENTS_LOCK = threading.Lock()
+
+
+def _register_live_agent(agent) -> None:
+    """Record a fully constructed agent. Weak, so a dead agent leaves on its own."""
+    try:
+        with _LIVE_AGENTS_LOCK:
+            _LIVE_AGENTS.add(agent)
+    except Exception:
+        pass
+
+
+def live_agents() -> list:
+    """Snapshot of the agents alive in this process, newest membership order undefined.
+
+    A LIST, not the set itself: iterating a WeakSet while agents are being constructed
+    on other threads (five workers start concurrently) can mutate it mid-iteration.
+    """
+    with _LIVE_AGENTS_LOCK:
+        return [a for a in _LIVE_AGENTS]
+
+
+def reload_all_api_backends(*, force: bool = False) -> int:
+    """Re-apply provider + API key from the live config to EVERY agent in this process.
+
+    Returns how many agents actually changed backend. `force=True` when the caller knows
+    a key changed but not which - a pure key swap leaves the provider equal, so without
+    it `reload_api_backend`'s no-op guard would swallow the change.
+
+    Never raises: one agent refusing or failing must not stop the rest from being
+    repaired. A config change reaching four of five agents is bad; reaching one because
+    the second threw is worse.
+    """
+    changed = 0
+    for agent in live_agents():
+        try:
+            if agent.reload_api_backend(force=force):
+                changed += 1
+        except Exception:
+            continue
+    return changed
+
+
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
 
@@ -989,6 +1057,11 @@ class Agent:
         self._plan_gate_blocks = 0
 
         # Team-await State (main agent: don't declare done while sub-agents genuinely run)
+
+        # LAST line of __init__ on purpose: a half-built agent must never be handed a
+        # backend swap by a broadcast running on another thread. If __init__ raises
+        # above this, the agent is never registered, which is the correct outcome.
+        _register_live_agent(self)
 
     @staticmethod
     def _is_placeholder_plan(plan) -> bool:

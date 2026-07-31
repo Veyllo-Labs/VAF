@@ -237,15 +237,26 @@ def _reload_config_branches(src: str):
 def test_every_reload_config_receiver_delegates_to_the_agent(module, expected):
     """web_server sends ONE __CMD__:RELOAD_CONFIG; these are the receivers. Each must ask
     the agent to swap rather than reconstruct the swap - reconstructing it is exactly how
-    all three drifted, and how two of them became copies of a copy."""
+    all three drifted, and how two of them became copies of a copy.
+
+    TIGHTENED 2026-07-31: delegating is no longer enough, it has to be the BROADCAST.
+    A receiver holds whichever agent its own loop was built around, and the headless pool
+    holds up to `parallel_main_workers` of them; repairing one and calling the command
+    handled is how a replaced API key kept being ignored by four workers out of five
+    until a restart. `reload_all_api_backends` still routes through
+    `Agent.reload_api_backend` per instance, so everything the original assertion
+    protected - the swap lock, the sub-agent pin, the embedded guard, the local teardown -
+    is unchanged; what changed is how many agents come out of it correct.
+    """
     src = Path(module.__file__).read_text(encoding="utf-8")
     branches = _reload_config_branches(src)
     assert len(branches) == expected, (
         f"{module.__name__}: expected {expected} RELOAD_CONFIG handler(s), found {len(branches)}"
     )
     for body in branches:
-        assert "reload_api_backend(force=True)" in body, (
-            "a RELOAD_CONFIG receiver does not delegate the swap to the agent"
+        assert "reload_all_api_backends(force=True)" in body, (
+            "a RELOAD_CONFIG receiver repairs one agent instead of every agent in the "
+            "process; the rest of the worker pool keeps the previous provider and key"
         )
         assert "APIBackendManager" not in body, (
             "a RELOAD_CONFIG receiver builds a backend itself again - that path misses "

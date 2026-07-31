@@ -45,6 +45,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Changing your API key now takes effect without restarting VAF.** Saving a new key
+  appeared to work while the old one kept answering, and only a full restart applied the
+  change - which meant a key you had just deleted or replaced could still be in use, with
+  nothing on screen saying so. VAF runs several chat workers side by side, and the change
+  was being applied to one of them; the rest carried on with the key they started with. It
+  now reaches every one of them. Agents belonging to an application that embeds VAF are
+  deliberately left alone, so a key passed in by that application is never replaced by the
+  one on the machine.
 - **A broken stored API key now says so instead of looking unconfigured.** Until now any
   problem reading a key produced an empty value, and an empty value means "not set up" to
   everything that asks - so a damaged key silently dropped you to the local model, or to no

@@ -269,6 +269,31 @@ that the secret is no longer in the same file as everything else, is not readabl
 eye, and does not travel in a config backup or a screenshot. It is not protection
 against someone who can already read your data directory.
 
+### Changing configuration on an agent that is already running
+
+There is no supported way to do it, and that is a decision rather than an oversight,
+so here is where the line sits.
+
+**Your `config=` wins permanently, by design.** An agent you constructed with
+overrides is caller-controlled for its whole life: nothing VAF does later - a provider
+switch on the machine, a key rotated in the product's settings, a reload triggered by
+its tray - can substitute the machine's value for yours. That is the guarantee the
+precedence rules above are worth having.
+
+The flip side is the boundary: **if you change your own settings, build a new agent.**
+There is no `agent.set_config(...)`, and the process-wide re-apply VAF uses internally
+(`vaf.core.agent.reload_all_api_backends`) deliberately skips every agent that carries
+overrides - so it would do nothing for you even if you reached into it. Treat anything
+under `vaf.core.*` as internal, as the stability section says.
+
+Why it is drawn there rather than built out: the need was measured on VAF's own
+product, where five chat workers each held a backend and only one was reachable, so a
+replaced API key kept being ignored by four of them until a restart. That is a real,
+counted requirement for a harness that owns many agents and no config overrides. No
+comparable measurement exists for an embedder yet, and a public name whose shape is
+still open is worse than none. If you hit this - if rebuilding an agent is genuinely
+not an option for your application - that is the report that would move the line.
+
 ### A complete example, with error handling
 
 The engine is built **lazily** on the first `run()` (or `.core`) call — so

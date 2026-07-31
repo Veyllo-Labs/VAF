@@ -1422,13 +1422,18 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     # guards, the embedded-key path, the event-sink reattach,
                                     # stop_server (GGUF stayed in VRAM), the tokenizer reset and
                                     # the model-name refresh. force=True so a pure key change
-                                    # is not swallowed by the no-op guard.
+                                    # is not swallowed by the no-op guard. Broadcast rather
+                                    # than one instance: this process is single-agent today,
+                                    # but "re-apply to the agent I happen to hold" is the
+                                    # assumption that left four of five workers stale in the
+                                    # headless pool, and it has no reason to survive here.
                                     try:
                                         tui.event("System", "Config updated from WebUI", style="dim")
                                         from vaf.core.config import Config
+                                        from vaf.core.agent import reload_all_api_backends
                                         if hasattr(agent, "config"):
                                             agent.config = Config.load()
-                                        if agent.reload_api_backend(force=True):
+                                        if reload_all_api_backends(force=True):
                                             tui.event("System", f"Provider switched to {getattr(agent, 'provider', 'local').upper()}", style="dim")
                                     except Exception:
                                         pass
@@ -1548,9 +1553,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             try:
                                                 tui.event("System", "Config updated from WebUI", style="dim")
                                                 from vaf.core.config import Config
+                                                from vaf.core.agent import reload_all_api_backends
                                                 if hasattr(agent, "config"):
                                                     agent.config = Config.load()
-                                                if agent.reload_api_backend(force=True):
+                                                if reload_all_api_backends(force=True):
                                                     tui.event("System", f"Provider switched to {getattr(agent, 'provider', 'local').upper()}", style="dim")
                                             except Exception:
                                                 pass

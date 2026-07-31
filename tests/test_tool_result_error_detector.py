@@ -67,9 +67,42 @@ def test_filesystem_path_safety_family():
 
     # The REAL wordings, so the family also covers what the code actually returns. Without
     # these, a rename of every refusal message in filesystem.py would leave this file green.
-    _fails("Access denied: VAF program directory is protected")               # filesystem.py:292
-    _fails("Access denied: VAF's own data directory")                         # filesystem.py:344
-    _fails("Access denied: outside your own data")                            # filesystem.py:347
+    for real in _REAL_FILESYSTEM_REFUSALS:
+        _fails(real)
+
+
+# The wordings above are not annotated with line numbers, and that is the point: a "# file:line"
+# comment is the same kind of claim as the "# filesystem.py" ones removed above - it is true when
+# written and goes quietly stale on the next inserted line, with the test still green. So the
+# provenance is an ASSERTION instead. Whoever rewords a refusal gets a red test naming the string,
+# rather than a comment that slowly stops being true.
+_REAL_FILESYSTEM_REFUSALS = (
+    "Access denied: VAF program directory is protected",
+    "Access denied: VAF's own data directory",
+    "Access denied: outside your own data",
+)
+
+
+def test_those_refusal_strings_really_come_from_filesystem():
+    """Checked against string LITERALS, not against the file's text.
+
+    Not pedantry: "Access denied: VAF's own data directory" appears twice in filesystem.py - once
+    as the returned refusal and once inside a comment that explains it. A plain substring check
+    would pass on the prose alone, so a reader grepping it finds two hits of different natures and
+    cannot tell which one the code actually returns. The AST only sees the literal.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "vaf" / "tools" / "filesystem.py"
+    literals = {n.value for n in ast.walk(ast.parse(src.read_bytes().decode()))
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    missing = [s for s in _REAL_FILESYSTEM_REFUSALS if s not in literals]
+    assert not missing, (
+        f"filesystem.py no longer returns {missing}. If a refusal was reworded, update the tuple "
+        "so the detector keeps being tested against what the code actually says - the three "
+        "strings above it are invented shapes and would not catch the change."
+    )
     _fails("Dest Error: Invalid path")                                        # move/copy wrapper
     _fails("Edit failed: old_string not found in file")                       # filesystem.py
 

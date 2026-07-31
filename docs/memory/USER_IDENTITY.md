@@ -5,7 +5,7 @@ This document describes how VAF stores and uses the **current human user's** pro
 ## Purpose
 
 The model needs to know who it is talking to so it can:
-- Greet the user by name (e.g. "Hey Mert").
+- Greet the user by name (e.g. "Hey Alice").
 - Prefer the user's language.
 - Use the user's location (city/country) for context-aware answers (e.g. weather, local time).
 - Follow stated preferences and rules (e.g. "always be concise", "don't use emojis").
@@ -40,7 +40,7 @@ That block is rebuilt every turn (dynamic system prompt), so the model always se
 
 - **Module**: `vaf/tools/user_identity.py`
 - **Name**: `update_user_identity`
-- **When to use**: When the user says their name, language, location, or rules (e.g. "call me Mert", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
+- **When to use**: When the user says their name, language, location, or rules (e.g. "call me Alice", "I prefer German", "I'm in Berlin" / "I'm based in Munich, Germany", "always be concise", "don't use emojis"). Also when the user says which channel to use for proactive messages (e.g. "send it via Telegram" → `main_messenger="telegram"`).
 
 Parameters (all optional): `name`, `language`, `city`, `country`, `main_messenger` (`"telegram"` | `"discord"` | `"slack"` | `"whatsapp"`), `timezone` (IANA e.g. `Europe/Berlin`), `date_format` (e.g. `dd.mm.yyyy`), `time_format` (`24h` | `12h`), `add_preference` / `remove_preference`, `add_do` / `remove_do`, `add_dont` / `remove_dont`. At least one must be provided.
 

@@ -1229,7 +1229,7 @@ function VAFDashboardContent() {
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
     /** User's preferred time format from Settings → Interface (24h | 12h). Used for message timestamps. */
     const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
-    /** User's display name from user_identity.json (e.g. "Mert"). Used for personalised welcome greeting. */
+    /** User's display name from user_identity.json (e.g. "Alice"). Used for personalised welcome greeting. */
     const [userName, setUserName] = useState<string | null>(null);
     /** Randomly selected welcome greeting — refreshed each time the chat is empty (new chat). */
     const [welcomeText, setWelcomeText] = useState('');

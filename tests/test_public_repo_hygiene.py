@@ -22,6 +22,12 @@ Design constraints of a PUBLIC guard for PRIVATE literals:
   time. On CI the file is absent and that layer is skipped; locally every pytest run checks
   the full set. Local git hooks (also never committed) cover commit messages, which no
   pytest can see.
+- HOME PATHS are checked by SHAPE, not by name, and that layer runs everywhere. A denylist
+  can only catch the names somebody thought of: the sweep that added this layer was looking
+  for one first name and found `/Users/<real-macos-login>` in `launch_vaf.scpt`, a different
+  identifier entirely, which no name-based check would ever have reported. A shape check
+  catches the whole class, protects a fork of this repo as much as this one, and needs no
+  secret to work.
 """
 import re
 import subprocess
@@ -40,6 +46,30 @@ _SYNTHETIC_IDS = {"green123456", "red654321", "yellow012345"}
 
 # Owner-specific literals, one per line, gitignored, owner's machine only. Never commit it.
 _LOCAL_DENYLIST = _REPO / ".hygiene-deny.local"
+
+# A home directory in committed content names a person. The shape is generic and safe to
+# publish, so unlike the literals above this layer also runs on CI and in anyone's fork.
+_HOME_PATH_RE = re.compile(r"(?:[Cc]:[\\/]+Users[\\/]+|/Users/|/home/)([A-Za-z0-9._-]{2,32})")
+
+# Accounts that are placeholders, service accounts or documentation examples rather than a
+# person. Everything else in a home path is treated as a real login. Keep this list boring:
+# a new entry is a claim that the name identifies nobody, and that claim is easy to get wrong
+# (the login this layer first caught was initials plus a surname, which reads like a service
+# account until you say it out loud - it cannot be listed here for the reason above).
+_PLACEHOLDER_USERS = {
+    "user", "users", "username", "youruser", "user1", "web_user", "test", "testuser",
+    "alice", "bob", "example", "me", "admin", "administrator", "public", "root",
+    "runner", "browser", "nobody9x", "windows10fan", "node", "app", "vaf",
+    "...", "<user>", "$user", "${user}",
+}
+
+# Files that carry the author's real name ON PURPOSE - a credit line is authorship, not a
+# leaked identifier, and the owner decides whether to publish their own name. Listed rather
+# than pattern-matched so that adding one is a visible decision. This set may only shrink.
+_AUTHOR_CREDIT_FILES = {
+    "vaf/cli/cmd/settings.py",   # "Created by ..." in the CLI's about screen
+    "vaf/sources/news.json",     # maintainer field of the shipped news feed
+}
 
 # Tracked files we do not scan: binaries and vendored third-party code (upstream authorship
 # notes legitimately contain their authors' real emails).
@@ -68,6 +98,11 @@ def _session_id_hits(text: str):
     return [m for m in _SESSION_ID_RE.findall(text) if m not in _SYNTHETIC_IDS]
 
 
+def _home_path_hits(text: str):
+    return sorted({m for m in _HOME_PATH_RE.findall(text)
+                   if m.lower() not in _PLACEHOLDER_USERS})
+
+
 def test_no_real_session_ids_in_tracked_content():
     offenders = {}
     for rel, p in _tracked_text_files():
@@ -83,6 +118,51 @@ def test_no_real_session_ids_in_tracked_content():
     )
 
 
+def test_no_real_home_paths_in_tracked_content():
+    """A home directory names a person, and this layer runs everywhere - no secret needed.
+
+    It exists because the name-based layer cannot be complete. The sweep that added it was
+    hunting one first name; this shape check reported `/Users/<a real macOS login>` in the
+    macOS launcher, an identifier nobody had thought to look for. It was also a product bug:
+    the launcher only worked on one machine.
+    """
+    offenders = {}
+    for rel, p in _tracked_text_files():
+        text = p.read_bytes().decode("utf-8", errors="ignore")
+        hits = _home_path_hits(text)
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "Real home paths in committed content (public repo). Use $HOME / a placeholder, or "
+        "add the account to _PLACEHOLDER_USERS if it truly identifies nobody:\n"
+        + "\n".join(f"  {k}: {v}" for k, v in sorted(offenders.items()))
+    )
+
+
+def test_the_home_path_detector_actually_detects():
+    """Both directions, because a shape check that never refuses anything reads exactly like
+    a clean repository."""
+    # Assembled at runtime, like the session-id example above and for the same reason: a
+    # contiguous real-shaped home path written here would be flagged by this very guard.
+    login = "jd" + "oe"
+    for shape in (rf"C:\Users\{login}\Documents", f"/Users/{login}/VAF", f"/home/{login}/.vaf"):
+        assert _home_path_hits(shape) == [login], shape
+    for benign in (r"C:\Users\user\Documents", "/home/runner/work", "/Users/alice/x",
+                   "/home/user/.vaf", "/Users/.../Documents"):
+        assert _home_path_hits(benign) == [], benign
+
+
+def test_the_author_credit_allowlist_stays_a_decision():
+    """The two files that may carry the author's real name are named, not matched. If the set
+    grows silently the literal layer below stops meaning anything."""
+    assert len(_AUTHOR_CREDIT_FILES) <= 2, (
+        "a new file was allowed to carry the owner's real name - that is a publishing "
+        "decision and belongs in a commit message, not in a quietly grown set"
+    )
+    for rel in _AUTHOR_CREDIT_FILES:
+        assert (_REPO / rel).is_file(), f"{rel} is allowlisted but gone - drop the entry"
+
+
 def test_no_owner_literals_in_tracked_content():
     """Full-literal layer, owner's machine only. CI skips it (the denylist is gitignored and
     absent there); the generic pattern above still runs everywhere."""
@@ -95,6 +175,8 @@ def test_no_owner_literals_in_tracked_content():
     ]
     offenders = {}
     for rel, p in _tracked_text_files():
+        if rel in _AUTHOR_CREDIT_FILES:
+            continue        # the owner's own credit line, published on purpose
         text = p.read_bytes().decode("utf-8", errors="ignore")
         hits = [lit for lit in literals if lit in text]
         if hits:

@@ -72,8 +72,8 @@ def test_split_directory_path_unchanged():
 
 
 def test_split_windows_file_path_on_any_host():
-    d, hint = _split_explicit_path(r"C:\Users\mert\Documents\proj\site.html")
-    assert d == r"C:\Users\mert\Documents\proj"
+    d, hint = _split_explicit_path(r"C:\Users\alice\Documents\proj\site.html")
+    assert d == r"C:\Users\alice\Documents\proj"
     assert hint == "site.html"
 
 
@@ -102,8 +102,8 @@ def test_bare_unix_path_stops_at_quotes():
 
 def test_bare_windows_path_keeps_extension():
     # Pre-fix the Windows arm excluded '.', truncating the extension away.
-    got = _extract_explicit_task_path(r"speichere unter C:\Users\mert\Documents\proj\site.html")
-    assert got == r"C:\Users\mert\Documents\proj\site.html"
+    got = _extract_explicit_task_path(r"speichere unter C:\Users\alice\Documents\proj\site.html")
+    assert got == r"C:\Users\alice\Documents\proj\site.html"
 
 
 def test_incident_task_text_extracts_full_file_path():

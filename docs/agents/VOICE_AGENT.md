@@ -216,7 +216,7 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    trust a downgrade). A CLEAR stranger flips immediately: a reliable-length `other`
    well below the band, or a named third-party match, drops `_speaker_ok` and breaks
    the sticky. `voice_reply(speaker_ok=False)` still drops any delegate marker in
-   CODE, and the prompt pins that the voice label outranks spoken claims ("I am Mert"
+   CODE, and the prompt pins that the voice label outranks spoken claims ("I am Alice"
    from `[anderer_Sprecher]` stays another speaker). The sticky window is a
    deliberate, owner-approved usability/anti-spoofing trade-off: a guest speaking in
    the borderline band immediately after the owner can inherit the window, but a

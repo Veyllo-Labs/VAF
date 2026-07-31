@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Speaker identification ("Mert vs. anderer_Sprecher") - enroll-and-verify.
+"""Speaker identification ("Alice vs. anderer_Sprecher") - enroll-and-verify.
 
 Local lane on sherpa-onnx (Apache-2.0, onnxruntime-only, no torch): Silero VAD
 segments the audio, a 3D-Speaker ERes2Net model (Apache-2.0) produces 192-dim
@@ -1031,8 +1031,8 @@ def analyze_segments(wav_bytes: bytes, scope_id: str) -> Optional[List[Dict]]:
         return None
 
 
-def label_prefix(score_result: Optional[Dict], display_name: str = "Mert") -> str:
-    """Transcript prefix for the LLM, e.g. '[Mert]: ' / '[anderer_Sprecher]: '."""
+def label_prefix(score_result: Optional[Dict], display_name: str = "Alice") -> str:
+    """Transcript prefix for the LLM, e.g. '[Alice]: ' / '[anderer_Sprecher]: '."""
     if not score_result:
         return ""
     label = score_result.get("label")

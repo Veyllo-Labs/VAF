@@ -5,7 +5,7 @@
 Standalone tool for updating the current user's identity (user_identity.json).
 
 Used so the LLM can set name, language, location (city/country), preferences, do's and don'ts
-when the user says e.g. "call me Mert", "I prefer German", or "I'm based in Berlin, Germany".
+when the user says e.g. "call me Alice", "I prefer German", or "I'm based in Berlin, Germany".
 """
 
 from vaf.tools.base import BaseTool
@@ -15,9 +15,9 @@ class UpdateUserIdentityTool(BaseTool):
     """
     Update the current user's identity (name, language, preferences, do's and don'ts).
     Use when the user tells you their name, preferred language, what they like or prefer,
-    or what you should do or avoid (e.g. "call me Mert", "I prefer German", "always be concise",
+    or what you should do or avoid (e.g. "call me Alice", "I prefer German", "always be concise",
     "don't use emojis"). This keeps the User identity block in your system prompt accurate
-    so you can greet them correctly (e.g. "Hey Mert") and respect their preferences.
+    so you can greet them correctly (e.g. "Hey Alice") and respect their preferences.
     """
     name = "update_user_identity"
     identity_kwargs = ("username",)
@@ -29,7 +29,7 @@ class UpdateUserIdentityTool(BaseTool):
         "'I'm in Berlin' or 'I'm based in Munich, Germany', 'always be concise', 'don't use emojis'). Use also when the user says which channel to use for proactive messages "
         "(e.g. 'send it to Telegram' -> main_messenger='telegram'). You can set name, language, city, country, main_messenger, timezone, date_format, time_format, and add/remove preferences, do's, and don'ts. "
         "Location (city/country) and timezone help you answer context-aware questions (e.g. weather, local time). date_format (e.g. dd.mm.yyyy) and time_format (24h/12h) are used when showing dates and times. "
-        "This updates the User identity block in your system prompt so you can greet them correctly (e.g. 'Hey Mert') and follow their rules."
+        "This updates the User identity block in your system prompt so you can greet them correctly (e.g. 'Hey Alice') and follow their rules."
     )
     parameters = {
         "type": "object",
@@ -49,7 +49,7 @@ class UpdateUserIdentityTool(BaseTool):
             },
             "name": {
                 "type": "string",
-                "description": "Display name for the user (e.g. 'Mert'). Omit to keep current."
+                "description": "Display name for the user (e.g. 'Alice'). Omit to keep current."
             },
             "language": {
                 "type": "string",

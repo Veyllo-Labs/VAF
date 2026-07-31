@@ -17,7 +17,7 @@ def main():
     tool = MemorySaveTool()
     # user_scope_id=None => global scope (allowed for Web UI without login)
     result = tool.run(
-        content="User's name is Mert",
+        content="User's name is Alice",
         title="User Information",
         tags=["identity"],
         user_scope_id=None,

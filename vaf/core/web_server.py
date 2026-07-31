@@ -6790,7 +6790,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             from vaf.core import voice_context as _vctx
                             # Store the spoken words WITHOUT the "[label]: " prefix - the
                             # speaker label is kept separately, so the transcript digest
-                            # renders one clean "[label] text" (not a double "[self] [Mert]:
+                            # renders one clean "[label] text" (not a double "[self] [Alice]:
                             # text") and no display name is embedded in the guest-facing
                             # group context.
                             _vctx.record(_call["scope"], _session,

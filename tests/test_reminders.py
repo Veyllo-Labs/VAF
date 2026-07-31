@@ -33,7 +33,7 @@ def _in(minutes):
 
 def test_create_and_list(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    res = rem.create_reminder(SCOPE, "mert", "Meeting in 30 Minuten", _in(30))
+    res = rem.create_reminder(SCOPE, "alice", "Meeting in 30 Minuten", _in(30))
     assert res["ok"], res
     items = rem.list_reminders(SCOPE)
     assert len(items) == 1 and items[0]["message"] == "Meeting in 30 Minuten"
@@ -43,18 +43,18 @@ def test_create_and_list(monkeypatch, tmp_path):
 
 def test_past_horizon_and_cap_are_refused(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    assert not rem.create_reminder(SCOPE, "mert", "x", _in(-10))["ok"]
+    assert not rem.create_reminder(SCOPE, "alice", "x", _in(-10))["ok"]
     far = (datetime.now() + timedelta(days=rem.MAX_HORIZON_DAYS + 1)).strftime("%Y-%m-%d %H:%M")
-    assert not rem.create_reminder(SCOPE, "mert", "x", far)["ok"]
+    assert not rem.create_reminder(SCOPE, "alice", "x", far)["ok"]
     for i in range(rem.MAX_PENDING_PER_USER):
-        assert rem.create_reminder(SCOPE, "mert", f"r{i}", _in(30 + i))["ok"]
-    capped = rem.create_reminder(SCOPE, "mert", "one too many", _in(200))
+        assert rem.create_reminder(SCOPE, "alice", f"r{i}", _in(30 + i))["ok"]
+    capped = rem.create_reminder(SCOPE, "alice", "one too many", _in(200))
     assert not capped["ok"] and "cap" in capped["error"]
 
 
 def test_cancel(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    r = rem.create_reminder(SCOPE, "mert", "x", _in(30))["reminder"]
+    r = rem.create_reminder(SCOPE, "alice", "x", _in(30))["reminder"]
     assert rem.cancel_reminder(SCOPE, r["id"]) is True
     assert rem.list_reminders(SCOPE) == []
     assert rem.cancel_reminder(SCOPE, "nope") is False
@@ -77,7 +77,7 @@ def _capture_router(monkeypatch, result=(True, "telegram")):
 def test_due_reminder_is_delivered_verbatim(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     sent, notes = _capture_router(monkeypatch)
-    r = rem.create_reminder(SCOPE, "mert", "Dein Meeting startet gleich.", _in(30))["reminder"]
+    r = rem.create_reminder(SCOPE, "alice", "Dein Meeting startet gleich.", _in(30))["reminder"]
     # not due yet
     assert rem.fire_due_reminders() == 0 and sent == []
     # force due (within grace)
@@ -85,7 +85,7 @@ def test_due_reminder_is_delivered_verbatim(monkeypatch, tmp_path):
     items[0]["fire_at"] = (datetime.now() - timedelta(minutes=5)).isoformat()
     rem._save(SCOPE, items)
     assert rem.fire_due_reminders() == 1
-    assert sent == [(SCOPE, "mert", "Dein Meeting startet gleich.")]  # verbatim, owner-scoped
+    assert sent == [(SCOPE, "alice", "Dein Meeting startet gleich.")]  # verbatim, owner-scoped
     assert rem.list_reminders(SCOPE) == []  # no longer pending
     assert notes == []
 
@@ -93,7 +93,7 @@ def test_due_reminder_is_delivered_verbatim(monkeypatch, tmp_path):
 def test_overdue_beyond_grace_is_marked_missed_honestly(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     sent, notes = _capture_router(monkeypatch)
-    rem.create_reminder(SCOPE, "mert", "zu spaet", _in(30))
+    rem.create_reminder(SCOPE, "alice", "zu spaet", _in(30))
     items = rem._load(SCOPE)
     items[0]["fire_at"] = (datetime.now() - timedelta(hours=rem.GRACE_HOURS + 1)).isoformat()
     rem._save(SCOPE, items)
@@ -105,7 +105,7 @@ def test_overdue_beyond_grace_is_marked_missed_honestly(monkeypatch, tmp_path):
 def test_no_messenger_falls_back_to_notification(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     sent, notes = _capture_router(monkeypatch, result=(False, None))
-    rem.create_reminder(SCOPE, "mert", "hallo", _in(30))
+    rem.create_reminder(SCOPE, "alice", "hallo", _in(30))
     items = rem._load(SCOPE)
     items[0]["fire_at"] = (datetime.now() - timedelta(minutes=1)).isoformat()
     rem._save(SCOPE, items)
@@ -118,7 +118,7 @@ def test_no_messenger_falls_back_to_notification(monkeypatch, tmp_path):
 def test_tool_roundtrip(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     t = ScheduleReminderTool()
-    out = t.run(message="Test", fire_at=_in(45), username="mert", user_scope_id=SCOPE)
+    out = t.run(message="Test", fire_at=_in(45), username="alice", user_scope_id=SCOPE)
     assert "Reminder scheduled" in out and "verbatim" in out
     listing = t.run(action="list", user_scope_id=SCOPE)
     assert "Test" in listing

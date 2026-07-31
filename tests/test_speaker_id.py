@@ -88,7 +88,7 @@ def test_resolve_label_hysteresis_and_length_awareness():
 
 
 def test_label_prefix():
-    assert sid.label_prefix({"label": "self"}, "Mert") == "[Mert]: "
+    assert sid.label_prefix({"label": "self"}, "Alice") == "[Alice]: "
     assert sid.label_prefix({"label": "other"}) == "[anderer_Sprecher]: "
     assert sid.label_prefix({"label": "unsure"}) == "[unsicher]: "
     assert sid.label_prefix(None) == ""
@@ -123,8 +123,8 @@ def test_profile_roundtrip_and_scope_isolation():
     rng = np.random.default_rng(1)
     c = rng.standard_normal(512).astype(np.float32)
     c /= np.linalg.norm(c)
-    meta = sid._save_profile("scope-a", "Mert", c, 26.4, 6)
-    assert meta["display_name"] == "Mert"
+    meta = sid._save_profile("scope-a", "Alice", c, 26.4, 6)
+    assert meta["display_name"] == "Alice"
     assert meta["net_speech_seconds"] == 26.4
 
     loaded = sid.load_profile("scope-a")
@@ -164,14 +164,14 @@ def test_enroll_rounds_accumulate_and_finalize(monkeypatch):
     r = sid.enroll_round("scope-a", wav)
     assert r["done"] and r["net_seconds"] == 25.0 and r["confidence"] == "hoch"
 
-    meta = sid.enroll_finalize("scope-a", "Mert")
+    meta = sid.enroll_finalize("scope-a", "Alice")
     assert meta is not None and meta["rounds"] == 5
     prof = sid.load_profile("scope-a")
     assert prof is not None
     # centroid of identical embeddings is that embedding
     assert np.allclose(prof["centroid"], emb, atol=1e-5)
     # session is consumed
-    assert sid.enroll_finalize("scope-a", "Mert") is None
+    assert sid.enroll_finalize("scope-a", "Alice") is None
 
 
 def test_enroll_round_without_session():
@@ -225,13 +225,13 @@ def test_score_wav_with_mocked_pipeline(monkeypatch):
     rng = np.random.default_rng(4)
     emb = rng.standard_normal(512).astype(np.float32)
     emb /= np.linalg.norm(emb)
-    sid._save_profile("scope-a", "Mert", emb, 26.0, 6)
+    sid._save_profile("scope-a", "Alice", emb, 26.0, 6)
     _mock_pipeline(monkeypatch, emb, seg_seconds=3.0)
 
     res = sid.score_wav(_wav_bytes(np.zeros(16000, dtype=np.float32)), "scope-a")
     assert res is not None
     assert res["label"] == "self" and res["score"] >= 0.99
-    assert sid.label_prefix(res, "Mert") == "[Mert]: "
+    assert sid.label_prefix(res, "Alice") == "[Alice]: "
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ def test_adaptive_owner_sample_blends_and_caps(monkeypatch, tmp_path):
     similarity floor; re-enrollment wipes the adaptive state."""
     import numpy as np
     base = np.zeros(8, dtype=np.float32); base[0] = 1.0
-    sid._save_profile("s1", "Mert", base, 20.0, 3)
+    sid._save_profile("s1", "Alice", base, 20.0, 3)
 
     near = np.zeros(8, dtype=np.float32); near[0] = 0.9; near[1] = 0.45
     monkeypatch.setattr(sid, "embed_wav",
@@ -319,7 +319,7 @@ def test_adaptive_owner_sample_blends_and_caps(monkeypatch, tmp_path):
     assert sid.load_profile("s1")["meta"]["adaptive_samples"] == sid._ADAPTIVE_MAX_SAMPLES
 
     # Fresh enrollment resets all adaptive state.
-    sid._save_profile("s1", "Mert", base, 25.0, 3)
+    sid._save_profile("s1", "Alice", base, 25.0, 3)
     d = sid._profile_dir("s1")
     assert not (d / "adaptive.npy").exists()
     assert not (d / "enroll_centroid.npy").exists()
@@ -330,7 +330,7 @@ def test_no_profile_no_adaptive_write(monkeypatch, tmp_path):
 
 
 def test_suggested_threshold_has_security_floor(monkeypatch, tmp_path):
-    """Mert's exact case: owner mean 0.61 vs others 0.15 - the naive midpoint
+    """Alice's exact case: owner mean 0.61 vs others 0.15 - the naive midpoint
     (0.38) would accept untested similar voices; the suggestion is floored at
     owner_mean - 0.15 (delegation authority: false accept >> false reject)."""
     for s in (0.60, 0.62):

@@ -627,7 +627,7 @@ def pop_user_reply_for_session(session_id: str) -> Optional[Dict[str, Any]]:
 
 def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, session_id: Optional[str] = None,
                 channel: Optional[str] = None) -> bool:
-    """Send a short nudge via main_messenger (e.g. 'Hey Mert, bist du da?'). Returns True if sent. The web
+    """Send a short nudge via main_messenger (e.g. 'Hey Alice, bist du da?'). Returns True if sent. The web
     fallback delivers to `session_id` (the anchor session the question was asked in) when given and still
     present, so the nudge lands in the SAME chat as the question — not whatever chat is currently 'latest'.
     `channel` is where the question was delivered: when it is "web" (incl. after a messenger escalation) the

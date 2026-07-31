@@ -101,10 +101,10 @@ def test_success_reports_actual_channel(monkeypatch):
     notifications = []
     result, calls = _run(
         monkeypatch, (True, "discord"), notifications,
-        message="Report ready.", username="mert", user_scope_id="scope1",
+        message="Report ready.", username="alice", user_scope_id="scope1",
     )
     assert "sent to the user via Discord" in result
-    assert calls["args"][0] == "scope1" and calls["args"][1] == "mert"
+    assert calls["args"][0] == "scope1" and calls["args"][1] == "alice"
     assert notifications == []
 
 
@@ -115,7 +115,7 @@ def test_no_messenger_falls_back_honestly(monkeypatch):
     notifications = []
     result, _ = _run(
         monkeypatch, (False, None), notifications,
-        message="Hello", username="mert", user_scope_id="scope1",
+        message="Hello", username="alice", user_scope_id="scope1",
     )
     assert "sent to the user via" not in result.lower()
     assert "Could not deliver via messenger" in result
@@ -127,10 +127,10 @@ def test_think_blocks_are_stripped(monkeypatch):
     notifications = []
     _, calls = _run(
         monkeypatch, (True, "telegram"), notifications,
-        message="<think>secret reasoning</think>Hi Mert", username="mert", user_scope_id=None,
+        message="<think>secret reasoning</think>Hi Alice", username="alice", user_scope_id=None,
     )
     assert "secret reasoning" not in calls["args"][2]
-    assert "Hi Mert" in calls["args"][2]
+    assert "Hi Alice" in calls["args"][2]
 
 
 def test_missing_attachment_still_sends_text(monkeypatch):
@@ -140,7 +140,7 @@ def test_missing_attachment_still_sends_text(monkeypatch):
     result, calls = _run(
         monkeypatch, (True, "telegram"), notifications,
         message="Summary", file_path="/nonexistent/nowhere_42.html",
-        username="mert", user_scope_id=None,
+        username="alice", user_scope_id=None,
     )
     assert calls["args"][3] is None
     assert "sent to the user via Telegram" in result
@@ -229,7 +229,7 @@ def test_router_records_outbound_into_channel_session(monkeypatch):
     monkeypatch.setattr(store_mod, "append_message",
                         lambda **kw: store_calls.append(kw))
 
-    mc._record_outbound("telegram", "12345", "Hello", "mert", "scope1")
+    mc._record_outbound("telegram", "12345", "Hello", "alice", "scope1")
     assert saved["sid"] == "telegram_12345"
     assert ("assistant", "Hello") in saved["session"].messages
     assert saved.get("saved") is True
@@ -260,8 +260,8 @@ def test_router_recording_respects_whatsapp_bridge_ownership(monkeypatch):
     monkeypatch.setattr(store_mod, "append_message",
                         lambda **kw: store_calls.append(kw))
 
-    mc._record_outbound("whatsapp", "4917012345@s.whatsapp.net", "Hi", "mert", None)
-    assert saved["sid"] == "whatsapp_mert_4917012345"
+    mc._record_outbound("whatsapp", "4917012345@s.whatsapp.net", "Hi", "alice", None)
+    assert saved["sid"] == "whatsapp_alice_4917012345"
     assert store_calls == []
 
 

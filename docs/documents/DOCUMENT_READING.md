@@ -82,8 +82,8 @@ pip install python-pptx>=0.6.21    # For PowerPoint files
 You can pass a normal path or a **file URL** (e.g. from a browser or file manager):
 
 ```
-User: "Read the file C:\Users\mert\Documents\mitgliedschaftsbescheinigung.pdf"
-User: "Open file:///C:/Users/mert1/Downloads/20251110_075336_Bewilligungsbescheid.pdf"
+User: "Read the file C:\Users\alice\Documents\membership_certificate.pdf"
+User: "Open file:///C:/Users/user/Downloads/20251110_075336_approval_notice.pdf"
 ```
 
 The document_editor tool and Librarian accept `file:///` URLs and convert them to the correct path on your OS. The librarian will:
@@ -93,7 +93,7 @@ The document_editor tool and Librarian accept `file:///` URLs and convert them t
 
 **Output:**
 ```
-### PDF: mitgliedschaftsbescheinigung.pdf
+### PDF: membership_certificate.pdf
 **Pages:** 5
 
 --- Page 1 ---

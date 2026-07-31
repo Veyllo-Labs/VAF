@@ -7,7 +7,7 @@ AgentAvatar and a title that types itself out character by character.
 
 The title is **randomly selected** from a pool of greetings each time the empty
 state appears (new chat, session switch). If the user's name is known, personalised
-variants like *"Hey Mert, womit kann ich helfen?"* are included in the pool.
+variants like *"Hey Alice, womit kann ich helfen?"* are included in the pool.
 
 ---
 
@@ -57,7 +57,7 @@ The name comes from `user_identity.json` (stored at `~/.vaf/users/{username}/use
 
 The frontend fetches it via:
 ```
-GET /api/user/persona  →  { user_identity: { name: "Mert", ... } }
+GET /api/user/persona  →  { user_identity: { name: "Alice", ... } }
 ```
 
 This fetch already happens on page load (for time format). The name is stored
@@ -102,7 +102,7 @@ The effect runs whenever:
 ```
         [●]          ← AgentAvatar (scale 1.8, idle mode, floating)
 
-  Hey Mert, womit    ← TypingTitle — types out after 50ms delay
+  Hey Alice, womit    ← TypingTitle — types out after 50ms delay
   kann ich helfen?
 
   Starte eine Unterhaltung...  ← static subtitle

@@ -66,10 +66,10 @@ def test_field_roundtrip_and_legacy_passthrough(monkeypatch):
     _with_key(monkeypatch, _b64.b64encode(_secrets.token_bytes(32)).decode())
     from vaf.memory import crypto as mc
     mc.reset_crypto()
-    enc = mc.encrypt_field("Mert owns patent US12375457B2.")
+    enc = mc.encrypt_field("Alice owns patent US12375457B2.")
     assert enc.startswith(mc.FIELD_PREFIX)
     assert "patent" not in enc
-    assert mc.decrypt_field(enc) == "Mert owns patent US12375457B2."
+    assert mc.decrypt_field(enc) == "Alice owns patent US12375457B2."
     # Legacy plaintext rows pass through untouched (pre-migration tolerance)
     assert mc.decrypt_field("plain old chunk text") == "plain old chunk text"
     assert mc.encrypt_field("") == ""

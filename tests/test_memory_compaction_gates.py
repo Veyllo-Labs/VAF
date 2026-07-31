@@ -29,7 +29,7 @@ def test_prompt_carries_the_sharpened_rules():
 
 def test_gates_length_and_junk():
     kept, rejected = _apply_fact_gates([
-        ("User's name is Mert and his company is Veyllo GmbH.", ["personal"]),
+        ("User's name is Alice and his company is Veyllo GmbH.", ["personal"]),
         ("Ok.", []),                                     # too short
         ("x" * 600, []),                                 # too long
         ("NO_REPLY", []),                                # junk marker
@@ -53,13 +53,13 @@ def test_gates_cap_per_run():
 def test_parse_then_gate_pipeline():
     reply = (
         "<think>let me see</think>\n"
-        'MEMORY: "Mert owns patent US12375457B2 privately, not via Veyllo GmbH." [work, patent]\n'
+        'MEMORY: "Alice owns patent US12375457B2 privately, not via Veyllo GmbH." [work, patent]\n'
         'MEMORY: "Ok." [junk]\n'
         "NO_REPLY trailing noise\n"
     )
     kept, rejected = _apply_fact_gates(_parse_memory_reply(reply))
     assert len(kept) == 1
-    assert kept[0][0].startswith("Mert owns patent")
+    assert kept[0][0].startswith("Alice owns patent")
     assert kept[0][1] == ["work", "patent"]
     assert rejected[0][1] == "too_short"
 
@@ -74,7 +74,7 @@ def test_kai_question_scores_after_stopword_filter():
     With function words filtered the same question must clear the 0.3 bar."""
     from vaf.memory.rag import (_tokenize_lexical_query, _content_tokens,
                                 _lexical_score_query_to_text)
-    fact = "Mert is working with Kai on a Pro FIT funding application for Veyllo GmbH."
+    fact = "Alice is working with Kai on a Pro FIT funding application for Veyllo GmbH."
     raw = _tokenize_lexical_query("Kannst du dich noch an Kai erinnern?")
     old_score = _lexical_score_query_to_text(raw, fact)
     new_score = _lexical_score_query_to_text(_content_tokens(raw), fact)

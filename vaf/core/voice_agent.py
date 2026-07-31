@@ -53,7 +53,7 @@ _META_REASONING_RE = re.compile(
     r"okay, the user|i need to |i should |first, |parsing |so the user)", re.I)
 # Language-independent leak fingerprint: a real spoken answer never mentions
 # the labeling machinery (live incident: 'Wir haben einen Sprecher mit dem
-# Label "[unsicher]". Der Nutzer ist Mert, ...' was read aloud).
+# Label "[unsicher]". Der Nutzer ist Alice, ...' was read aloud).
 _META_INTERNAL_RE = re.compile(
     r"\[(unsicher|anderer_Sprecher)\]|(?:\bdem\b|\bthe\b)\s+label\b|"
     r"speaker label|system.?prompt", re.I)
@@ -823,7 +823,7 @@ def voice_reply(
     *,
     scope_id: str,
     lang: str = "de",
-    user_name: str = "Mert",
+    user_name: str = "Alice",
     history: Optional[List[Dict[str, str]]] = None,
     main_busy: bool = False,
     pending_task: str = "",
@@ -938,7 +938,7 @@ def chime_in_reply(
     *,
     scope_id: str,
     lang: str = "de",
-    user_name: str = "Mert",
+    user_name: str = "Alice",
     agent_name: str = "",
     speaker_ok: bool = True,
     transcript: str = "",
@@ -1095,7 +1095,7 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             # Plain-content CoT leak (live incidents: 'We need to parse the
             # user's utterance...', German 'Wir haben einen Sprecher mit dem
             # Label "[unsicher]"...', and 'We need to respond to this user
-            # query. User is Mert...' were read aloud). Salvage a trailing
+            # query. User is Alice...' were read aloud). Salvage a trailing
             # real answer paragraph if one exists, else degrade.
             parts = [p.strip() for p in text.split("\n\n") if p.strip()]
             tail = parts[-1] if parts else ""

@@ -15,7 +15,7 @@ from vaf.tools.search import _search_internal_knowledge
 
 RAG_RAW = (
     "[Source 1] (Relevance: 91%)\n"
-    "VAF ist Mert's Agenten-Framework mit eigenem IPC und Sub-Agents.\n"
+    "VAF ist Alice's Agenten-Framework mit eigenem IPC und Sub-Agents.\n"
     "Es laeuft lokal mit Qwen-Modellen."
     "\n\n---\n\n"
     "[Source 2] (Relevance: 74%)\n"

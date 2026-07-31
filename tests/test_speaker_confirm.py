@@ -143,7 +143,7 @@ def _request(monkeypatch, scope="scope-a", messenger_ok=False):
 
 def test_request_and_resolve_yes_never_touches_owner_profile(monkeypatch, tmp_path):
     # Enrolled owner profile on disk
-    sid._save_profile("scope-a", "Mert", _unit(hot=0), 25.0, 5)
+    sid._save_profile("scope-a", "Alice", _unit(hot=0), 25.0, 5)
     before = (sid._profile_dir("scope-a") / "centroid.npy").read_bytes()
 
     rec, sent, emitted = _request(monkeypatch)
@@ -207,19 +207,19 @@ def _ask(monkeypatch, score_result, transcript="", owner_name="", scope="scope-a
 
 
 def test_claims_to_be_owner_detector():
-    assert sc.claims_to_be_owner("ich bin Mert", "Mert") is True
-    assert sc.claims_to_be_owner("[anderer_Sprecher]: das ist Mert", "Mert") is True
-    assert sc.claims_to_be_owner("this is Mert speaking", "Mert") is True
-    assert sc.claims_to_be_owner("ich bin nicht Mert", "Mert") is False   # negation, no match
-    assert sc.claims_to_be_owner("wie ist das wetter", "Mert") is False
-    assert sc.claims_to_be_owner("ich bin Mert", "Ich") is False          # placeholder name
+    assert sc.claims_to_be_owner("ich bin Alice", "Alice") is True
+    assert sc.claims_to_be_owner("[anderer_Sprecher]: das ist Alice", "Alice") is True
+    assert sc.claims_to_be_owner("this is Alice speaking", "Alice") is True
+    assert sc.claims_to_be_owner("ich bin nicht Alice", "Alice") is False   # negation, no match
+    assert sc.claims_to_be_owner("wie ist das wetter", "Alice") is False
+    assert sc.claims_to_be_owner("ich bin Alice", "Ich") is False          # placeholder name
 
 
 def test_claim_by_non_owner_fires_spoofing_question(monkeypatch):
     """A non-owner voice (label 'other', NOT unsure) that CLAIMS to be the owner
     triggers a confirmation with the spoofing question - so the real owner decides."""
     rec, q = _ask(monkeypatch, {"label": "other", "score": 0.12},
-                  transcript="ja hallo, ich bin Mert", owner_name="Mert")
+                  transcript="ja hallo, ich bin Alice", owner_name="Alice")
     assert rec is not None and rec["kind"] == "claim"
     assert "als du ausgegeben" in q.lower()        # the claim-specific question
 
@@ -228,13 +228,13 @@ def test_non_owner_without_claim_does_not_fire(monkeypatch):
     """A non-owner voice with no identity claim and not 'unsure' -> no question. This
     is what removes the every-unsure nagging: plain other-speaker talk is left alone."""
     rec, _ = _ask(monkeypatch, {"label": "other", "score": 0.12},
-                  transcript="schoenes wetter heute", owner_name="Mert")
+                  transcript="schoenes wetter heute", owner_name="Alice")
     assert rec is None
 
 
 def test_verified_owner_is_never_asked_even_with_claim(monkeypatch):
     rec, _ = _ask(monkeypatch, {"label": "self", "score": 0.9},
-                  transcript="ich bin Mert", owner_name="Mert")
+                  transcript="ich bin Alice", owner_name="Alice")
     assert rec is None
 
 
@@ -242,7 +242,7 @@ def test_unsure_without_claim_still_fires_plain_question(monkeypatch):
     """The restrained unsure path survives (adaptive reclaim): a borderline own voice
     with no claim still asks, but with the plain 'was that you?' question."""
     rec, q = _ask(monkeypatch, {"label": "unsure", "score": 0.57},
-                  transcript="mach mal das licht an", owner_name="Mert")
+                  transcript="mach mal das licht an", owner_name="Alice")
     assert rec is not None and rec["kind"] == "unsure"
     assert "als du ausgegeben" not in q.lower()    # NOT the spoofing question
 
@@ -277,9 +277,9 @@ def test_question_language_from_user_identity(monkeypatch):
     monkeypatch.setattr(Config, "get", classmethod(
         lambda cls, k, d=None: {"speaker_id_enabled": True,
                                 "speaker_id_confirmation_enabled": True}.get(k, d)))
-    assert sc._lang("Mert") == "de"
+    assert sc._lang("Alice") == "de"
     monkeypatch.setattr(uw, "get_user_workspace", lambda username: _WS("tr"))
-    assert sc._lang("Mert") == "tr"  # raw code - the VOCAB BOOK resolves it
+    assert sc._lang("Alice") == "tr"  # raw code - the VOCAB BOOK resolves it
     assert sc._lang(None) == "en"    # no identity, config unset -> en
     # Vocab gap: languages without an entry fall back to the English phrasing
     from vaf.core import vocab

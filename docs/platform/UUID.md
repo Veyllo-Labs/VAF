@@ -18,7 +18,7 @@ This document defines how user identity works across all layers of the VAF stack
 |-------|------|---------|----------|---------|
 | `user_scope_id` | UUID v4 | **Tenant isolation key**. Used in DB queries, cache keys, RAG filtering, and all data ownership checks. | No (immutable after creation) | `f01a10fe-e959-4c71-b93f-6bc4073d2072` |
 | `user_id` | UUID v4 | Database primary key (`local_users.id`). Internal only. | No | `a8b3c1d2-...` |
-| `username` | String | Human-readable login name. Used for filesystem paths and display. | Yes (rename possible) | `Mert`, `alice` |
+| `username` | String | Human-readable login name. Used for filesystem paths and display. | Yes (rename possible) | `Alice`, `bob` |
 | `role` | String | Authorization level: `admin`, `user`, `guest`. | Yes (promotable) | `admin` |
 
 ### Local Admin Defaults
@@ -278,7 +278,7 @@ This makes user data independent of username changes.
 // Legacy fallback: keyed by username
 {
   "email_config_by_user": {
-    "Mert": { "accounts": [...] },
+    "Alice": { "accounts": [...] },
     "alice": { "accounts": [...] }
   }
 }
@@ -312,7 +312,7 @@ key = f"email:{provider}:{user_scope_id}:{account_id}"
 ### Problem 1: Username ≠ Admin Role
 
 The current code checks `if username.lower() == local_admin_username` to determine admin access. This breaks when:
-- A network user has admin role but a different username (e.g., "Mert" with role=admin)
+- A network user has admin role but a different username (e.g., "Alice" with role=admin)
 - The local admin username is changed in config
 - Two users named "Admin" and "admin" exist (case sensitivity)
 
@@ -330,7 +330,7 @@ If a user's username is changed, all of the following break:
 
 ### Problem 3: Local Mode Identity Mismatch
 
-When the system is in local mode (no auth), the WebSocket assigns `username="admin"`. But when network mode is enabled with the same user, the JWT provides the real username (e.g., "Mert"). Now the same person has data split across two identities.
+When the system is in local mode (no auth), the WebSocket assigns `username="admin"`. But when network mode is enabled with the same user, the JWT provides the real username (e.g., "Alice"). Now the same person has data split across two identities.
 
 **Fix:** Bootstrap writes the first admin's `user_scope_id` and `username` into config (`local_admin_scope_id`, `local_admin_username`). CLI and localhost without JWT then use that same scope, so there is a single identity for the admin. For existing installations that had data under the legacy UUID, set `local_admin_scope_id` in config to the admin UUID (and optionally run a one-time DB update to move memories to that scope); or run bootstrap once so config is set automatically.
 

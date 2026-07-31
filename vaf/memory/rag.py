@@ -1422,7 +1422,7 @@ def run_session_compaction_sync(
                     # Dedup gate (same primitive as the auto-capture lane,
                     # singleton embedding service - charter-safe): a near-
                     # identical chunk in this scope means the fact is already
-                    # known ("User's name is Mert" must not accumulate).
+                    # known ("User's name is Alice" must not accumulate).
                     try:
                         existing = await pipeline.search(
                             content.strip(), k=1, threshold=0.95,

@@ -131,9 +131,9 @@ def test_waiting_state_carries_session_id(monkeypatch, tmp_path):
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
     import vaf.core.thinking_mode as tm
-    tm.set_waiting_for_reply("u-w", username="mert", question_text="q", request_id="r1", session_id="sess-A")
+    tm.set_waiting_for_reply("u-w", username="alice", question_text="q", request_id="r1", session_id="sess-A")
     assert tm.get_waiting_for_reply("u-w").get("session_id") == "sess-A"
-    tm.set_waiting_for_reply("u-w2", username="mert", question_text="q")   # default omits it
+    tm.set_waiting_for_reply("u-w2", username="alice", question_text="q")   # default omits it
     assert tm.get_waiting_for_reply("u-w2").get("session_id") is None
 
 

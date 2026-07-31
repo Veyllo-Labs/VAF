@@ -29,7 +29,7 @@ The main self-learning component today is the **Memory System** (RAG). It improv
 
 ### 2. User profile (identity)
 
-The **user profile** (`user_identity.json`) is a structured description of the current human user: name, preferred language, location (city/country), timezone, date/time format, **preferences**, **do’s**, and **don’ts**. The model learns the user better by updating this profile when the user says things like “call me Mert”, “I prefer German”, “always be concise”, or “don’t use emojis”.
+The **user profile** (`user_identity.json`) is a structured description of the current human user: name, preferred language, location (city/country), timezone, date/time format, **preferences**, **do’s**, and **don’ts**. The model learns the user better by updating this profile when the user says things like “call me Alice”, “I prefer German”, “always be concise”, or “don’t use emojis”.
 
 | Mechanism | What it does | Where it’s documented |
 |-----------|--------------|------------------------|

@@ -24,7 +24,7 @@ class FilesystemMap:
         
         Returns:
             Dict mapping semantic names to actual paths
-            e.g., {'documents': Path('/Users/mert/Documents')}
+            e.g., {'documents': Path('/Users/user/Documents')}
         """
         locations = {}
         

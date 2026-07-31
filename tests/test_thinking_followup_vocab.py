@@ -23,19 +23,19 @@ def _isolate_vaf_dir(monkeypatch, tmp_path):
 # ── Vocabulary book ───────────────────────────────────────────────────────────
 
 def test_vocab_pick_exact_and_format():
-    out = vocab.pick("nudge", "de", name="Mert")
-    assert out and "Mert" in out
+    out = vocab.pick("nudge", "de", name="Alice")
+    assert out and "Alice" in out
 
 
 def test_vocab_pick_region_normalizes_to_base():
-    assert "Mert" in vocab.pick("nudge", "de-DE", name="Mert")
-    assert "Mert" in vocab.pick("nudge", "pt_BR", name="Mert")
+    assert "Alice" in vocab.pick("nudge", "de-DE", name="Alice")
+    assert "Alice" in vocab.pick("nudge", "pt_BR", name="Alice")
 
 
 def test_vocab_pick_unknown_lang_falls_back_to_en():
-    out = vocab.pick("nudge", "qq", name="Mert")  # not in the book -> English
-    en_formatted = [p.format(name="Mert") for p in vocab._load("nudge")["en"]]  # type: ignore[attr-defined]
-    assert out and "Mert" in out and out in en_formatted
+    out = vocab.pick("nudge", "qq", name="Alice")  # not in the book -> English
+    en_formatted = [p.format(name="Alice") for p in vocab._load("nudge")["en"]]  # type: ignore[attr-defined]
+    assert out and "Alice" in out and out in en_formatted
 
 
 def test_vocab_unknown_key_is_safe():

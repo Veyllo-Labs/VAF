@@ -7252,7 +7252,7 @@ class Agent:
             # Analyze intent and active relevant modules
             self.prompt_manager.analyze_context(user_input, language=lang)
             
-            # Rebuild system prompt (includes User identity so e.g. "Hey" -> model knows "that's Mert")
+            # Rebuild system prompt (includes User identity so e.g. "Hey" -> model knows "that's Alice")
             new_prompt = self.prompt_manager.build_prompt(
                 self.filename,
                 username=getattr(self, "_current_username", None),

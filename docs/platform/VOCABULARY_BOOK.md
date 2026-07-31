@@ -71,7 +71,7 @@ speaker; `addressee_clarify` is a normal phrasing list of the spoken responses
 from vaf.core import vocab
 
 lang = vocab.resolve_user_language(user_scope_id, username)   # 'de', 'en', ...
-text = vocab.pick("nudge", lang, scope=user_scope_id, name="Mert")
+text = vocab.pick("nudge", lang, scope=user_scope_id, name="Alice")
 ```
 
 - **`pick(key, lang, scope=None, **fmt) -> str`** - returns one phrasing for `key` in `lang`, formatted with

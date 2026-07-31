@@ -51,10 +51,10 @@ def test_legit_replies_survive_untouched():
 
 def test_chain_applies_all_stages():
     txt = ("<think>secret</think>[WORKFLOW_ASYNC:abc] internal\n"
-           "Hallo Mert, dein Bericht ist fertig.")
+           "Hallo Alice, dein Bericht ist fertig.")
     out = hr._prepare_channel_outbound(txt)
     assert "secret" not in out and "WORKFLOW_ASYNC" not in out
-    assert "Hallo Mert" in out
+    assert "Hallo Alice" in out
     # internal-phrase net still blocks whole contaminated messages
     assert hr._prepare_channel_outbound("[TOOL BLOCKED] do not send this") == ""
 

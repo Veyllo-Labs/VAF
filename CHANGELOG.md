@@ -45,6 +45,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The macOS launcher works on any machine.** `launch_vaf.scpt` opened a hardcoded home
+  directory belonging to one account, so it failed for everybody else. It now uses `$HOME`.
+- **Examples in the assistant's own instructions no longer name one particular person.** The
+  shipped prompt text used a real first name in its examples ("... said", "Tell ... to call me
+  back"), which read oddly for anybody else and put a private name in a public repository.
+  Examples, default display names and documentation now use neutral placeholders. A guard
+  checks committed content for real home directories by shape, so the next one is caught
+  before it is published rather than after.
 - **Code search and the linter stayed inside your own files.** Both took a path and worked on
   it without asking whether it was yours. Code search looked contained - it clamps a path back
   into the project it was given - but that only applies to the copy the coding assistant uses;

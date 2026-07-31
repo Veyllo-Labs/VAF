@@ -45,11 +45,11 @@ def test_resolve_placeholders_memory_chat_open(monkeypatch):
         "<p>E-Mail {{VERKÄUFER_EMAIL}}, Marke {{MARKE}}, FIN {{FIN}}.</p>",
     ]}
     # memory provides the user's own identity; counterparty fields must NOT be filled from it
-    monkeypatch.setattr(t, "_memory_identity", lambda: {"NAME": "Mert Can", "EMAIL": "m@example.de"})
+    monkeypatch.setattr(t, "_memory_identity", lambda: {"NAME": "Alice Can", "EMAIL": "m@example.de"})
     out = t._resolve_placeholders("Marke: VW\nModell: Golf VII")
     by = {p["name"]: p for p in out}
 
-    assert by["VERKÄUFER_NAME"]["value"] == "Mert Can" and by["VERKÄUFER_NAME"]["source"] == "memory"
+    assert by["VERKÄUFER_NAME"]["value"] == "Alice Can" and by["VERKÄUFER_NAME"]["source"] == "memory"
     assert by["VERKÄUFER_EMAIL"]["value"] == "m@example.de" and by["VERKÄUFER_EMAIL"]["source"] == "memory"
     assert by["KÄUFER_NAME"]["source"] == "open"          # counterparty -> stays open
     assert by["MARKE"]["value"] == "VW" and by["MARKE"]["source"] == "chat"

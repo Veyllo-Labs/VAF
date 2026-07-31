@@ -15,7 +15,8 @@ from vaf.core.api_backend import APIBackendManager
 
 
 def _mgr(events=None):
-    mgr = APIBackendManager("openai", config={}, api_key="test-key")
+    mgr = APIBackendManager("openai", config={},
+                            caller_config={"api_key_openai": "test-key"})
     if events is not None:
         mgr.event_sink = events.append
     return mgr

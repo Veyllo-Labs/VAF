@@ -6,7 +6,6 @@ import json
 import threading
 from pathlib import Path
 from typing import Optional
-import base64
 
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
@@ -1005,43 +1004,34 @@ class Config:
     
     @classmethod
     def set_api_key(cls, provider: str, api_key: str):
-        """
-        Securely store API key with basic obfuscation.
-        Best Practice: Base64 encoding for storage (not encryption, but prevents casual viewing)
-        
-        Args:
-            provider: Provider name (veyllo, openai, anthropic, deepseek, google, openrouter)
-            api_key: Raw API key string
+        """Store an API key in the ENCRYPTED store. A thin adapter, kept logic-free.
+
+        It used to base64-encode into `config.json` under a docstring claiming to "securely
+        store" it - a label the mechanism did not carry, in a module that says "NOT
+        encryption!" twenty lines higher. Both the encoding and the claim are gone; the one
+        decision about where a key lives is in `vaf/core/api_keys.py`.
         """
         if not api_key:
             return
+        from vaf.core.api_keys import store_api_key
+        store_api_key(provider, api_key)
 
-        # Basic obfuscation using base64
-        encoded = base64.b64encode(api_key.encode()).decode()
-        cls.set(f"api_key_{provider}", encoded)
-    
     @classmethod
     def get_api_key(cls, provider: str) -> str:
-        """
-        Retrieve and decode API key.
-        
-        Args:
-            provider: Provider name
-            
-        Returns:
-            Decoded API key string
-        """
-        encoded = cls.get(f"api_key_{provider}", "")
+        """Retrieve an API key. A thin adapter over the shared resolver.
 
-        if not encoded:
-            return ""
-        
-        try:
-            # Decode from base64
-            return base64.b64decode(encoded.encode()).decode()
-        except Exception:
-            # If decoding fails, assume it's plain text (backward compatibility)
-            return encoded
+        IT MUST STAY LOGIC-FREE. Thirteen call sites reach a provider key through this name,
+        and the reason they used to disagree with an embedder's key is that this method
+        answered the question by itself, from the file, as a classmethod no caller config
+        could influence. If a lane ever needs an answer the resolver cannot give, that shape
+        belongs in the resolver - or the design behind it is wrong.
+
+        Raises `ApiKeyUnavailable` when a key IS stored and cannot be read; "" still means
+        "nothing configured". Those two used to be the same value, which is why a corrupt
+        store looked exactly like an unconfigured one.
+        """
+        from vaf.core.api_keys import resolve_api_key
+        return resolve_api_key(provider)
     
     @classmethod
     def mask_api_key(cls, api_key: str) -> str:

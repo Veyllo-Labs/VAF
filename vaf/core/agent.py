@@ -640,18 +640,18 @@ class Agent:
     DEFAULT_FILENAME = "VQ-1_Instruct-q4_k_m.gguf"
     
     def _build_api_backend(self, provider):
-        """Construct an APIBackendManager, passing programmatic config overrides through.
+        """Construct an APIBackendManager, handing the caller's overrides to the resolver.
 
-        When VAF is embedded as a library via Agent(config={...}), the api_key /
-        api_model from the override dict must reach the backend instead of being read
-        from ~/.vaf/config.json. The override api_key is RAW (never base64-decoded).
-        With no overrides (product mode) behaviour is byte-identical to before.
+        It used to pull ONE key out of the override dict and pass it as a constructor
+        argument. That reached the primary backend and nothing else: the failover chain and
+        model discovery ask the shared reader unconditionally, so for an embedder that chain
+        was structurally dead while EMBEDDING.md said "pass your key". The dict now travels
+        instead of one value, and every consumer inside the backend resolves from it.
         """
         from vaf.core.api_backend import APIBackendManager
         ov = getattr(self, "_config_overrides", None) or {}
-        api_key = ov.get(f"api_key_{provider}") if ov else None  # RAW, used as-is
         cfg = self.config if ov else None                        # merged cfg only in embed mode
-        return APIBackendManager(provider, config=cfg, api_key=api_key)
+        return APIBackendManager(provider, config=cfg, caller_config=ov or None)
 
     def reload_api_backend(self, *, force: bool = False) -> bool:
         """Re-apply provider + API key from the LIVE on-disk config to this RUNNING agent.
@@ -666,6 +666,15 @@ class Agent:
         if os.environ.get("VAF_PROVIDER", "").strip():
             return False
         # Embedded library mode is caller-controlled (config_overrides) -- leave it alone.
+        #
+        # THIS GUARDS TWO THINGS, and only one of them was replaced. The KEY half is now
+        # covered by precedence: a caller-supplied key beats every stored one, so a rebuild
+        # would hand the same overrides back to the resolver and could not substitute the
+        # file's contents. The PROVIDER half is not - this method re-reads `provider` from
+        # the live on-disk config, so without the check a change on disk would switch an
+        # embedded agent to a provider its caller never chose. Counting this as three
+        # deleted lines was the same mistake as measuring a boundary by the surface someone
+        # had enumerated; it stays, and the key half of its job is now belt and braces.
         if getattr(self, "_config_overrides", None):
             return False
 

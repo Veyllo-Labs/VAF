@@ -853,15 +853,23 @@ class GoogleProvider(BaseAIProvider):
 class APIBackendManager:
     """Refactored Manager using provider-specific classes."""
     
-    def __init__(self, provider: str, *, config: Optional[dict] = None, api_key: Optional[str] = None):
-        # config/api_key are supplied only when VAF is embedded as a library
-        # (Agent(config={...})). The merged config and the RAW api_key then come from
-        # the agent and must NOT be re-read from disk. With both None (product mode)
-        # behaviour is byte-identical to before.
+    def __init__(self, provider: str, *, config: Optional[dict] = None,
+                 caller_config: Optional[dict] = None):
+        # `config` is the merged config an embedder handed in; `caller_config` is their raw
+        # override dict, which the shared resolver treats as the highest-precedence source.
+        # It used to be a single pre-extracted api_key, which reached this constructor and
+        # nothing else - the failover chain and model discovery below ask the resolver
+        # themselves, so an embedder's chain could never find a key. Passing the dict is
+        # what makes those work; with both None (product mode) nothing changes.
+        from vaf.core.api_keys import resolve_api_key
         self.provider_name = provider
+        self.caller_config = caller_config
+        # Still needed, and NOT about the key: `_embedded` decides whether `api_model_*` is
+        # read from the programmatic config or re-read from disk each turn. Dropping it while
+        # reworking the key path would have quietly taken an embedder's model choice away.
         self._embedded = config is not None
         self.config = config if config is not None else Config.load()
-        self.api_key = api_key if api_key is not None else Config.get_api_key(provider)
+        self.api_key = resolve_api_key(provider, caller_config)
         self.provider = self._create_provider()
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
@@ -955,10 +963,14 @@ class APIBackendManager:
             try:
                 if kind == "backup":
                     bp = str(self._failover_cfg("failover_backup_provider", "") or "").strip()
-                    if not bp or bp == "local" or bp in seen or not Config.get_api_key(bp):
+                    # The caller's overrides travel into the fallback too - this is the
+                    # line that made an embedder's failover chain structurally dead.
+                    from vaf.core.api_keys import resolve_api_key as _resolve
+                    if not bp or bp == "local" or bp in seen or not _resolve(bp, self.caller_config):
                         continue
                     bm = str(self._failover_cfg("failover_backup_model", "") or "").strip() or None
-                    chain.append((APIBackendManager(bp, config=self.config, api_key=Config.get_api_key(bp)), bm))
+                    chain.append((APIBackendManager(bp, config=self.config,
+                                                    caller_config=self.caller_config), bm))
                     seen.add(bp)
                 elif kind == "local":
                     if "local" in seen:

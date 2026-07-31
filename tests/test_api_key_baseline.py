@@ -14,7 +14,11 @@ every installed copy of VAF and reaches users through `vaf update`; a mistake he
 cost test lines, it costs every user their API keys. So the current behaviour is MEASURED and
 frozen first, and the merged resolver has to reproduce it exactly.
 
-THREE RESOLUTION PATHS TODAY, which is one more than it looks like from either end:
+UPDATED AFTER THE MERGE. The literals below no longer describe what VAF WRITES - they
+describe the ESTATE it must keep READING, which is the half that decides whether a user
+loses their keys. Everything else here moved from "what is" to "what must still hold".
+
+THREE RESOLUTION PATHS BEFORE THE MERGE, one more than it looked like from either end:
 
   product    `Config.get_api_key(p)` - a CLASSMETHOD reading `cls.load()`, i.e. the FILE
   embedder   `Agent(config={...})` -> `_config_overrides` -> `APIBackendManager(api_key=RAW)`
@@ -72,21 +76,33 @@ def clean_config(tmp_path, monkeypatch):
 # ── what the file holds ──────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("provider", sorted(SYNTHETIC))
-def test_the_on_disk_form_is_unchanged(provider, clean_config):
-    """One character different is not a refactor, it is a user who has to find their key
-    again. The literal is frozen, not recomputed."""
+def test_the_estate_form_still_reads(provider, clean_config):
+    """THE test the whole change hangs on: an installed base64 key keeps working.
+
+    These literals used to describe what `set_api_key` WROTE. It writes to the encrypted
+    store now, so what they describe is the ESTATE - the exact strings sitting in every
+    config.json that `vaf update` will upgrade. One character misread here is not a
+    refactor, it is a user who has to find their key again.
+    """
     from vaf.core.config import Config
 
-    Config.set_api_key(provider, SYNTHETIC[provider])
-    assert Config.load().get(f"api_key_{provider}") == ON_DISK[provider]
+    config = Config.load()
+    config[f"api_key_{provider}"] = ON_DISK[provider]
+    Config.save(config)
+    assert Config.get_api_key(provider) == SYNTHETIC[provider]
 
 
 @pytest.mark.parametrize("provider", sorted(SYNTHETIC))
-def test_the_round_trip_returns_exactly_what_went_in(provider, clean_config):
+def test_a_stored_key_round_trips(provider, clean_config):
+    """The new write path, end to end - and it must NOT land in config.json."""
     from vaf.core.config import Config
 
     Config.set_api_key(provider, SYNTHETIC[provider])
     assert Config.get_api_key(provider) == SYNTHETIC[provider]
+    assert not Config.load().get(f"api_key_{provider}"), (
+        "the key is in config.json again; the write side is the half that keeps a Settings "
+        "save from writing to a file nobody asks any more"
+    )
 
 
 def test_a_plaintext_estate_entry_still_reads(clean_config):
@@ -99,11 +115,16 @@ def test_a_plaintext_estate_entry_still_reads(clean_config):
     """
     from vaf.core.config import Config
 
-    for raw in ("sk-proj-PLAINTEXT", "sk-ant-api03-PLAIN", "AIzaSyPLAIN"):
-        cfg = Config.load()
-        cfg["api_key_openai"] = raw
-        Config.save(cfg)
-        assert Config.get_api_key("openai") == raw
+    raw = "sk-proj-PLAINTEXT"
+    cfg = Config.load()
+    cfg["api_key_openai"] = raw
+    Config.save(cfg)
+    assert Config.get_api_key("openai") == raw
+    # Read again: the first read MIGRATED it, so this one comes from the store. Same answer
+    # either way - which is the whole point, and why the loop this test used to run was
+    # wrong: after the first iteration the store already answered, so the remaining
+    # iterations measured the migration rather than the estate.
+    assert Config.get_api_key("openai") == raw
 
 
 def test_an_unset_key_is_the_empty_string(clean_config):
@@ -155,51 +176,100 @@ def _get_api_key_callers():
     return out
 
 
-# Measured 2026-07-31. Thirteen call sites; the embedder's key reaches exactly one of them
-# (`api_backend.py:864`, and only through the separate RAW path below).
+# Measured 2026-07-31, AFTER the merge. Fourteen call sites - the four in `search.py` used
+# to read `Config.get("api_key_brave_search")` RAW, past `get_api_key` entirely, because the
+# search keys are a third family under the same prefix: never written by `set_api_key`, only
+# by the web path, and therefore never base64. They were invisible to the count that shaped
+# the first plan; missing them would have taken the web search its keys.
 CALLERS = {
     "vaf/api/voice_routes.py:82",
     "vaf/cli/cmd/settings.py:718",
     "vaf/cli/cmd/settings.py:913",
-    "vaf/core/api_backend.py:864",
-    "vaf/core/api_backend.py:958",
-    "vaf/core/api_backend.py:961",
-    "vaf/core/api_backend.py:1364",
+    "vaf/core/api_backend.py:1376",
     "vaf/core/headless_runner.py:919",
     "vaf/core/speech_api.py:113",
     "vaf/core/voice_agent.py:580",
     "vaf/core/voice_agent.py:587",
     "vaf/tools/coder.py:3185",
+    "vaf/tools/search.py:119",
+    "vaf/tools/search.py:146",
+    "vaf/tools/search.py:260",
+    "vaf/tools/search.py:269",
     "vaf/whare_wananga/teacher.py:132",
+}
+
+# The three places a key can ENTER storage. Frozen because the first version of this change
+# made the write side "set_api_key" and missed the two that matter most - a boundary as wide
+# as the surface somebody had enumerated. The two web paths carried keys RAW into
+# config.json, so with only the read side moved a Settings save would have kept writing to a
+# file nobody asks any more: the user changes their key, the UI says saved, and the agent
+# goes on using the old one.
+WRITE_SITES = {
+    "vaf/cli/cmd/settings.py",       # Config.set_api_key -> the store
+    "vaf/api/config_routes.py",      # HTTP config update -> absorb_config_keys
+    "vaf/core/web_server.py",        # WebSocket config update -> absorb_config_keys
 }
 
 
 def test_the_set_of_consumers_is_what_was_measured():
-    """A new consumer is a new place that must keep working after the merge, and a vanished
-    one is a lane that quietly stopped asking. Frozen by NAME rather than by count - the
-    count was the thing that went wrong three times in the round that produced this file."""
+    """A new consumer is a new place that must keep working, and a vanished one is a lane
+    that quietly stopped asking. Frozen by NAME rather than by count - the count was the
+    thing that went wrong three times in the round that produced this file."""
     live = _get_api_key_callers()
     assert live == CALLERS, f"the consumer set moved: {sorted(live ^ CALLERS)}"
 
 
-def test_the_embedders_key_never_reaches_the_shared_reader():
-    """THE contract breach, pinned as a fact rather than argued.
+def test_every_write_site_routes_into_the_store():
+    """The write side, asserted as places rather than as a sentence.
 
-    `Config.get_api_key` is a classmethod over `cls.load()`, so a config dict handed to
-    `Agent(...)` cannot influence it. The embedder's key travels a separate, raw path into
-    one constructor argument. Everything else - failover, model discovery, voice, speech,
-    the coder - reads the file.
+    Each of the three either calls `set_api_key` (which stores) or `absorb_config_keys`
+    (which lifts every `api_key_*` out of a payload before it is saved). A fourth site
+    appearing that writes `api_key_*` straight into the config is the regression this pins.
     """
-    import inspect
+    import pathlib as _pl
+    import re as _re
 
-    from vaf.core.config import Config
+    root = _pl.Path(__file__).resolve().parents[1]
+    for site in sorted(WRITE_SITES):
+        src = (root / site).read_bytes().decode()
+        assert _re.search(r"absorb_config_keys|set_api_key", src), (
+            f"{site} no longer routes API keys into the store"
+        )
 
-    src = inspect.getsource(Config.get_api_key)
-    assert "cls.get(" in src, "the reader no longer goes through the class-level config"
-    assert "self" not in src.split("(", 1)[1].split(")", 1)[0], (
-        "get_api_key gained instance state; if it can see an embedder's config now, this "
-        "whole baseline needs re-measuring rather than adjusting"
+    # And nobody else merges a raw payload into the config without absorbing first.
+    offenders = []
+    for f in sorted((root / "vaf").rglob("*.py")):
+        src = f.read_bytes().decode()
+        if "merge_preserving_nonempty_sensitive" not in src:
+            continue
+        if str(f.relative_to(root)) in WRITE_SITES or f.name == "config.py":
+            continue
+        offenders.append(str(f.relative_to(root)))
+    assert not offenders, (
+        f"a config-merge path that was not part of the measured write set: {offenders}. "
+        f"It would write API keys raw into config.json where nothing asks for them."
     )
+
+
+def test_the_embedders_key_now_reaches_every_consumer():
+    """The contract breach, closed - and asserted as its OPPOSITE.
+
+    This test used to pin the breach as a fact: `Config.get_api_key` was a classmethod over
+    the on-disk config, so a dict handed to `Agent(...)` could not influence it, and the
+    embedder's key travelled a separate raw path into ONE constructor argument. The failover
+    chain and model discovery asked the file regardless, so that chain was structurally dead
+    for an embedder while `docs/EMBEDDING.md` said "pass your key".
+
+    Now the overrides dict itself is the highest-precedence SOURCE, so anything resolving a
+    key sees it. Driven through the resolver rather than through a backend, because what
+    changed is where the answer comes from, not who asks.
+    """
+    from vaf.core.api_keys import resolve_api_key
+
+    caller = {"api_key_openai": "sk-CALLER-ONLY"}
+    assert resolve_api_key("openai", caller) == "sk-CALLER-ONLY"
+    # And it does not bleed into a provider the caller did not supply.
+    assert resolve_api_key("anthropic", caller) == ""
 
 
 def test_the_reload_lock_is_the_only_thing_protecting_an_embedded_key():

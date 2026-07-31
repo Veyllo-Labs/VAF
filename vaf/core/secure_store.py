@@ -195,6 +195,14 @@ def _config_kek(create: bool = True) -> Optional[bytes]:
 #  Secure blob store
 # ---------------------------------------------------------------------------
 
+class SecureStoreUnreadable(RuntimeError):
+    """A payload exists on disk and could not be decrypted.
+
+    Distinct from "there is nothing stored", which is not an error. The distinction only
+    matters to callers that would otherwise fall back to a weaker copy - see `load_strict`.
+    """
+
+
 class SecureBlobStore:
     """A single encrypted JSON blob on disk with envelope encryption and locking.
 
@@ -219,6 +227,25 @@ class SecureBlobStore:
         """Return the decrypted blob (empty dict if missing or undecryptable)."""
         with self._tlock, self._file_lock():
             return self._load_locked()
+
+    def load_strict(self) -> Dict[str, str]:
+        """Like load(), but RAISE when a payload exists and cannot be read.
+
+        `load()` answers "missing" and "present but undecryptable" with the same empty
+        dict, and from the outside those are indistinguishable - a caller that falls back
+        to a weaker source on an empty result therefore falls back on a CORRUPT store just
+        as readily as on an absent one. For credentials that is the difference between a
+        migration and a silent downgrade: the weaker copy still exists on disk, so the
+        fallback succeeds and nobody learns the encrypted one broke.
+
+        This is additive. `load()` keeps its old contract, and its two existing callers
+        (mail and cloud credentials) are unchanged - they swallow the same way they always
+        have, which is its own finding and not this one's to fix.
+        """
+        with self._tlock, self._file_lock():
+            if not self.enc_path.exists():
+                return {}
+            return self._load_locked(strict=True)
 
     def update(self, mutator: Callable[[Dict[str, str]], None]) -> None:
         """Atomically load -> mutate -> save under both locks (no lost updates)."""
@@ -258,21 +285,29 @@ class SecureBlobStore:
 
     # -- payload I/O (must be called while holding the locks) ---------------
 
-    def _load_locked(self) -> Dict[str, str]:
+    def _load_locked(self, strict: bool = False) -> Dict[str, str]:
         if not self.enc_path.exists():
             return {}
         try:
             raw = self.enc_path.read_bytes()
             if len(raw) < _NONCE_SIZE:
+                if strict:
+                    raise SecureStoreUnreadable(f"{self.name}: payload is truncated")
                 return {}
             nonce, ciphertext = raw[:_NONCE_SIZE], raw[_NONCE_SIZE:]
             dek = self._get_dek(create=False)
             if dek is None:
+                if strict:
+                    raise SecureStoreUnreadable(f"{self.name}: key material is unavailable")
                 return {}
             decrypted = AESGCM(dek).decrypt(nonce, ciphertext, None).decode("utf-8")
             return json.loads(decrypted)
+        except SecureStoreUnreadable:
+            raise
         except Exception as e:
             logger.warning("Failed to load secure store %s: %s", self.name, e)
+            if strict:
+                raise SecureStoreUnreadable(f"{self.name}: payload could not be decrypted") from e
             return {}
 
     def _save_locked(self, data: Dict[str, str]) -> None:

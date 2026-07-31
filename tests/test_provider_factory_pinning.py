@@ -21,7 +21,15 @@ FAKE_KEY = "test-key-not-real"
 
 
 def _mgr(provider, config=None, api_key=FAKE_KEY):
-    return APIBackendManager(provider, config=config or {}, api_key=api_key)
+    """The key now travels as the CALLER'S CONFIG rather than a separate argument.
+
+    `api_key=` was an internal constructor argument with no production caller - only the
+    agent, which pre-extracted one value from the embedder's overrides and thereby reached
+    the primary backend and nothing else. Two caller-supplied precedence levels filled by
+    the same person are an ambiguity, so they were merged into one: the overrides dict.
+    """
+    caller = {f"api_key_{provider}": api_key} if api_key else None
+    return APIBackendManager(provider, config=config or {}, caller_config=caller)
 
 
 @pytest.mark.parametrize(
@@ -51,14 +59,14 @@ def test_sdk_native_providers():
 
 
 def test_local_needs_no_key_and_honors_local_api_url():
-    mgr = APIBackendManager("local", config={}, api_key="")
+    mgr = APIBackendManager("local", config={})
     assert type(mgr.provider) is OpenAIProvider
     assert mgr.provider.provider_name == "local"
     # default: VAF's own llama-server, never Ollama's 11434
     assert ":8080" in str(mgr.provider.client.base_url)
 
     mgr2 = APIBackendManager(
-        "local", config={"local_api_url": "http://127.0.0.1:11434/v1"}, api_key=""
+        "local", config={"local_api_url": "http://127.0.0.1:11434/v1"}
     )
     assert "11434" in str(mgr2.provider.client.base_url)
 
@@ -72,4 +80,4 @@ def test_error_messages_are_stable():
     with pytest.raises(ValueError, match=r"^Unsupported provider: nope$"):
         _mgr("nope")
     with pytest.raises(ValueError, match=r"^API key missing for openai$"):
-        APIBackendManager("openai", config={}, api_key="")
+        APIBackendManager("openai", config={})

@@ -92,6 +92,12 @@ async def patch_config(
             for scope_id, toggles in scope_toggles.items():
                 by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
             current["connection_enabled_by_scope"] = by_scope
-    merged = Config.merge_preserving_nonempty_sensitive(current, body)
-    Config.save(merged)  # Config.save centrally applies the Veyllo-key -> default-STT seed
+    # API keys leave the payload here and go into the encrypted store. Without this the
+    # read side would migrate a key on first read while this path kept writing raw into a
+    # file nobody asks any more - the user changes their key, the UI says saved, and the
+    # agent keeps using the old one. `absorb_config_keys` also fires the Veyllo-STT seed,
+    # which used to hang off the key appearing in the config dict.
+    from vaf.core.api_keys import absorb_config_keys
+    merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
+    Config.save(merged)
     return merged

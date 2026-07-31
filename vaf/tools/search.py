@@ -116,7 +116,7 @@ def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
 
 def _search_brave_api(query: str, max_results: int) -> list:
     """Brave Search API. Returns list of {title, href, body} or [] on failure."""
-    key = (Config.get("api_key_brave_search") or "").strip()
+    key = (Config.get_api_key("brave_search") or "").strip()
     if not key:
         return []
     try:
@@ -143,7 +143,7 @@ def _search_brave_api(query: str, max_results: int) -> list:
 
 def _search_google_cse(query: str, max_results: int) -> list:
     """Google Custom Search JSON API. Returns list of {title, href, body} or [] on failure."""
-    key = (Config.get("api_key_google_search") or "").strip()
+    key = (Config.get_api_key("google_search") or "").strip()
     cx = (Config.get("google_search_engine_id") or "").strip()
     if not key or not cx:
         return []
@@ -257,7 +257,7 @@ def get_web_search_results(query: str, max_results: int, *,
     fallback_hint = None
 
     # 1) Brave API
-    brave_key = (Config.get("api_key_brave_search") or "").strip()
+    brave_key = (Config.get_api_key("brave_search") or "").strip()
     if brave_key:
         results = _search_brave_api(query, max_results)
         if results:
@@ -266,7 +266,7 @@ def get_web_search_results(query: str, max_results: int, *,
         UI.event("Web Search", "Brave API: no key configured — skipping", style="dim")
 
     # 2) Google Custom Search API
-    google_key = (Config.get("api_key_google_search") or "").strip()
+    google_key = (Config.get_api_key("google_search") or "").strip()
     google_cx  = (Config.get("google_search_engine_id") or "").strip()
     if google_key and google_cx:
         results = _search_google_cse(query, max_results)

@@ -46,11 +46,19 @@ def _drive(m):
 # ── T1: RAW override key reaches the backend undecoded, no disk key ────────────
 
 def test_raw_override_key_reaches_backend_undecoded(monkeypatch, fake_provider):
-    # Disk has NO key for openai; if the backend fell back to disk, api_key would be "".
-    monkeypatch.setattr(Config, "get_api_key", lambda provider: "")
-    raw = "skABCDEFGH123456"  # valid base64 length/alphabet -> b64decode would silently corrupt it
-    m = APIBackendManager("openai", config={**Config.DEFAULTS, "api_key_openai": raw}, api_key=raw)
-    assert m.api_key == raw       # used as-is: never base64-decoded, never read from disk
+    """The caller's key wins and is used verbatim.
+
+    The key now travels as the override DICT rather than a pre-extracted value - one
+    caller-supplied source instead of two, and the same dict the failover chain and model
+    discovery consult. The shape below is deliberate: valid base64 alphabet and length, so a
+    decoder in the path would corrupt it silently rather than fail loudly.
+    """
+    monkeypatch.setattr("vaf.core.api_keys.resolve_api_key",
+                        lambda provider, caller=None: (caller or {}).get(f"api_key_{provider}", ""))
+    raw = "skABCDEFGH123456"
+    m = APIBackendManager("openai", config={**Config.DEFAULTS, "api_key_openai": raw},
+                          caller_config={"api_key_openai": raw})
+    assert m.api_key == raw       # used as-is: never decoded, never read from disk
     assert m._embedded is True
 
 
@@ -58,7 +66,7 @@ def test_raw_override_key_reaches_backend_undecoded(monkeypatch, fake_provider):
 
 def test_embedded_model_resolves_from_config(fake_provider):
     cfg = {**Config.DEFAULTS, "api_key_openai": "sk-x", "api_model_openai": "gpt-4o-mini"}
-    m = APIBackendManager("openai", config=cfg, api_key="sk-x")
+    m = APIBackendManager("openai", config=cfg, caller_config={"api_key_openai": "sk-x"})
     assert _drive(m)["model"] == "gpt-4o-mini"
 
 
@@ -67,7 +75,7 @@ def test_embedded_model_resolves_from_config(fake_provider):
 def test_product_path_reads_model_live_from_disk(monkeypatch, fake_provider):
     disk = {"api_model_openai": "DISK-MODEL-1"}
     monkeypatch.setattr(Config, "load", lambda: dict(disk))
-    monkeypatch.setattr(Config, "get_api_key", lambda provider: "sk-x")
+    monkeypatch.setattr("vaf.core.api_keys.resolve_api_key", lambda provider, caller=None: "sk-x")
     m = APIBackendManager("openai")  # non-embedded (config=None)
     assert m._embedded is False
     assert _drive(m)["model"] == "DISK-MODEL-1"
@@ -79,7 +87,9 @@ def test_product_path_reads_model_live_from_disk(monkeypatch, fake_provider):
 # ── T4: no disk key and no override still raises (unchanged) ───────────────────
 
 def test_missing_key_still_raises(monkeypatch):
+    """Nothing configured anywhere is still "" and still refuses - the normal state. It is
+    the case a corrupt store used to be indistinguishable from."""
     monkeypatch.setattr(Config, "load", lambda: dict(Config.DEFAULTS))
-    monkeypatch.setattr(Config, "get_api_key", lambda provider: "")
+    monkeypatch.setattr("vaf.core.api_keys.resolve_api_key", lambda provider, caller=None: "")
     with pytest.raises(ValueError, match="API key missing"):
         APIBackendManager("openai")

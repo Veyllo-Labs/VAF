@@ -47,6 +47,26 @@ ISOLATED_ENV_AXES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_provider_keys(tmp_path, monkeypatch):
+    """A provider-key store per TEST, not per session.
+
+    The store behind `vaf.core.api_keys` is a module-level singleton over one file, and the
+    session store dir is shared - so without this, a key written by one test is still there
+    for the next. It showed up immediately: a seed that fires only the FIRST time a Veyllo
+    key appears stopped firing, because an earlier test had already put one there. Same
+    class as the data-dir pollution one level up, one scope smaller.
+    """
+    import vaf.core.api_keys as api_keys
+    from vaf.core.secure_store import SecureBlobStore
+
+    monkeypatch.setattr(
+        api_keys, "_store_singleton",
+        SecureBlobStore("provider_keys", tmp_path / "provider_keys.enc"),
+    )
+    yield
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _isolated_store_dirs(tmp_path_factory):
     import os

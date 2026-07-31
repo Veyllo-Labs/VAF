@@ -45,6 +45,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **A broken stored API key now says so instead of looking unconfigured.** Until now any
+  problem reading a key produced an empty value, and an empty value means "not set up" to
+  everything that asks - so a damaged key silently dropped you to the local model, or to no
+  provider at all, with nothing to indicate why. It now reports the problem for the provider
+  you are actually using, at the moment it is used: a damaged entry for a provider you never
+  touch cannot take the installation down. If you see it, re-enter that key in Settings.
+- **Your API keys move out of the plain configuration file.** They were stored in
+  `config.json`, scrambled but not encrypted - readable to anyone who opened the file, and
+  carried along in any backup or screenshot of it. They now live in the same encrypted store
+  as your mail, GitHub and cloud logins. Existing keys keep working and move across by
+  themselves the first time they are used; nothing is deleted, so going back to an older
+  version still finds them. Worth being precise about what this buys: unless you set a master
+  passphrase, the protection is still only your file permissions - the win is that the secret
+  is no longer sitting in the file everything else reads.
 - **Cloud storage no longer treats everyone as the machine owner.** The assistant's cloud
   tool worked out who was calling from a setting that is never actually set, so it always
   concluded it was the owner - whoever was really asking. On a shared installation that

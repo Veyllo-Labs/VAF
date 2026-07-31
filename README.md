@@ -38,9 +38,11 @@ pip install --pre vaf
 ```
 
 ```python
+import os
+
 from vaf import Agent
 
-agent = Agent(config={"provider": "openai", "api_key_openai": "sk-..."})
+agent = Agent(config={"provider": "openai", "api_key_openai": os.environ["OPENAI_API_KEY"]})
 print(agent.run("In one short sentence, what is Python?"))
 ```
 

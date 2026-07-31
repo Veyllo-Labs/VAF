@@ -141,7 +141,7 @@ Pass `system_prompt=` to give the agent its identity and instructions:
 from vaf import Agent
 
 agent = Agent(
-    config={"provider": "openai", "api_key_openai": "sk-..."},
+    config={"provider": "openai", "api_key_openai": os.environ["OPENAI_API_KEY"]},
     system_prompt=(
         "You are Aria, a terse code-review assistant. "
         "Answer in short, direct bullet points. Never apologise."
@@ -189,9 +189,11 @@ model for your hardware (`model="auto"`; override with a filename or repo).
 
 - Zero VRAM, fast first start, and parallel `Agent` instances scale freely
   (each request is independent).
-- Needs a key: pass `api_key_<provider>` (raw, e.g. `"sk-..."`) and
-  optionally `api_model_<provider>` per instance via `config=`; your prompts
-  are sent to that provider.
+- Needs a key: pass `api_key_<provider>` and optionally `api_model_<provider>`
+  per instance via `config=`; your prompts are sent to that provider. Read the
+  key from your own secret source - the snippets here take it from the
+  environment on purpose, because a key in source code is a key in your git
+  history.
 - `veyllo` is Veyllo's own hosted OpenAI-compatible endpoint (multimodal
   `veyllo-chat`); `openrouter` fans out to many third-party models behind
   one key.
@@ -206,7 +208,7 @@ model for your hardware (`model="auto"`; override with a filename or repo).
 private_agent = Agent(config={"provider": "local"})
 power_agent = Agent(config={
     "provider": "anthropic",
-    "api_key_anthropic": "sk-ant-...",
+    "api_key_anthropic": os.environ["ANTHROPIC_API_KEY"],
 })
 ```
 
@@ -230,14 +232,42 @@ keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 ```python
 Agent(config={
     "provider": "openai",
-    "api_key_openai": "sk-...",
+    "api_key_openai": os.environ["OPENAI_API_KEY"],
     "api_model_openai": "gpt-4o",
 })
 ```
 
-The `api_key_*` and `api_model_*` you pass here reach the LLM backend directly for
-this `Agent` instance. Pass the **raw** key (`"sk-..."`) — unlike the on-disk value
-it is not Base64-decoded.
+The `api_key_*` and `api_model_*` you pass here reach **every** consumer for this
+`Agent` instance - the primary backend, the failover chain, model discovery, and
+the voice and speech lanes. That was not always true: the key used to be pulled out
+as a single value and handed to one constructor, so an embedded agent's failover
+chain could never find a key while this page said "pass your key". Your dict is now
+the highest-precedence source, above anything stored on the machine, and a later
+provider switch cannot substitute the machine's value for yours.
+
+Two consequences worth knowing before you rely on it:
+
+- **A provider key arms every capability that uses that provider.** Passing
+  `api_key_openai` supplies the language model *and* speech-to-text if you enable
+  it, because keys are addressed per provider, not per feature. Voice, speech and
+  the learning system each sit behind their own switch, so nothing activates that
+  you did not turn on.
+- **It does not cross a process boundary.** The coder sub-agent runs in its own
+  process and reads the machine's own encrypted store; an in-memory key never
+  reaches it. This is the third member of a family worth recognising: the declared
+  file boundary does not cover the linter either (it shells out), and the librarian
+  has to carry identity through `extra_env` for the same reason. Passing a secret
+  through a child's environment is a different decision from passing a scope id,
+  and VAF does not make it for you.
+
+**Where a key lives when VAF stores one.** Keys set through the product go into the
+same envelope-encrypted store as mail, GitHub and cloud credentials - not into
+`config.json`. Be precise about what that buys: without a master passphrase (the
+default, and the headless case) the key-encryption key sits in `config.json` itself,
+which `secure_store` describes as equivalent to chmod-only protection. The gain is
+that the secret is no longer in the same file as everything else, is not readable by
+eye, and does not travel in a config backup or a screenshot. It is not protection
+against someone who can already read your data directory.
 
 ### A complete example, with error handling
 
@@ -253,7 +283,7 @@ from vaf import Agent
 
 agent = Agent(config={
     "provider": "openai",
-    "api_key_openai": "sk-...",          # raw key
+    "api_key_openai": os.environ["OPENAI_API_KEY"],   # read it, never inline it
     "api_model_openai": "gpt-4o-mini",
 })
 

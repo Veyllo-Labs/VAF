@@ -223,10 +223,24 @@ def test_the_dispatcher_injects_scope_and_role_for_every_read_tool():
 
 @pytest.mark.parametrize("cls", [ReadFileTool, ListFilesTool, TreeTool, FinderTool, FolderSizeTool])
 def test_every_read_tool_installs_the_read_jail(cls):
-    """One shared context manager rather than five hand-written copies of the same four
-    steps - a forgotten `finally` in one of them would leak the jail into the next run."""
-    import inspect
+    """The jail is DECLARED now, not installed by hand, so this asks the declaration.
 
-    src = inspect.getsource(cls.run)
-    assert "user_jail(" in src, f"{cls.__name__}.run does not install the jail"
-    assert 'mode="read"' in src, f"{cls.__name__}.run installs the wrong jail mode"
+    Strictly stronger than what it replaced. The old form read `run`'s source for a
+    `user_jail(..., mode="read")` call, which could only ever be true for a tool that
+    remembered to write it; five of twenty-two had not. `file_access` is validated when the
+    class is defined - declaring a mode without the matching identity_kwargs is a TypeError
+    at import - so the failure mode this test was guarding against cannot reach a test run
+    at all.
+    """
+    assert cls.file_access == "read", (
+        f"{cls.__name__} no longer declares the read jail; declaring nothing means no "
+        "boundary on any lane, including the direct .run() calls the coder and the workflow "
+        "engine make"
+    )
+    assert {"user_scope_id", "user_role"} <= set(cls.identity_kwargs), (
+        f"{cls.__name__} declares file_access without the identity to resolve it - user_jail "
+        "installs nothing for a falsy scope, so it would run unconfined while looking confined"
+    )
+    assert getattr(cls.run, "_vaf_jailed", False), (
+        f"{cls.__name__}.run is not wrapped - the declaration exists but nothing acts on it"
+    )

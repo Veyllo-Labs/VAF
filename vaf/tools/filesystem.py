@@ -123,10 +123,53 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
     and automations call these tools directly, so run() is the only place that always runs.
 
     A falsy scope means a direct consumer (coder, workflow engine, automations) - no jail,
-    exactly as before this existed."""
+    exactly as before this existed.
+
+    NESTING ONLY EVER NARROWS. An inner jail may shrink the roots it inherits and may never
+    add one, and it can never lift an outer jail by resolving to an admin. Without that rule
+    nesting WIDENS, and not hypothetically: the librarian installs the default `write` mode
+    around its whole run while its read sub-tools enter `read`, which reaches further by the
+    folders of the skills this user may see. That gap opened with the Phase 3 unification -
+    before it the sub-tools received no scope at all, so the inner call was a no-op and there
+    was nothing to widen.
+    Stated at its true size, because an overstated example devalues the rule it justifies:
+    those extra roots are the skills THIS user is allowed to see, decided by a separate
+    authority (`get_visible_skill_ids_for_user`). It widened onto data the caller is
+    separately entitled to, not onto someone else's. The MECHANISM is the forbidden one all
+    the same, and the next widening will not be that harmless."""
     token = None
     if user_scope_id:
         info = compute_user_jail(user_scope_id, user_role, mode=mode)
+        outer = _librarian_scope_ctx.get(None)
+        if outer:
+            if info.get("is_admin"):
+                # DEFENSIVE, AND TODAY EQUIVALENT TO DOING NOTHING - deliberately kept, and
+                # deliberately not covered by a test of its own. Replacing this line with
+                # `pass` leaves the whole suite green, because an admin resolution also fails
+                # the `if not info.get("is_admin")` below: no token is set and the outer
+                # contextvar survives by itself. Both routes end in the same place.
+                # It is load-bearing for one property that is NOT visible here: this holds
+                # only as long as user_jail never CLEARS the contextvar, but merely sets it
+                # or does nothing. Rewrite it to always install a token and this line becomes
+                # the thing that stops an inner admin from lifting an outer jail. The
+                # PROPERTY is tested (test_an_inner_admin_cannot_lift_an_outer_jail); this
+                # line is not, and pinning an equivalent line would be the ballast the test
+                # rules call a reason for deletion.
+                info = outer
+            else:
+                # NOT an intersection, deliberately: an inner root is KEPT whole when it lies
+                # inside an outer one and DROPPED whole otherwise. An inner root that is a
+                # PARENT of an outer root is therefore discarded rather than trimmed to the
+                # overlap, and if that was the only root the tool is left with none, i.e.
+                # deny-all. That is the safe direction and it is the intended one - but it is
+                # a silent total refusal rather than access to the shared part, so it is
+                # written down here. Do not "fix" it by widening to the parent.
+                outer_roots = [os.path.abspath(str(r)) for r in (outer.get("allowed_roots") or [])]
+                info = {**info, "allowed_roots": [
+                    r for r in (info.get("allowed_roots") or [])
+                    if any(os.path.abspath(str(r)) == o
+                           or os.path.abspath(str(r)).startswith(o.rstrip("/") + os.sep)
+                           for o in outer_roots)]}
         if not info.get("is_admin"):
             token = set_librarian_scope(info)
     try:
@@ -352,6 +395,7 @@ def is_safe_path(path):
 class ListFilesTool(BaseTool):
     name = "list_files"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     permission_level = "read"
     side_effect_class = "none"
     description = "Lists files in a directory."
@@ -366,17 +410,8 @@ class ListFilesTool(BaseTool):
         "required": ["path"]
     }
 
-    def run(self, **kwargs) -> str:
-        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
-        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because a dispatcher is not always in the picture - the coder, the
-        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
-        # user: use_skill hands out their absolute paths and asks for read_file.
-        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
-                       mode="read"):
-            return self._run_body(**kwargs)
 
-    def _run_body(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get('path', '.')
         sort_by = kwargs.get('sort_by', 'name')
         limit = kwargs.get('limit', 100)
@@ -440,6 +475,7 @@ class ListFilesTool(BaseTool):
 class FolderSizeTool(BaseTool):
     name = "folder_size"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     permission_level = "read"
     side_effect_class = "none"
     description = "Calculates the total size of a folder (recursive), with optional largest-files preview."
@@ -454,17 +490,8 @@ class FolderSizeTool(BaseTool):
         "required": ["path"],
     }
 
-    def run(self, **kwargs) -> str:
-        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
-        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because a dispatcher is not always in the picture - the coder, the
-        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
-        # user: use_skill hands out their absolute paths and asks for read_file.
-        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
-                       mode="read"):
-            return self._run_body(**kwargs)
 
-    def _run_body(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get("path", "")
         top_n = int(kwargs.get("top_n", 10) or 10)
         max_files = int(kwargs.get("max_files", 200000) or 200000)
@@ -547,6 +574,7 @@ class FolderSizeTool(BaseTool):
 class ReadFileTool(BaseTool):
     name = "read_file"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     permission_level = "read"
     side_effect_class = "none"
     description = """Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).
@@ -571,17 +599,8 @@ For detailed analysis of large files, consider using librarian_agent instead."""
         "required": ["path"]
     }
 
-    def run(self, **kwargs) -> str:
-        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
-        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because a dispatcher is not always in the picture - the coder, the
-        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
-        # user: use_skill hands out their absolute paths and asks for read_file.
-        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
-                       mode="read"):
-            return self._run_body(**kwargs)
 
-    def _run_body(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         start_line = kwargs.get('start_line')
         end_line = kwargs.get('end_line')
@@ -764,6 +783,7 @@ For detailed analysis of large files, consider using librarian_agent instead."""
 class WriteFileTool(BaseTool):
     name = "write_file"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "write"
     permission_level = "write"
     side_effect_class = "reversible"
     description = (
@@ -803,29 +823,8 @@ class WriteFileTool(BaseTool):
         "content": ["message", "text", "body", "data", "file_content", "contents"],
     }
 
-    def run(self, **kwargs) -> str:
-        # Main-agent calls (identified by the injected kwargs from execute_tool) apply
-        # the per-user filesystem jail for non-admin users. It MUST be set here, in the
-        # tool itself, because a dispatcher is not always in the picture - the direct
-        # consumers below call run() with no dispatcher to have set anything.
-        # Direct consumers (coder, workflow engine, librarian) pass no user_scope_id
-        # and run the body unchanged.
-        _jail_token = None
-        _scope = kwargs.pop("user_scope_id", None)
-        # Popped unconditionally: execute_tool always SETS this from the trusted session
-        # context, so a model-supplied value is overwritten before it ever arrives here.
-        _role = kwargs.pop("user_role", None)
-        if _scope:
-            _info = compute_user_jail(_scope, _role)
-            if not _info.get("is_admin"):
-                _jail_token = set_librarian_scope(_info)
-        try:
-            return self._run_write(**kwargs)
-        finally:
-            if _jail_token is not None:
-                reset_librarian_scope(_jail_token)
 
-    def _run_write(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         content = kwargs.get('content', '')
         # Binary lane: content_base64 decodes to raw bytes (png/jpg/pdf/... - the
@@ -1129,6 +1128,7 @@ class EditFileTool(BaseTool):
 
 
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "write"
     name = "edit_file"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1199,33 +1199,8 @@ class EditFileTool(BaseTool):
             return hits[0]
         return "ambiguous" if len(hits) > 1 else "not_found"
 
-    def run(self, **kwargs) -> str:
-        # Same contract as WriteFileTool.run: execute_tool injects the caller's scope and
-        # role, and the jail is installed HERE, in the tool itself, because a dispatcher is
-        # not always in the picture - direct consumers call run() without one.
-        #
-        # It must wrap the WHOLE body, not just the write. edit_file reads the target to
-        # compute the edit, and its miss path answers with a slice of the file ("nearest
-        # region"), so an unjailed run is a read primitive as much as a write one. The
-        # inner WriteFileTool call inherits this contextvar - it is the same thread and
-        # that tool sees no scope of its own.
-        #
-        # Both keys are ASSIGNED by the dispatcher, never defaulted: kwargs starts out as
-        # the arguments the model produced.
-        _jail_token = None
-        _scope = kwargs.pop("user_scope_id", None)
-        _role = kwargs.pop("user_role", None)
-        if _scope:
-            _info = compute_user_jail(_scope, _role)
-            if not _info.get("is_admin"):
-                _jail_token = set_librarian_scope(_info)
-        try:
-            return self._run_edit(**kwargs)
-        finally:
-            if _jail_token is not None:
-                reset_librarian_scope(_jail_token)
 
-    def _run_edit(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get("path", "")
         edits = kwargs.get("edits")
         # Weak models sometimes pass a single {search,replace} or flat search/replace.
@@ -1355,6 +1330,7 @@ class MoveFileTool(BaseTool):
 class TreeTool(BaseTool):
     name = "tree"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     permission_level = "read"
     side_effect_class = "none"
     description = "Generates an ASCII tree view of a directory structure."
@@ -1368,17 +1344,8 @@ class TreeTool(BaseTool):
         "required": []
     }
 
-    def run(self, **kwargs) -> str:
-        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
-        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because a dispatcher is not always in the picture - the coder, the
-        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
-        # user: use_skill hands out their absolute paths and asks for read_file.
-        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
-                       mode="read"):
-            return self._run_body(**kwargs)
 
-    def _run_body(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         path = kwargs.get('path', '.')
         try:
             depth = int(kwargs.get('depth', 2))
@@ -1416,6 +1383,7 @@ class TreeTool(BaseTool):
 class FinderTool(BaseTool):
     name = "find_files"
     identity_kwargs = ("user_role", "user_scope_id")
+    file_access = "read"
     permission_level = "read"
     side_effect_class = "none"
     description = "Finds files matching a glob pattern (e.g. *.py) recursively."
@@ -1429,17 +1397,8 @@ class FinderTool(BaseTool):
         "required": ["pattern"]
     }
 
-    def run(self, **kwargs) -> str:
-        # Per-user READ jail. execute_tool injects the caller's scope and role (ASSIGNED,
-        # never defaulted - kwargs starts out as the model's own arguments), and the jail is
-        # entered HERE because a dispatcher is not always in the picture - the coder, the
-        # workflow engine and automations call this tool directly. Read mode also allows the folders of skills visible to this
-        # user: use_skill hands out their absolute paths and asks for read_file.
-        with user_jail(kwargs.pop("user_scope_id", None), kwargs.pop("user_role", None),
-                       mode="read"):
-            return self._run_body(**kwargs)
 
-    def _run_body(self, **kwargs) -> str:
+    def run(self, **kwargs) -> str:
         import fnmatch
         path = kwargs.get('path', '.')
         pattern = kwargs.get('pattern', '*')

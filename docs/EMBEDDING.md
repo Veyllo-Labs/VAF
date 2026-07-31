@@ -441,7 +441,7 @@ Hard limits you must respect (they are architecture, not fine print):
   read exactly like a built-in one:
 
   ```python
-  from vaf import BaseTool, user_jail
+  from vaf import BaseTool
 
   class TenantNotes(BaseTool):
       name = "tenant_notes"
@@ -452,16 +452,28 @@ Hard limits you must respect (they are architecture, not fine print):
       # "username", "user_role". Declaring nothing means receiving nothing.
       identity_kwargs = ("user_scope_id", "user_role")
 
+      # Declare the MODE your tool needs, and the per-user file boundary is installed
+      # around run() for you - on every lane, including a direct `.run()` call with no
+      # dispatcher in the picture. "read" reaches further than "write" by the folders
+      # of the skills this user may see.
+      file_access = "read"
+
       def run(self, **kwargs):
-          scope = kwargs.get("user_scope_id")     # assigned by the dispatcher,
-          role = kwargs.get("user_role")          # never taken from the model
-          # Declaring tells you WHO is calling. It does not confine anything by
-          # itself - for file access, turn the answer into a boundary. Enter the
-          # jail INSIDE run(): your tool can also be called directly, with no
-          # dispatcher to have set anything up for it.
-          with user_jail(scope, role, mode="read"):
-              return read_notes(kwargs.get("path"))
+          # Already confined when this line runs. Nothing to enter, nothing to release.
+          return read_notes(kwargs.get("path"))
   ```
+
+  `file_access` without the matching `identity_kwargs` is a **TypeError when your class is
+  defined**, not a silent no-op at run time. The boundary is resolved from the caller's
+  scope, so a tool that never receives one would run completely unconfined while looking
+  confined - the contract refuses to be declared halfway. Nesting only ever NARROWS: if a
+  boundary is already installed, yours can shrink what it inherits and never add to it.
+
+  Until this existed, the example here told you to write `with user_jail(scope, role, ...)`
+  inside `run()` yourself. That was honest about what the framework offered and it was the
+  wrong offer: eleven built-in tools hand-rolled the same four steps, and five of the
+  twenty-two that needed them had simply forgotten. An older tool doing it by hand keeps
+  working - `user_jail` is still exported - but the declaration is the supported form.
 
   Two properties worth relying on. The values are **assigned, never defaulted**: the
   arguments reaching `run()` start out as whatever the model produced, so a
@@ -759,7 +771,9 @@ Stable public surface (safe to build on):
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `BaseTool` - the tool contract, including the `identity_kwargs` declaration.
-- `vaf.user_jail` - turning a declared identity into a file boundary.
+- `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
+  `file_access` declaration on your tool, which does it on every lane; this remains
+  exported for tools that need the boundary around something other than a whole `run()`.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import functools
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Literal
 
@@ -129,9 +130,67 @@ class BaseTool(ABC):
     # The values are ASSIGNED, never defaulted: the arguments reaching a tool start
     # out as whatever the MODEL produced, so a prompt-injected user_role="admin"
     # must be overwritten with the session's real one rather than honored.
-    # For file access, resolve the declaration with vaf.tools.filesystem.user_jail
-    # (see docs/security/USER_ISOLATION.md); declaring alone confines nothing.
+    # For file access, declare `file_access` below - it resolves this identity into a
+    # boundary for you, on every lane, without a line inside run().
     identity_kwargs: tuple[str, ...] = ()
+
+    # file_access: "read" | "write" | None. Declare the MODE a tool needs, and the per-user
+    # file boundary is installed around run() for you - including when something calls
+    # `.run()` directly, which the coder, the workflow engine and automations all do.
+    #
+    # The mode, not the parameter, and that is the whole point. Naming "which argument is a
+    # path" would only cover tools that take one; the reason this exists is that most jailed
+    # tools protect a DERIVED path. `librarian_agent` installs the boundary so its thirteen
+    # sub-tools inherit it and has no path argument at all; `send_mail` protects attachment
+    # resolution; the document tools protect what their readers open afterwards. A
+    # parameter-shaped declaration would miss exactly the class the jail was invented for,
+    # while looking like coverage.
+    #
+    # "read" reaches further than "write" by the folders of the skills this user may see
+    # (see compute_user_jail). Nesting NARROWS only: an inner declaration can shrink what it
+    # inherits, never add to it.
+    #
+    # DECLARING THIS WITHOUT THE MATCHING identity_kwargs IS A HARD ERROR, raised when the
+    # class is defined rather than when it runs. `user_jail` installs nothing for a falsy
+    # scope - correct for a direct consumer that has no user - so a tool declaring a mode but
+    # never receiving a scope would run completely unconfined while LOOKING confined. That is
+    # the exact failure this declaration exists to remove, reproduced one layer up, and it
+    # would be inherited by every third-party tool: custom tools are loaded as "the first
+    # BaseTool subclass found", so they get this contract whether they read about it or not.
+    # Class-definition time is the only moment it is noticed before production.
+    file_access: str | None = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        mode = getattr(cls, "file_access", None)
+        if mode is None:
+            return                       # default: nothing wrapped, behaviour byte-identical
+        if mode not in ("read", "write"):
+            raise TypeError(
+                f"{cls.__name__}.file_access must be 'read', 'write' or None, not {mode!r}"
+            )
+        missing = {"user_scope_id", "user_role"} - set(getattr(cls, "identity_kwargs", ()) or ())
+        if missing:
+            raise TypeError(
+                f"{cls.__name__} declares file_access={mode!r} but its identity_kwargs is "
+                f"missing {sorted(missing)}. Without those the dispatcher passes no identity, "
+                f"user_jail installs nothing for a falsy scope, and the tool would run "
+                f"UNCONFINED while appearing confined. Add "
+                f'identity_kwargs = ("user_scope_id", "user_role").'
+            )
+        run = cls.__dict__.get("run") or getattr(cls, "run", None)
+        if run is None or getattr(run, "_vaf_jailed", False):
+            return                       # abstract, or already wrapped by a parent class
+
+        @functools.wraps(run)
+        def _jailed_run(self, *args, **kw):
+            from vaf.tools.filesystem import user_jail
+            with user_jail(kw.get("user_scope_id"), kw.get("user_role"), mode=mode):
+                return run(self, *args, **kw)
+
+        _jailed_run._vaf_jailed = True
+        _jailed_run._vaf_file_access = mode
+        cls.run = _jailed_run
 
     # input_aliases: {canonical_param: [synonyms]}. Weak models often use a
     # synonym for a parameter name (write_file: file_path -> path,

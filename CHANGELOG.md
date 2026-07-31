@@ -12,6 +12,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A tool can now say that it touches files, and the per-user boundary is installed for
+  it.** Building something on VAF that reads or writes a user's files meant declaring who is
+  calling and then writing the confinement yourself, inside every tool, exactly right, every
+  time. Eleven built-in tools did precisely that, across five files, and five of the
+  twenty-two that needed it had simply forgotten. A tool now declares `file_access = "read"`
+  or `"write"` next to its identity, and the boundary is applied around it on every path -
+  including when something calls the tool directly, with no dispatcher involved. Declaring a
+  mode without the matching identity is refused when the class is defined, rather than
+  quietly doing nothing later: a tool that receives no identity would otherwise run
+  completely unconfined while looking confined. A boundary inside another can only narrow
+  what it inherited, never widen it.
 - **A new example runs without needing a model at all.**
   `examples/07_tool_caller_and_authorizer.py` shows the two pieces below in one runnable
   script: running a tool with VAF's rules but no conversation, and deciding about each call.

@@ -174,8 +174,14 @@ def test_the_jailed_tools_read_the_role_from_the_injected_argument():
     from vaf.tools import librarian as librarian_mod
     from vaf.tools import send_mail as send_mail_mod
 
-    fs_src = Path(filesystem_mod.__file__).read_text(encoding="utf-8")
-    assert 'kwargs.pop("user_role", None)' in fs_src, "WriteFileTool must consume user_role"
+    # The filesystem tools no longer consume the role by hand: they DECLARE `file_access`
+    # and BaseTool resolves it. Asked of the declaration, which is the thing that now has to
+    # be right - and which is checked when the class is defined rather than when it runs.
+    assert filesystem_mod.WriteFileTool.file_access == "write"
+    assert {"user_scope_id", "user_role"} <= set(filesystem_mod.WriteFileTool.identity_kwargs), (
+        "WriteFileTool must still receive the role: without it a SECOND admin account is "
+        "jailed here while every other gate in the app treats it as a full admin"
+    )
     lib_src = Path(librarian_mod.__file__).read_text(encoding="utf-8")
     assert 'kwargs.get("user_role")' in lib_src
     assert "VAF_USER_ROLE" in lib_src, (

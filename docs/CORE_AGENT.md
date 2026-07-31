@@ -177,7 +177,7 @@ shape: [EMBEDDING.md](EMBEDDING.md).
 - Hot reload: `reload_builtin_tools()` (new in-tree files only),
   `reload_custom_tools()`, `reload_mcp_tools()`,
   `reload_api_backend(*, force=False)`.
-- `reload_api_backend(*, force=False) -> bool` is the **only** supported way to move a
+- `reload_api_backend(*, force=False) -> bool` is the supported way to move **one**
   running agent to a different provider or API key, and it is the whole job: it takes a
   swap lock, refuses to touch a sub-agent pinned via `VAF_PROVIDER` or an embedded agent
   with `config_overrides`, builds the backend through `_build_api_backend` (so an embedded
@@ -195,6 +195,21 @@ shape: [EMBEDDING.md](EMBEDDING.md).
   that does not know which key changed must force. Do not reassign `provider`,
   `api_backend`, `use_server` or `llm` by hand; guarded by
   `tests/test_provider_swap_single_implementation.py`.
+- `reload_all_api_backends(*, force=False) -> int` (module level in `vaf/core/agent.py`)
+  is what a CONFIG CHANGE should call. It applies the above to every agent alive in the
+  process and returns how many changed. **This sentence used to read "the only supported
+  way" about the singular form, and that wording was the defect**: a process routinely
+  holds several agents - the headless runner builds one per `parallel_main_workers` -
+  so re-applying to the agent a code path happens to hold repaired one of them and left
+  the rest on the previous key until a restart. Five call sites had each hand-rolled that
+  same mistake. The broadcast needs no policy of its own: the `VAF_PROVIDER` pin and the
+  `config_overrides` guard live inside the per-instance method, so it reaches exactly the
+  agents meant to follow the file. It never raises - one agent refusing must not stop the
+  rest from being repaired. Agents are held weakly; note that an Agent stays reachable for
+  the life of the process anyway, because `__init__` registers an `atexit` handler.
+  Deliberately NOT on the public facade: it declines for every agent built with config
+  overrides, which is every agent an embedder builds the documented way. See
+  `tests/test_api_backend_broadcast.py` and the boundary in `docs/EMBEDDING.md`.
 
 ## Concurrency contract
 

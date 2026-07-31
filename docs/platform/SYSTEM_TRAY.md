@@ -66,7 +66,7 @@ Certain settings trigger an automatic server restart when changed in the Web UI:
 | :--- | :--- |
 | `n_ctx`, `gpu_layers` | Stops and restarts `llama-server` with new values (local provider only). |
 | `local_network_enabled`, `local_network_port`, `local_network_port_frontend` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
-| `provider` | Marks config refresh (`requires_refresh`) and triggers backend `RELOAD_CONFIG`. The activity loop (not `on_config_changed`) then unloads the local model on a cloud/API provider and (re)loads it on switch back to local. |
+| `provider`, any `api_key_*` | `on_config_changed` re-applies the backend to **every** agent in the process (`reload_all_api_backends`), forcing the reload for a key change because that leaves the provider equal. A provider change additionally marks config refresh (`requires_refresh`) and triggers backend `RELOAD_CONFIG`; a key-only change does neither, so it produces no UI signal. What the activity loop (not `on_config_changed`) handles is the local model's memory: unload on a cloud/API provider, (re)load on switch back to local. |
 
 You can also toggle local network hosting and SSL from the CLI (no UI needed):
 

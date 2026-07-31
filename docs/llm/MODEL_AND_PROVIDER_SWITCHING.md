@@ -19,13 +19,14 @@ The overlay mirrors the behavior when toggling the network settings (Local Netwo
 - **API to Local:**
   On the switch back the activity loop detects the local provider and **(re)loads the local model** right away (`start_model_async`). After `RELOAD_CONFIG` the local path is active again.
 
-This live load/unload is driven by the **tray activity loop** (which reads `provider` each tick — desktop only), NOT by `on_config_changed`. The config save itself still queues `__CMD__:RELOAD_CONFIG` for the headless runner.
+This live load/unload is driven by the **tray activity loop** (which reads `provider` each tick — desktop only), NOT by `on_config_changed`. That is a statement about the LOCAL MODEL's memory only. The BACKEND swap is a separate lane and `on_config_changed` does own it: it has a branch on `provider` and on any `api_key_*`, and applies the change to the running agents. The config save itself also still queues `__CMD__:RELOAD_CONFIG` for the headless runner, so both lanes converge on the same per-agent method.
 
 ## Technical notes
 
-- **Config/WebSocket:** On save the API marks the provider change (`requires_refresh: true`) and queues `__CMD__:RELOAD_CONFIG`.
-- **Headless runner:** `RELOAD_CONFIG` updates the agent context (provider/backend, LLM reset, `use_server` path).
-- **Tray:** `on_config_changed` handles model-, context-, gpu- and network-related keys. The **provider** switch is handled separately by the activity loop (`check_activity_loop`), which reads `provider` each tick: cloud/API + model still loaded → unload immediately; switch back to local → load. (Desktop tray only.)
+- **Config/WebSocket:** On save the API marks the provider change (`requires_refresh: true`) and queues `__CMD__:RELOAD_CONFIG`. Note the asymmetry: `requires_refresh` is computed from the PROVIDER only, so a key-only change reaches the backend but produces no UI refresh signal.
+- **Headless runner:** `RELOAD_CONFIG` updates the agent context (provider/backend, LLM reset, `use_server` path) for **every** agent in the process, not only the one whose command loop received it - the pool holds one per `parallel_main_workers`.
+- **Tray:** `on_config_changed` handles model-, context-, gpu- and network-related keys, **and the backend swap for `provider` and every `api_key_*`** via `reload_all_api_backends`. What the activity loop (`check_activity_loop`) handles separately is the local model's MEMORY, not the backend: it reads `provider` each tick and, on cloud/API with the model still loaded, unloads immediately; on the switch back to local it loads. (Desktop tray only.)
+- **An API key changing is a switch too.** It leaves `provider` equal, so every no-op guard on the path treats it as nothing to do unless the caller forces the reload. This is not theoretical: a replaced key was ignored until a restart because the re-apply reached one agent out of the pool.
 - **WebSocket:** On config save the `config_saved` response may include `requires_refresh: true` (e.g. on a provider change). In that case the Web UI shows the same overlay and reloads the page after 5 seconds.
 
 ## Related documentation

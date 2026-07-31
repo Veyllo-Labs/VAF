@@ -213,14 +213,19 @@ def test_the_downstream_re_ask_runs_under_the_same_jail(tmp_path, monkeypatch, s
 
 
 def test_the_decision_is_asked_inside_the_jail():
-    """`is_safe_path` answers the static blocks AND the per-user jail, but only if the jail
-    is installed when it is asked - the jail is a contextvar, not an argument."""
-    import inspect
+    """`is_safe_path` answers the static blocks AND the per-user jail, but only if the jail is
+    installed when it is asked - it is a contextvar, not an argument.
 
-    src = inspect.getsource(DocumentViewerTool.run)
-    jail = src.index("user_jail(")
-    check = src.index("is_safe_path(")
-    assert jail < check, "is_safe_path is asked before the jail is entered; it answers unjailed"
+    The tool no longer installs it by hand: it DECLARES `file_access`, and BaseTool wraps
+    run(), so the jail is already in place on the first line of the body. Asserted on the
+    declaration plus the wrapping, which is what has to hold now - and stronger than the old
+    source check, since a declared mode without the identity to resolve it is refused when the
+    class is defined."""
+    assert DocumentViewerTool.file_access == "read"
+    assert {"user_scope_id", "user_role"} <= set(DocumentViewerTool.identity_kwargs)
+    assert getattr(DocumentViewerTool.run, "_vaf_jailed", False), (
+        "run() is not wrapped - the declaration exists but nothing installs the jail"
+    )
 
 
 # ── what the split nearly broke, silently ────────────────────────────────────

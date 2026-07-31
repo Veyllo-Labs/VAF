@@ -434,7 +434,8 @@ async def ingest_document_knowledge(
 
 class LearnDocumentTool(BaseTool):
     name = "learn_document"
-    identity_kwargs = ("user_scope_id",)
+    identity_kwargs = ("user_scope_id", "user_role")
+    file_access = "read"
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
@@ -497,10 +498,10 @@ class LearnDocumentTool(BaseTool):
         #     did. A guard that appears to cover and provably does not is worse than a narrow
         #     one, so the decision is made here, up front, and the resolved path is what the
         #     rest of the function uses.
-        from vaf.tools.filesystem import is_safe_path, user_jail
+        from vaf.tools.filesystem import is_safe_path
 
-        with user_jail(user_scope_id, kwargs.get("user_role"), mode="read"):
-            safe, resolved = is_safe_path(str(path))
+        # Jail already installed via the file_access declaration; this is the decision only.
+        safe, resolved = is_safe_path(str(path))
         if not safe:
             return f"[ERROR] {resolved}"
         path = Path(resolved)

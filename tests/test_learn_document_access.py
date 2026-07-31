@@ -82,13 +82,16 @@ def test_the_private_policy_is_gone():
 
 
 def test_the_shared_rule_decides_now():
+    """The shared rule decides, and the boundary it answers against is now DECLARED rather
+    than installed by hand inside run()."""
     import inspect
 
     import vaf.tools.learn_document as mod
 
-    src = inspect.getsource(mod.LearnDocumentTool.run)
-    assert "is_safe_path" in src
-    assert "user_jail" in src
+    assert "is_safe_path" in inspect.getsource(mod.LearnDocumentTool.run)
+    assert mod.LearnDocumentTool.file_access == "read"
+    assert {"user_scope_id", "user_role"} <= set(mod.LearnDocumentTool.identity_kwargs)
+    assert getattr(mod.LearnDocumentTool.run, "_vaf_jailed", False)
 
 
 # ── the outcome: nothing blocked reaches memory ──────────────────────────────

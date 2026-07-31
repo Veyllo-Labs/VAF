@@ -39,7 +39,8 @@ class DocumentViewerTool(BaseTool):
     """
 
 
-    identity_kwargs = ("user_scope_id",)
+    identity_kwargs = ("user_scope_id", "user_role")
+    file_access = "read"
     name = "document_viewer"
     permission_level = "read"
     side_effect_class = "none"
@@ -84,22 +85,25 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
         # Read mode, and no `user_role`: this tool declares only `user_scope_id`, so a second
         # administrator is jailed to their own tree here. That is restrictive, never
         # permissive, and widening access is not something to bundle into a fix for a leak.
-        from vaf.tools.filesystem import is_safe_path, user_jail
+        from vaf.tools.filesystem import is_safe_path
 
-        with user_jail(kwargs.get("user_scope_id"), kwargs.get("user_role"), mode="read"):
-            safe, resolved = is_safe_path(str(path))
-            if not safe:
-                return f"[ERROR] {resolved}"
-            path = Path(resolved)
+        # The jail is already installed - declared as file_access above, applied around run()
+        # by BaseTool on every lane. What stays here is the DECISION: is_safe_path answers the
+        # static blocks and the jail in one question, and its RESOLVED path is what everything
+        # below uses.
+        safe, resolved = is_safe_path(str(path))
+        if not safe:
+            return f"[ERROR] {resolved}"
+        path = Path(resolved)
 
-            # Existence is probed only AFTER the path is allowed: answering "not found" for a
-            # blocked path still tells the caller whether it exists.
-            if not path.exists():
-                return f"Error: File not found: {path}"
-            if not path.is_file():
-                return f"Error: Not a file: {path}"
+        # Existence is probed only AFTER the path is allowed: answering "not found" for a
+        # blocked path still tells the caller whether it exists.
+        if not path.exists():
+            return f"Error: File not found: {path}"
+        if not path.is_file():
+            return f"Error: Not a file: {path}"
 
-            return self._open_in_viewer(path, user_scope_id=kwargs.get("user_scope_id"))
+        return self._open_in_viewer(path, user_scope_id=kwargs.get("user_scope_id"))
 
     def _open_in_viewer(self, path: Path, *, user_scope_id: str | None = None) -> str:
         """Everything after the access decision. Split out so the guard above cannot be

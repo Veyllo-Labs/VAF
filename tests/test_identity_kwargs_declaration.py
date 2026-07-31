@@ -63,7 +63,10 @@ IDENTITY_BASELINE = {
     "delete_skill": ["user_scope_id", "username"],
     "discord_inbox": ["user_scope_id", "username"],
     "document_editor": ["user_scope_id"],
-    "document_viewer": ["user_scope_id"],
+    # Both gained user_role on 2026-07-31: `file_access` refuses to be declared
+    # without the identity that resolves it, and the role is what recognises a
+    # SECOND admin - who was jailed here while every other file gate freed them.
+    "document_viewer": ["user_role", "user_scope_id"],
     "edit_file": ["user_role", "user_scope_id"],
     "find_discord_messages": ["user_scope_id", "username"],
     "find_files": ["user_role", "user_scope_id"],
@@ -85,7 +88,7 @@ IDENTITY_BASELINE = {
     "github_update_file": ["user_scope_id", "username"],
     "label_mail": ["user_scope_id", "username"],
     "learn_attached_knowledge": ["user_scope_id"],
-    "learn_document": ["user_scope_id"],
+    "learn_document": ["user_role", "user_scope_id"],
     "librarian_agent": ["user_role", "user_scope_id"],
     "list_automation_notes": ["user_scope_id"],
     "list_automation_todos": ["user_scope_id"],

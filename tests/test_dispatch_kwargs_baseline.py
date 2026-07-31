@@ -82,7 +82,8 @@ KWARGS_BASELINE = {
     "discord_inbox":             ("chat", ["user_scope_id", "username"]),
     "document_agent":            ("chat", []),
     "document_editor":           ("chat", ["user_scope_id"]),
-    "document_viewer":           ("chat", ["user_scope_id"]),
+    # user_role joined 2026-07-31 with the file_access declaration (see below).
+    "document_viewer":           ("chat", ["user_role", "user_scope_id"]),
     "document_writer":           ("chat", ["_session_id"]),
     "edit_file":                 ("chat", ["user_role", "user_scope_id"]),
     "execute_workflow":          ("chat", ["_agent"]),
@@ -111,7 +112,7 @@ KWARGS_BASELINE = {
     "host_bash":                 ("chat", ["_is_channel_session"]),
     "label_mail":                ("chat", ["user_scope_id", "username"]),
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
-    "learn_document":            ("chat", ["_agent", "user_scope_id"]),
+    "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),
     "librarian_agent":           ("chat", ["user_role", "user_scope_id"]),
     "linter":                    ("chat", []),
     "list_automation_notes":     ("chat", ["user_scope_id"]),

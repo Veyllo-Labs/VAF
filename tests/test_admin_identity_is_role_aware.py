@@ -188,8 +188,11 @@ def test_the_jailed_tools_read_the_role_from_the_injected_argument():
         "the sub-agent terminal lane carries the scope via env and must carry the role too, "
         "or an admin is jailed in one lane and free in the other"
     )
-    mail_src = Path(send_mail_mod.__file__).read_text(encoding="utf-8")
-    assert 'kwargs.get("user_role")' in mail_src
+    # send_mail no longer reads the role by hand either - it declares file_access="write"
+    # and BaseTool resolves it. "write" rather than "read" although attachments are read:
+    # the mode names the ROOT SET, and the hand-built jail it replaced used the write set.
+    assert send_mail_mod.SendMailTool.file_access == "write"
+    assert {"user_scope_id", "user_role"} <= set(send_mail_mod.SendMailTool.identity_kwargs)
 
 
 # ── Consumers 2+3: the HTTP file gates that had drifted ──────────────────────

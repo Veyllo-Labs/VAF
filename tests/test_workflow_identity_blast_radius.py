@@ -98,7 +98,10 @@ NEWLY_IDENTIFIED = {
     "delete_skill": ('user_scope_id', 'username'),
     "discord_inbox": ('user_scope_id', 'username'),
     "document_editor": ('user_scope_id',),
-    "document_viewer": ('user_scope_id',),
+    # +user_role 2026-07-31 (file_access declaration). In the workflow lane this
+    # means a second admin running these two as a step is no longer jailed - the
+    # same direction the other file gates already took.
+    "document_viewer": ('user_role', 'user_scope_id'),
     "edit_file": ('user_role', 'user_scope_id'),
     "find_discord_messages": ('user_scope_id', 'username'),
     "find_files": ('user_role', 'user_scope_id'),
@@ -115,7 +118,7 @@ NEWLY_IDENTIFIED = {
     "github_search_files": ('user_scope_id', 'username'),
     "github_update_file": ('user_scope_id', 'username'),
     "learn_attached_knowledge": ('user_scope_id',),
-    "learn_document": ('user_scope_id',),
+    "learn_document": ('user_role', 'user_scope_id'),
     "librarian_agent": ('user_role', 'user_scope_id'),
     "list_automations": ('user_role', 'user_scope_id'),
     "list_files": ('user_role', 'user_scope_id'),

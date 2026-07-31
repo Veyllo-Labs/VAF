@@ -260,11 +260,16 @@ def test_the_loop_dispatches_through_the_shared_pipeline():
 # ── the jail widening, measured rather than asserted in a comment ────────────
 
 FILE_TOOLS_WITH_BOTH_KEYS = (
-    "find_files", "folder_size", "list_files", "read_file", "tree", "write_file",
+    # Grew from six to seven on 2026-07-31: document_viewer gained user_role together with
+    # its `file_access` declaration, which refuses to be declared without the identity that
+    # resolves it. The count is the point - a tool dropping out of this set would lose its
+    # jail without failing anything else.
+    "document_viewer", "find_files", "folder_size", "list_files", "read_file", "tree",
+    "write_file",
 )
 
 
-def test_six_of_the_thirteen_carry_both_jail_keys():
+def test_the_file_tools_among_the_thirteen_carry_both_jail_keys():
     """The count is load-bearing for the paragraph below, so it is measured, not written
     down. A tool losing a key would silently drop out of the jail without failing anything."""
     import importlib

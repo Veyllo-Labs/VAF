@@ -17,10 +17,7 @@ from vaf.core.email_transport import get_account
 from vaf.mail import compose, sender
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import (
-    compute_user_jail,
     is_safe_path,
-    reset_librarian_scope,
-    set_librarian_scope,
 )
 from vaf.tools.mail_utils import (
     _EXEC_IMPERSONATION_WORDS,
@@ -120,6 +117,12 @@ class SendMailTool(BaseTool):
     """
     name = "send_mail"
     identity_kwargs = ("user_role", "user_scope_id", "username")
+    # "write", not "read", although attachments are READ - the mode names the ROOT SET, not
+    # the operation, and the hand-built jail this replaced used the write set (compute_user_jail
+    # without a mode). "read" would additionally allow the folders of skills shared with this
+    # user, i.e. it would make a shared skill file attachable to an outgoing mail. That may
+    # even be reasonable, but it is a widening and does not belong in a mechanical migration.
+    file_access = "write"
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
@@ -225,36 +228,30 @@ class SendMailTool(BaseTool):
         attachments = []      # {path, filename} - for the high-risk gate + delegate tail
         att_bytes = []        # {filename, content_type, payload} - read INSIDE the jail
         if attachment_paths:
-            _jail_token = None
-            # user_role is set by the dispatcher from the session's JWT-derived role, so a
-            # model-supplied value never reaches this call.
-            _jail_info = compute_user_jail(user_scope_id, kwargs.get("user_role"))
-            if not _jail_info.get("is_admin"):
-                _jail_token = set_librarian_scope(_jail_info)
-            try:
-                for p in attachment_paths:
-                    if not p:
-                        continue
-                    resolved, path_error = _resolve_path(str(p))
-                    if path_error:
-                        return path_error
-                    if resolved and resolved.is_file():
-                        # Read the bytes NOW, while the jail is active, so the file
-                        # cannot be swapped between the safety check and the send
-                        # (closes the documented check-vs-read race).
-                        try:
-                            payload = resolved.read_bytes()
-                        except Exception as e:
-                            return f"Could not read attachment {resolved.name}: {e}"
-                        attachments.append({"path": str(resolved), "filename": resolved.name})
-                        att_bytes.append({
-                            "filename": resolved.name,
-                            "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
-                            "payload": payload,
-                        })
-            finally:
-                if _jail_token is not None:
-                    reset_librarian_scope(_jail_token)
+            # The jail is already installed: declared as file_access above and applied around
+            # run() by BaseTool. Measured before widening it from this block to the whole
+            # method: run() touches the filesystem nowhere else, so nothing can be denied
+            # that was allowed before.
+            for p in attachment_paths:
+                if not p:
+                    continue
+                resolved, path_error = _resolve_path(str(p))
+                if path_error:
+                    return path_error
+                if resolved and resolved.is_file():
+                    # Read the bytes NOW, while the jail is active, so the file
+                    # cannot be swapped between the safety check and the send
+                    # (closes the documented check-vs-read race).
+                    try:
+                        payload = resolved.read_bytes()
+                    except Exception as e:
+                        return f"Could not read attachment {resolved.name}: {e}"
+                    attachments.append({"path": str(resolved), "filename": resolved.name})
+                    att_bytes.append({
+                        "filename": resolved.name,
+                        "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
+                        "payload": payload,
+                    })
 
         # Safety gate: do not auto-send potentially fraudulent/social-engineering requests.
         # The user must explicitly confirm before we allow risky messages.

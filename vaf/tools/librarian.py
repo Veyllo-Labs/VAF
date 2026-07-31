@@ -204,11 +204,33 @@ You have access to this filesystem map for fast navigation:
         from vaf.tools.filesystem import set_librarian_scope, reset_librarian_scope
         scope = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID") or None
         role = kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE") or None
-        token = set_librarian_scope(self._compute_jail(scope, role))
+        # NOT converted to the `file_access` declaration, and the reason is a CLASS rather than
+        # a quirk of this tool: `file_access` is resolved from kwargs by BaseTool, so it cannot
+        # see an identity that arrives through the ENVIRONMENT. Tools that also run in a spawned
+        # child process have exactly that shape, because no dispatcher is present there to set
+        # kwargs. Two members are known and measured: this one (the child gets
+        # VAF_USER_SCOPE_ID / VAF_USER_ROLE at :309-312) and `browser_agent`
+        # (browser_agent.py:745 falls back to the same variable). Declaring here would drop the
+        # jail in that lane silently, which is worse than not declaring at all.
+        # Whether the wrapper should also consult the environment is a real question and a
+        # separate one - it would make a process-global value part of a per-tool contract, so
+        # it is named here rather than answered in passing. If the child lane is ever changed
+        # to hand identity over as arguments, both members convert.
+        # This is the one of eleven hand-built installations that stays.
+        #
+        # An admin resolves to no jail at all, mirroring user_jail: installing the admin dict
+        # ({"is_admin": True, "allowed_roots": []}) was behaviour-neutral, because
+        # _librarian_jail_ok short-circuits on is_admin - but it meant an OUTER jail with zero
+        # roots could exist, which user_jail never produces. Meeting the narrowing rule inside
+        # one would intersect against nothing and deny everything. Unreachable today (the
+        # ToolCaller hands the sub-tools the same identity), removed so it stays that way.
+        _info = self._compute_jail(scope, role)
+        token = set_librarian_scope(_info) if not _info.get("is_admin") else None
         try:
             return self._run_impl(**kwargs)
         finally:
-            reset_librarian_scope(token)
+            if token is not None:
+                reset_librarian_scope(token)
 
     def _compute_jail(self, user_scope_id, user_role=None):
         """Librarian jail info. An admin (role admin, no scope, or the local-admin scope) => full access;

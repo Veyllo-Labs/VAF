@@ -39,6 +39,93 @@ When adding features or fixing bugs:
 - Ensure all new tests pass before submitting a pull request.
 - Follow the naming convention `test_*.py` for test discovery.
 
+## What makes a test admissible here
+
+**A test that does not go red when you revert the fix proves nothing.** That is the house
+rule, and it is the only one on this page that is not negotiable. A green suite is evidence
+only about the tests that would have gone red.
+
+This is not a local invention. The practice has a name - mutation testing - and the
+literature is blunt about why coverage is not a substitute: coverage says a line was
+executed, a mutation score says the execution was backed by an assertion that would have
+noticed. It is the metric that correlates with real fault detection; coverage on its own
+does not.
+
+So a new test arrives with the mutation that proves it:
+
+1. Make the fix.
+2. Break it again, deliberately - remove the guard, drop the argument, flip the polarity.
+3. Check that exactly the tests meant to protect it turn red.
+4. If a mutation stays green, the property is unguarded. The number of tests around it is
+   irrelevant.
+
+Three failure modes have actually happened in this repository. They are worth knowing
+before writing the test, not after:
+
+**Stage tested, wiring not.** The commonest gap by a wide margin. The pipeline stage is
+correct and fully covered, and the caller never passes it what it checks. Every test stays
+green because every test drives the stage directly. Whenever a test proves that a component
+behaves correctly, a second one has to prove that its caller actually reaches it that way.
+
+**A guard that reads text instead of code.** Assertions over `inspect.getsource` or a file
+grep break when code moves and pass when it is renamed. `test_markers_sync` once stayed
+green while the constant it guards had moved away, because the prompt text further down the
+file happened to contain the same words. A grep for `.run(**` reported zero raw dispatches
+while five of the form `.run(path=...)` sat in the same file. If a test must look at source,
+ask the AST, not the string - and never choose a pattern that matches only one of several
+call shapes. Strip docstrings first: a comment explaining the old mechanism should not
+satisfy or break a guard about the new one.
+
+**A probe that measures nothing and reads as an acquittal.** A leak test whose fake session
+started as `{}` found no leak, because the code replaces a falsy container and the probe
+then inspected the wrong object. "No leak found" and "nothing was measured" look identical
+from the outside. Assert on the artefact the code really writes - the file on disk, the
+store, the object the caller keeps - not on the return string, which can say "denied" while
+the write already happened.
+
+## When to delete a test
+
+Removing tests is a maintenance practice, not an admission of defeat, and the same rule
+decides it: a test whose mutation stays green is not protection - it is runtime and false
+confidence. Delete it or repair it.
+
+Two further groups are worth removing on sight:
+
+- **Tests that restate the implementation.** If a test has to be edited every time the
+  production code is edited, it is a copy of the code rather than a statement about its
+  behaviour, and it will be updated to match whatever the code now does - including a bug.
+- **Scaffolding.** Tests written to drive a migration, pinned against a state that no longer
+  exists. When the migration lands, the scaffolding comes down.
+
+What is NOT a reason to delete: the suite being large. Measured against the size of `vaf/`,
+this suite is small. Size is not the metric; whether each test would notice a break is.
+
+**A standing decision, so that nobody starts a cull unprompted.** The suite has been left
+as it is on purpose. Its runtime is measured and negligible, and the rule above turns every
+test in it into either a guard or a candidate - decidable in a minute by one mutation, which
+is cheaper than auditing thousands of them up front.
+
+What a large suite really costs is churn: the portion of it pinned to the SHAPE of the code
+rather than to its behaviour has to be edited every time the code moves. That portion is
+small and identifiable - the assertions over source text - and it is the only group a sweep
+would be worth aiming at.
+
+The trigger for doing that sweep is measurable rather than aspirational: **when a refactor
+costs more in updating tests than in changing the code itself.** Until that happens, apply
+the rule to what you touch and leave the rest alone.
+
+## Frozen measurements
+
+Several tests here pin a MEASURED set rather than a written one - the tools that receive an
+identity, the tools that gain one in workflows, the arguments a public class promises. They
+are generated, never typed, because the one attempt to type such a list invented nine
+entries and dropped five.
+
+Two rules for them. They may only shrink without a deliberate diff: a name joining the set
+is a security-relevant change and belongs in a review, not in silence. And the failure
+message says what to do - which file to edit, and why the change might be correct - because
+a frozen set is read by someone who did not write it.
+
 ## Dependencies
 
 - `pytest`: Core testing framework.

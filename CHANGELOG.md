@@ -45,6 +45,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Cloud storage no longer treats everyone as the machine owner.** The assistant's cloud
+  tool worked out who was calling from a setting that is never actually set, so it always
+  concluded it was the owner - whoever was really asking. On a shared installation that
+  meant anyone could list, read, download and upload through the owner's connected Google
+  Drive, OneDrive, Dropbox, Nextcloud and iCloud accounts, using the owner's stored logins.
+  It now uses the identity of the actual caller. In a normal chat that means you see your
+  own connected accounts and nobody else's. When the assistant reaches the tool through its
+  file assistant, your name is not passed along yet, so you see nothing rather than someone
+  else's accounts - safe, but not yet complete; the remaining half is in progress.
+  Single-user installations are unaffected.
+  In the same place, two file paths are no longer taken at face value: asking the tool to
+  upload a local file, or to fetch one back out of the sync folder, is refused when the path
+  points outside your own area instead of copying the file somewhere the assistant can serve
+  it back.
 - **A tool run without a username no longer guesses whose data it is.** Some runs carry no
   username - after switching into a chat that has none stored, from the command line, from a
   workflow started without one - and the assistant used to fill in the literal name "admin".

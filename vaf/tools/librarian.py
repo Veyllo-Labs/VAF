@@ -478,8 +478,27 @@ You have access to this filesystem map for fast navigation:
         except Exception:
             pass
         try:
-            from vaf.tools.cloud_storage import _get_username, _get_cloud_accounts
-            for a in (_get_cloud_accounts(_get_username()) or []):
+            # The storage tile used to ask cloud_storage for a process-global name, so it
+            # showed the OWNER's connected clouds to whoever was looking. That resolver is
+            # gone; this call site is why deleting it needed a caller sweep rather than a
+            # grep of the tool's own file - sitting inside `except Exception: pass`, the
+            # stale import failed silently and the tile just vanished.
+            #
+            # NARROWED, not ported: this method has no identity of its own, and the jail
+            # contextvar carries `is_admin` and a `uid8` but not the scope the shared
+            # resolver needs. Rebuilding the synthetic tenant name from `uid8` here would be
+            # a second hand-rolled copy of a rule that was just consolidated into one place.
+            # So the tile is shown to the machine owner and omitted for anyone confined -
+            # which also stops it reporting the owner's connected providers to a tenant.
+            # Making it per-caller needs the librarian to carry a username; that is named in
+            # cloud step B's scope, not guessed at here.
+            from vaf.tools.filesystem import _librarian_scope_ctx
+            from vaf.core.config import get_local_admin_username
+            _jail = _librarian_scope_ctx.get(None)
+            if _jail and not _jail.get("is_admin"):
+                raise RuntimeError("confined caller - no cloud tile")
+            from vaf.tools.cloud_storage import _get_cloud_accounts
+            for a in (_get_cloud_accounts(get_local_admin_username()) or []):
                 if (a.get("provider") or "").lower() in ("google_drive", "googledrive", "gdrive", "google"):
                     drives.append({"name": a.get("label") or "Google Drive", "kind": "cloud",
                                    "usedBytes": 0, "totalBytes": 0, "connected": True})

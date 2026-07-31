@@ -39,22 +39,32 @@ def _store() -> SecureBlobStore:
     return _store_singleton
 
 
-# ── Credential keys: SHARED BUILDER, AND DELIBERATELY WITHOUT A SCOPE (part 1 of 2) ─────────────
-# This lane now calls the same builder as mail and github, which makes the three key formats one
-# decision instead of three copies. It does NOT yet pass `user_scope_id`, and that is the whole
-# remaining defect rather than an oversight: without a scope every caller resolves to the same key,
-# so a tenant reaches the machine owner's cloud accounts - the finding this work started from.
+# ── Credential keys: SHARED BUILDER, STILL WITHOUT A SCOPE (part 1 of 2) ────────────────────────
+# This lane calls the same builder as mail and github, which makes the three key formats one
+# decision instead of three copies. It does NOT pass `user_scope_id` yet.
 #
-# Written here rather than only in a commit message, because "calls the shared builder" reads like
-# "done". It is the same shape as a tool that declares an identity and still confines nothing: the
-# wiring is right and the effect is missing.
+# CORRECTED 2026-07-31, because this paragraph and the changelog said opposite things and a reader
+# had no way to tell which was stale. It used to read "without a scope every caller resolves to the
+# same key, so a tenant reaches the machine owner's cloud accounts". That premise no longer holds,
+# and it held for a reason that was never in this file: `cloud_storage` resolved its caller from an
+# environment variable nobody sets, so it handed this builder the OWNER's name every time. With the
+# tool taking its identity from the caller, the keys already diverge - `cloud:<provider>:<acct>` for
+# the owner, `cloud:<provider>:<name>:<acct>` for a named tenant, `cloud:<provider>:scope_<hex>:
+# <acct>` for one whose name is not known.
 #
-# PART 2 adds the scope, and it is a bigger change than swapping this call: the four public
-# functions below take `username` and no scope, and eight callers would have to supply one -
-# vaf/cloud/oauth_cloud.py (which already passes locally-massaged names), vaf/cloud/nextcloud.py and
-# vaf/api/cloud_routes.py. It also needs the lock mail already has: once a scope format exists, a
-# scoped user must never fall back to the name or unscoped forms, or they land on somebody else's
-# credentials. That lock has no meaning before the scope exists, which is why it is not here yet.
+# WHAT REMAINS, stated narrowly so it is not read as done: the key is keyed on a NAME, and a name is
+# resolved per lane. A lane that supplies no name still collapses to the owner's key, and the
+# librarian's dispatch path is exactly such a lane today. A scope would remove the question instead
+# of answering it per caller.
+#
+# PART 2 adds it, and it is a bigger change than swapping this call: the four public functions below
+# take `username` and no scope, and the readers reach them through the provider classes -
+# `BaseProvider(username, account_id)` plus five subclasses and three `_create_provider` copies. The
+# ORDER matters and was measured: the hole is a READ, so the providers must carry a scope BEFORE the
+# key changes; changing the write key first would leave every reader on the old form. It also needs
+# the lock mail already has - once a scope format exists, a scoped user must never fall back to the
+# OWNERLESS form - plus a single migration probe on the caller's own non-empty name, which re-keys
+# and deletes rather than becoming a permanent second lookup.
 from vaf.core.credential_store import build_credential_key
 
 def _cred_key_username(username: Optional[str]) -> Optional[str]:

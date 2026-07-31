@@ -108,6 +108,19 @@ whether a legitimate caller got through. Every gate therefore needs at least one
 on the refusal side, and the counter-proof to run against it is always "make the doubtful
 case permissive" - never the other direction, which fails on its own.
 
+**A boundary as wide as the surface somebody enumerated, described as if it covered the
+module.** The fix is correct and the sentence around it is not: "this module is contained"
+is a claim about the SURFACE, while the work was done on the line that was being looked at.
+Three times, same shape, three different neighbours. `write_file` was jailed and `edit_file`
+- the other half of the same write surface, in the same tool list - was not. `document_viewer`
+refused a path on the checked read and opened it raw again eight lines later. `cloud_storage`
+got its guard on `_action_save`, the door the author was already standing in, while
+`_action_retrieve` one function below took the same model-chosen path, let pathlib swallow
+the base on an absolute value, and copied the result into a directory the API serves. Each
+time the fix was real and the description was one size too big. So before writing that
+something is contained, enumerate the doors mechanically - every entry point that accepts a
+path, not the one that prompted the change - and let the count decide the sentence.
+
 **A counter-proof built on the same mechanism as the defect.** It reproduces the failure
 instead of catching it, and it does so while looking like independent confirmation. Three
 times in one round: a guard whose collector parsed `name = TOOL_NAME` with

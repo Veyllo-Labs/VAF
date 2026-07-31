@@ -7,7 +7,6 @@ from the user's connected cloud storage.
 """
 
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -15,6 +14,7 @@ from typing import Any, Dict, Optional
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
+from vaf.tools.filesystem import is_safe_path, user_jail
 
 logger = logging.getLogger("vaf.tools.cloud_storage")
 
@@ -71,9 +71,25 @@ TOOL_PARAMETERS = {
 }
 
 
-def _get_username() -> str:
-    """Get current username from environment or config."""
-    return os.environ.get("VAF_USERNAME") or Config.get("local_admin_username", "admin")
+def _caller(kwargs: dict) -> tuple:
+    """Who is calling, from the DECLARATION rather than from process-global state.
+
+    This replaced a read of `VAF_USERNAME`, an environment variable that is SET NOWHERE in
+    the repository - the only occurrence was the read itself. So the fallback was not the
+    exceptional case, it was the only one: every call resolved to the machine owner's name,
+    for every user, on every lane. `_get_cloud_accounts` branches on exactly that name, so
+    its per-user arm (`cloud_config_by_user`) could not be reached at all, and a tenant got
+    the OWNER's connected accounts - and, through them, the owner's cloud credentials.
+
+    `resolve_caller_username` rather than the raw kwarg because a direct `.run()` caller -
+    the coder, the workflow engine's legacy arm, an automation - passes no identity at all,
+    and "no name" must not silently mean "the owner" for anyone carrying a foreign scope.
+    Asking the shared rule keeps that one decision in one place instead of two.
+    """
+    from vaf.core.config import resolve_caller_username
+
+    scope = kwargs.get("user_scope_id")
+    return resolve_caller_username(kwargs.get("username"), scope), scope, kwargs.get("user_role")
 
 
 def _get_sync_dir(username: str, account_id: str) -> Path:
@@ -131,7 +147,7 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
                       query: Optional[str] = None, mime_type: Optional[str] = None,
                       **kwargs: Any) -> str:
     """Execute the cloud_storage tool action."""
-    username = _get_username()
+    username, user_scope_id, user_role = _caller(kwargs)
     first = _get_first_connected_account(username)
     if not first and action not in ("search_all", "status"):
         return "No cloud storage connected. Go to Settings → Connections to connect a cloud provider."
@@ -160,7 +176,8 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
     if action == "show_in_viewer":
         return _action_show_in_viewer(username, account_id, effective_provider, file_id)
     if action == "save":
-        return _action_save(username, account_id, effective_provider, file_path, remote_path)
+        return _action_save(username, account_id, effective_provider, file_path, remote_path,
+                            user_scope_id=user_scope_id, user_role=user_role)
     elif action == "list":
         return _action_list(username, account_id, effective_provider)
     elif action == "retrieve":
@@ -195,12 +212,36 @@ def _get_account_by_id(username: str, account_id: str) -> Optional[dict]:
     return None
 
 
-def _action_save(username: str, account_id: str, provider: str, file_path: Optional[str], remote_path: Optional[str]) -> str:
-    """Copy a local file into the sync directory for upload on next sync cycle."""
+def _action_save(username: str, account_id: str, provider: str, file_path: Optional[str],
+                 remote_path: Optional[str], user_scope_id: Optional[str] = None,
+                 user_role: Optional[str] = None) -> str:
+    """Copy a local file into the sync directory for upload on next sync cycle.
+
+    THE ONE PLACE A MODEL-CHOSEN LOCAL PATH ENTERS THIS TOOL, and until now it entered
+    unchecked: `expanduser().resolve()` and straight into `shutil.copy2`, with no
+    `is_safe_path` anywhere in this module. The copy lands under `Platform.data_dir()`,
+    which `GET /api/file` serves, so an unreadable file could be made readable by asking
+    this tool to "save" it.
+
+    THE JAIL IS HELD NARROW, DELIBERATELY, and the measurement says why. `file_access` on
+    the class would wrap the whole of `run()` - but `read` and `show_in_viewer` download a
+    cloud file into a TEMPORARY file and hand it to `LibrarianTool._read_file`, which asks
+    `is_safe_path` itself. Measured: inside a tenant jail a path in the system temp
+    directory is refused, so a class-wide declaration would break those two actions on the
+    tool's OWN scratch file, which no tenant boundary has any business containing. The
+    boundary belongs where untrusted input arrives, not around everything the tool touches.
+
+    Access is decided BEFORE existence, so the refusal cannot be read as an oracle for
+    which files are there.
+    """
     if not file_path:
         return "file_path is required for 'save' action."
 
     source = Path(file_path).expanduser().resolve()
+    with user_jail(user_scope_id, user_role, mode="read"):
+        allowed, detail = is_safe_path(str(source))
+    if not allowed:
+        return f"Access denied: {detail}"
     if not source.exists():
         return f"File not found: {file_path}"
     if not source.is_file():
@@ -438,7 +479,17 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -
         return "file_path is required for 'retrieve' action (the remote filename to download)."
 
     sync_dir = _get_sync_dir(username, account_id)
-    source = sync_dir / file_path
+    # THE SECOND UNTRUSTED DOOR, and the sharper of the two. `file_path` is documented as
+    # "the remote filename in the sync folder", but pathlib SWALLOWS the base when the right
+    # operand is absolute - `sync_dir / "/etc/shadow"` is `/etc/shadow` - and `../` walks
+    # out. The copy then lands in the Downloads folder, which `GET /api/file` serves, so
+    # this was a read-anything primitive with delivery attached. Exactly the class closed in
+    # `document_writer`; guarding only `save` and calling the module contained would have
+    # been the same half-measure one function higher.
+    source = (sync_dir / file_path).resolve()
+    if not source.is_relative_to(sync_dir.resolve()):
+        return ("Access denied: 'file_path' is a name inside the sync folder, not a path. "
+                "Use 'list' to see available files.")
     if not source.exists():
         return f"File not found in sync folder: {file_path}. Use 'list' to see available files."
 
@@ -587,6 +638,11 @@ class CloudStorageTool(BaseTool):
     side_effect_class = "reversible"
     description = TOOL_DESCRIPTION
     parameters = TOOL_PARAMETERS
+    # Scope AND role: the role half is what keeps a SECOND admin - one with the DB role but
+    # not the configured local-admin scope - from being treated as a tenant in their own
+    # cloud accounts. `file_access` is deliberately NOT declared; the reason is measured and
+    # written out in `_action_save`, where the boundary is applied narrowly instead.
+    identity_kwargs = ("user_scope_id", "username", "user_role")
 
     def run(self, **kwargs) -> str:
         return run_cloud_storage(

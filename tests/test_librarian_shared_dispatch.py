@@ -264,8 +264,13 @@ FILE_TOOLS_WITH_BOTH_KEYS = (
     # its `file_access` declaration, which refuses to be declared without the identity that
     # resolves it. The count is the point - a tool dropping out of this set would lose its
     # jail without failing anything else.
-    "document_viewer", "find_files", "folder_size", "list_files", "read_file", "tree",
-    "write_file",
+    # And from seven to EIGHT the same day: cloud_storage declared both keys in cloud step
+    # A. It is the one member that does NOT declare `file_access` - its boundary is
+    # applied narrowly in `_action_save`, because `read`/`show_in_viewer` hand the tool's
+    # OWN temp download to LibrarianTool._read_file, which asks is_safe_path and would
+    # refuse a temp path inside a tenant jail.
+    "cloud_storage", "document_viewer", "find_files", "folder_size", "list_files",
+    "read_file", "tree", "write_file",
 )
 
 

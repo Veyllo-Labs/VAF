@@ -63,7 +63,9 @@ KWARGS_BASELINE = {
     "browser_agent":             ("chat", ["user_scope_id"]),
     "cancel_timer":              ("chat", ["_agent"]),
     "checkpoint_context":        ("chat", ["_agent"]),
-    "cloud_storage":             ("chat", []),
+    # Gained all three on 2026-07-31: it resolved its caller from VAF_USERNAME, an env var
+    # set nowhere in the repo, so every user reached the OWNER's connected cloud accounts.
+    "cloud_storage":             ("chat", ["user_role", "user_scope_id", "username"]),
     # codesearch/linter gained identity 2026-07-31 as consumers of file_access. The
     # count of hand-built jails did not move: N was 2, the primitive already existed.
     "codesearch":                ("chat", ["user_role", "user_scope_id"]),

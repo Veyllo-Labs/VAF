@@ -97,17 +97,6 @@ UNGUARDED = {
     "update_automation":
         "Same path, same runner, same absence of any check - it edits the value that "
         "create_automation stored, so both feed one unguarded write site.",
-    "cloud_storage":
-        "SURFACED 2026-07-31 by fixing this file's own detector, not by new code. It was "
-        "invisible twice over: the parser skipped the class because `name`/`parameters` come "
-        "from module constants rather than literals, and once seen, the delegation check "
-        "cleared it because it imports and calls `LibrarianTool` from a module that happens "
-        "to contain `is_safe_path` - a coincidence, not a check. Measured: cloud_storage.py "
-        "contains `is_safe_path` zero times, and `_action_save` does "
-        "`Path(file_path).expanduser().resolve()` with no containment at all, copying the "
-        "result under Platform.data_dir() - one of the four roots GET /api/file serves. It "
-        "leaves this set in cloud step A, which gives the tool its caller and the boundary "
-        "by declaration.",
 }
 
 # Tools that do NOT ask `is_safe_path` and are nevertheless contained, by a different mechanism

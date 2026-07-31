@@ -172,7 +172,10 @@ def _get_api_key_callers():
         src = f.read_bytes().decode()
         for i, line in enumerate(src.split("\n"), 1):
             if re.search(r"\bget_api_key\s*\(", line) and "def get_api_key" not in line:
-                out.add(f"{f.relative_to(root.parent)}:{i}")
+                # `.as_posix()`: on Windows `relative_to` yields backslashes and every
+                # comparison below would miss. Same POSIX assumption that made a
+                # hardcoded /tmp accuse the code of the defect it guarded.
+                out.add(f"{f.relative_to(root.parent).as_posix()}:{i}")
     return out
 
 
@@ -242,9 +245,9 @@ def test_every_write_site_routes_into_the_store():
         src = f.read_bytes().decode()
         if "merge_preserving_nonempty_sensitive" not in src:
             continue
-        if str(f.relative_to(root)) in WRITE_SITES or f.name == "config.py":
+        if f.relative_to(root).as_posix() in WRITE_SITES or f.name == "config.py":
             continue
-        offenders.append(str(f.relative_to(root)))
+        offenders.append(f.relative_to(root).as_posix())
     assert not offenders, (
         f"a config-merge path that was not part of the measured write set: {offenders}. "
         f"It would write API keys raw into config.json where nothing asks for them."

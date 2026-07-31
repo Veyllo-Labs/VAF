@@ -247,3 +247,56 @@ def test_the_embedded_lock_still_guards_the_provider_half(config):
         "the embedded-mode check is gone. Precedence replaces its KEY half only; without it "
         "the on-disk provider reaches into an agent its caller controls."
     )
+
+
+# ── the running agent must learn about a key change ──────────────────────────
+
+def test_storing_a_changed_key_notifies_the_config_observers(store, config):
+    """A LIVE REGRESSION, found by using the product rather than by running the suite.
+
+    `Config.save` notifies observers when one of a list of critical keys differs before and
+    after; the tray listens and calls `reload_api_backend`, which is what makes a key change
+    reach the RUNNING agent without a restart. Lifting `api_key_*` out of the saved payload
+    removed the difference, so the notification stopped: a user changed their key in
+    Settings, the UI reported success, and the agent went on using the old one. The exact
+    failure this whole change existed to remove, reintroduced one layer up - and no test saw
+    it, because every test asks the resolver rather than the running agent.
+
+    Mutation that turns this red: drop the `_announce_change` call.
+    """
+    from vaf.core.api_keys import store_api_key
+    from vaf.core.config import Config
+
+    seen = []
+    Config.add_observer(lambda key, value, old=None: seen.append(key))
+    try:
+        store_api_key(PROVIDER, "sk-FIRST")
+        store_api_key(PROVIDER, "sk-SECOND")
+    finally:
+        Config._observers.clear()
+
+    assert f"api_key_{PROVIDER}" in seen, (
+        "a changed key never reached the observers, so the running agent keeps the old one"
+    )
+
+
+def test_an_unchanged_key_and_a_migration_stay_quiet(store, config):
+    """The refusing half: only a real change is announced.
+
+    Re-writing the same value, or moving a key from the estate into the store, must not
+    trigger a live backend rebuild - a migration happens on the first read after every
+    update, and announcing it would rebuild the backend on startup for no reason.
+    """
+    from vaf.core.api_keys import store_api_key
+    from vaf.core.config import Config
+
+    store_api_key(PROVIDER, "sk-SAME")
+    seen = []
+    Config.add_observer(lambda key, value, old=None: seen.append(key))
+    try:
+        store_api_key(PROVIDER, "sk-SAME")                       # unchanged
+        store_api_key(OTHER, "sk-MOVED", is_migration=True)      # a move
+    finally:
+        Config._observers.clear()
+
+    assert seen == [], f"a no-op write announced a change: {seen}"

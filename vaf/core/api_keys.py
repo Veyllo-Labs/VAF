@@ -229,10 +229,35 @@ def store_api_key(provider: str, key: str, *, is_migration: bool = False) -> Non
     if not name or not key:
         return
     existing = _store().load()
-    first_time = not existing.get(name)
+    previous = existing.get(name)
     _store().update(lambda data: data.__setitem__(name, str(key)))
-    if first_time and not is_migration:
+    if is_migration:
+        return                      # a move is neither a new key nor a changed one
+    if not previous:
         _seed_side_effects(name)
+    if previous != str(key):
+        _announce_change(name)
+
+
+def _announce_change(name: str) -> None:
+    """Tell the config observers a key changed, even though it no longer lives there.
+
+    A LIVE REGRESSION THIS REPAIRS, found by running the product rather than the suite.
+    `Config.save` compares a list of critical keys before and after and notifies observers on
+    a difference; the tray listens and calls `reload_api_backend`, which is what makes a key
+    change take effect in the RUNNING agent without a restart. Lifting `api_key_*` out of the
+    payload removed the difference, so the notification stopped - and a user who changed
+    their key in Settings watched the agent keep using the old one, with the UI reporting
+    success. Exactly the shape this change set out to remove, reintroduced one layer up.
+
+    The VALUE is redacted rather than passed. No observer consults it for these keys - the
+    only listener branches on the key NAME - and routing a secret through a fan-out that
+    ends in logging calls would be a poor trade for an argument nobody reads.
+    """
+    try:
+        Config.notify_observers(f"api_key_{name}", "<changed>", None)
+    except Exception:                                       # noqa: BLE001 - never block a write
+        pass
 
 
 def clear_estate_entry(provider: str) -> None:

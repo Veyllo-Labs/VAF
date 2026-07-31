@@ -59,8 +59,10 @@ So a new test arrives with the mutation that proves it:
 4. If a mutation stays green, the property is unguarded. The number of tests around it is
    irrelevant.
 
-Three failure modes have actually happened in this repository. They are worth knowing
-before writing the test, not after:
+The failure modes below have actually happened in this repository. They are worth knowing
+before writing the test, not after. (The list is deliberately not numbered in this sentence:
+a count that has to be edited whenever the list grows is the same stale anchor as a number
+inside a test name.)
 
 **Stage tested, wiring not.** The commonest gap by a wide margin. The pipeline stage is
 correct and fully covered, and the caller never passes it what it checks. Every test stays
@@ -95,6 +97,16 @@ then inspected the wrong object. "No leak found" and "nothing was measured" look
 from the outside. Assert on the artefact the code really writes - the file on disk, the
 store, the object the caller keeps - not on the return string, which can say "denied" while
 the write already happened.
+
+**A gate with no assertion on the refusing side.** A loosening is invisible; a tightening is
+noticed at once. Under a gate that is too wide everything still works, so every assertion of
+the form "X gets through" stays green. Only an assertion that something is REFUSED can catch
+a loosening, and nobody writes that one until the case has been named out loud.
+`_ws_session_owner_ok` answered "the file exists but cannot be read" the permissive way;
+eight tests covered that helper and all eight stayed green, because each of them asked
+whether a legitimate caller got through. Every gate therefore needs at least one assertion
+on the refusal side, and the counter-proof to run against it is always "make the doubtful
+case permissive" - never the other direction, which fails on its own.
 
 ## When to delete a test
 

@@ -44,23 +44,84 @@ def _local_admin_scope_id() -> str:
     return get_local_admin_scope_id()
 
 
+# ── One key builder for every lane ───────────────────────────────────────────────────────────────
+# There used to be THREE `_credential_key` functions - here, in vaf/github/credential_github.py and
+# in vaf/cloud/credential_cloud.py - written independently, none importing another. Two knew about
+# `user_scope_id`; the cloud one had no such parameter at all, which is why the cloud lane keyed per
+# NAME while these two keyed per SCOPE, and why a tenant reached the owner's cloud accounts. The one
+# copy nobody touched is the one that fell behind, which is the usual direction for a copy.
+#
+# The lanes differ on FOUR axes, and every one of them was measured from the old functions rather
+# than derived by reading. Two would not be guessed: this namespace is literally `email:` even for a
+# google_drive provider, and github writes an extra literal segment before a name. They travel as
+# DATA below, not as branches - a fourth special case would mean the design is wrong.
+#
+# The exact strings are frozen in tests/test_credential_key_baseline.py, measured BEFORE this merge.
+# A key is not an implementation detail: it is the address of a secret already on disk and in the
+# keyring. One character different and the owner's credentials are not migrated, they are gone.
+_KEY_PROFILES = {
+    #             provider segment   admin form        name prefix
+    "email":     (True,              None,             None),
+    "github":    (False,             "default",        "user"),
+    "cloud":     (True,              None,             None),
+}
+
+
+def build_credential_key(
+    account_id: str,
+    *,
+    namespace: str,
+    provider: Optional[str] = None,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> str:
+    """Address a stored credential for one account, for one identity.
+
+    IDENTITY IS KEYWORD-ONLY, deliberately. The old cloud signature was
+    `(account_id, provider, username)`, so anything identity-shaped could be handed in
+    positionally and land in the wrong slot without a word from Python. Making it keyword-only
+    deletes that failure mode instead of testing for it - the same lesson as assigning identity
+    rather than passing it through.
+
+    Precedence: a scope wins over a name, and the configured local admin's scope collapses to the
+    form with no identity segment, because the machine owner's credentials predate scoping and are
+    stored unscoped.
+    """
+    try:
+        has_provider, admin_form, name_prefix = _KEY_PROFILES[namespace]
+    except KeyError:
+        raise ValueError(f"unknown credential namespace {namespace!r}") from None
+
+    safe_id = (account_id or "").strip().lower().replace(" ", "_")
+    head = [namespace]
+    if has_provider:
+        head.append(provider or "")
+
+    if user_scope_id and str(user_scope_id).strip():
+        scope_str = str(user_scope_id).strip()
+        if scope_str != _local_admin_scope_id():
+            return ":".join([*head, scope_str, safe_id])
+        return ":".join([*head, admin_form, safe_id]) if admin_form else ":".join([*head, safe_id])
+
+    if username and str(username).strip():
+        safe_user = str(username).strip().lower().replace(" ", "_")
+        parts = [*head, *( [name_prefix] if name_prefix else [] ), safe_user, safe_id]
+        return ":".join(parts)
+
+    return ":".join([*head, admin_form, safe_id]) if admin_form else ":".join([*head, safe_id])
+
+
 def _credential_key(
     account_id: str,
     provider: str = "email",
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> str:
-    """Build keyring/fallback key for an account. When user_scope_id is set use scope key; else when username set scope by user; else legacy."""
-    safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    if user_scope_id and str(user_scope_id).strip():
-        scope_str = str(user_scope_id).strip()
-        if scope_str == _local_admin_scope_id():
-            return f"email:{provider}:{safe_id}"
-        return f"email:{provider}:{scope_str}:{safe_id}"
-    if username and str(username).strip():
-        safe_user = str(username).strip().lower().replace(" ", "_")
-        return f"email:{provider}:{safe_user}:{safe_id}"
-    return f"email:{provider}:{safe_id}"
+    """Mail/IMAP key. A thin adapter over the shared builder, kept because this lane's callers
+    pass `provider` positionally in four places and the signature is not worth churning; the
+    KEY LOGIC lives in build_credential_key and exists once."""
+    return build_credential_key(account_id, namespace="email", provider=provider,
+                                username=username, user_scope_id=user_scope_id)
 
 
 def _cred_key_username(username: Optional[str]) -> Optional[str]:

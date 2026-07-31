@@ -39,22 +39,23 @@ def _store() -> SecureBlobStore:
     return _store_singleton
 
 
-# ---------------------------------------------------------------------------
-#  Key helpers
-# ---------------------------------------------------------------------------
-
-def _credential_key(account_id: str, provider: str, username: Optional[str] = None) -> str:
-    safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    # Normalize the username identically for store AND lookup (local admin -> None, i.e. no username
-    # segment). Without this, set_cloud_oauth_tokens stored under the raw admin username
-    # (e.g. "cloud:google_drive:mert:<id>") while get_cloud_credentials looked it up normalized
-    # ("cloud:google_drive:<id>"), so a local admin's tokens were never found ("Credentials not found").
-    key_user = _cred_key_username(username)
-    if key_user:
-        safe_user = key_user.strip().lower().replace(" ", "_")
-        return f"cloud:{provider}:{safe_user}:{safe_id}"
-    return f"cloud:{provider}:{safe_id}"
-
+# ── Credential keys: SHARED BUILDER, AND DELIBERATELY WITHOUT A SCOPE (part 1 of 2) ─────────────
+# This lane now calls the same builder as mail and github, which makes the three key formats one
+# decision instead of three copies. It does NOT yet pass `user_scope_id`, and that is the whole
+# remaining defect rather than an oversight: without a scope every caller resolves to the same key,
+# so a tenant reaches the machine owner's cloud accounts - the finding this work started from.
+#
+# Written here rather than only in a commit message, because "calls the shared builder" reads like
+# "done". It is the same shape as a tool that declares an identity and still confines nothing: the
+# wiring is right and the effect is missing.
+#
+# PART 2 adds the scope, and it is a bigger change than swapping this call: the four public
+# functions below take `username` and no scope, and eight callers would have to supply one -
+# vaf/cloud/oauth_cloud.py (which already passes locally-massaged names), vaf/cloud/nextcloud.py and
+# vaf/api/cloud_routes.py. It also needs the lock mail already has: once a scope format exists, a
+# scoped user must never fall back to the name or unscoped forms, or they land on somebody else's
+# credentials. That lock has no meaning before the scope exists, which is why it is not here yet.
+from vaf.core.credential_store import build_credential_key
 
 def _cred_key_username(username: Optional[str]) -> Optional[str]:
     """Normalize username for credential key lookup: None for local admin (matches storage)."""
@@ -87,7 +88,8 @@ def get_cloud_credentials(account_id: str, provider: str, username: Optional[str
     key_username = _cred_key_username(username)
     account_ids_to_try = _normalize_google_email(account_id) if provider == "google_drive" else [account_id]
     for aid in account_ids_to_try:
-        key = _credential_key(aid, provider, key_username)
+        key = build_credential_key(aid, namespace="cloud", provider=provider,
+                                   username=key_username)  # no scope yet - part 2
         raw = _get_credential_raw(key)
         if raw:
             try:
@@ -123,7 +125,8 @@ def set_cloud_oauth_tokens(
     store_id = account_id
     if provider == "google_drive" and isinstance(account_id, str):
         store_id = (account_id or "").strip().lower().replace("@googlemail.com", "@gmail.com")
-    key = _credential_key(store_id, provider, username)
+    key = build_credential_key(store_id, namespace="cloud", provider=provider,
+                               username=_cred_key_username(username))  # no scope yet - part 2
     value = json.dumps({
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -149,7 +152,8 @@ def set_cloud_webdav_credentials(
     username: Optional[str] = None,
 ) -> None:
     """Store WebDAV credentials (Nextcloud app password)."""
-    key = _credential_key(account_id, "nextcloud", username)
+    key = build_credential_key(account_id, namespace="cloud", provider="nextcloud",
+                               username=_cred_key_username(username))  # no scope yet - part 2
     value = json.dumps({
         "url": url,
         "webdav_username": webdav_username,
@@ -168,7 +172,8 @@ def set_cloud_webdav_credentials(
 
 def delete_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> None:
     """Remove stored credentials for a cloud account."""
-    key = _credential_key(account_id, provider, username)
+    key = build_credential_key(account_id, namespace="cloud", provider=provider,
+                               username=_cred_key_username(username))  # no scope yet - part 2
     if keyring_available():
         try:
             import keyring

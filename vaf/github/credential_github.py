@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from vaf.core.credential_store import build_credential_key
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 
@@ -53,24 +54,6 @@ def _keyring_available() -> bool:
 
 def _local_admin_scope_id() -> str:
     return get_local_admin_scope_id()
-
-
-def _credential_key(
-    account_id: str,
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> str:
-    """Build keyring/fallback key for a GitHub account. Scoped by user_scope_id or username."""
-    safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    if user_scope_id and str(user_scope_id).strip():
-        scope_str = str(user_scope_id).strip()
-        if scope_str == _local_admin_scope_id():
-            return f"github:default:{safe_id}"
-        return f"github:{scope_str}:{safe_id}"
-    if username and str(username).strip():
-        safe_user = str(username).strip().lower().replace(" ", "_")
-        return f"github:user:{safe_user}:{safe_id}"
-    return f"github:default:{safe_id}"
 
 
 def _cred_key_username(username: Optional[str]) -> Optional[str]:
@@ -157,9 +140,10 @@ def get_github_oauth_token(
     - Non-admin context: scoped key only (no cross-user fallback).
     - Local admin context: scoped/default key with legacy compatibility.
     """
-    primary_key = _credential_key(
+    primary_key = build_credential_key(
         account_id,
-        _cred_key_username(username),
+        namespace="github",
+        username=_cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
     keys_to_try = [primary_key]
@@ -207,9 +191,10 @@ def get_github_credentials(
     Retrieve full stored credentials for a GitHub account.
     Returns dict with access_token, optional refresh_token, type; or None.
     """
-    key = _credential_key(
+    key = build_credential_key(
         account_id,
-        _cred_key_username(username),
+        namespace="github",
+        username=_cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
     if _keyring_available():
@@ -240,9 +225,10 @@ def set_github_oauth_tokens(
     user_scope_id: Optional[str] = None,
 ) -> None:
     """Store GitHub OAuth tokens. GitHub tokens are long-lived; refresh_token optional."""
-    key = _credential_key(
+    key = build_credential_key(
         account_id,
-        _cred_key_username(username),
+        namespace="github",
+        username=_cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
     value = json.dumps({
@@ -268,9 +254,10 @@ def delete_github_credentials(
     user_scope_id: Optional[str] = None,
 ) -> None:
     """Remove stored credentials for a GitHub account."""
-    key = _credential_key(
+    key = build_credential_key(
         account_id,
-        _cred_key_username(username),
+        namespace="github",
+        username=_cred_key_username(username),
         user_scope_id=_cred_key_scope(user_scope_id) or user_scope_id,
     )
     if _keyring_available():

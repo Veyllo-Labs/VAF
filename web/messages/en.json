@@ -421,7 +421,20 @@
     "ovActivityTitle": "Recent supervised activity",
     "ovActivityHint": "tool activity from the audit chain only · not a threat history",
     "ovUnitsTitle": "Active supervised units",
-    "ovUnitsHint": "session-scoped · live watchdog"
+    "ovUnitsHint": "session-scoped · live watchdog",
+    "ovEvMailSend": "High-risk mail blocked",
+    "ovEvMailImage": "Remote image blocked",
+    "ovEvSkillBlocked": "Skill install blocked",
+    "ovEvSkillOverride": "Admin override",
+    "ovEvSkillAlert": "Skill re-scan alert",
+    "ovEvSkillQuarantined": "Skill quarantined",
+    "ovEvSkillRemoved": "Quarantined skill deleted",
+    "ovRaSkillOverride": "{n} security refusal(s) overridden today",
+    "ovRaSkillAlert": "{n} skill re-scan alert(s) today",
+    "ovHeroEventsToday": "{n} blocked today",
+    "ovEventsTitle": "Blocked today",
+    "ovDescEvents": "Every attempt VAF turned away today: rejected access, refused senders, blocked mail and stopped skill installs. An admin override means someone deliberately stepped past a refusal.",
+    "ovEvFactTotal": "Events today"
   },
   "common": {
     "save": "Save",

@@ -421,7 +421,20 @@
     "ovActivityTitle": "Letzte überwachte Aktivität",
     "ovActivityHint": "nur Tool-Aktivität aus der Audit-Kette · keine Bedrohungs-Historie",
     "ovUnitsTitle": "Aktive überwachte Einheiten",
-    "ovUnitsHint": "session-scoped · Live-Watchdog"
+    "ovUnitsHint": "session-scoped · Live-Watchdog",
+    "ovEvMailSend": "Riskante Mail blockiert",
+    "ovEvMailImage": "Externes Bild blockiert",
+    "ovEvSkillBlocked": "Skill-Installation blockiert",
+    "ovEvSkillOverride": "Admin-Freigabe",
+    "ovEvSkillAlert": "Skill-Neupruefung auffaellig",
+    "ovEvSkillQuarantined": "Skill isoliert",
+    "ovEvSkillRemoved": "Isolierte Skill geloescht",
+    "ovRaSkillOverride": "{n} Sicherheitssperre(n) heute uebergangen",
+    "ovRaSkillAlert": "{n} Skill-Neupruefung(en) heute auffaellig",
+    "ovHeroEventsToday": "{n} heute blockiert",
+    "ovEventsTitle": "Heute blockiert",
+    "ovDescEvents": "Alles, was VAF heute abgewiesen hat: abgelehnte Zugriffe, abgewiesene Absender, blockierte Mails und gestoppte Skill-Installationen. Eine Admin-Freigabe heisst, dass jemand eine Sperre bewusst uebergangen hat.",
+    "ovEvFactTotal": "Ereignisse heute"
   },
   "common": {
     "save": "Speichern",

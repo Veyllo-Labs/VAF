@@ -53,6 +53,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   now reaches every one of them. Agents belonging to an application that embeds VAF are
   deliberately left alone, so a key passed in by that application is never replaced by the
   one on the machine.
+- **The protection shield no longer reports "no anomalies" on a day something was
+  blocked.** The shield summarised the state of each protection module but ignored what had
+  actually happened that day, so a stopped high-risk skill installation and an admin
+  overriding a security refusal appeared only as two small numbers in the Skills panel,
+  next to a large green "no anomalies". Today's blocked attempts now appear at the shield
+  itself as a clickable badge that opens the full list, and an overridden refusal or a
+  worsened re-scan raises the shield to amber. A block on its own stays green with a count:
+  a blocked attempt is the protection working, not a problem.
+- **The security event list now names every kind of event.** Half of what VAF records -
+  every skill event and both mail events - had no label anywhere in the interface and would
+  have been shown as a raw internal identifier instead of a description.
 - **A broken stored API key now says so instead of looking unconfigured.** Until now any
   problem reading a key produced an empty value, and an empty value means "not set up" to
   everything that asks - so a damaged key silently dropped you to the local model, or to no

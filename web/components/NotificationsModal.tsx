@@ -1320,12 +1320,17 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   // Blocked/rejected attempts for the firewall popup, fetched lazily on open.
   const [secEvents, setSecEvents] = useState<SecurityEvent[] | null>(null);
   useEffect(() => {
-    if (detail !== 'firewall' && detail !== 'channels') return;
+    if (detail !== 'firewall' && detail !== 'channels' && detail !== 'events') return;
     fetch(`${getApiBase()}/api/security/events?limit=100`, { credentials: 'include' })
       .then(r => (r.ok ? r.json() : null))
       .then(d => setSecEvents(Array.isArray(d?.events) ? d.events : []))
       .catch(() => setSecEvents([]));
   }, [detail]);
+  // One case per kind in SECURITY_EVENT_KINDS (vaf/core/security_events.py). The skill
+  // and mail kinds were missing here while being written to the log, so half of what an
+  // event list could show rendered as a raw identifier; tests/test_security_event_kinds_sync.py
+  // now fails when a new kind arrives without a label. `default` stays as the floor,
+  // because the writer deliberately lets unknown kinds through.
   const evKindLabel = (kind: string): string => {
     switch (kind) {
       case 'ip_blocked': return t('ovEvIpBlocked');
@@ -1335,6 +1340,13 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'twofa_failed': return t('ovEv2fa');
       case 'ws_rejected': return t('ovEvWs');
       case 'channel_rejected': return t('ovEvChannel');
+      case 'mail_high_risk_send_blocked': return t('ovEvMailSend');
+      case 'mail_image_proxy_blocked': return t('ovEvMailImage');
+      case 'skill_blocked': return t('ovEvSkillBlocked');
+      case 'skill_override': return t('ovEvSkillOverride');
+      case 'skill_scan_alert': return t('ovEvSkillAlert');
+      case 'skill_quarantined': return t('ovEvSkillQuarantined');
+      case 'skill_removed': return t('ovEvSkillRemoved');
       default: return kind;
     }
   };
@@ -1407,18 +1419,42 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
     quarantinedSkills > 0 ? t('ovRcSkillQuarantined', { n: quarantinedSkills }) : '',
     (skills?.state === 'critical' && quarantinedSkills === 0) ? t('ovRcSkillHigh') : '',
   ].filter(Boolean);
+  // TODAY'S EVENTS ARE PART OF THE ROLL-UP (owner-found 2026-07-31). The hero read
+  // module STATES only, so it printed "no anomalies" on a day when a HIGH-scored skill
+  // install had been stopped and an admin had overridden a HIGH import - both sitting
+  // in a sub-panel two columns away. That is the inverse of the rule stated above
+  // ("absent data never reads as safe"): the data was present and nothing read it.
+  //
+  // The distinction that decides which number raises the shield: a BLOCK is the guard
+  // working, exactly like the firewall row that stays green while reporting deflections.
+  // An OVERRIDE is a human stepping past a refusal, and an ALERT is a re-scan finding a
+  // skill got worse after install. Those two are attention; a block is a count.
+  const skillOverridesToday = skills?.overrides_today ?? 0;
+  const skillAlertsToday = skills?.alerts_today ?? 0;
   const amberReasons: string[] = [
     sandbox?.state === 'warn' ? t('ovRaSandbox') : '',
     isoState === 'db_down' ? t('ovRaDb') : '',
     firewall?.docker?.state === 'warn' ? t('ovRaDocker') : '',
     channels?.state === 'warn' ? t('ovRaChannel') : '',
     skills?.state === 'warn' ? t('ovRaSkillMedium') : '',
+    skillOverridesToday > 0 ? t('ovRaSkillOverride', { n: skillOverridesToday }) : '',
+    skillAlertsToday > 0 ? t('ovRaSkillAlert', { n: skillAlertsToday }) : '',
   ].filter(Boolean);
   const overallState: 'critical' | 'attention' | 'ok' | 'nodata' =
     criticalReasons.length > 0 ? 'critical'
       : !hasChainData ? 'nodata'
         : amberReasons.length > 0 ? 'attention'
           : 'ok';
+  // Same arithmetic as `securityAlertCount` in the outer component, over the same
+  // aggregator payload: every entry in the log is a blocked, rejected or failed attempt,
+  // so all of them count. Kept as one expression here rather than threaded down, because
+  // the outer count drives the sidebar dot and this one drives the shield - two readers
+  // of one number, and they must never disagree on the screen.
+  const blockedToday =
+    (firewall ? firewall.blocked_today + firewall.failed_logins_today : 0)
+    + (channels ? channels.rejected_today : 0)
+    + (skills ? skills.blocked_today + skillOverridesToday + skillAlertsToday : 0);
+  const eventsNeedAttention = skillOverridesToday > 0 || skillAlertsToday > 0;
   const amber = dark ? '#fbbf24' : '#b45309';
   const overall = overallState === 'ok'
     ? { rgb: '34,197,94', shield: 'rgba(74,222,128,.5)', color: green, Icon: ShieldCheck, border: 'rgba(34,197,94,.28)', head: t('ovHeroOk'), sub: `${t('ovHeroOkSub')} · ${totalRaw} ${t('ovEventsSecured')}`, pulse: false }
@@ -1462,6 +1498,28 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: C.textDim, fontWeight: 600, marginBottom: 3 }}>{t('ovEyebrow')}</div>
           <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.01em', color: overallState === 'nodata' ? C.textMid : overall.color, ...(overall.pulse ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }}>{overall.head}</div>
           <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>{overall.sub}</div>
+          {/* Today's blocked/rejected attempts, AT THE SHIELD (owner 2026-07-31). The
+              only place a count of blocked events appeared was inside the skills panel
+              and the firewall row, so the summary that people actually read carried
+              none of it. Amber when a refusal was overridden or a re-scan raised an
+              alert, green when the count is only the guard doing its job. */}
+          {blockedToday > 0 && (
+            <button
+              type="button"
+              onClick={() => setDetail('events')}
+              style={{
+                marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 7,
+                fontSize: 11.5, fontWeight: 600, padding: '6px 11px', borderRadius: 999,
+                cursor: 'pointer', color: eventsNeedAttention ? amber : overall.color,
+                background: `rgba(${eventsNeedAttention ? '245,158,11' : overall.rgb},.10)`,
+                border: `1px solid rgba(${eventsNeedAttention ? '245,158,11' : overall.rgb},.32)`,
+              }}
+            >
+              <ShieldAlert size={13} />
+              {t('ovHeroEventsToday', { n: blockedToday })}
+              <ChevronRight size={13} />
+            </button>
+          )}
         </div>
         {/* Module status list. Only the audit chain is wired; every other module
             stays grey (not measured) until its data point lands. */}
@@ -1921,11 +1979,13 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
           audit: t('ovCardAudit'), sandbox: t('ovCardSandbox'), firewall: t('ovCardFirewall'),
           isolation: t('ovCardIsolation'), channels: t('ovCardChannels'),
           phishing: t('ovCardPhishing'), guardrails: t('ovCardGuardrails'),
+          events: t('ovEventsTitle'),
         };
         const descs: Record<string, string> = {
           audit: t('ovDescAudit'), sandbox: t('ovDescSandbox'), firewall: t('ovDescFirewall'),
           isolation: t('ovDescIsolation'), channels: t('ovDescChannels'),
           phishing: t('ovDescPhishing'), guardrails: t('ovDescGuardrails'),
+          events: t('ovDescEvents'),
         };
         const factRow = (label: string, value: ReactNode, okDot?: boolean | null) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 12 }}>
@@ -2176,6 +2236,44 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                       </button>
                     </div>
                   ) : <OvNoData C={C} label={noData} />
+                )}
+
+                {/* ── What the shield's badge opens: today's blocked/rejected attempts,
+                       every kind, newest first. The firewall popup below shows the same
+                       feed filtered to its own module; this is the unfiltered one, which
+                       is what a summary at the shield has to be able to explain. ── */}
+                {detail === 'events' && (
+                  <div>
+                    {factRow(t('ovEvFactTotal'), String(blockedToday))}
+                    {skills && skills.blocked_today > 0 && factRow(t('ovSkBlockedToday'), String(skills.blocked_today), true)}
+                    {skillOverridesToday > 0 && factRow(t('ovSkOverrides'), String(skillOverridesToday), false)}
+                    {skillAlertsToday > 0 && factRow(t('ovSkAlerts'), String(skillAlertsToday), false)}
+                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovFwEventsTitle')}</div>
+                    {secEvents === null ? (
+                      <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('loading')}</div>
+                    ) : secEvents.length === 0 ? (
+                      <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovNoEventsToday')}</div>
+                    ) : (
+                      [...secEvents].reverse().map((ev, i) => (
+                        <div key={`${ev.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                          <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>{(ev.ts || '').slice(11, 19)}</span>
+                          <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, flexShrink: 0 }}>{evKindLabel(ev.kind)}</span>
+                          <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {[ev.ip, ev.username, ev.path, ev.detail].filter(Boolean).join(' · ')}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                    <button
+                      type="button"
+                      disabled={!securityLogFile}
+                      onClick={() => { if (securityLogFile) { setDetail(null); onOpenLogFile(securityLogFile); } }}
+                      title={securityLogFile ? undefined : t('ovNoEventsToday')}
+                      style={{ marginTop: 14, fontSize: 11.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgLabel, color: securityLogFile ? C.textStrong : C.textFaint, cursor: securityLogFile ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <GitBranch size={12} />{t('ovShowLogHistory')}
+                    </button>
+                  </div>
                 )}
 
                 {detail === 'isolation' && (

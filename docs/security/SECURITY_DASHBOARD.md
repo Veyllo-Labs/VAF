@@ -104,7 +104,13 @@ Contract rules:
 - **Always on**: independent of `debug_logs_enabled`. Rejected access attempts
   are audit signal, not debug noise.
 
-Event kinds and emit sites:
+Event kinds and emit sites. The list below is generated from - and CI-checked
+against - `SECURITY_EVENT_KINDS` in `vaf/core/security_events.py`, which is the
+single declaration every consumer reads. It used to be prose in four places
+that had drifted apart (this table named 12 kinds, the module comment 7, the
+dashboard's label switch the same 7, and the code emitted 14);
+`tests/test_security_event_kinds_sync.py` now fails when an emitted kind is
+undeclared, undocumented here, or unlabelled in the dashboard.
 
 | Kind | Meaning | Emit site |
 |------|---------|-----------|
@@ -115,14 +121,17 @@ Event kinds and emit sites:
 | `twofa_failed` | Wrong/expired 2FA code or temp token | `vaf/api/auth_routes.py` |
 | `ws_rejected` | Rejected NETWORK WebSocket handshake (IP/token); trusted-localhost paths do not emit | `vaf/core/web_server.py` (`_emit_sec_ws`) |
 | `channel_rejected` | Unauthorized messenger sender dropped at ingress; `channel` carries the platform, `username` the sender id | `vaf/api/telegram_bridge.py`, `whatsapp_bridge.py`, `discord_bridge.py` |
+| `mail_high_risk_send_blocked` | Outgoing mail stopped as high-risk before sending | `vaf/tools/send_mail.py`, `reply_mail.py`, `manage_mail.py` |
+| `mail_image_proxy_blocked` | Remote image proxy refused a host | `vaf/api/mail_routes.py` |
 | `skill_blocked` | HIGH scan result stopped a skill install/update | `vaf/skills/scanner.py emit_skill_security_event`, called from the `create_skill`/`update_skill` tools and the WebUI editor/zip import |
 | `skill_override` | Admin explicitly accepted a HIGH result (install override or quarantine restore) | Same pipeline + `security_routes.py` restore |
 | `skill_scan_alert` | Periodic re-scan found a worsened risk level (below high) | `vaf/skills/rescan.py` |
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
 
-Unknown kinds pass through; the list is an informational contract for
-consumers, not a validation gate.
+Unknown kinds pass through; the registry is a contract for consumers, not a
+validation gate. Auditing must never drop an event because bookkeeping
+disagrees - the guard, not the writer, is what keeps the contract true.
 
 Read endpoints (both admin-gated):
 
@@ -187,7 +196,20 @@ The dashboard renders as the "Overview" view of the Logs window
 (`OverviewPane` in `web/components/NotificationsModal.tsx`), which is the
 default view when the window opens: a hero worst-of roll-up over the module
 rows, each opening a detail popup, plus the skills donut with the resolution
-actions above. For admins the frontend polls `GET /api/security/alert-count`
+actions above.
+
+The hero also carries **today's blocked count as a clickable badge**, opening
+the unfiltered event list for the day. It exists because the roll-up reads
+module STATES, and states alone let the shield print "no anomalies" on a day
+when a HIGH-scored skill install had been stopped and an admin had overridden a
+HIGH import - both visible only as two numbers in the skills panel. Two of
+those counters now feed the roll-up as attention reasons, and the distinction
+is deliberate: a BLOCK is the guard working (a count, like the firewall row
+that stays green while reporting deflections), while an OVERRIDE (a human
+stepping past a refusal) and a re-scan ALERT raise the shield to amber for the
+rest of the day.
+
+For admins the frontend polls `GET /api/security/alert-count`
 every 60 seconds; a red dot appears on the sidebar Logs button while the
 newest security event is newer than the per-browser seen marker (localStorage
 key `vaf_logs_seen_ts`), and opening the security log marks everything seen.
@@ -205,6 +227,11 @@ CI-guarded contracts (run with the repo venv):
   the live inspect payload).
 - `tests/test_security_events.py`: dual sink, parseable log-line format, flood
   throttle, no-secrets field surface, firewall-module derivations.
+- `tests/test_security_event_kinds_sync.py`: the kind registry against its
+  readers - every emitted kind is declared, documented in the table above and
+  labelled in the dashboard (in both message catalogs), with no dead rows. The
+  scan has its own floor assertion, so a broken scan fails instead of passing
+  while measuring nothing.
 - `tests/test_skills_rescan.py`: post-install tampering surfaces (manifest
   updated to high, `skill_scan_alert` raised, clean sweep changes nothing,
   summary persisted).

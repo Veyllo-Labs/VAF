@@ -35,16 +35,41 @@ from typing import Any, Dict, List
 
 from vaf.core.log_helper import get_app_log_dir
 
-# Known event kinds (informational contract for consumers; unknown kinds pass through):
-#   ip_blocked              - request from outside the allowed LAN ranges (403)
-#   unauthenticated_blocked - LAN request without a token (401)
-#   token_rejected          - LAN request with an invalid/expired token (401)
-#   login_failed            - wrong username/password on /api/auth/login
-#   twofa_failed            - wrong/expired 2FA code or temp token
-#   ws_rejected             - WebSocket handshake rejected (IP/token)
-#   channel_rejected        - unauthorized messenger sender dropped (telegram/
-#                             whatsapp/discord); `channel` carries the platform,
-#                             `username` the sender id (phone/user id)
+# ── The event kinds, as DATA ─────────────────────────────────────────────────────────
+#
+# This used to be a prose comment listing the kinds, and every consumer kept its own
+# copy of the list. Measured 2026-07-31, all four disagreed: the comment named 7 kinds,
+# the dashboard's label switch named the same 7, the design doc's table named 12, and
+# the code emitted 14. Half of everything that reaches the log had no label anywhere, so
+# a reader would have been shown a raw identifier like `skill_blocked`.
+#
+# Nothing here VALIDATES: an unknown kind still passes through, because auditing must
+# never drop an event over a bookkeeping mismatch. This is the SSOT that consumers read
+# and that `tests/test_security_event_kinds_sync.py` holds against the emit sites and
+# against the dashboard, so the four copies cannot drift apart again silently.
+#
+# Adding a kind: emit it, add the row here, add a label in the dashboard's `evKindLabel`
+# plus the two message catalogs. The guard names whichever of those you forgot.
+SECURITY_EVENT_KINDS: dict[str, str] = {
+    # network / auth perimeter
+    "ip_blocked": "Request from outside the allowed LAN ranges (403)",
+    "unauthenticated_blocked": "LAN request without a token (401)",
+    "token_rejected": "LAN request with an invalid or expired token (401)",
+    "login_failed": "Wrong username or password on /api/auth/login",
+    "twofa_failed": "Wrong or expired 2FA code or temp token",
+    "ws_rejected": "Rejected network WebSocket handshake (IP/token)",
+    "channel_rejected": "Unauthorized messenger sender dropped at ingress; "
+                        "`channel` carries the platform, `username` the sender id",
+    # mail
+    "mail_high_risk_send_blocked": "Outgoing mail stopped as high-risk before sending",
+    "mail_image_proxy_blocked": "Remote image proxy refused a host",
+    # skills
+    "skill_blocked": "HIGH scan result stopped a skill install or update",
+    "skill_override": "Admin explicitly accepted a HIGH result (install or quarantine restore)",
+    "skill_scan_alert": "Periodic re-scan found a worsened risk level (below high)",
+    "skill_quarantined": "Skill quarantined (auto on worsened-to-high, or manual isolate)",
+    "skill_removed": "Quarantined skill deleted from the dashboard",
+}
 
 _THROTTLE_S = 5.0
 _last_emit: Dict[str, float] = {}

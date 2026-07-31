@@ -150,9 +150,17 @@ def test_a_pattern_matched_task_reaches_the_caller(tmp_path, monkeypatch):
 
 # ── what the conversion buys: the call becomes visible ───────────────────────
 
-def test_a_fast_path_call_now_emits_start_and_end_events():
+def test_a_fast_path_call_now_emits_start_and_end_events(tmp_path):
     """The forensic half. Before this change these five executions produced no events at all,
-    so a rename done by the librarian left no record anywhere."""
+    so a rename done by the librarian left no record anywhere.
+
+    The directory has to come from `tmp_path`, not from a literal. `_show_tree` refuses and
+    returns BEFORE reaching the caller if the path fails `is_safe_path` or does not exist, so a
+    hardcoded `/tmp` measured correctly on Linux and, on Windows, reported "the fast path still
+    runs invisibly" when nothing had reached the fast path at all. The dangerous half is not the
+    red run: it is that the failure message accused the code under test of the exact defect this
+    file was written to catch, which is the most convincing way for a test to be wrong.
+    """
     seen = []
 
     class _Tool:
@@ -169,7 +177,7 @@ def test_a_fast_path_call_now_emits_start_and_end_events():
 
     caller = ToolCaller({"tree": _Tool()}, max_result_chars=None, gate_enabled=False,
                         on_event=lambda ev, *a, **k: seen.append(ev.get("type")))
-    LibrarianTool()._show_tree(Path("/tmp"), caller)
+    LibrarianTool()._show_tree(tmp_path, caller)
 
     assert "tool_start" in seen and "tool_end" in seen, (
         f"the fast path still runs invisibly: {seen}"

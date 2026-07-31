@@ -106,35 +106,31 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
     prompt-injected ``user_role="admin"`` is overwritten with the caller's real role rather
     than honoured. Declaring nothing gets nothing - the safe direction.
 
-    The ``username`` fallback is load-bearing and it is the CONFIGURED owner's name, not the
-    literal "admin". Registration writes the first user's chosen name into
-    ``local_admin_username`` (vaf/api/auth_routes.py), and every store keyed on a name asks
-    ``get_local_admin_username()`` whether the caller is the owner. A literal therefore named
-    a person who does not exist on any installation whose owner is not called "admin": the
-    same human resolved to `email:imap:<id>` through the web and `email:imap:admin:<id>` from
-    a lane with no username, and the name-only stores - the cloud account list and its sync
-    directory - answered with an empty stranger's view.
+    The nameless caller is resolved by ``resolve_caller_username``, which asks the SCOPE rather
+    than substituting a name, and this line has now been wrong twice in opposite directions.
+    First it was the literal "admin" - a person who exists on no installation whose owner
+    registered under another name, which is why the store still probes a legacy
+    ``email:<provider>:admin:<id>`` shape that this very fallback wrote. Then it was the
+    owner's name unconditionally, which is worse: a nameless caller is overwhelmingly a TENANT
+    whose name is missing from the session metadata (measured: 3208 of 3238 stored sessions
+    carry a non-owner scope and no username), and three stores decide ownership on the name
+    alone, so those tenants reached the owner's GitHub token and cloud accounts.
 
-    That the mismatch is old is visible in the store itself: ``get_email_credentials`` still
-    probes a legacy ``email:<provider>:admin:<id>`` shape, which is what this fallback wrote
-    back when it was the only one. Reaching it is not exotic either - a session carries a
-    username in 24 of 3178 stored sessions, and switching to one without resets
-    ``_current_username`` to None on purpose, so the fallback is the normal path rather than
-    the exception.
+    Reaching this line is the normal path, not the exception: switching into a session that
+    stores no username resets ``_current_username`` to None on purpose.
 
-    THE CHANGE IS INERT WHERE NOTHING WAS CONFIGURED. ``get_local_admin_username`` itself ends
-    in ``or "admin"`` and strips (vaf/core/config.py), so it can never answer empty: on a fresh
-    installation, or any whose owner did register as "admin", this resolves to the same string
-    as the literal did. It differs only where the two already disagreed, which is the case that
-    was broken.
+    THE LOOKUP STAYS OFF HERE. ``allow_lookup=True`` would resolve a tenant's real account name
+    but costs an uncached database round trip per dispatch. The synthetic bucket is the cheap
+    and safe answer; resolving the real name belongs where a session's identity is established,
+    once, not on every tool call.
 
     Mutates and returns ``args``.
     """
-    from vaf.core.config import get_local_admin_username
+    from vaf.core.config import resolve_caller_username
 
     available = {
         "user_scope_id": user_scope_id,
-        "username": username or get_local_admin_username(),
+        "username": resolve_caller_username(username, user_scope_id),
         "user_role": user_role,
     }
     for key in (getattr(tool, "identity_kwargs", ()) or ()):

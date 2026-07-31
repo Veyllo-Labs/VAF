@@ -184,20 +184,17 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
 
     SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account username, never
     the literal "admin". The username keys the per-user workspace + messenger lookups, so handing a
-    non-admin "admin" would deliver their automation result to the LOCAL ADMIN's messenger. Mirrors
-    the thinking-mode resolver: admin only for the admin scope (or empty scope = single-user/local),
-    a synthetic ``scope_<hex>`` for an unknown scope, never "admin" for a non-admin scope.
+    non-admin "admin" would deliver their automation result to the LOCAL ADMIN's messenger.
+
+    THE RULE IS NO LONGER WRITTEN HERE. It was right in this file and right in thinking_mode,
+    and wrong in the dispatcher that every tool call actually passes through - a rule that
+    existed twice and still failed where it mattered. It lives in
+    ``config.resolve_caller_username`` now, so the assigner and the workflow engine answer the
+    same question the same way. Automations may pay for the account lookup: one per task is
+    affordable, one per tool call is not.
     """
-    try:
-        from vaf.core.config import get_local_admin_username, get_local_admin_scope_id
-        admin_user = get_local_admin_username() or "admin"
-        if not user_scope_id or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
-            return admin_user
-        from vaf.core.thinking_mode import _resolve_username_for_scope
-        resolved = _resolve_username_for_scope(user_scope_id)
-        return resolved or ("scope_" + str(user_scope_id).replace("-", "")[:8])
-    except Exception:
-        return "admin"
+    from vaf.core.config import resolve_caller_username
+    return resolve_caller_username(None, user_scope_id, allow_lookup=True)
 
 
 # Outbound send tools a workflow step can use for in-run delivery. When one of

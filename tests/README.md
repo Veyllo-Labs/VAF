@@ -108,6 +108,18 @@ whether a legitimate caller got through. Every gate therefore needs at least one
 on the refusal side, and the counter-proof to run against it is always "make the doubtful
 case permissive" - never the other direction, which fails on its own.
 
+**A measured number that is read as an answer to a question it did not count.** The count is
+correct, the conclusion drawn from it is not, and the number's authority is what carries the
+conclusion past review. "24 of 3178 sessions carry a username" was counted right, twice, and
+read as "so the nameless fallback resolves to the machine owner". It counted how many sessions
+have a NAME. It said nothing about who the other 3154 are - and when that was finally counted,
+3208 of 3238 turned out to carry a non-owner SCOPE and none carried the owner's, so the
+nameless caller was overwhelmingly a tenant. A fix built on the first reading handed those
+tenants the owner's GitHub token and cloud accounts. The same shape produced "49 path literals"
+as an argument about whether they get touched, which is not what a grep for literals counts. So
+before a number justifies a change, say out loud what it counted and what the change assumes,
+and check they are the same sentence; where they differ, the missing count is the one to run.
+
 **A label that asserts something no test holds.** "Legacy", "deprecated", "read-only",
 "historical" are all claims about the PRESENT: they say the thing is no longer produced. That
 half is what nobody measures. A frozen set in `test_credential_key_baseline.py` carried the

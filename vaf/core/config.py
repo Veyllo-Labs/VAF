@@ -1250,3 +1250,61 @@ def is_admin_identity(role: Optional[str], user_scope_id: Optional[str]) -> bool
 def get_local_admin_username() -> str:
     """Return the local admin username. Use for display and paths when no JWT."""
     return (Config.get("local_admin_username") or "admin").strip()
+
+
+def resolve_caller_username(
+    username: Optional[str],
+    user_scope_id: Optional[str] = None,
+    *,
+    allow_lookup: bool = False,
+) -> str:
+    """Who is calling, expressed as a NAME, for the stores that key on one.
+
+    A NAMELESS CALLER IS NOT AUTOMATICALLY THE OWNER, and that is the whole reason this exists.
+    Seven owner-branches across the stores read `if not username or username == local_admin` and
+    answer with the machine owner's data, so a missing name and the owner's name are the same
+    key - "no name" cannot be expressed by passing None. The question a caller with no name has
+    to answer is therefore not "what is my name" but "am I the owner", and only the SCOPE can
+    say. No scope, or the owner's scope, means single-user or the owner, and the owner's name is
+    right. A DIFFERENT scope means a tenant whose name simply is not in the session metadata,
+    and handing them the owner's name hands them the owner's data.
+
+    Measured on a live installation before this was written: of 3238 stored sessions 24 carry a
+    username, and of the rest 3208 carry a NON-OWNER scope while 0 carry the owner's. So the
+    nameless case is overwhelmingly a tenant, not the owner - a number that was counted right
+    and read wrong once already.
+
+    Three stores make the ownership decision on the NAME ALONE, which is why the name matters
+    this much: `github_tools._get_github_account_for_user` (which accepts `user_scope_id` and
+    never references it), `cloud_routes._get_cloud_config` and
+    `cloud_storage._get_cloud_accounts`. For those the owner's name IS the owner's data.
+
+    The synthetic `scope_<hex>` for an unknown tenant is not invented here: `automation` and
+    `thinking_mode` both resolved it that way, correctly, and wrote down why. What they could
+    not do was make the DISPATCHER agree, because it had its own naive answer - which is how a
+    rule that existed twice still failed at the one place every tool passes through.
+
+    `allow_lookup` costs a database round trip (and sometimes a thread) with no cache, so it is
+    off by default and must stay off on the per-dispatch path. Without it a tenant addresses a
+    stable, isolated bucket of their own rather than their real account name - safe, and still
+    better than the shared literal, which pooled every nameless tenant into ONE bucket.
+    """
+    given = str(username or "").strip()
+    if given:
+        return given
+    try:
+        scope = str(user_scope_id or "").strip()
+        if not scope or scope == str(get_local_admin_scope_id() or "").strip():
+            return get_local_admin_username()
+        if allow_lookup:
+            try:
+                from vaf.core.thinking_mode import _resolve_username_for_scope
+                resolved = _resolve_username_for_scope(scope)
+                if resolved and str(resolved).strip():
+                    return str(resolved).strip()
+            except Exception:
+                pass
+        return "scope_" + scope.replace("-", "")[:8]
+    except Exception:
+        # Cannot tell whose scope this is -> must not answer with the owner's name.
+        return get_local_admin_username() if not user_scope_id else "scope_unknown"

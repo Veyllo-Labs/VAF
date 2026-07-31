@@ -411,12 +411,12 @@ class WorkflowEngine:
         self.tools = tools
         self.callback = callback or (lambda *args: None)
         self.user_scope_id = user_scope_id
-        # The CONFIGURED owner's name, not the literal: registration writes the first user's
-        # chosen name into local_admin_username, and every name-keyed store compares against
-        # that. A literal here also pre-empts the shared fallback in assign_declared_identity -
-        # it arrives truthy, so the one place that knows this rule never gets asked.
-        from vaf.core.config import get_local_admin_username
-        self.username = username or get_local_admin_username()
+        # Resolved from the SCOPE when no name was passed, never substituted: a literal here
+        # would also pre-empt the shared rule in assign_declared_identity, arriving truthy so
+        # the one place that knows it never gets asked. A workflow started by a tenant whose
+        # name is not in the metadata must not run as the owner.
+        from vaf.core.config import resolve_caller_username
+        self.username = resolve_caller_username(username, user_scope_id)
         # Never injected by the old name list - it has no branch that sets user_role at all,
         # so a workflow step could not be role-aware. None keeps the previous answer: the
         # jail resolves admin-ness from the scope half alone, exactly as before.

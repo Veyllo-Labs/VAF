@@ -367,6 +367,154 @@ def test_the_default_installation_is_unaffected():
     assert assigned == "admin" and recognised_as_owner
 
 
+# ── the other half: nameless is not the same as "the owner" ──────────────────
+#
+# The fix above was right about the literal and wrong about what replaces it. A nameless caller
+# was then resolved to the OWNER unconditionally - and nameless is overwhelmingly a TENANT whose
+# name is missing from the session metadata. Measured on a live installation: of 3238 stored
+# sessions 24 carry a username; of the remainder 3208 carry a NON-OWNER scope and 0 carry the
+# owner's. The same number that proved the first defect (24 of ~3200) says nothing about which
+# person the other ~3200 are, and reading it that way is what produced the second one.
+#
+# It matters because three stores decide ownership on the NAME ALONE - github_tools
+# (_get_github_account_for_user, which takes user_scope_id and never references it),
+# cloud_routes._get_cloud_config and cloud_storage._get_cloud_accounts - so for them the owner's
+# name IS the owner's data. And "no name" cannot express the difference: seven owner-branches
+# read `if not username or username == local_admin`, so passing None is the owner too.
+
+FOREIGN_SCOPE = "deadbeef-0000-0000-0000-000000000000"
+
+
+def test_a_nameless_tenant_does_not_become_the_owner():
+    """THE refusal-side assertion, run through the store that ignores the scope entirely.
+
+    Asserted on `_get_github_account_for_user` rather than on the resolved string, because that
+    function is where the damage was: it branches on the name only, so whatever the assigner
+    puts there decides whether the owner's GitHub account and token come back. Asserting "the
+    name is not the owner's" would pass for any constant at all; asserting the ACCOUNT is
+    refused is the property.
+
+    Counter-proof run: dropping the scope check in `resolve_caller_username` - i.e. going back
+    to the owner unconditionally - turns this red while the tests above stay green, because
+    every one of them asks whether a legitimate caller gets through.
+    """
+    from vaf.core.config import Config
+    from vaf.tools.github_tools import _get_github_account_for_user
+    from vaf.core.tool_dispatch import assign_declared_identity
+
+    class _NameOnly(_SpyTool):
+        name = "third_party_name_only"
+        identity_kwargs = ("user_scope_id", "username")
+
+    populated = {"accounts": [{"account_id": "acct-1", "enabled": True}]}
+    _real_get = Config.get
+
+    def _fake_get(key, default=None):
+        if key == "github_config":
+            return populated
+        if key == "github_config_by_user":
+            return {}
+        return _real_get(key, default)
+
+    with patch.object(Config, "get", staticmethod(_fake_get)):
+        owner_args = assign_declared_identity(_NameOnly(), {}, user_scope_id=None,
+                                              username=None, user_role=None)
+        tenant_args = assign_declared_identity(_NameOnly(), {}, user_scope_id=FOREIGN_SCOPE,
+                                               username=None, user_role=None)
+        owner_sees = _get_github_account_for_user(owner_args["username"], None)
+        tenant_sees = _get_github_account_for_user(tenant_args["username"], FOREIGN_SCOPE)
+
+    assert owner_sees is not None, (
+        "the machine owner can no longer reach their own GitHub account - the fallback has to "
+        "keep working for the case it exists for, or this fix simply denies everything"
+    )
+    assert tenant_sees is None, (
+        "a caller with a FOREIGN scope and no username reached the owner's GitHub account. "
+        "That gate branches on the name alone, so resolving a nameless caller to the owner "
+        "hands the owner's account and token to every tenant whose name is missing from the "
+        "session metadata."
+    )
+
+
+def test_two_different_tenants_do_not_share_one_bucket():
+    """Why the synthetic name is per-scope and not one constant.
+
+    The literal had every nameless tenant addressing the SAME name, so their name-keyed data
+    was not merely mis-filed, it was pooled together. Any replacement constant would repeat
+    that; the scope is what keeps them apart."""
+    from vaf.core.config import resolve_caller_username
+
+    a = resolve_caller_username(None, FOREIGN_SCOPE)
+    b = resolve_caller_username(None, "cafebabe-0000-0000-0000-000000000000")
+    assert a != b, "two tenants share one name-keyed bucket again"
+    assert a == resolve_caller_username(None, FOREIGN_SCOPE), (
+        "the same tenant gets a different name on a second call - their data would scatter"
+    )
+
+
+def test_the_rule_exists_once_and_the_dispatcher_asks_it():
+    """The conversion, not just the behaviour.
+
+    `automation` and `thinking_mode` both had this rule and both had it RIGHT, with the reason
+    written out. The dispatcher - the one path every tool call goes through - had its own naive
+    answer, which is how a rule that existed twice still failed where it counted. If automation
+    grows its own copy back, the next divergence is a matter of time."""
+    import inspect
+
+    from vaf.core import automation
+
+    src = inspect.getsource(automation._resolve_username)
+    assert "resolve_caller_username" in src, "the automation lane hand-rolls the rule again"
+    # The LITERAL with its quotes, not the bare word: `scope_` also occurs inside
+    # `user_scope_id`, and matching that was a guard reading text instead of code - the exact
+    # failure mode tests/README.md warns about, caught here by its own first run.
+    assert '"scope_"' not in src, (
+        "the synthetic tenant name is being constructed here again rather than asked for"
+    )
+
+
+# ── what the rule does NOT reach, measured rather than assumed ───────────────
+#
+# The gate above decides what a caller with NO name becomes. It is therefore blind to any lane
+# that supplies a name of its own, and three such lanes were measured while it was built. They
+# are frozen here because each one is a live mis-keying today, and because a green suite around
+# `resolve_caller_username` would otherwise read as "the name question is settled".
+
+REMAINING_LITERAL_NAME_SOURCES = {
+    # file:line -> why the shared rule cannot see it
+    "vaf/core/channel_history.py:90":
+        "_session_identity reads meta.get('username') or 'admin' and is the WRITER of the "
+        "channel message store, while the reader gets its name from the assigner. For a "
+        "session with no username the two now disagree - writer literal, reader owner or "
+        "tenant bucket - so a sync writes one file and the query reads another.",
+    "vaf/api/discord_bridge.py:127":
+        "The bridges stamp a hardcoded 'admin' into task metadata, which headless_runner "
+        "copies into session metadata and the agent into _current_username. It arrives TRUTHY, "
+        "so the rule returns it unchanged and never gets to ask the scope. This is what put "
+        "980 telegram rows under a literal-named directory against 116 under the owner's on "
+        "the installation where this was measured.",
+    "vaf/core/system_prompt.py:610":
+        "get_user_workspace('admin') is hardcoded and runs on EVERY prompt build, reading "
+        "identity.json and soul.md from the literal's workspace - and creating it. The persona "
+        "editor writes the owner's. Nothing here involves an assigner at all.",
+}
+
+
+@pytest.mark.parametrize("site", sorted(REMAINING_LITERAL_NAME_SOURCES))
+def test_the_named_remainder_still_looks_the_way_it_was_measured(site):
+    """Not a fix - a receipt. Each of these was checked against the finished rule and confirmed
+    unreached by it; if one is repaired or moved, this points at the note that explains what it
+    was for rather than leaving a stale claim in a docstring."""
+    path, line = site.rsplit(":", 1)
+    text = (Path(__file__).resolve().parents[1] / path).read_bytes().decode().split("\n")
+    body = "\n".join(text[int(line) - 3:int(line) + 2])
+    assert '"admin"' in body or "'admin'" in body, (
+        f"{site} no longer carries the literal name it was frozen for. If it was fixed, delete "
+        f"this entry and say so; the note explaining it is in this file.\n"
+        f"{REMAINING_LITERAL_NAME_SOURCES[site]}"
+    )
+
+
 def test_the_workflow_engine_does_not_pre_empt_the_shared_fallback():
     """The second site of the same decision, and the reason a fix in the assigner alone was
     not enough.

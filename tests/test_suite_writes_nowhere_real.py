@@ -46,23 +46,42 @@ CHILD_ENV_TO_CLEAR = (
     "VAF_LOG_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "VAF_TEST_STORE_ROOT",
 )
 
-# Every Platform directory accessor, frozen WITH THE MECHANISM THAT GOVERNS IT. Two
-# mechanisms exist and neither covers the other: a throwaway HOME (the runner's job) and
-# the XDG redirection in conftest (the suite's job). An axis governed by NEITHER is an
-# escape route that no amount of discipline at the shell can close - that is the case this
-# mapping exists to catch, and it is what "XDG is set independently of HOME" produced.
+# Every Platform directory accessor, frozen WITH THE MECHANISM THAT GOVERNS IT - PER
+# PLATFORM, because the mechanism is not the same one everywhere and the first version of
+# this table said it was. Three of the ten are branched: Linux reads the XDG names, Windows
+# reads %LOCALAPPDATA%/%APPDATA%, macOS puts them under Library inside HOME. Frozen for all
+# three so each CI job checks its own row rather than the one the author happened to be on.
+#
+# An axis governed by NEITHER of the mechanisms the suite redirects is the dangerous shape -
+# no discipline at the shell can close it - and that is exactly what Windows was: measured
+# on Linux, declared universal, and the suite kept writing into the real %LOCALAPPDATA%.
+_HOME, _XDG_C, _XDG_D, _XDG_K = "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
+_LOCAL, _APP = "LOCALAPPDATA", "APPDATA"
+
 PLATFORM_DIR_AXES = {
-    "home_dir": "HOME",
-    "documents_dir": "HOME",
-    "downloads_dir": "HOME",
-    "get_vaf_output_dir": "HOME",
-    "get_research_dir": "HOME",
-    "vaf_dir": "HOME",
-    "get_context_log_dir": "HOME",
-    "config_dir": "XDG_CONFIG_HOME",
-    "data_dir": "XDG_DATA_HOME",
-    "cache_dir": "XDG_CACHE_HOME",
+    "home_dir":           {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "documents_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "downloads_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "get_vaf_output_dir": {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "get_research_dir":   {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "vaf_dir":            {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
+    "get_context_log_dir": {"linux": _HOME, "darwin": _HOME, "win32": _HOME},
+    "config_dir":         {"linux": _XDG_C, "darwin": _HOME, "win32": _APP},
+    "data_dir":           {"linux": _XDG_D, "darwin": _HOME, "win32": _LOCAL},
+    "cache_dir":          {"linux": _XDG_K, "darwin": _HOME, "win32": _LOCAL},
 }
+
+# Every mechanism that could govern an axis on any platform. Varied one at a time.
+MECHANISMS = (_HOME, _XDG_C, _XDG_D, _XDG_K, _LOCAL, _APP)
+
+
+def _platform_key():
+    """From `sys.platform`, NOT from `Platform`. Asking the module under test which platform
+    it thinks it is on would let a broken branch pick its own expectation."""
+    if sys.platform.startswith("win"):
+        return "win32"
+    return "darwin" if sys.platform == "darwin" else "linux"
+
 
 _PROBE = (
     "import json;from vaf.core.platform import Platform;"
@@ -70,11 +89,11 @@ _PROBE = (
 )
 
 
-def _resolve_axes(**env_overrides):
+def _resolve_axes(env_overrides):
     """Ask a FRESH interpreter where each axis lands under a given environment.
 
-    A subprocess rather than monkeypatching, because the question is what the code does
-    with an environment - reaching in to patch would measure the patch.
+    A subprocess rather than monkeypatching, because the question is what the code does with
+    an environment - reaching in to patch would measure the patch.
     """
     import json
 
@@ -85,6 +104,26 @@ def _resolve_axes(**env_overrides):
         cwd=REPO, env=env, capture_output=True, text=True, check=True,
     ).stdout
     return {k: Path(v) for k, v in json.loads(out).items()}
+
+
+def _governing_mechanisms(tmp_path):
+    """Which mechanism does each axis actually follow? Vary one at a time and watch.
+
+    Mechanical on purpose: the DETECTION knows nothing about platforms, only the frozen
+    expectation does. A detector that branched on the platform could agree with a wrong
+    branch in the code it is checking.
+    """
+    base_env = {m: str(tmp_path / f"base-{m.lower()}") for m in MECHANISMS}
+    base = _resolve_axes(base_env)
+    out = {axis: set() for axis in PLATFORM_DIR_AXES}
+    for m in MECHANISMS:
+        moved_env = dict(base_env)
+        moved_env[m] = str(tmp_path / f"moved-{m.lower()}")
+        moved = _resolve_axes(moved_env)
+        for axis in PLATFORM_DIR_AXES:
+            if moved[axis] != base[axis]:
+                out[axis].add(m)
+    return out
 
 
 def test_the_env_axes_actually_point_into_the_session_temp_root():
@@ -105,32 +144,67 @@ def test_the_env_axes_actually_point_into_the_session_temp_root():
         )
 
 
-def test_every_platform_axis_moves_with_the_mechanism_that_claims_it():
-    """MEASURED, not declared: point each mechanism somewhere else and see what follows.
+def test_every_platform_axis_moves_with_the_mechanism_that_claims_it(tmp_path):
+    """MEASURED, not declared: move each mechanism in turn and see what follows.
 
-    An axis that moves with neither HOME nor its XDG variable is the dangerous shape - no
-    discipline at the shell can redirect it, so every run writes into the developer's real
-    store no matter how carefully the suite is invoked. `data_dir` was exactly that for
-    anyone who ran with a throwaway HOME and nothing else.
+    An axis that follows NONE of the mechanisms the suite redirects is the dangerous shape -
+    no discipline at the shell can close it, so every run writes into the developer's real
+    store however carefully the suite is invoked. That was `data_dir` on Windows, which
+    follows %LOCALAPPDATA%: the first version of this table was measured on Linux, declared
+    universal, and CI on two other platforms is what said otherwise.
     """
-    a = _resolve_axes(HOME="/tmp/vaf-probe-home-a", XDG_CONFIG_HOME="/tmp/vaf-probe-cfg-a",
-                      XDG_DATA_HOME="/tmp/vaf-probe-data-a", XDG_CACHE_HOME="/tmp/vaf-probe-cache-a")
-    b = _resolve_axes(HOME="/tmp/vaf-probe-home-b", XDG_CONFIG_HOME="/tmp/vaf-probe-cfg-a",
-                      XDG_DATA_HOME="/tmp/vaf-probe-data-a", XDG_CACHE_HOME="/tmp/vaf-probe-cache-a")
-    c = _resolve_axes(HOME="/tmp/vaf-probe-home-a", XDG_CONFIG_HOME="/tmp/vaf-probe-cfg-b",
-                      XDG_DATA_HOME="/tmp/vaf-probe-data-b", XDG_CACHE_HOME="/tmp/vaf-probe-cache-b")
+    platform_key = _platform_key()
+    governing = _governing_mechanisms(tmp_path)
 
     wrong = []
-    for name, mechanism in PLATFORM_DIR_AXES.items():
-        follows_home = a[name] != b[name]
-        follows_xdg = a[name] != c[name]
-        actual = ("HOME" if follows_home else None) or (mechanism if follows_xdg else None)
-        if actual != mechanism:
-            wrong.append(f"{name}: declared {mechanism}, follows {actual or 'NOTHING'}")
+    for axis, per_platform in PLATFORM_DIR_AXES.items():
+        expected = per_platform[platform_key]
+        actual = governing[axis]
+        if actual != {expected}:
+            wrong.append(f"{axis}: declared {expected}, follows "
+                         f"{sorted(actual) if actual else 'NOTHING'}")
     assert not wrong, (
-        f"{wrong}. An axis following NOTHING cannot be isolated at all and will write into "
-        f"the developer's store on every run; an axis following a different mechanism means "
-        f"conftest redirects a variable that no longer governs it."
+        f"on {platform_key}: {wrong}. An axis following NOTHING cannot be isolated at all; "
+        f"one following something else means conftest redirects a variable that does not "
+        f"govern it here. Both leave the suite writing into the developer's real store."
+    )
+
+
+def test_every_governing_mechanism_is_one_the_suite_redirects(tmp_path):
+    """The bridge between the table and the isolation, which nothing checked before.
+
+    The table can be right and the isolation still incomplete - that is precisely what
+    Windows was. Whatever actually governs an axis here has to appear in
+    `conftest.ISOLATED_ENV_AXES`, or a correct table sits next to a suite that pollutes.
+    """
+    redirected = set(ISOLATED_ENV_AXES) | {"HOME"}      # HOME is the runner's job, not conftest's
+    missing = sorted({m for ms in _governing_mechanisms(tmp_path).values() for m in ms} - redirected)
+    assert not missing, (
+        f"mechanism(s) govern a VAF directory on {_platform_key()} and are not redirected: "
+        f"{missing}. Add them to conftest.ISOLATED_ENV_AXES."
+    )
+
+
+def test_the_isolation_covers_EVERY_platform_in_the_table_not_just_this_one():
+    """The same bridge, asked of all three columns - and the half that had to exist.
+
+    The test above only ever sees the platform it runs on, so a Windows-only gap is
+    invisible to a developer on Linux and only CI can find it. That is exactly how the gap
+    got in: measured on one platform, frozen as universal, and no local run could have said
+    otherwise. Checking the whole table costs nothing and moves the discovery from a red CI
+    job to the machine where the change is written.
+    """
+    redirected = set(ISOLATED_ENV_AXES) | {"HOME"}
+    missing = sorted({
+        f"{axis} on {plat} -> {mech}"
+        for axis, per_platform in PLATFORM_DIR_AXES.items()
+        for plat, mech in per_platform.items()
+        if mech not in redirected
+    })
+    assert not missing, (
+        f"the table names mechanism(s) the suite does not redirect: {missing}. On that "
+        f"platform every run writes into the developer's real store, and no test on any "
+        f"other platform would notice."
     )
 
 

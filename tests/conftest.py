@@ -28,9 +28,23 @@ than a claim.
 """
 import pytest
 
-# The environment axes that decide where VAF writes. VAF_LOG_DIR is VAF's own; the three
-# XDG names are the ones a throwaway HOME does NOT cover.
-ISOLATED_ENV_AXES = ("VAF_LOG_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+# The environment axes that decide where VAF writes. VAF_LOG_DIR is VAF's own; the rest are
+# the ones a throwaway HOME does NOT cover, and WHICH of them applies depends on the
+# platform: Linux reads the XDG names, Windows reads %LOCALAPPDATA%/%APPDATA%, and macOS
+# puts all three under Library inside HOME (so it needs none of these). All of them are
+# redirected everywhere - a name the platform ignores costs nothing, and leaving it out
+# costs a whole operating system.
+#
+# The Windows half was missing until CI said so. The first version of this isolation was
+# measured on Linux and frozen as if the mapping were universal, so `data_dir` on Windows
+# followed neither redirected mechanism and the suite kept writing into the real
+# %LOCALAPPDATA%. Same shape as the count that started this: measured on one platform, read
+# as an answer about all of them.
+ISOLATED_ENV_AXES = (
+    "VAF_LOG_DIR",
+    "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",   # Linux
+    "LOCALAPPDATA", "APPDATA",                              # Windows
+)
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -108,6 +108,28 @@ whether a legitimate caller got through. Every gate therefore needs at least one
 on the refusal side, and the counter-proof to run against it is always "make the doubtful
 case permissive" - never the other direction, which fails on its own.
 
+**A counter-proof built on the same mechanism as the defect.** It reproduces the failure
+instead of catching it, and it does so while looking like independent confirmation. Three
+times in one round: a guard whose collector parsed `name = TOOL_NAME` with
+`ast.literal_eval`, silently dropped the class, and reported 31 tools where there were 32 -
+then the cross-check written to catch that attributed each class to the file it was FOUND in
+rather than the one that defines it, so it cleared the very tool it existed for, because the
+re-exporting module happened to contain the check. And an isolation counter-proof that
+cleared the child's environment from the same tuple the mutation shrinks: breaking the
+isolation also stopped the environment being cleared, so the child inherited the real
+setting, wrote into the real store, and left the scratch directory spotless. A green
+counter-proof while the defect is actively happening is perfect camouflage. So the probe has
+to come from an INDEPENDENT source: `__module__` rather than "where I found it", an explicit
+list rather than the constant under test, the imported object rather than the parsed text.
+Ask of every counter-proof: if the defect were present right now, which line of THIS test
+would notice - and does that line share a mechanism with the thing that broke?
+
+**Nothing measures the thing that finds the things.** Every assertion in a frozen guard is
+about its members; the collector that decides who the members ARE is usually unguarded, and
+it fails in the reassuring direction - a tool it cannot parse is simply absent, and absence
+reads as a clean bill of health. A set is only as honest as its collector, so a guard that
+enumerates needs a second, independently derived enumeration asserted against it.
+
 **A measured number that is read as an answer to a question it did not count.** The count is
 correct, the conclusion drawn from it is not, and the number's authority is what carries the
 conclusion past review. "24 of 3178 sessions carry a username" was counted right, twice, and

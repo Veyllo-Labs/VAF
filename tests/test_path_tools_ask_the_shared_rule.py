@@ -97,6 +97,17 @@ UNGUARDED = {
     "update_automation":
         "Same path, same runner, same absence of any check - it edits the value that "
         "create_automation stored, so both feed one unguarded write site.",
+    "cloud_storage":
+        "SURFACED 2026-07-31 by fixing this file's own detector, not by new code. It was "
+        "invisible twice over: the parser skipped the class because `name`/`parameters` come "
+        "from module constants rather than literals, and once seen, the delegation check "
+        "cleared it because it imports and calls `LibrarianTool` from a module that happens "
+        "to contain `is_safe_path` - a coincidence, not a check. Measured: cloud_storage.py "
+        "contains `is_safe_path` zero times, and `_action_save` does "
+        "`Path(file_path).expanduser().resolve()` with no containment at all, copying the "
+        "result under Platform.data_dir() - one of the four roots GET /api/file serves. It "
+        "leaves this set in cloud step A, which gives the tool its caller and the boundary "
+        "by declaration.",
 }
 
 # Tools that do NOT ask `is_safe_path` and are nevertheless contained, by a different mechanism
@@ -121,6 +132,26 @@ CONTAINED_ELSEWHERE = {
         "both.",
 }
 
+def _module_constants(tree):
+    """Module-level literal assignments, so `name = TOOL_NAME` can be resolved.
+
+    This lookup is not a nicety. Without it `ast.literal_eval` raises on the Name node, the
+    class is skipped in silence, and the tool is simply absent from the guard - which is
+    what happened: `cloud_storage` declares `file_path`, its module contains no
+    `is_safe_path`, and the set below reported 31 tools while there were 32. A detector
+    that drops what it cannot parse reads exactly like a detector that found nothing wrong.
+    """
+    consts = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and node.targets
+                and isinstance(node.targets[0], ast.Name)):
+            try:
+                consts[node.targets[0].id] = ast.literal_eval(node.value)
+            except Exception:
+                pass
+    return consts
+
+
 def _tool_classes():
     """(tool_name, module_stem, [path-shaped params]) for every tool in vaf/tools."""
     out = []
@@ -131,27 +162,67 @@ def _tool_classes():
             tree = ast.parse(f.read_bytes().decode())
         except SyntaxError:                       # pragma: no cover - not our concern here
             continue
+        consts = _module_constants(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             name = params = None
             for body in node.body:
-                if (isinstance(body, ast.Assign) and body.targets
+                if not (isinstance(body, ast.Assign) and body.targets
                         and isinstance(body.targets[0], ast.Name)):
-                    try:
-                        value = ast.literal_eval(body.value)
-                    except Exception:
+                    continue
+                try:
+                    value = ast.literal_eval(body.value)
+                except Exception:
+                    # A module-level constant, the shape that used to vanish here.
+                    if isinstance(body.value, ast.Name) and body.value.id in consts:
+                        value = consts[body.value.id]
+                    else:
                         continue
-                    if body.targets[0].id == "name":
-                        name = value
-                    elif body.targets[0].id == "parameters":
-                        params = value
+                if body.targets[0].id == "name":
+                    name = value
+                elif body.targets[0].id == "parameters":
+                    params = value
             if not name or not isinstance(params, dict):
                 continue
             props = params.get("properties") if params.get("type") == "object" else params
             hits = [k for k in (props or {}) if _PATH_PARAM.match(k)]
             if hits:
                 out.append((name, f.stem, hits))
+    return out
+
+
+def _tool_classes_at_runtime():
+    """The same question asked of the imported classes, as a check on the parser.
+
+    Attribution is by `__module__`, not by which file the name was found in: half a dozen
+    modules re-export each other's tools, and counting a class where it was imported made
+    `cloud_storage` look like it lived in `librarian.py` - which DOES contain `is_safe_path`,
+    so the first version of this cross-check cleared the exact tool it was written to catch.
+    """
+    import importlib
+
+    from vaf.tools.base import BaseTool
+
+    out = {}
+    for f in sorted(TOOLS_DIR.glob("*.py")):
+        if f.name.startswith("_"):
+            continue
+        try:
+            module = importlib.import_module(f"vaf.tools.{f.stem}")
+        except Exception:
+            continue
+        for obj in vars(module).values():
+            if not (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool):
+                continue
+            if obj.__module__ != f"vaf.tools.{f.stem}":
+                continue
+            name, params = getattr(obj, "name", None), getattr(obj, "parameters", None)
+            if not name or not isinstance(params, dict):
+                continue
+            props = params.get("properties") if params.get("type") == "object" else params
+            if any(_PATH_PARAM.match(k) for k in (props or {})):
+                out[name] = f.stem
     return out
 
 
@@ -175,9 +246,30 @@ def _asks_the_shared_rule(stem: str) -> bool:
         target = pathlib.Path(*node.module.split(".")).with_suffix(".py")
         if not target.exists() or "is_safe_path" not in target.read_bytes().decode():
             continue
-        # Only counts if a name imported from it is actually CALLED here.
-        if any(re.search(rf"\b{re.escape(a.name)}\s*\(", src) for a in node.names):
-            return True
+        # The imported name must be a FUNCTION in that module whose body reaches
+        # `is_safe_path`, and it must be called here. "Any name from a module that happens
+        # to contain the string" cleared `cloud_storage`, which imports `LibrarianTool` for
+        # the document viewer and checks no path of its own - an acquittal on a coincidence,
+        # in the direction where a false clean bill costs the most.
+        for alias in node.names:
+            if not re.search(rf"\b{re.escape(alias.name)}\s*\(", src):
+                continue
+            if _is_path_resolving_function(target, alias.name):
+                return True
+    return False
+
+
+def _is_path_resolving_function(module_path, symbol):
+    """Is `symbol` a module-level function in `module_path` that reaches `is_safe_path`?"""
+    try:
+        tree = ast.parse(module_path.read_bytes().decode())
+    except SyntaxError:                           # pragma: no cover
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == symbol:
+            return "is_safe_path" in ast.dump(node) or any(
+                isinstance(n, ast.Name) and n.id == "is_safe_path" for n in ast.walk(node)
+            ) or "is_safe_path" in ast.unparse(node)
     return False
 
 
@@ -189,6 +281,26 @@ def _local_path_tools():
 
 
 # ── the guard ────────────────────────────────────────────────────────────────
+
+def test_the_detector_sees_every_tool_the_runtime_does():
+    """THE GUARD ON THE GUARD, and the reason this file was quietly incomplete.
+
+    Everything else here measures tools. Nothing measured the thing that FINDS the tools, so
+    when the parser silently dropped a class whose `name`/`parameters` came from module
+    constants, the set shrank by one and every assertion stayed green. A frozen set is only
+    as honest as its collector, and a collector that skips what it cannot parse fails in the
+    reassuring direction - the same asymmetry as a gate with no assertion on the refusing
+    side.
+    """
+    static = {name for name, _, _ in _tool_classes()}
+    runtime = _tool_classes_at_runtime()
+    invisible = sorted(set(runtime) - static)
+    assert not invisible, (
+        f"the parser cannot see tool(s) that declare a path-shaped parameter: "
+        f"{[(n, runtime[n]) for n in invisible]}. They are absent from every assertion in "
+        f"this file, so their absence reads as a clean bill of health."
+    )
+
 
 def test_every_local_path_tool_asks_or_is_named_here():
     """A new tool that takes a path and never asks is a red test on the day it is written,

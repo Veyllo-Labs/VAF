@@ -45,6 +45,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **If you did not name your account "admin", tools sometimes looked up a stranger.** When a
+  tool run carries no username - after switching into a chat that has none stored, from the
+  command line, from a workflow started without one - the assistant fills in the machine
+  owner. It filled in the literal name "admin" instead of the name you actually registered
+  with, and everything stored under a name (your cloud accounts and their sync folder, and
+  credentials in the lanes that have no scope) compares against the registered one. So the
+  same person could be recognised at the web interface and be a stranger with an empty
+  account list one lane over. Both places that made this substitution now resolve the
+  configured owner. Installations whose owner is called "admin" were never affected, which is
+  why it went unnoticed - the traces of it are still visible in an old credential key shape
+  the store has to keep reading.
 - **The macOS launcher works on any machine.** `launch_vaf.scpt` opened a hardcoded home
   directory belonging to one account, so it failed for everybody else. It now uses `$HOME`.
 - **Examples in the assistant's own instructions no longer name one particular person.** The

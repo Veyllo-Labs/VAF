@@ -307,3 +307,104 @@ def test_a_tool_that_declares_nothing_receives_nothing():
     quiet = _Quiet()
     _dispatch(quiet, {})
     assert not (VALID_KEYS & set(quiet.seen)), quiet.seen
+
+
+# ── WHICH keys is settled above. This is WHAT the fallback resolves to ───────
+#
+# Everything above measures which keys a tool receives. The nameless case decides what the
+# `username` key CONTAINS, and it was wrong in a way no count could see: the fallback was the
+# literal "admin", while every store keyed on a name asks `get_local_admin_username()` - which
+# registration sets to the FIRST USER'S CHOSEN NAME (vaf/api/auth_routes.py). On any
+# installation whose owner is not literally called "admin", the fallback named nobody.
+#
+# Not a corner: `Agent` resets `_current_username` to None on every switch into a session that
+# has no stored username, and that is 3154 of 3178 stored sessions. The scope covers the
+# scope-aware stores; the NAME-ONLY ones - the cloud account list and its sync directory - saw
+# a stranger with an empty account list.
+
+def _assign_as_nameless_caller(local_admin_name):
+    """Run the real assigner on an installation whose owner is called `local_admin_name`."""
+    import vaf.core.config as config_mod
+    import vaf.core.credential_store as cred_mod
+    from vaf.core.tool_dispatch import assign_declared_identity
+
+    class _NameOnly(_SpyTool):
+        name = "third_party_name_only"
+        identity_kwargs = ("username",)
+
+    with patch.object(config_mod, "get_local_admin_username", lambda: local_admin_name), \
+         patch.object(cred_mod, "get_local_admin_username", lambda: local_admin_name):
+        args = assign_declared_identity(_NameOnly(), {}, user_scope_id=None,
+                                        username=None, user_role=None)
+        # The REAL consumer decides whether that name means "the owner" - asking it is the
+        # whole assertion. Re-deriving the rule here would reproduce the call site instead of
+        # exercising it, and would stay green through exactly the mutation this test exists
+        # for.
+        owner = cred_mod._cred_key_username(args["username"]) is None
+    return args["username"], owner
+
+
+def test_the_nameless_caller_is_the_configured_owner_not_a_literal():
+    """THE regression, asserted through `_cred_key_username` rather than against a constant.
+
+    Counter-proof that was actually run: putting the literal "admin" back makes this red and
+    leaves every other test in this file green - the fallback's VALUE is invisible to a guard
+    that only counts keys.
+    """
+    assigned, recognised_as_owner = _assign_as_nameless_caller("sam")
+    assert recognised_as_owner, (
+        f"a caller with no username was assigned {assigned!r}, which the credential store does "
+        f"not recognise as the machine owner. Their credentials, cloud accounts and sync "
+        f"directory resolve to a user that does not exist."
+    )
+
+
+def test_the_default_installation_is_unaffected():
+    """The control. Without it the test above also passes for a fallback that returns any
+    constant at all, and it is the case that hid the defect: when the owner IS called "admin",
+    literal and configured name agree and nothing looks wrong."""
+    assigned, recognised_as_owner = _assign_as_nameless_caller("admin")
+    assert assigned == "admin" and recognised_as_owner
+
+
+def test_the_workflow_engine_does_not_pre_empt_the_shared_fallback():
+    """The second site of the same decision, and the reason a fix in the assigner alone was
+    not enough.
+
+    `WorkflowEngine.__init__` substituted the literal itself, so `self.username` reached
+    `assign_declared_identity` already truthy - the one function that knows this rule was
+    never asked. Fixing only the assigner left the workflow lane on the old answer while
+    every test here went green, which is exactly the invisible half of a loosening.
+
+    Counter-proof run: putting `or "admin"` back in the engine leaves the WHOLE suite green
+    (3060 tests) without this one. That is what "unproven" looks like from the inside.
+    """
+    import vaf.core.config as config_mod
+    import vaf.core.credential_store as cred_mod
+    from vaf.workflows.engine import WorkflowEngine
+
+    with patch.object(config_mod, "get_local_admin_username", lambda: "sam"), \
+         patch.object(cred_mod, "get_local_admin_username", lambda: "sam"):
+        engine = WorkflowEngine(tools={}, username=None)
+        recognised_as_owner = cred_mod._cred_key_username(engine.username) is None
+
+    assert recognised_as_owner, (
+        f"a workflow started without a username runs as {engine.username!r}, which the stores "
+        f"do not recognise as the machine owner"
+    )
+
+
+def test_a_real_username_is_never_replaced_by_the_owner():
+    """The fallback must stay a fallback. Widening it to "resolve the owner" would hand every
+    named tenant the owner's identity, which is the opposite failure and a far worse one."""
+    import vaf.core.config as config_mod
+    from vaf.core.tool_dispatch import assign_declared_identity
+
+    class _NameOnly(_SpyTool):
+        name = "third_party_name_only"
+        identity_kwargs = ("username",)
+
+    with patch.object(config_mod, "get_local_admin_username", lambda: "sam"):
+        args = assign_declared_identity(_NameOnly(), {}, user_scope_id=None,
+                                        username="tenant", user_role=None)
+    assert args["username"] == "tenant"

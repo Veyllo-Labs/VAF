@@ -589,7 +589,7 @@ The supported arguments:
 | Argument | What it is for |
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
-| `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant**: it falls back to `"admin"`, the machine owner, because the tokenless desktop and the CLI have no username and the stores keyed on it treat that as the owner. Scope and role without a username therefore run every tenant against the owner's username-keyed data. |
+| `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant**: with none, the caller becomes the machine owner - `get_local_admin_username()`, i.e. whatever name registration wrote into `local_admin_username`, not the literal `"admin"` - because the tokenless desktop and the CLI have no username and the stores keyed on a name treat the owner's as theirs. Scope and role without a username therefore run every tenant against the owner's username-keyed data. |
 | `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`; leave them out if you have no messaging channels. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |

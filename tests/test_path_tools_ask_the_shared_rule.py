@@ -10,9 +10,13 @@ mechanically countable:
   1. PATH     does a tool that takes a filesystem path ask `is_safe_path`?   <- this file
   2. IDENTITY on whose behalf is it acting?  No guard exists. The source itself is empty:
               of 3178 stored sessions, 3172 carry a `user_scope_id` and 24 carry a
-              `username`, so the dispatcher's `username or "admin"` fallback resolves to the
-              machine owner for almost every session. A guard here would report nearly
-              everything as red today, and that would be the honest answer.
+              `username`, so the dispatcher's nameless-caller fallback decides the name for
+              almost every session. That fallback used to be the literal "admin" and now
+              resolves the CONFIGURED owner - the two differ on every installation whose
+              owner did not register under that name, and the sentence here asserted the
+              benign reading of it (see test_identity_kwargs_declaration.py). A guard on this
+              axis would report nearly everything as red today, and that would be the honest
+              answer.
   3. OWNERSHIP whose session, whose resource?  No guard exists. Three WebSocket commands take
               a client-supplied `sessionId` without an ownership check, and so does the
               endpoint behind the workflow report viewer.

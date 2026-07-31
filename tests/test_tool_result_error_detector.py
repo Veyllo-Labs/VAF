@@ -55,9 +55,21 @@ def test_python_exec_banner_then_error_marker():
 # --- Tier: filesystem path-safety gate + wrappers ------------------------
 
 def test_filesystem_path_safety_family():
-    _fails("Access denied: Path is outside allowed directories")              # filesystem.py
-    _fails("Invalid path: contains traversal")                                # filesystem.py
-    _fails("Source Error: Access denied: outside workspace")                  # move/copy wrapper
+    # SHAPES, not quotations. All three strings below are invented; none occurs anywhere in
+    # vaf/ (measured 2026-07-30). Until then each carried a "# filesystem.py" comment, which
+    # made this a test that proves something real - the detector classifies these as failures -
+    # while lying about where they came from. A reader took away a wording that does not exist.
+    # That is its own defect class, distinct from a test that proves nothing: this one proves
+    # the right thing and misleads about provenance.
+    _fails("Access denied: Path is outside allowed directories")              # shape only
+    _fails("Invalid path: contains traversal")                                # shape only
+    _fails("Source Error: Access denied: outside workspace")                  # shape only
+
+    # The REAL wordings, so the family also covers what the code actually returns. Without
+    # these, a rename of every refusal message in filesystem.py would leave this file green.
+    _fails("Access denied: VAF program directory is protected")               # filesystem.py:292
+    _fails("Access denied: VAF's own data directory")                         # filesystem.py:344
+    _fails("Access denied: outside your own data")                            # filesystem.py:347
     _fails("Dest Error: Invalid path")                                        # move/copy wrapper
     _fails("Edit failed: old_string not found in file")                       # filesystem.py
 

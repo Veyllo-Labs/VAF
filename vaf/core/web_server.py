@@ -2075,7 +2075,13 @@ async def delete_my_workspace(req: WorkspaceFolderDeleteRequest, request: Reques
 
 @app.get("/api/file")
 async def get_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
-    """Serve a local file by path (allowed roots: documents, downloads, data dir). Used by Web UI."""
+    """Serve a local file by path (allowed roots: documents, downloads, data dir, VAF output dir).
+
+    FOUR roots, not three - the output dir is easy to miss and this docstring said three until
+    2026-07-30. The list matters beyond this endpoint: `document_editor` carries no access check
+    of its own precisely because the decision lives here, so anything added to it becomes
+    reachable by a tool that never looks at a path. Pinned in tests/test_api_file_allowed_roots.py.
+    Used by Web UI."""
     from vaf.core.platform import Platform
     import mimetypes
     try:
@@ -2650,7 +2656,7 @@ async def save_file_as_pptx(request: FileSaveOfficeRequest):
 
 @app.post("/api/file/save")
 async def save_file(request: FileSaveRequest):
-    """Save content to a local file (allowed roots: documents, downloads, data dir)."""
+    """Save content to a local file (allowed roots: documents, downloads, data dir, VAF output dir)."""
     from vaf.core.platform import Platform
     try:
         target = Platform.normalize_path(request.path)

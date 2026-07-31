@@ -339,6 +339,6 @@ Log files are one per day and can be deleted freely (GC-safe).
 
 2. **Terminal Scroll**: Auto-scroll only works when new lines are added. Manual scrolling up is preserved until new content arrives.
 
-3. **Document Loading**: DocumentEditor requires the `/api/file` endpoint to be accessible. Files must be in allowed directories (Documents, Downloads, or VAF data dir).
+3. **Document Loading**: DocumentEditor requires the `/api/file` endpoint to be accessible. Files must be under one of four allowed roots (Documents, Downloads, the VAF data dir, or the VAF output dir); anything else is refused with 403. Files under `Documents/VAF_Projects/<uid8>/` are additionally served only to that user or an admin.
 
 4. **workflow_done delivery**: `_push_session_update` is fire-and-forget over WebSocket - no queue, no replay, no sequence numbers. If the socket is down, `workflow_done` and every other panel event are delivered to nobody, and the two in-band fallbacks (the tool_update force-close, and the old orphan timeout) rode the same dead wire. The panel now reconciles by ASKING the backend (`get_workflow_run_state`) on reconnect, focus and visibility change; see the reconciliation note under VAFWorkflowRuntime above. Fields also have to be DECLARED on the `WorkflowUpdate` model in `web_server.py` to survive the subprocess route - an undeclared field is dropped silently, which is how `success` went missing and a finished run showed FAILED.

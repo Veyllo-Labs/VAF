@@ -23,8 +23,12 @@ _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # the CALLER's OWN data - never another user's VAF_Projects/<uid8>/. This is a contextvar so it is
 # scoped to that run only: when unset (the default) it has ZERO effect. Set/reset via
 # set_librarian_scope/reset_librarian_scope; the jail info comes from compute_user_jail (single
-# source - do not re-derive it per tool). Installers today: LibrarianTool.run, WriteFileTool.run,
-# SendMailTool attachment resolution.
+# source - do not re-derive it per tool). Installed today by ELEVEN TOOLS in five files - named
+# rather than counted, because a bare number is what went wrong three times in the round that
+# grew this list: list_files, folder_size, read_file, write_file, edit_file, tree, find_files
+# (all here), plus document_viewer, learn_document, librarian_agent and send_mail attachment
+# resolution. `tests/test_path_tools_ask_the_shared_rule.py` is the guard that keeps a new
+# path-taking tool from quietly joining without asking.
 import contextlib as _contextlib
 import contextvars as _contextvars
 _librarian_scope_ctx = _contextvars.ContextVar("vaf_librarian_scope", default=None)

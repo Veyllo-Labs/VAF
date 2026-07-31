@@ -204,7 +204,7 @@ if name in ("mail_inbox", "send_mail", ...):
 ```
 
 **Rules:**
-- Scope-injected tools (receiving `user_scope_id` UUID, never `username`): `memory_save` / `memory_search` (RAG isolation), `browser_agent` (per-user browser session store), `librarian_agent` (per-user filesystem jail), and `use_skill` (per-user skill visibility). The agent attaches `_current_user_scope_id` to each before `tool.run()`.
+- Scope-injected tools receive `user_scope_id` (a UUID). This is **declarative, not a list**: a tool states its need via `BaseTool.identity_kwargs` and the dispatcher assigns accordingly, so the set is whatever declares it (89 tools as of 2026-07-30) rather than a hardcoded roster. The examples that used to be enumerated here - `memory_save` / `memory_search`, `browser_agent`, `librarian_agent`, `use_skill` - are still members, but the enumeration read as exhaustive and stopped being so when the assignment became declarative. Values are **assigned, never defaulted**: a model-supplied `user_scope_id` is overwritten before the tool runs.
 - Communication tools (email, WhatsApp, contacts) receive `username` (string) for config/credential lookup.
 - **Target state:** Communication tools should ALSO receive `user_scope_id` and use it as the primary key, with `username` only for filesystem paths.
 

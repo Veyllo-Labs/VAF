@@ -42,6 +42,8 @@ class CodeSearchTool(BaseTool):
     
     name = "codesearch"
     permission_level = "read"
+    identity_kwargs = ("user_scope_id", "user_role")
+    file_access = "read"
     side_effect_class = "none"
     coder_only = True  # Only available to Coder Sub-Agent
     description = """Search through the codebase for code patterns, function definitions, and text.
@@ -100,9 +102,14 @@ Examples:
         if not query:
             return "Error: No search query provided"
 
-        # Resolve + JAIL the search path to the project workspace: default to base_dir (NOT the
-        # process cwd = VAF's own repo); a relative path is taken under base_dir; any path that
-        # escapes base_dir is clamped back to it, so codesearch can never scan outside the project.
+        # TWO containments, and only one of them was ever here. The base_dir clamping below is
+        # the coder's: a relative path is taken under base_dir and anything escaping it is
+        # clamped back. It says "codesearch can never scan outside the project" and that was
+        # measured to be true ONLY for the coder's instance - the main agent registers
+        # CodeSearchTool() with no base_dir at all, so `root` is None, nothing clamps, and an
+        # absolute path was read and its contents returned. The per-user boundary now comes from
+        # the `file_access` declaration above, which holds on every lane and does not depend on
+        # who constructed the tool.
         root = Path(self.base_dir).resolve() if getattr(self, "base_dir", None) else None
         raw_path = kwargs.get("path") or self.base_dir or "."
         search_path = Path(raw_path)
@@ -114,6 +121,13 @@ Examples:
                 search_path.relative_to(root)
             except ValueError:
                 search_path = root
+        # Ask the shared rule on the RESOLVED path, before existence is probed: answering
+        # "not found" for a blocked path still tells the caller what lives there.
+        from vaf.tools.filesystem import is_safe_path
+        _safe, _resolved = is_safe_path(str(search_path))
+        if not _safe:
+            return f"[ERROR] {_resolved}"
+        search_path = Path(_resolved)
         if not search_path.exists():
             return f"Error: Path not found: {search_path}"
         

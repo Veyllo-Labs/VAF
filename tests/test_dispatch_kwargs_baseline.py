@@ -64,7 +64,9 @@ KWARGS_BASELINE = {
     "cancel_timer":              ("chat", ["_agent"]),
     "checkpoint_context":        ("chat", ["_agent"]),
     "cloud_storage":             ("chat", []),
-    "codesearch":                ("chat", []),
+    # codesearch/linter gained identity 2026-07-31 as consumers of file_access. The
+    # count of hand-built jails did not move: N was 2, the primitive already existed.
+    "codesearch":                ("chat", ["user_role", "user_scope_id"]),
     "coding_agent":              ("chat", []),
     "create_agent_tool":         ("chat", ["_agent"]),
     "create_agent_workflow":     ("chat", ["_agent"]),
@@ -116,7 +118,7 @@ KWARGS_BASELINE = {
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
     "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),
     "librarian_agent":           ("chat", ["user_role", "user_scope_id"]),
-    "linter":                    ("chat", []),
+    "linter":                    ("chat", ["user_role", "user_scope_id"]),
     "list_automation_notes":     ("chat", ["user_scope_id"]),
     "list_automation_todos":     ("chat", ["user_scope_id"]),
     "list_automations":          ("chat", ["user_role", "user_scope_id"]),

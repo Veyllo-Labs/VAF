@@ -45,6 +45,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Code search and the linter stayed inside your own files.** Both took a path and worked on
+  it without asking whether it was yours. Code search looked contained - it clamps a path back
+  into the project it was given - but that only applies to the copy the coding assistant uses;
+  the one in normal chat is created without a project, so the clamp did nothing and an absolute
+  path was searched and its matching lines returned. Both now confine to the calling user's
+  own files, on every path they can be called from.
 - **On a shared machine, one person could reach into another's chat session.** Three of the
   commands the browser sends act on a session named in the message itself, and they never
   checked that the session belonged to whoever sent it. The consequences differed: the

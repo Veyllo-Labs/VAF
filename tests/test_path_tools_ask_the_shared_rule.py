@@ -83,12 +83,6 @@ NOT_A_LOCAL_PATH = {
 # Tools that take a local path and never reach a containment decision. Every entry is a known
 # GAP with a reason, not a permission. THIS SET MAY ONLY SHRINK.
 UNGUARDED = {
-    "codesearch":
-        "resolves a model-supplied path and walks it with rglob('*'). No jail, no declared "
-        "identity. Found by the census on 2026-07-30, ranked, not yet fixed.",
-    "linter":
-        "resolves a model-supplied path and runs an external linter over it via subprocess. "
-        "Found by the census on 2026-07-30, ranked, not yet fixed.",
     "create_automation":
         "MEASURED 2026-07-30, and worse than 'hands it on': the tool itself never opens the "
         "path, but the runner does - vaf/core/automation.py does expanduser() and then "

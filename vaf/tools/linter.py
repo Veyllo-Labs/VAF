@@ -22,6 +22,20 @@ from vaf.core.platform import Platform
 class LinterTool(BaseTool):
     name = "linter"
     permission_level = "read"
+    identity_kwargs = ("user_scope_id", "user_role")
+    # THE OTHER EDGE OF THE PRIMITIVE, and it is the reason this comment is longer than the
+    # declaration. `file_access` installs a CONTEXTVAR around run(); a subprocess does not
+    # inherit it. So the declaration confines what this tool does IN-PROCESS - the path it
+    # accepts, and the rglob in _lint_directory, which is why a directory scan stays inside the
+    # caller's roots - and confines nothing the linter process does afterwards. Measured, not
+    # assumed: the subprocess is started with cwd INSIDE the target, so ruff/eslint load their
+    # own configuration from there, and with env={**os.environ}, so it inherits everything.
+    # `npx --yes eslint` additionally fetches and executes a package from the network when it is
+    # not installed. None of that is a path question and none of it is reachable from here.
+    # Same class as the other edge, from the opposite side: at the librarian the IDENTITY does
+    # not arrive in kwargs, here the CONFINEMENT does not reach the child. Both are the borders
+    # of one primitive, not two separate quirks.
+    file_access = "read"
     side_effect_class = "none"
     description = (
         "Check code files for syntax errors and linting issues. "
@@ -148,6 +162,13 @@ class LinterTool(BaseTool):
             # Assume relative to current working directory
             target_path = Path(path).resolve()
 
+        # The shared rule on the RESOLVED path, asked before existence is probed so a refusal
+        # cannot double as an existence oracle.
+        from vaf.tools.filesystem import is_safe_path
+        _safe, _resolved = is_safe_path(str(target_path))
+        if not _safe:
+            return f"[ERROR] {_resolved}"
+        target_path = Path(_resolved)
         if not target_path.exists():
             return f"[ERROR] linter: path does not exist: {path}"
 

@@ -76,6 +76,19 @@ ask the AST, not the string - and never choose a pattern that matches only one o
 call shapes. Strip docstrings first: a comment explaining the old mechanism should not
 satisfy or break a guard about the new one.
 
+**A test that uses a precondition instead of establishing it.** It then measures whether
+that precondition happens to hold. When it fails, its error text accuses the code - most
+convincingly where the text is precise. A test drove a helper with a hardcoded `/tmp`; on
+Windows the helper bailed out before reaching the code under test, and the failure read
+"the fast path still runs invisibly", which is exactly the defect the file was written to
+catch. Six other jobs were green, so it looked like a platform-specific hole in the fix
+rather than a broken assumption in the test.
+
+All three failures that CI caught in one round were this shape: a config key taken from a
+real `~/.vaf`, a lock tool taken against whatever pip the runner image carried, a path taken
+from the OS. `tmp_path` and an explicit pin would have established all three. Ask of every
+fixture: did this test CREATE the state it depends on, or find it?
+
 **A probe that measures nothing and reads as an acquittal.** A leak test whose fake session
 started as `{}` found no leak, because the code replaces a falsy container and the probe
 then inspected the wrong object. "No leak found" and "nothing was measured" look identical

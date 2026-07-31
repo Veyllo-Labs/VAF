@@ -3,28 +3,56 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Shared test isolation, plus the one helper eight dispatch tests need.
 
-VAF_LOG_DIR is pointed at a per-session temp directory for the WHOLE suite:
-several code paths (security events, timeline, domain logs) write to the real
-log directory as a side effect, and tests exercising them must never pollute
-the developer's actual logs - the security dashboard counts those files as
-real audit data (live incident: suite runs left synthetic skill_blocked events
-in the production security log, making the "threats blocked today" counter lie).
-Tests that need their own log dir still monkeypatch VAF_LOG_DIR per-test.
+THE SUITE MUST NOT WRITE INTO THE DEVELOPER'S REAL STORES, and getting that right needs
+more than one variable. `Platform` resolves ten directories; seven of them hang off
+`Path.home()` and are therefore covered by running with a throwaway HOME. THREE ARE NOT:
+`config_dir`, `data_dir` and `cache_dir` read `XDG_CONFIG_HOME` / `XDG_DATA_HOME` /
+`XDG_CACHE_HOME`, which desktop sessions set INDEPENDENTLY of HOME. On a machine where
+they are set, `HOME=$(mktemp -d) pytest` isolates nothing on those three axes - the runs
+go straight into the real store, and both the house rule and the person applying it
+believed otherwise.
+
+That is not hypothetical. It produced a false SECURITY finding: 980 rows sat in a
+literal-named channel-message store and were reported as user traffic orphaned by a
+naming defect. They were suite output - 980 rows carrying two distinct message bodies,
+one of them 653 times. The count was correct and answered a question nobody had asked.
+Three further synthetic scope directories held ~3600 more rows. Same class as the earlier
+incident where suite runs left synthetic security events in the production log and made
+the dashboard's "threats blocked today" counter lie.
+
+So all four axes are redirected for the WHOLE session. Tests that need their own log dir
+still monkeypatch VAF_LOG_DIR per-test. The counter-proof that this actually holds -
+including for directories a future `Platform` axis might add - lives in
+`tests/test_suite_writes_nowhere_real.py`; it is the half that makes this docstring more
+than a claim.
 """
 import pytest
 
+# The environment axes that decide where VAF writes. VAF_LOG_DIR is VAF's own; the three
+# XDG names are the ones a throwaway HOME does NOT cover.
+ISOLATED_ENV_AXES = ("VAF_LOG_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+
 
 @pytest.fixture(autouse=True, scope="session")
-def _isolated_log_dir(tmp_path_factory):
+def _isolated_store_dirs(tmp_path_factory):
     import os
-    log_dir = tmp_path_factory.mktemp("vaf-test-logs")
-    old = os.environ.get("VAF_LOG_DIR")
-    os.environ["VAF_LOG_DIR"] = str(log_dir)
-    yield
-    if old is None:
-        os.environ.pop("VAF_LOG_DIR", None)
-    else:
-        os.environ["VAF_LOG_DIR"] = old
+    root = tmp_path_factory.mktemp("vaf-test-stores")
+    previous = {}
+    for var in ISOLATED_ENV_AXES:
+        previous[var] = os.environ.get(var)
+        target = root / var.lower()
+        target.mkdir(parents=True, exist_ok=True)
+        os.environ[var] = str(target)
+    # Exposed so the counter-proof can assert against the same root rather than
+    # recomputing it - a proof that derives its own expectation is not a proof.
+    os.environ["VAF_TEST_STORE_ROOT"] = str(root)
+    yield root
+    for var, old in previous.items():
+        if old is None:
+            os.environ.pop(var, None)
+        else:
+            os.environ[var] = old
+    os.environ.pop("VAF_TEST_STORE_ROOT", None)
 
 
 # ── duck-typed agents for the dispatch tests ─────────────────────────────────

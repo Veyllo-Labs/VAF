@@ -490,9 +490,12 @@ REMAINING_LITERAL_NAME_SOURCES = {
     "vaf/api/discord_bridge.py:127":
         "The bridges stamp a hardcoded 'admin' into task metadata, which headless_runner "
         "copies into session metadata and the agent into _current_username. It arrives TRUTHY, "
-        "so the rule returns it unchanged and never gets to ask the scope. This is what put "
-        "980 telegram rows under a literal-named directory against 116 under the owner's on "
-        "the installation where this was measured.",
+        "so the rule returns it unchanged and never gets to ask the scope. WHAT THAT COSTS IN "
+        "USER DATA IS UNMEASURED: a literal-named message store on the installation where this "
+        "was written held 980 rows, and counting them was mistaken for finding orphaned "
+        "traffic - 980 rows carried TWO distinct bodies, one of them 653 times, i.e. test "
+        "pollution. The real store held 116 rows, 114 of them distinct. So the code path is "
+        "real and its damage is not demonstrated; do not quote a row count for it.",
     "vaf/core/system_prompt.py:610":
         "get_user_workspace('admin') is hardcoded and runs on EVERY prompt build, reading "
         "identity.json and soul.md from the literal's workspace - and creating it. The persona "

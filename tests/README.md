@@ -108,6 +108,18 @@ whether a legitimate caller got through. Every gate therefore needs at least one
 on the refusal side, and the counter-proof to run against it is always "make the doubtful
 case permissive" - never the other direction, which fails on its own.
 
+**A label that asserts something no test holds.** "Legacy", "deprecated", "read-only",
+"historical" are all claims about the PRESENT: they say the thing is no longer produced. That
+half is what nobody measures. A frozen set in `test_credential_key_baseline.py` carried the
+`email:<provider>:admin:<id>` key shape as a legacy form, read but never written - and the
+dispatcher's nameless-caller fallback was still writing exactly it, on every installation
+whose owner had not registered under that name. The set was correct about the read path and
+silently wrong about the world, and the label is what stopped anyone looking: it had already
+answered the question. Same shape as the comment claiming a tool "can never scan outside the
+project" while it did. So when a frozen set carries an entry as historical, "does anything
+still produce this today?" is part of the assurance and belongs in an assertion - not in the
+prose above it, which is where a label goes to avoid being checked.
+
 ## When to delete a test
 
 Removing tests is a maintenance practice, not an admission of defeat, and the same rule

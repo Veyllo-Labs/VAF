@@ -28,6 +28,8 @@ Two of those would not be guessed: the mail namespace is literally `email:` even
 segment. A builder that "cleaned that up" would be a data-loss commit wearing a refactor's
 clothes.
 """
+from unittest.mock import patch
+
 import pytest
 
 SCOPE = "deadbeef-0000-0000-0000-000000000000"   # synthetic; never a real scope UUID
@@ -146,6 +148,40 @@ LEGACY_READ_ONLY = [
     "email:{provider}:admin:{id}",
     "email:{provider}:{id}",
 ]
+
+
+def test_the_legacy_admin_form_is_no_longer_PRODUCED():
+    """The half of "legacy" that nobody measured, and it was false.
+
+    The list above is labelled read-only, and the label is a claim about the present: this
+    shape is not written any more. It was. A tool run with no username had the LITERAL "admin"
+    substituted for it, and `_cred_key_username` compares against the CONFIGURED owner - so on
+    every installation whose owner registered under another name, that nameless caller was a
+    named stranger and wrote precisely `email:<provider>:admin:<id>`. The read path was
+    described correctly; the world was not, and the word "legacy" is what kept anyone from
+    looking, because it had already answered the question.
+
+    Asserted through the real assigner rather than by grepping for a literal: what matters is
+    the key that comes out the far end of the nameless path, not which spelling produced it.
+    """
+    import vaf.core.config as config_mod
+    import vaf.core.credential_store as cred_mod
+    from vaf.core.tool_dispatch import assign_declared_identity
+
+    class _NameOnly:
+        identity_kwargs = ("username",)
+
+    with patch.object(config_mod, "get_local_admin_username", lambda: "sam"), \
+         patch.object(cred_mod, "get_local_admin_username", lambda: "sam"):
+        args = assign_declared_identity(_NameOnly(), {}, user_scope_id=None,
+                                        username=None, user_role=None)
+        produced = cred_mod._credential_key(ACCT, "imap", cred_mod._cred_key_username(args["username"]))
+
+    assert produced == "email:imap:acct_one", (
+        f"a caller with no username produced {produced!r}. The forms in LEGACY_READ_ONLY are "
+        f"documented as no longer written; if one of them is being written again, that label "
+        f"is the lie and the probe below is load-bearing rather than historical."
+    )
 
 
 def test_the_legacy_read_forms_are_still_probed():

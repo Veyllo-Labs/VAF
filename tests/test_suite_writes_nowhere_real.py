@@ -56,23 +56,32 @@ CHILD_ENV_TO_CLEAR = (
 # no discipline at the shell can close it - and that is exactly what Windows was: measured
 # on Linux, declared universal, and the suite kept writing into the real %LOCALAPPDATA%.
 _HOME, _XDG_C, _XDG_D, _XDG_K = "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
-_LOCAL, _APP = "LOCALAPPDATA", "APPDATA"
+_LOCAL, _APP, _PROFILE = "LOCALAPPDATA", "APPDATA", "USERPROFILE"
+
+# THE HOME MECHANISM IS NOT CALLED HOME EVERYWHERE. `Path.home()` goes through
+# `os.path.expanduser`, and on Windows that reads USERPROFILE, then HOMEDRIVE+HOMEPATH -
+# HOME is not consulted at all: with only HOME set, `expanduser("~")` returns `~` unchanged.
+# Verified against `ntpath.expanduser` rather than assumed. So the house rule "run the full
+# suite in a throwaway HOME" does nothing whatsoever on Windows, for ANY of the ten axes -
+# and that is why seven of them reported "follows NOTHING" there while Linux and macOS were
+# green. The rule needs its Windows spelling, and this table is where that is written down.
+HOME_MECHANISM = {"linux": _HOME, "darwin": _HOME, "win32": _PROFILE}
 
 PLATFORM_DIR_AXES = {
-    "home_dir":           {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "documents_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "downloads_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "get_vaf_output_dir": {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "get_research_dir":   {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "vaf_dir":            {"linux": _HOME,  "darwin": _HOME, "win32": _HOME},
-    "get_context_log_dir": {"linux": _HOME, "darwin": _HOME, "win32": _HOME},
+    "home_dir":           {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "documents_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "downloads_dir":      {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "get_vaf_output_dir": {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "get_research_dir":   {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "vaf_dir":            {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
+    "get_context_log_dir": {"linux": _HOME, "darwin": _HOME, "win32": _PROFILE},
     "config_dir":         {"linux": _XDG_C, "darwin": _HOME, "win32": _APP},
     "data_dir":           {"linux": _XDG_D, "darwin": _HOME, "win32": _LOCAL},
     "cache_dir":          {"linux": _XDG_K, "darwin": _HOME, "win32": _LOCAL},
 }
 
 # Every mechanism that could govern an axis on any platform. Varied one at a time.
-MECHANISMS = (_HOME, _XDG_C, _XDG_D, _XDG_K, _LOCAL, _APP)
+MECHANISMS = (_HOME, _PROFILE, _XDG_C, _XDG_D, _XDG_K, _LOCAL, _APP)
 
 
 def _platform_key():
@@ -177,7 +186,7 @@ def test_every_governing_mechanism_is_one_the_suite_redirects(tmp_path):
     Windows was. Whatever actually governs an axis here has to appear in
     `conftest.ISOLATED_ENV_AXES`, or a correct table sits next to a suite that pollutes.
     """
-    redirected = set(ISOLATED_ENV_AXES) | {"HOME"}      # HOME is the runner's job, not conftest's
+    redirected = set(ISOLATED_ENV_AXES) | set(HOME_MECHANISM.values())   # the home axis is the runner's job
     missing = sorted({m for ms in _governing_mechanisms(tmp_path).values() for m in ms} - redirected)
     assert not missing, (
         f"mechanism(s) govern a VAF directory on {_platform_key()} and are not redirected: "
@@ -194,7 +203,7 @@ def test_the_isolation_covers_EVERY_platform_in_the_table_not_just_this_one():
     otherwise. Checking the whole table costs nothing and moves the discovery from a red CI
     job to the machine where the change is written.
     """
-    redirected = set(ISOLATED_ENV_AXES) | {"HOME"}
+    redirected = set(ISOLATED_ENV_AXES) | set(HOME_MECHANISM.values())
     missing = sorted({
         f"{axis} on {plat} -> {mech}"
         for axis, per_platform in PLATFORM_DIR_AXES.items()

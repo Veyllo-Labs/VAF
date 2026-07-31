@@ -59,6 +59,18 @@ So a new test arrives with the mutation that proves it:
 4. If a mutation stays green, the property is unguarded. The number of tests around it is
    irrelevant.
 
+**Before saying "green locally", run the full suite with the home directory redirected -
+and the variable for that is not called the same thing everywhere.** Several code paths
+write into real stores as a side effect, and a run against your own home mixes synthetic
+rows into data you will later measure. On Linux and macOS: `HOME=$(mktemp -d) pytest -q`.
+On Windows the equivalent is `USERPROFILE`, because `Path.home()` goes through
+`os.path.expanduser`, which consults USERPROFILE and then HOMEDRIVE+HOMEPATH there and
+never looks at HOME at all - so the Linux spelling of this rule silently does nothing on
+Windows. The remaining store axes (the XDG names, and `%APPDATA%`/`%LOCALAPPDATA%`) are
+redirected by `conftest.py` for the whole session; `tests/test_suite_writes_nowhere_real.py`
+holds which mechanism governs which directory on which platform, and fails if one of them
+is governed by something nothing redirects.
+
 The failure modes below have actually happened in this repository. They are worth knowing
 before writing the test, not after. (The list is deliberately not numbered in this sentence:
 a count that has to be edited whenever the list grows is the same stale anchor as a number

@@ -45,6 +45,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Editing an offline user no longer deactivates their account.** The user table showed
+  "Active/Inactive" for presence - is the user connected right now - but the edit dialog
+  read that same field as the account state and wrote it back on save. Editing anyone who
+  happened to be offline and clicking Save silently blocked their sign-in, and a
+  reactivation appeared not to stick because the list refresh dropped the mapped fields.
+  Presence and account state are now two separate things everywhere, and the list refresh
+  is one shared loader instead of four drifting copies. The user list also says
+  "Online/Offline" for presence now, so it no longer borrows the words the account
+  setting uses, and a deactivated account is marked as such right in the list.
+- **An admin can no longer lock themselves - or everyone - out.** You cannot deactivate,
+  demote or delete your own account (another admin can still do all three to you), and
+  nobody can deactivate, demote or delete the last remaining admin who is able to sign
+  in. Deleting was the gap: it only checked that some other admin account existed, even
+  a deactivated one that could never log in to repair anything. The server refuses with a
+  clear message, and the dialog does not offer the self-lockout controls in the first
+  place.
+- **A generated password is shown once instead of being thrown away.** Creating a user
+  with the password field left empty is the advertised way to let VAF generate one - and
+  the generated password was then discarded without ever being displayed, so the new
+  account could not be used until an admin ran a separate password reset. It now appears
+  in a confirmation dialog with a copy button, once, because it exists nowhere else.
+- **Opening the user editor from the detail view no longer carries the previous user's
+  state.** The access preset picked for the last user stayed selected and immediately
+  rewrote the newly opened user's tool selection, and a temporary password from the
+  previous user could appear in the new user's dialog.
 - **The account status toggle says what it does.** It flips whether the user may sign
   in, but showed only a nameless switch. It now shows the state in words - Active or
   Deactivated - plus what each means, including the honest limit: deactivating blocks

@@ -463,7 +463,9 @@
     "noResults": "No results",
     "logOut": "Log out",
     "haveANiceDay": "Have a nice day",
-    "logoutConfirm": "Are you sure you want to log out?"
+    "logoutConfirm": "Are you sure you want to log out?",
+    "online": "Online",
+    "offline": "Offline"
   },
   "settings": {
     "title": "Settings",
@@ -1252,7 +1254,10 @@
       "enableMemory": "Enable Memory System",
       "enableMemoryOn": "User gets a personal memory database - VAF remembers conversations and context",
       "enableMemoryOff": "No memory storage - conversations won't be saved between sessions",
-      "createUser": "Create User"
+      "createUser": "Create User",
+      "createdTitle": "User created",
+      "createdHint": "This password is shown once and cannot be retrieved again. Pass it to the user; they can change it after signing in.",
+      "createdDone": "Done"
     },
     "editUser": {
       "title": "Edit User",
@@ -1271,7 +1276,9 @@
       "accountActive": "Active",
       "accountDeactivated": "Deactivated",
       "accountActiveDesc": "This user can sign in and use VAF. Turn off to block the account.",
-      "accountDeactivatedDesc": "Sign-in and token renewal are blocked on save. A session that is already signed in ends when its token expires."
+      "accountDeactivatedDesc": "Sign-in and token renewal are blocked on save. A session that is already signed in ends when its token expires.",
+      "selfEditHint": "This is your own account. Role and account status can only be changed by another admin - so you cannot lock yourself out.",
+      "selfRoleLocked": "your own account"
     },
     "userDetail": {
       "lastActive": "Last Active",

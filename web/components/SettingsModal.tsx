@@ -1210,7 +1210,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [networkEdges, setNetworkEdges, onNetworkEdgesChange] = useEdgesState([]);
 
     // User Management: loaded from API when Local Network tab is active (no dummy list)
-    const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; tools: string[]; workflows: string[]; access: string }>>([]);
+    /** `status` is PRESENCE (a live WebSocket), `accountActive` is the is_active ACCOUNT flag.
+     *  They are separate fields because they were once one, and the edit dialog then wrote
+     *  presence back as the account state - saving an offline user deactivated them. */
+    const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; accountActive: boolean; tools: string[]; workflows: string[]; access: string }>>([]);
     const [usersLoading, setUsersLoading] = useState(false);
     const [networkLinkCopied, setNetworkLinkCopied] = useState(false);
     /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
@@ -1228,6 +1231,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // so custom tools are covered automatically. 'custom' reveals the granular grids.
     const [accessPreset, setAccessPreset] = useState<'standard' | 'full' | 'readonly' | 'custom'>('standard');
     const [showNewUserPassword, setShowNewUserPassword] = useState(false);
+    // Shown once, right after creation, when the server generated the password: it exists
+    // nowhere else afterwards (only its hash is stored) and there is no mail delivery.
+    const [createdUserCreds, setCreatedUserCreds] = useState<{ username: string; password: string } | null>(null);
 
     // Security Warning & Restart Animation
     const [showNetworkWarning, setShowNetworkWarning] = useState(false);
@@ -1517,20 +1523,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, activeTab, showNetworkModal, displayHost, displayPort]);
 
-    // Fetch local network users when tab is active
-    useEffect(() => {
-        if (!isOpen || activeTab !== 'local_network') return;
+    // ONE loader for the user table. There were four fetch('/api/users') copies, and only the
+    // first applied the row mapping - after any create/update/delete the list was raw API
+    // shape, so `status` vanished and the edit modal read every account as deactivated.
+    const loadUsers = useCallback(() => {
         setUsersLoading(true);
         fetch('/api/users')
             .then((res) => (res.ok ? res.json() : []))
             .then((data) => {
                 if (!Array.isArray(data)) { setUsers([]); return; }
-                // Map the API shape (online / last_login / is_active) onto the table's fields. "Status"
-                // means actually-online (a live WebSocket), not the is_active account flag; "Last active"
-                // is "now" when online, else the last login time (or — when there is none).
+                // Two DIFFERENT truths, kept in two fields on purpose (live defect: they were
+                // one). `status` is PRESENCE - a live WebSocket - and feeds the table's Status
+                // column. `accountActive` is the is_active ACCOUNT flag - may this user sign in -
+                // and feeds the edit modal's Account Status row. Writing presence into is_active
+                // meant "edit any offline user + Save" silently deactivated their account.
                 setUsers(data.map((u: any) => ({
                     ...u,
                     status: u.online ? 'active' : 'inactive',
+                    accountActive: u.is_active !== false,
                     lastActive: u.online
                         ? tCommon('now')
                         : (u.last_login ? new Date(u.last_login).toLocaleString() : '—'),
@@ -1538,7 +1548,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             })
             .catch(() => setUsers([]))
             .finally(() => setUsersLoading(false));
-    }, [isOpen, activeTab, tCommon]);
+    }, [tCommon]);
+
+    // Fetch local network users when tab is active
+    useEffect(() => {
+        if (!isOpen || activeTab !== 'local_network') return;
+        loadUsers();
+    }, [isOpen, activeTab, loadUsers]);
 
     // Apply the chosen access preset to the new user's tool/workflow lists (covers custom tools too).
     useEffect(() => {
@@ -1554,6 +1570,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // hooks have to run on every render or React throws "rendered more hooks than previous render").
     const [pwResetTemp, setPwResetTemp] = useState<string | null>(null);
     const [twoFaResetDone, setTwoFaResetDone] = useState(false);
+    // ONE way to open the user editor. Two entry points (table row, detail modal) each carried
+    // their own reset list and the detail modal's was empty, so a preset picked for the PREVIOUS
+    // user stayed selected and the effect below rewrote the newly opened user's tools to that
+    // preset before the admin ever saw their real ones - a silent permission rewrite, same class
+    // as the save that silently deactivated accounts. A stale temporary password from another
+    // user was displayed in the same way.
+    const openUserEditor = useCallback((user: any) => {
+        setEditingUser(user);
+        setEditAccessPreset('custom');
+        setPwResetTemp(null);
+        setTwoFaResetDone(false);
+    }, []);
     useEffect(() => {
         if (!editingUser || editAccessPreset === 'custom') return;
         const resolved = resolveAccessPreset(editAccessPreset, pickerTools, workflows);
@@ -2125,15 +2153,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             });
 
             if (res.ok) {
+                // The generated password travels back EXACTLY ONCE (the server keeps only its
+                // hash). This body used to go unread: the form advertised "auto-generated if
+                // empty", the account was created, and the only credential for it was dropped
+                // on the floor - the new user could not sign in until an admin ran a separate
+                // password reset.
+                const created = await res.json().catch(() => null);
+                const tempPassword = created?.temporary_password || null;
+                if (tempPassword) {
+                    setCreatedUserCreds({ username: newUser.username, password: tempPassword });
+                }
                 setShowAddUserModal(false);
-                // Refresh users list
-                setUsersLoading(true);
-                fetch('/api/users')
-                    .then((res) => (res.ok ? res.json() : []))
-                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
-                    .catch(() => setUsers([]))
-                    .finally(() => setUsersLoading(false));
-                
+                loadUsers();
+
                 // Reset form
                 setNewUser({ username: '', email: '', role: 'User', password: '', tools: [], workflows: [], createDb: true });
                 setAccessPreset('standard');
@@ -2158,7 +2190,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 body: JSON.stringify({
                     email: editingUser.email,
                     role: editingUser.role,
-                    is_active: editingUser.status === 'active',
+                    is_active: editingUser.accountActive !== false,
                     tools: editingUser.tools || [],
                     workflows: editingUser.workflows || [],
                 })
@@ -2166,13 +2198,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             if (res.ok) {
                 setEditingUser(null);
-                // Refresh users list
-                setUsersLoading(true);
-                fetch('/api/users')
-                    .then((res) => (res.ok ? res.json() : []))
-                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
-                    .catch(() => setUsers([]))
-                    .finally(() => setUsersLoading(false));
+                loadUsers();
             } else {
                 const err = await res.json();
                 alert(`Failed to update user: ${err.detail || 'Unknown error'}`);
@@ -2227,13 +2253,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             if (res.ok) {
                 setEditingUser(null);
-                // Refresh users list
-                setUsersLoading(true);
-                fetch('/api/users')
-                    .then((res) => (res.ok ? res.json() : []))
-                    .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
-                    .catch(() => setUsers([]))
-                    .finally(() => setUsersLoading(false));
+                loadUsers();
             } else {
                 const err = await res.json();
                 alert(`Failed to delete user: ${err.detail || 'Unknown error'}`);
@@ -3757,13 +3777,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                             : "bg-gray-50 text-gray-600 border-gray-200"
                                                                     )}>
                                                                         <div className={cn("w-1.5 h-1.5 rounded-full", user.status === 'active' ? "bg-green-500" : "bg-gray-400")} />
-                                                                        {user.status === 'active' ? tCommon('active') : tCommon('inactive')}
+                                                                        {/* "Online/Offline", not "Active/Inactive": this column is PRESENCE, and
+                                                                            the old wording read like the account-enabled flag one dialog away. */}
+                                                                        {user.status === 'active' ? tCommon('online') : tCommon('offline')}
                                                                     </span>
+                                                                    {user.accountActive === false && (
+                                                                        <span className="ml-1.5 px-2 py-1 rounded-full text-xs font-medium border bg-red-50 text-red-700 border-red-200">
+                                                                            {tModals('editUser.accountDeactivated')}
+                                                                        </span>
+                                                                    )}
                                                                 </td>
                                                                 <td className="px-4 py-3 text-center">
                                                                     <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                         <button 
-                                                                            onClick={() => { setEditingUser(user); setEditAccessPreset('custom'); setPwResetTemp(null); setTwoFaResetDone(false); }}
+                                                                            onClick={() => openUserEditor(user)}
                                                                             className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
                                                                             title="Edit User"
                                                                         >
@@ -6387,16 +6414,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         value={editingUser.username}
                                         onChange={(v) => setEditingUser({...editingUser, username: v})}
                                     />
-                                    <Select
-                                        label={tLocalNet('role')}
-                                        value={editingUser.role}
-                                        onChange={(v) => setEditingUser({...editingUser, role: v})}
-                                        options={[
-                                            { value: 'User', label: tModals('addUser.roleUser') },
-                                            { value: 'Admin', label: tModals('addUser.roleAdmin') },
-                                            { value: 'Guest', label: tModals('addUser.roleGuest') }
-                                        ]}
-                                    />
+                                    {editingUser.id === currentUser?.id ? (
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-600 mb-2">{tLocalNet('role')}</label>
+                                            <div className="px-4 py-2.5 border border-gray-200 rounded-xl bg-gray-50 text-sm text-gray-500" title={tModals('editUser.selfEditHint')}>
+                                                {editingUser.role} - {tModals('editUser.selfRoleLocked')}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <Select
+                                            label={tLocalNet('role')}
+                                            value={editingUser.role}
+                                            onChange={(v) => setEditingUser({...editingUser, role: v})}
+                                            options={[
+                                                { value: 'User', label: tModals('addUser.roleUser') },
+                                                { value: 'Admin', label: tModals('addUser.roleAdmin') },
+                                                { value: 'Guest', label: tModals('addUser.roleGuest') }
+                                            ]}
+                                        />
+                                    )}
                                 </div>
                                 <Input
                                     label="E-Mail"
@@ -6452,31 +6488,35 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
                                         <div className="flex items-center gap-3">
-                                            <div className={cn("p-2 rounded-lg transition-colors", editingUser.status === 'active' ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")}>
-                                                {editingUser.status === 'active' ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                                            <div className={cn("p-2 rounded-lg transition-colors", editingUser.accountActive !== false ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")}>
+                                                {editingUser.accountActive !== false ? <CheckCircle size={16} /> : <XCircle size={16} />}
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-sm font-medium text-gray-700">{tModals('editUser.accountStatus')}</span>
                                                     <span className={cn("text-xs font-semibold px-2 py-0.5 rounded-full",
-                                                        editingUser.status === 'active'
+                                                        editingUser.accountActive !== false
                                                             ? "bg-green-50 text-green-700 border border-green-200"
                                                             : "bg-red-50 text-red-700 border border-red-200")}>
-                                                        {editingUser.status === 'active' ? tModals('editUser.accountActive') : tModals('editUser.accountDeactivated')}
+                                                        {editingUser.accountActive !== false ? tModals('editUser.accountActive') : tModals('editUser.accountDeactivated')}
                                                     </span>
                                                 </div>
                                                 <p className="text-xs text-gray-400 mt-0.5 max-w-md">
-                                                    {editingUser.status === 'active'
-                                                        ? tModals('editUser.accountActiveDesc')
-                                                        : tModals('editUser.accountDeactivatedDesc')}
+                                                    {editingUser.id === currentUser?.id
+                                                        ? tModals('editUser.selfEditHint')
+                                                        : (editingUser.accountActive !== false
+                                                            ? tModals('editUser.accountActiveDesc')
+                                                            : tModals('editUser.accountDeactivatedDesc'))}
                                                 </p>
                                             </div>
                                         </div>
-                                        <Switch 
-                                            label="" 
-                                            checked={editingUser.status === 'active'} 
-                                            onChange={(v) => setEditingUser({...editingUser, status: v ? 'active' : 'inactive'})} 
-                                        />
+                                        {editingUser.id !== currentUser?.id && (
+                                            <Switch 
+                                                label="" 
+                                                checked={editingUser.accountActive !== false} 
+                                                onChange={(v) => setEditingUser({...editingUser, accountActive: v})} 
+                                            />
+                                        )}
                                     </div>
                                 </div>
                             </Section>
@@ -6494,6 +6534,45 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Save size={16} /> {tCommon('saveChanges')}
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* The generated password, shown once. Deliberately a blocking dialog rather than a
+                toast: it cannot be retrieved again, only replaced by a password reset. */}
+            {createdUserCreds && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-green-50 text-green-600 rounded-lg"><CheckCircle size={18} /></div>
+                            <h3 className="text-lg font-semibold text-gray-900">{tModals('addUser.createdTitle')}</h3>
+                        </div>
+                        <p className="text-sm text-gray-500">{tModals('addUser.createdHint')}</p>
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                                <span className="text-xs uppercase tracking-wide font-semibold text-gray-500">{tLocalNet('username')}</span>
+                                <span className="text-sm font-mono text-gray-800 select-all">{createdUserCreds.username}</span>
+                            </div>
+                            <div className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                                <span className="text-xs uppercase tracking-wide font-semibold text-gray-500">{tModals('editUser.password')}</span>
+                                <span className="text-sm font-mono text-gray-800 select-all">{createdUserCreds.password}</span>
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 pt-1">
+                            <button
+                                onClick={() => { navigator.clipboard?.writeText(createdUserCreds.password); }}
+                                className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                {tCommon('copy')}
+                            </button>
+                            <button
+                                onClick={() => setCreatedUserCreds(null)}
+                                className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-[#f5f5f5] transition-colors"
+                            >
+                                {tModals('addUser.createdDone')}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -6519,9 +6598,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-[10px] font-bold uppercase tracking-wider rounded">
                                             {selectedUser.role}
                                         </span>
+                                        {/* Two badges because they are two truths: the ACCOUNT flag (may this
+                                            person sign in) and PRESENCE (are they connected right now). One
+                                            badge read `status` - presence - under the label "Active Account",
+                                            so every offline user looked deactivated. */}
+                                        <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full border",
+                                            selectedUser.accountActive !== false
+                                                ? "bg-green-50 text-green-700 border-green-200"
+                                                : "bg-red-50 text-red-700 border-red-200")}>
+                                            {selectedUser.accountActive !== false ? tModals('userDetail.activeAccount') : tModals('editUser.accountDeactivated')}
+                                        </span>
                                         <span className={cn("text-xs flex items-center gap-1", selectedUser.status === 'active' ? "text-green-600" : "text-gray-400")}>
                                             <div className={cn("w-1.5 h-1.5 rounded-full", selectedUser.status === 'active' ? "bg-green-500" : "bg-gray-400")} />
-                                            {selectedUser.status === 'active' ? tModals('userDetail.activeAccount') : tCommon('inactive')}
+                                            {selectedUser.status === 'active' ? tCommon('online') : tCommon('offline')}
                                         </span>
                                     </div>
                                 </div>
@@ -6601,7 +6690,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </button>
                             <button
                                 onClick={() => {
-                                    setEditingUser(selectedUser);
+                                    openUserEditor(selectedUser);
                                     setSelectedUser(null);
                                 }}
                                 className="px-6 py-2.5 rounded-xl font-medium bg-blue-600 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-blue-700 dark:hover:bg-[#f5f5f5] shadow-lg shadow-blue-200 dark:shadow-none transition-all flex items-center gap-2"

@@ -63,6 +63,89 @@ def require_admin(request: Request) -> Dict[str, Any]:
 
 # --- Request/Response Models ---
 
+async def count_other_active_admins(db, target_id) -> int:
+    """How many ACTIVE admins besides this one - the number both lockout guards need.
+
+    Shared rather than written twice: the two call sites disagreeing about whether
+    ``is_active`` counts is exactly how the delete route ended up permitting the lockout
+    the update route refuses.
+    """
+    result = await db.execute(
+        select(LocalUser).where(
+            LocalUser.role == "admin",
+            LocalUser.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+            LocalUser.id != target_id,
+        )
+    )
+    return len(result.scalars().all())
+
+
+def caller_identity(caller: dict) -> tuple:
+    """The (id, scope) of whoever is making the request, from the auth middleware's dict.
+
+    The key is ``user_id``: the middleware maps the JWT ``sub`` claim onto that name
+    (vaf/auth/middleware.py). Reading ``sub`` here yields None on every request and
+    silently disables the id half of the self-check - it did, until a review measured it.
+    The tokenless local-admin caller has no id at all, which is why the scope is the
+    second half rather than a nicety.
+    """
+    caller = caller or {}
+    return caller.get("user_id") or caller.get("sub"), caller.get("user_scope_id")
+
+
+def refuse_dangerous_user_change(*, caller_id, caller_scope, target_id, target_scope,
+                                 target_role, target_active, other_active_admins: int,
+                                 new_role=None, new_is_active=None, deleting: bool = False):
+    """Refusal reasons for changes that would saw off the branch someone sits on.
+
+    ONE function for both the update and the delete route, because they can reach the same
+    lockout by three different doors - deactivate, demote, delete - and a rule that lives
+    in only one of them is not a rule. (Measured: the delete route's own guard counted
+    admin rows by EXISTENCE, so deleting the last ACTIVE admin was allowed whenever a
+    deactivated admin row remained. That leaves an instance where no admin can sign in,
+    which flips it back to "needs setup" and re-opens the unauthenticated bootstrap
+    endpoint to the LAN.)
+
+    Self-protection: you cannot deactivate, demote or delete YOUR OWN account - the
+    session issuing the request would keep rights its account no longer has, and another
+    admin can always do it for you. Last-admin protection: nobody may deactivate, demote
+    or delete the last ACTIVE admin. "Active" is the operative word - an
+    existing-but-deactivated admin cannot log in to repair anything, so counting rows
+    would call a system repairable that is not.
+
+    Self is matched by id AND by scope; see :func:`caller_identity`. Returns a readable
+    reason, or None to allow.
+    """
+    is_admin_target = (target_role or "").lower() == "admin"
+    losing_access = deleting or (new_is_active is False and bool(target_active))
+    demoting = (
+        not deleting
+        and new_role is not None
+        and str(new_role).lower() != "admin"
+        and is_admin_target
+    )
+    if not losing_access and not demoting:
+        return None
+
+    is_self = bool(
+        (caller_id and target_id and str(caller_id) == str(target_id))
+        or (caller_scope and target_scope and str(caller_scope) == str(target_scope))
+    )
+    if is_self and deleting:
+        return "You cannot delete your own account - another admin can."
+    if is_self and losing_access:
+        return "You cannot deactivate your own account - another admin can."
+    if is_self and demoting:
+        return "You cannot remove your own admin role - another admin can."
+    if is_admin_target and other_active_admins == 0:
+        return (
+            "Cannot delete the last active admin account."
+            if deleting else
+            "Cannot deactivate or demote the last active admin account."
+        )
+    return None
+
+
 class UserCreate(BaseModel):
     username: str
     email: Optional[str] = None
@@ -267,7 +350,7 @@ async def get_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
 
 
 @router.put("/{user_id}")
-async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depends(require_admin)):
+async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = Depends(require_admin)):
     """Update a user's details (admin only)."""
     try:
         async with get_auth_db() as db:
@@ -281,6 +364,22 @@ async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depend
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="User not found"
                 )
+
+            if data.role is not None or data.is_active is not None:
+                caller_id, caller_scope = caller_identity(admin)
+                reason = refuse_dangerous_user_change(
+                    caller_id=caller_id,
+                    caller_scope=caller_scope,
+                    target_id=user.id,
+                    target_scope=user.user_scope_id,
+                    target_role=user.role,
+                    target_active=user.is_active,
+                    new_role=data.role,
+                    new_is_active=data.is_active,
+                    other_active_admins=await count_other_active_admins(db, user.id),
+                )
+                if reason:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
             # Update fields
             if data.role is not None:
@@ -374,7 +473,7 @@ async def reset_2fa(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+async def delete_user(user_id: str, admin: Dict[str, Any] = Depends(require_admin)):
     """Delete a user account (admin only)."""
     try:
         async with get_auth_db() as db:
@@ -389,17 +488,23 @@ async def delete_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
                     detail="User not found"
                 )
 
-            # Don't allow deleting the last admin
-            if user.role == "admin":
-                admin_count = await db.execute(
-                    select(LocalUser).where(LocalUser.role == "admin")
-                )
-                admins = admin_count.scalars().all()
-                if len(admins) <= 1:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot delete the last admin account"
-                    )
+            # Same three rules as the update route, through the same function: deleting is
+            # the third door to the identical lockout, and this guard used to count admin
+            # ROWS - so with a deactivated admin row present, the last ACTIVE admin could
+            # be deleted and nobody could sign in to repair it.
+            caller_id, caller_scope = caller_identity(admin)
+            reason = refuse_dangerous_user_change(
+                caller_id=caller_id,
+                caller_scope=caller_scope,
+                target_id=user.id,
+                target_scope=user.user_scope_id,
+                target_role=user.role,
+                target_active=user.is_active,
+                deleting=True,
+                other_active_admins=await count_other_active_admins(db, user.id),
+            )
+            if reason:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
             await db.delete(user)
             await db.commit()

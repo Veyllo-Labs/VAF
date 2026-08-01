@@ -463,7 +463,9 @@
     "noResults": "Keine Ergebnisse",
     "logOut": "Abmelden",
     "haveANiceDay": "Einen schönen Tag noch",
-    "logoutConfirm": "Möchtest du dich wirklich abmelden?"
+    "logoutConfirm": "Möchtest du dich wirklich abmelden?",
+    "online": "Online",
+    "offline": "Offline"
   },
   "settings": {
     "title": "Einstellungen",
@@ -1252,7 +1254,10 @@
       "enableMemory": "Gedächtnissystem aktivieren",
       "enableMemoryOn": "Der Nutzer erhält eine persönliche Gedächtnis-Datenbank – VAF merkt sich Gespräche und Kontext",
       "enableMemoryOff": "Kein Gedächtnisspeicher – Gespräche werden nicht zwischen Sitzungen gespeichert",
-      "createUser": "Nutzer erstellen"
+      "createUser": "Nutzer erstellen",
+      "createdTitle": "Nutzer angelegt",
+      "createdHint": "Dieses Passwort wird nur einmal angezeigt und kann nicht erneut abgerufen werden. Gib es dem Nutzer weiter; er kann es nach der Anmeldung ändern.",
+      "createdDone": "Fertig"
     },
     "editUser": {
       "title": "Nutzer bearbeiten",
@@ -1271,7 +1276,9 @@
       "accountActive": "Aktiv",
       "accountDeactivated": "Deaktiviert",
       "accountActiveDesc": "Dieser Nutzer kann sich anmelden und VAF verwenden. Zum Sperren ausschalten.",
-      "accountDeactivatedDesc": "Anmeldung und Token-Verlängerung sind nach dem Speichern gesperrt. Eine bereits angemeldete Sitzung endet, wenn ihr Token abläuft."
+      "accountDeactivatedDesc": "Anmeldung und Token-Verlängerung sind nach dem Speichern gesperrt. Eine bereits angemeldete Sitzung endet, wenn ihr Token abläuft.",
+      "selfEditHint": "Das ist dein eigenes Konto. Rolle und Kontostatus kann nur ein anderer Admin ändern - damit du dich nicht selbst aussperrst.",
+      "selfRoleLocked": "dein eigenes Konto"
     },
     "userDetail": {
       "lastActive": "Zuletzt aktiv",

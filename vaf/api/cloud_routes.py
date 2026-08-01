@@ -62,6 +62,9 @@ DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024
 
 # ── Auth helper ───────────────────────────────────────────────────────────
 
+from vaf.cloud.base import create_cloud_provider
+
+
 def _get_current_username(request: Request) -> str:
     """Current user from auth middleware, or local admin. Used to scope cloud data per user."""
     from vaf.api.config_routes import get_current_username as get_username
@@ -71,6 +74,18 @@ def _get_current_username(request: Request) -> str:
 def _get_current_user(request: Request) -> Dict[str, Any]:
     from vaf.api.config_routes import get_current_user_or_local_admin
     return get_current_user_or_local_admin(request)
+
+
+def _get_current_scope(request: Request) -> Optional[str]:
+    """The caller's scope, for addressing their cloud credentials.
+
+    A sibling of `_get_current_username` rather than a wider dependency on purpose: the
+    routes below already take the name, and the credential key needs the SCOPE - a name is
+    resolved per lane, a scope is not. Cloud credentials keyed on the name alone is exactly
+    what let a nameless lane reach the owner's connected accounts.
+    """
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    return get_current_user_or_local_admin(request).get("user_scope_id")
 
 
 # ── Config helpers ────────────────────────────────────────────────────────
@@ -127,27 +142,6 @@ def _local_sync_dir(username: str, account_id: str) -> Path:
 
 
 # ── Provider factory ──────────────────────────────────────────────────────
-
-def _create_provider(provider_name: str, username: str, account_id: str):
-    """Instantiate a cloud provider by name."""
-    from vaf.cloud.google_drive import GoogleDriveProvider
-    from vaf.cloud.onedrive import OneDriveProvider
-    from vaf.cloud.dropbox_provider import DropboxProvider
-    from vaf.cloud.nextcloud import NextcloudProvider
-    from vaf.cloud.icloud import ICloudProvider
-
-    PROVIDERS = {
-        "google_drive": GoogleDriveProvider,
-        "onedrive": OneDriveProvider,
-        "dropbox": DropboxProvider,
-        "nextcloud": NextcloudProvider,
-        "icloud": ICloudProvider,
-    }
-    cls = PROVIDERS.get(provider_name)
-    if not cls:
-        raise ValueError(f"Unknown provider: {provider_name}")
-    return cls(username=username, account_id=account_id)
-
 
 # ── Pydantic models ──────────────────────────────────────────────────────
 
@@ -255,7 +249,8 @@ async def oauth_callback(
         username = state_username or _get_current_username(request)
         cred_username = _get_cred_username(username)
 
-        data = exchange_code_for_tokens(provider, code, state, redirect_uri, username=cred_username)
+        data = exchange_code_for_tokens(provider, code, state, redirect_uri, username=cred_username,
+                                        user_scope_id=state_scope)
         account_id = data.get("account_id") or str(uuid.uuid4())
 
         # Add account to config
@@ -279,6 +274,12 @@ async def oauth_callback(
                 "display_name": data.get("display_name") or data.get("account_id") or provider,
                 "sync_enabled": True,
                 "last_synced_at": None,
+                # Recorded so the BACKGROUND sync worker can address this account's
+                # credentials. It runs without a request and has only a name; no
+                # name-to-scope resolution exists in the repository, so the scope is
+                # written down here by the one place that already holds it rather than
+                # looked up later by a lane that cannot.
+                "user_scope_id": state_scope,
             })
 
         cc["accounts"] = accounts
@@ -295,6 +296,7 @@ async def connect_webdav(
     request: Request,
     body: WebDavConnectRequest,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Connect a Nextcloud/WebDAV account with URL, username, and password."""
     url = (body.url or "").strip().rstrip("/")
@@ -317,6 +319,7 @@ async def connect_webdav(
         webdav_username=webdav_user,
         password=password,
         username=cred_username,
+        user_scope_id=_scope,
     )
 
     # Add to config
@@ -328,6 +331,7 @@ async def connect_webdav(
         "display_name": f"Nextcloud ({webdav_user}@{url.split('//')[1].split('/')[0] if '//' in url else url})",
         "sync_enabled": True,
         "last_synced_at": None,
+        "user_scope_id": _scope,          # see the OAuth branch: the sync worker has no scope of its own
     })
     cc["accounts"] = accounts
     _save_cloud_config(cc, _username)
@@ -351,6 +355,7 @@ async def patch_account(
     account_id: str,
     body: AccountPatchBody,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Update account metadata (e.g. label for private/work distinction)."""
     cc = _get_cloud_config(_username)
@@ -370,6 +375,7 @@ async def disconnect_account(
     request: Request,
     account_id: str,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Disconnect a cloud account: remove config entry and delete stored credentials."""
     cc = _get_cloud_config(_username)
@@ -390,7 +396,7 @@ async def disconnect_account(
 
     # Delete stored credentials
     try:
-        delete_cloud_credentials(account_id, provider, username=cred_username)
+        delete_cloud_credentials(account_id, provider, username=cred_username, user_scope_id=_scope)
     except Exception as exc:
         logger.warning("Failed to delete credentials for %s: %s", account_id, exc)
 
@@ -406,6 +412,7 @@ async def trigger_sync(
     request: Request,
     account_id: str,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Trigger a manual bi-directional sync for a cloud account."""
     cc = _get_cloud_config(_username)
@@ -417,12 +424,12 @@ async def trigger_sync(
     cred_username = _get_cred_username(_username)
 
     try:
-        provider = _create_provider(provider_name, _username, account_id)
+        provider = create_cloud_provider(provider_name, _username, account_id, user_scope_id=_scope)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Check credentials exist before attempting auth (uses same username as provider)
-    creds = get_cloud_credentials(account_id, provider_name, _username)
+    creds = get_cloud_credentials(account_id, provider_name, _username, user_scope_id=_scope)
     if not creds or creds.get("type") != "oauth":
         logger.warning(
             "Cloud sync: no OAuth credentials for account_id=%s provider=%s user=%s",
@@ -499,6 +506,7 @@ async def sync_status(
     request: Request,
     account_id: str,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Return sync status for a cloud account."""
     cc = _get_cloud_config(_username)
@@ -533,6 +541,7 @@ async def browse_cloud(
     account_id: str,
     folder_id: str = "root",
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """List cloud contents at a folder (cloud-only, no local sync). Use folder_id=root for Drive root."""
     cc = _get_cloud_config(_username)
@@ -542,7 +551,7 @@ async def browse_cloud(
 
     provider_name = acc.get("provider", "")
     cred_username = _get_cred_username(_username)
-    creds = get_cloud_credentials(account_id, provider_name, _username)
+    creds = get_cloud_credentials(account_id, provider_name, _username, user_scope_id=_scope)
     if not creds or creds.get("type") != "oauth":
         raise HTTPException(
             status_code=401,
@@ -550,7 +559,7 @@ async def browse_cloud(
         )
 
     try:
-        provider = _create_provider(provider_name, _username, account_id)
+        provider = create_cloud_provider(provider_name, _username, account_id, user_scope_id=_scope)
         authed = await asyncio.to_thread(provider.authenticate)
         if not authed:
             raise HTTPException(status_code=401, detail="Authentication failed")
@@ -597,6 +606,7 @@ async def search_cloud(
     q: str = "",
     mime_type: Optional[str] = None,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Search entire cloud by filename. Use q= for query (e.g. report, Bewilligung, *.pdf)."""
     if not q or not q.strip():
@@ -607,12 +617,13 @@ async def search_cloud(
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    creds = get_cloud_credentials(account_id, acc.get("provider", ""), _get_cred_username(_username))
+    creds = get_cloud_credentials(account_id, acc.get("provider", ""), _get_cred_username(_username),
+                                  user_scope_id=_scope)
     if not creds or creds.get("type") != "oauth":
         raise HTTPException(status_code=401, detail="Credentials not found. Remove and reconnect the account.")
 
     try:
-        provider = _create_provider(acc["provider"], _username, account_id)
+        provider = create_cloud_provider(acc["provider"], _username, account_id, user_scope_id=_scope)
         authed = await asyncio.to_thread(provider.authenticate)
         if not authed:
             raise HTTPException(status_code=401, detail="Authentication failed")
@@ -652,6 +663,7 @@ async def list_synced_files(
     request: Request,
     account_id: str,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """List all synced files from the manifest for a cloud account."""
     cc = _get_cloud_config(_username)
@@ -686,6 +698,7 @@ async def list_conflicts(
     request: Request,
     account_id: str,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """List files with unresolved conflicts for a cloud account."""
     cc = _get_cloud_config(_username)
@@ -721,6 +734,7 @@ async def resolve_conflict(
     file_id: str,
     body: ConflictResolveRequest,
     _username: str = Depends(_get_current_username),
+    _scope: Optional[str] = Depends(_get_current_scope),
 ):
     """Resolve a file conflict. Action must be keep_local, keep_remote, or keep_both."""
     action = body.action.strip().lower()
@@ -742,7 +756,7 @@ async def resolve_conflict(
         raise HTTPException(status_code=400, detail="File is not in conflict state")
 
     try:
-        provider = _create_provider(provider_name, _username, account_id)
+        provider = create_cloud_provider(provider_name, _username, account_id, user_scope_id=_scope)
         authed = await asyncio.to_thread(provider.authenticate)
         if not authed:
             raise HTTPException(status_code=401, detail="Authentication failed")

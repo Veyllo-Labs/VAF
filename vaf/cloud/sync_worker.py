@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
@@ -39,7 +39,9 @@ def _collect_enabled_accounts() -> List[Tuple[str, str, str]]:
         for acct in cloud_config.get("accounts", []):
             if acct.get("sync_enabled", True):
                 username = Config.get("local_admin_username", "admin")
-                results.append((username, acct["provider"], acct["account_id"]))
+                # Owner accounts: no scope, and that is correct rather than missing - the
+                # key builder collapses the owner's scope onto the ownerless form anyway.
+                results.append((username, acct["provider"], acct["account_id"], None))
 
     # Per-user accounts
     by_user = Config.get("cloud_config_by_user") or {}
@@ -48,38 +50,29 @@ def _collect_enabled_accounts() -> List[Tuple[str, str, str]]:
             continue
         for acct in user_cfg.get("accounts", []):
             if acct.get("sync_enabled", True):
-                results.append((username, acct["provider"], acct["account_id"]))
+                # THE SCOPE COMES FROM THE ACCOUNT ENTRY, not from a lookup. This worker is
+                # a background task with no request and no session, so it has a name and
+                # nothing else - and no name-to-scope resolution exists anywhere in the
+                # repository (measured 2026-08-01). Rather than inventing one in the hot
+                # path, the route that CONNECTS an account records the scope it already
+                # holds, and this reads it back. An older entry has none; then this stays a
+                # name-keyed lookup, which is what it was before, and the legacy probe in
+                # `get_cloud_credentials` finds it.
+                results.append((username, acct["provider"], acct["account_id"],
+                                acct.get("user_scope_id")))
 
     return results
 
 
-def _create_provider(provider_name: str, username: str, account_id: str):
-    """Create a provider instance by name."""
-    from vaf.cloud.google_drive import GoogleDriveProvider
-    from vaf.cloud.onedrive import OneDriveProvider
-    from vaf.cloud.dropbox_provider import DropboxProvider
-    from vaf.cloud.nextcloud import NextcloudProvider
-    from vaf.cloud.icloud import ICloudProvider
-
-    providers = {
-        "google_drive": GoogleDriveProvider,
-        "onedrive": OneDriveProvider,
-        "dropbox": DropboxProvider,
-        "nextcloud": NextcloudProvider,
-        "icloud": ICloudProvider,
-    }
-    cls = providers.get(provider_name)
-    if not cls:
-        raise ValueError(f"Unknown cloud provider: {provider_name}")
-    return cls(username=username, account_id=account_id)
-
-
-def _run_sync_for_account(username: str, provider_name: str, account_id: str) -> dict:
+def _run_sync_for_account(username: str, provider_name: str, account_id: str,
+                          user_scope_id: Optional[str] = None) -> dict:
     """Run a single sync cycle for one account. Blocking — call via asyncio.to_thread."""
+    from vaf.cloud.base import create_cloud_provider
     from vaf.cloud.sync_engine import SyncEngine
     from vaf.cloud.sync_manifest import SyncManifest
 
-    provider = _create_provider(provider_name, username, account_id)
+    provider = create_cloud_provider(provider_name, username, account_id,
+                                     user_scope_id=user_scope_id)
     if not provider.authenticate():
         logger.warning("[CloudSync] Auth failed for %s/%s", username[:4] + "***", provider_name)
         return {"error": "auth_failed"}
@@ -148,10 +141,10 @@ async def cloud_sync_loop() -> None:
         interval = max(Config.get("cloud_sync_interval_minutes", 15), 1) * 60
         accounts = _collect_enabled_accounts()
 
-        for username, provider_name, account_id in accounts:
+        for username, provider_name, account_id, scope in accounts:
             try:
                 result = await asyncio.to_thread(
-                    _run_sync_for_account, username, provider_name, account_id
+                    _run_sync_for_account, username, provider_name, account_id, scope
                 )
                 if result.get("error"):
                     logger.warning("[CloudSync] %s/%s: %s", username[:4] + "***", provider_name, result["error"])

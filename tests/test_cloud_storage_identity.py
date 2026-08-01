@@ -209,34 +209,54 @@ def test_the_identity_survives_the_real_dispatcher(cloud_config):
 # identity at all. Frozen here with the measurement so it is seen from now on; repairing it
 # belongs with the provider chain in cloud step B, where the scope arrives.
 
-UNIDENTIFIED_WRITE_TARGETS = {
-    "_action_download":
-        "writes to Platform.downloads_dir(), which is Path.home()/'Downloads' - process "
-        "global, no username and no scope. Every tenant's cloud download therefore lands in "
-        "the OWNER's home, and that directory is one of the four roots GET /api/file serves, "
-        "so the file becomes readable through the API as well as written to the wrong home.",
-    "_action_retrieve":
-        "same destination, same absence of identity. Its SOURCE side was closed in cloud "
-        "step A; the destination was not, which is precisely the shape this round keeps "
-        "meeting - a boundary as wide as the door somebody was standing in.",
-}
+IDENTIFIED_WRITE_TARGETS = (
+    "_action_download",
+    "_action_retrieve",
+)
 
 
-@pytest.mark.parametrize("fn", sorted(UNIDENTIFIED_WRITE_TARGETS))
-def test_the_unidentified_write_target_is_still_what_was_measured(fn):
-    """A receipt, not a fix. If the destination gains an identity, this points at the note
-    that says what it was for instead of leaving a stale claim behind."""
+@pytest.mark.parametrize("fn", IDENTIFIED_WRITE_TARGETS)
+def test_the_download_target_is_derived_from_the_caller(fn):
+    """THE RECEIPT IS REDEEMED (cloud step B, 2026-08-01).
+
+    This test used to assert the opposite - that both actions still wrote to
+    `Platform.downloads_dir()` and still took no scope - as a frozen receipt saying the
+    repair belonged with the provider chain "where the scope arrives". It arrived, and the
+    receipt went red the moment it did, which is the whole point of freezing a finding
+    instead of writing it in prose: a parked defect that stays parked after its
+    precondition changes is indistinguishable from a forgotten one.
+
+    What the destination was: `Path.home()/'Downloads'` - process global, no name, no
+    scope - so every tenant's cloud download landed in the machine OWNER's home, in one of
+    the four roots `GET /api/file` serves. Both actions now ask `_download_dir(scope)`, one
+    shared helper rather than two copies of the decision.
+    """
     import inspect
 
     import vaf.tools.cloud_storage as mod
 
     src = inspect.getsource(getattr(mod, fn))
-    assert "downloads_dir()" in src, (
-        f"{fn} no longer writes to the process-global downloads directory. If that was the "
-        f"fix, delete this entry and say so.\n{UNIDENTIFIED_WRITE_TARGETS[fn]}"
+    assert "_download_dir(user_scope_id)" in src, (
+        f"{fn} no longer derives its destination from the caller's scope"
     )
-    assert "user_scope_id" not in src, (
-        f"{fn} now takes a scope - if the destination is per-user, this entry is obsolete"
+    assert "Platform.downloads_dir()" not in src, (
+        f"{fn} writes to the process-global downloads directory again"
+    )
+
+
+def test_a_tenant_downloads_into_their_own_tree_and_the_owner_is_unaffected():
+    """The behaviour, not the call shape - the half a source assertion cannot see."""
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.platform import Platform
+    from vaf.tools.cloud_storage import _download_dir
+
+    tenant = _download_dir("ab12cd34-0000-4000-8000-000000000001")
+    assert "VAF_Projects" in tenant.as_posix(), "a tenant's download still leaves their tree"
+    assert tenant != Platform.downloads_dir()
+
+    assert _download_dir(None) == Platform.downloads_dir()
+    assert _download_dir(get_local_admin_scope_id()) == Platform.downloads_dir(), (
+        "the owner's own scope must not move their downloads out of ~/Downloads"
     )
 
 

@@ -99,6 +99,38 @@ def _get_sync_dir(username: str, account_id: str) -> Path:
     return base
 
 
+def _download_dir(user_scope_id: Optional[str]) -> Path:
+    """Where a cloud download lands, for THIS caller.
+
+    Both download actions wrote to `Platform.downloads_dir()`, which is `Path.home()/
+    'Downloads'` - process global, no name and no scope. Every tenant's download therefore
+    landed in the machine OWNER's home, and that directory is one of the four roots
+    `GET /api/file` serves, so the file became readable through the API as well as written
+    to the wrong home. Frozen as a receipt in cloud step A because the scope had not
+    arrived yet; it has now, so the receipt is redeemed rather than re-parked.
+
+    The owner keeps `~/Downloads` unchanged - it is their machine, and their scope collapses
+    to "no identity" in the credential key builder for the same reason. A tenant gets a
+    Downloads folder inside their OWN project root, the tree `/api/file` already isolates
+    per user, so delivery and isolation agree instead of contradicting each other.
+
+    ONE helper for both actions on purpose: two hand-written copies of this decision is the
+    shape CLAUDE.md Rule 0b warns about, and it is exactly how `_action_save` came to be
+    guarded while `_action_retrieve` was not.
+    """
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.session import get_user_projects_root
+
+    scope = str(user_scope_id or "").strip()
+    if scope and scope != get_local_admin_scope_id():
+        root = get_user_projects_root(scope)
+        if root:
+            dest = root / "Downloads"
+            dest.mkdir(parents=True, exist_ok=True)
+            return dest
+    return Platform.downloads_dir()
+
+
 def _get_cloud_accounts(username: str) -> list:
     """Return list of connected cloud accounts (dict with provider, account_id, label, etc.)."""
     admin_user = Config.get("local_admin_username", "admin")
@@ -120,25 +152,7 @@ def _get_first_connected_account(username: str) -> Optional[tuple[str, str]]:
     return None
 
 
-def _create_provider(provider_name: str, username: str, account_id: str):
-    """Instantiate a cloud provider by name."""
-    from vaf.cloud.google_drive import GoogleDriveProvider
-    from vaf.cloud.onedrive import OneDriveProvider
-    from vaf.cloud.dropbox_provider import DropboxProvider
-    from vaf.cloud.nextcloud import NextcloudProvider
-    from vaf.cloud.icloud import ICloudProvider
-
-    PROVIDERS = {
-        "google_drive": GoogleDriveProvider,
-        "onedrive": OneDriveProvider,
-        "dropbox": DropboxProvider,
-        "nextcloud": NextcloudProvider,
-        "icloud": ICloudProvider,
-    }
-    cls = PROVIDERS.get(provider_name)
-    if not cls:
-        raise ValueError(f"Unknown provider: {provider_name}")
-    return cls(username=username, account_id=account_id)
+from vaf.cloud.base import create_cloud_provider
 
 
 def run_cloud_storage(action: str, provider: Optional[str] = None,
@@ -172,26 +186,26 @@ def run_cloud_storage(action: str, provider: Optional[str] = None,
 
     file_id = file_id or kwargs.get("file_id")
     if action == "search_all":
-        return _action_search_all(username, query or kwargs.get("query"), kwargs.get("mime_type") or mime_type)
+        return _action_search_all(username, query or kwargs.get("query"), kwargs.get("mime_type") or mime_type, user_scope_id=user_scope_id)
     if action == "show_in_viewer":
-        return _action_show_in_viewer(username, account_id, effective_provider, file_id)
+        return _action_show_in_viewer(username, account_id, effective_provider, file_id, user_scope_id=user_scope_id)
     if action == "save":
         return _action_save(username, account_id, effective_provider, file_path, remote_path,
                             user_scope_id=user_scope_id, user_role=user_role)
     elif action == "list":
-        return _action_list(username, account_id, effective_provider)
+        return _action_list(username, account_id, effective_provider, user_scope_id=user_scope_id)
     elif action == "retrieve":
-        return _action_retrieve(username, account_id, file_path)
+        return _action_retrieve(username, account_id, file_path, user_scope_id=user_scope_id)
     elif action == "status":
-        return _action_status(username, effective_provider)
+        return _action_status(username, effective_provider, user_scope_id=user_scope_id)
     elif action == "browse":
-        return _action_browse(username, account_id, effective_provider, folder_id or "root")
+        return _action_browse(username, account_id, effective_provider, folder_id or "root", user_scope_id=user_scope_id)
     elif action == "download":
-        return _action_download(username, account_id, effective_provider, file_id)
+        return _action_download(username, account_id, effective_provider, file_id, user_scope_id=user_scope_id)
     elif action == "read":
-        return _action_read(username, account_id, effective_provider, file_id)
+        return _action_read(username, account_id, effective_provider, file_id, user_scope_id=user_scope_id)
     elif action == "search":
-        return _action_search(username, account_id, effective_provider, query or kwargs.get("query"), mime_type or kwargs.get("mime_type"))
+        return _action_search(username, account_id, effective_provider, query or kwargs.get("query"), mime_type or kwargs.get("mime_type"), user_scope_id=user_scope_id)
     else:
         return f"Unknown action: {action}. Use: search_all, search, browse, download, read, show_in_viewer, save, list, retrieve, status."
 
@@ -260,10 +274,10 @@ def _action_save(username: str, account_id: str, provider: str, file_path: Optio
         return f"Failed to save file: {e}"
 
 
-def _action_browse(username: str, account_id: str, provider: str, folder_id: str) -> str:
+def _action_browse(username: str, account_id: str, provider: str, folder_id: str, user_scope_id: Optional[str] = None) -> str:
     """Browse cloud contents at a folder (cloud-only, no local storage)."""
     try:
-        prov = _create_provider(provider, username, account_id)
+        prov = create_cloud_provider(provider, username, account_id, user_scope_id=user_scope_id)
         if not prov.authenticate():
             return f"Authentication failed for {provider}. Reconnect the account in Settings."
         items = prov.list_folder_by_id(folder_id, "/")
@@ -300,7 +314,7 @@ def _action_browse(username: str, account_id: str, provider: str, folder_id: str
     return "\n".join(lines)
 
 
-def _action_list(username: str, account_id: str, provider: str) -> str:
+def _action_list(username: str, account_id: str, provider: str, user_scope_id: Optional[str] = None) -> str:
     """List files in the local sync directory."""
     sync_dir = _get_sync_dir(username, account_id)
     files = []
@@ -319,7 +333,7 @@ def _action_list(username: str, account_id: str, provider: str) -> str:
     return f"Files in {provider} sync folder ({len(files)}):\n" + "\n".join(files)
 
 
-def _action_search_all(username: str, query: Optional[str], mime_type: Optional[str] = None) -> str:
+def _action_search_all(username: str, query: Optional[str], mime_type: Optional[str] = None, user_scope_id: Optional[str] = None) -> str:
     """Search all connected clouds at once (like the UI). Returns combined results with provider/label."""
     if not query or not str(query).strip():
         return "query is required for 'search_all' (e.g. 'report.pdf', 'Bewilligung')."
@@ -341,7 +355,7 @@ def _action_search_all(username: str, query: Optional[str], mime_type: Optional[
         acc_id = acct.get("account_id", "")
         label = acct.get("label") or None
         try:
-            prov = _create_provider(prov_name, username, acc_id)
+            prov = create_cloud_provider(prov_name, username, acc_id, user_scope_id=user_scope_id)
             if not prov.authenticate():
                 continue
             items = prov.search_files(query.strip(), mime_type=mime_type, limit=30)
@@ -369,13 +383,13 @@ def _action_search_all(username: str, query: Optional[str], mime_type: Optional[
     )
 
 
-def _action_search(username: str, account_id: str, provider: str, query: Optional[str], mime_type: Optional[str] = None) -> str:
+def _action_search(username: str, account_id: str, provider: str, query: Optional[str], mime_type: Optional[str] = None, user_scope_id: Optional[str] = None) -> str:
     """Search entire cloud by filename. Returns matching files with file_id for read/download."""
     if not query or not str(query).strip():
         return "query is required for 'search' action (e.g. 'report.pdf', 'Bewilligung', '*.pdf')."
 
     try:
-        prov = _create_provider(provider, username, account_id)
+        prov = create_cloud_provider(provider, username, account_id, user_scope_id=user_scope_id)
         if not prov.authenticate():
             return f"Authentication failed for {provider}. Reconnect the account in Settings."
         items = prov.search_files(query.strip(), mime_type=mime_type, limit=50)
@@ -405,13 +419,13 @@ def _action_search(username: str, account_id: str, provider: str, query: Optiona
     return f"Found {len(items)} item(s) matching '{query}':\n" + "\n".join(lines) + "\n\nUse read(file_id=...) or download(file_id=...) with the id above."
 
 
-def _action_download(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+def _action_download(username: str, account_id: str, provider: str, file_id: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Download a file from cloud by file_id to user's Downloads folder."""
     if not file_id:
         return "file_id is required for 'download' action. Get it from browse (e.g. id=xxx)."
 
     try:
-        prov = _create_provider(provider, username, account_id)
+        prov = create_cloud_provider(provider, username, account_id, user_scope_id=user_scope_id)
         if not prov.authenticate():
             return f"Authentication failed for {provider}. Reconnect the account in Settings."
 
@@ -421,7 +435,7 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
         if meta.is_folder:
             return "Cannot download a folder. Use browse to list folder contents."
 
-        downloads = Platform.downloads_dir()
+        downloads = _download_dir(user_scope_id)
         dest = downloads / meta.name
         prov.download_file(file_id, dest)
         return f"Downloaded '{meta.name}' to {dest}"
@@ -432,7 +446,7 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
         return f"Download failed: {e}"
 
 
-def _action_read(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+def _action_read(username: str, account_id: str, provider: str, file_id: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Download to temp, extract text with Librarian, return content, then delete temp (no local copy)."""
     if not file_id:
         return "file_id is required for 'read' action. Get it from browse (e.g. id=xxx)."
@@ -440,7 +454,7 @@ def _action_read(username: str, account_id: str, provider: str, file_id: Optiona
     import tempfile
 
     try:
-        prov = _create_provider(provider, username, account_id)
+        prov = create_cloud_provider(provider, username, account_id, user_scope_id=user_scope_id)
         if not prov.authenticate():
             return f"Authentication failed for {provider}. Reconnect the account in Settings."
 
@@ -473,7 +487,7 @@ def _action_read(username: str, account_id: str, provider: str, file_id: Optiona
         return f"Read failed: {e}"
 
 
-def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -> str:
+def _action_retrieve(username: str, account_id: str, file_path: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Download a file from cloud to the user's Downloads folder."""
     if not file_path:
         return "file_path is required for 'retrieve' action (the remote filename to download)."
@@ -493,7 +507,7 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -
     if not source.exists():
         return f"File not found in sync folder: {file_path}. Use 'list' to see available files."
 
-    downloads = Platform.downloads_dir()
+    downloads = _download_dir(user_scope_id)
     dest = downloads / source.name
     try:
         shutil.copy2(str(source), str(dest))
@@ -502,7 +516,7 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str]) -
         return f"Failed to retrieve file: {e}"
 
 
-def _action_show_in_viewer(username: str, account_id: str, provider: str, file_id: Optional[str]) -> str:
+def _action_show_in_viewer(username: str, account_id: str, provider: str, file_id: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Download a cloud file and open it in the Document Viewer (Anhänge) so the user can see the PDF/doc."""
     if not file_id:
         return "file_id is required for 'show_in_viewer'. Get it from search or search_all."
@@ -510,7 +524,7 @@ def _action_show_in_viewer(username: str, account_id: str, provider: str, file_i
     import tempfile
 
     try:
-        prov = _create_provider(provider, username, account_id)
+        prov = create_cloud_provider(provider, username, account_id, user_scope_id=user_scope_id)
         if not prov.authenticate():
             return f"Authentication failed for {provider}. Reconnect the account in Settings."
         meta = prov.get_file_metadata(file_id)
@@ -595,7 +609,7 @@ def _action_show_in_viewer(username: str, account_id: str, provider: str, file_i
         return f"Failed to open in viewer: {e}"
 
 
-def _action_status(username: str, provider: str) -> str:
+def _action_status(username: str, provider: str, user_scope_id: Optional[str] = None) -> str:
     """Return sync status for the provider."""
     admin_user = Config.get("local_admin_username", "admin")
     if username == admin_user:

@@ -341,6 +341,43 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
   Uploaded attachments need no special case - they land inside the caller's own root
   (`get_session_attachments_dir`) - and cloud-synced files need none either, because
   `cloud_storage` is a separate tool that never hands out an absolute `cloud_sync` path.
+
+### Cloud credentials are addressed by scope
+
+Mail and GitHub key their stored credentials on the caller's `user_scope_id`; the cloud
+lane keyed on a NAME until 2026-08-01. A name is resolved per lane, so any lane supplying
+none collapsed onto `cloud:<provider>:<account>` - the machine owner's key - and a tenant
+reached the owner's connected Google Drive, OneDrive, Dropbox, Nextcloud and iCloud
+accounts through it.
+
+The scope now travels the whole chain: `CloudProvider` and its five subclasses carry it,
+`get_valid_access_token` takes it and writes the refreshed token back WITH it (a refresh
+that dropped the scope would quietly return a tenant's credential to the ownerless key),
+and the four functions in `credential_cloud` address the key with it. The provider classes
+learned it BEFORE the key format changed, because the hole is a read: changing the write
+key first would have hidden the credentials from the user who had just connected an
+account while a tenant carried on reading the owner's.
+
+Three properties are worth knowing rather than rediscovering:
+
+- **A scoped caller never falls back to the ownerless form.** That form is the hole.
+  Exactly one legacy probe is permitted - the caller's own non-empty name - and a hit is
+  re-keyed onto the scoped form and the old entry deleted, so the branch drains instead of
+  becoming a second permanent lookup. An empty name yields no probe at all, because the
+  name key with an empty name collapses onto the ownerless form.
+- **The owner is unaffected.** Their scope collapses to the no-identity form in the shared
+  key builder, so their existing entries answer unchanged.
+- **The background sync worker has no scope of its own**, and that boundary is named
+  rather than papered over: it runs without a request or a session, and no name-to-scope
+  resolution exists in the repository. The route that CONNECTS an account records the
+  scope it already holds in the account entry, and the worker reads it back. An account
+  connected before this change carries none; that account stays a name-keyed lookup, which
+  is what it was, and the legacy probe finds it.
+
+Cloud DOWNLOADS follow the same rule. Both download actions wrote to
+`Platform.downloads_dir()` - process global, so every tenant's download landed in the
+owner's home, in one of the four roots `GET /api/file` serves. A tenant now receives a
+`Downloads` folder inside their own project root; the owner keeps `~/Downloads`.
   All jailed tools enter the jail through the shared `user_jail(...)` context manager, so the
   reset-in-`finally` cannot be forgotten in one of them. Which tools receive the identity at
   all is no longer a hardcoded list of names in the dispatcher: each tool DECLARES it via

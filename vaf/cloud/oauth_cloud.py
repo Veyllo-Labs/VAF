@@ -302,8 +302,17 @@ def exchange_code_for_tokens(
     state: str,
     redirect_uri: str,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Exchange auth code for tokens, store in credential_cloud, return result dict."""
+    """Exchange auth code for tokens, store in credential_cloud, return result dict.
+
+    THE WRITE SIDE. Without the scope here the whole chain is decoration: the reader would
+    address a scoped key that the connect flow never wrote, so a user who just connected an
+    account would find no credentials at all - and the only entry that DID exist would be
+    the ownerless one every tenant can reach. The scope comes from the OAuth state, which is
+    also what `enforce_callback_actor_binding` checks, so it is the same identity that was
+    verified rather than a second guess at it.
+    """
     states = _load_states()
     entry = states.pop(state, None)
     _save_states(states)
@@ -352,7 +361,8 @@ def exchange_code_for_tokens(
     expires_in = data.get("expires_in")
     expires_at = time.time() + int(expires_in) if expires_in else None
     account_id = _resolve_account_id(provider, access)
-    set_cloud_oauth_tokens(account_id, provider, access, refresh, expires_at, effective_username)
+    set_cloud_oauth_tokens(account_id, provider, access, refresh, expires_at, effective_username,
+                           user_scope_id=user_scope_id)
     return {**data, "account_id": account_id, "provider": provider, "username": effective_username}
 
 
@@ -366,12 +376,24 @@ def _cred_username_for_store(username: Optional[str]) -> Optional[str]:
     return username.strip()
 
 
-def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None) -> Optional[str]:
-    """Return a valid access token, refreshing if expired. Returns None on failure."""
+def get_valid_access_token(
+    account_id: str,
+    provider: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[str]:
+    """Return a valid access token, refreshing if expired. Returns None on failure.
+
+    The scope travels BOTH ways on purpose. A refresh rewrites the token, and writing it
+    back without the scope would silently move a tenant's credential onto the ownerless
+    key - undoing the isolation at the moment the token rotates, which is the one moment
+    nobody is watching. Same shape as the estate-first ordering in the API-key revocation:
+    a repair path that quietly restores the old form is worse than no repair.
+    """
     from vaf.cloud.credential_cloud import get_cloud_credentials
 
     cred_user = _cred_username_for_store(username)
-    creds = get_cloud_credentials(account_id, provider, username)
+    creds = get_cloud_credentials(account_id, provider, username, user_scope_id=user_scope_id)
     if not creds:
         logger.warning(
             "Cloud OAuth: no credentials for account_id=%s provider=%s username=%s cred_user=%s",
@@ -423,7 +445,8 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
         # Honor refresh-token rotation (Microsoft / Google with rotation): persist the
         # new refresh_token when present, otherwise keep the existing one.
         new_refresh = data.get("refresh_token") or refresh
-        set_cloud_oauth_tokens(account_id, provider, new_access, new_refresh, new_expires_at, cred_user)
+        set_cloud_oauth_tokens(account_id, provider, new_access, new_refresh, new_expires_at,
+                               cred_user, user_scope_id=user_scope_id)
         return new_access
     except Exception as e:
         logger.warning("Cloud token refresh error for %s: %s", provider, e)

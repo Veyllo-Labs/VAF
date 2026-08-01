@@ -99,9 +99,17 @@ class CloudProvider(ABC):
     supports_delta: bool = False
     max_upload_size: int = 100 * 1024 * 1024  # 100 MB default
 
-    def __init__(self, username: str, account_id: str):
+    def __init__(self, username: str, account_id: str, user_scope_id: Optional[str] = None):
         self.username = username
         self.account_id = account_id
+        # THE SCOPE IS WHY THIS ROUND EXISTS. Credentials for this lane were addressed by
+        # NAME alone, and a name is resolved per lane - so a lane that supplies none
+        # collapses to the machine owner's key. Mail and GitHub already key on the scope;
+        # this one did not, and the hole is a READ, which is why the providers carry it
+        # before the key format changes. Optional because one lane genuinely has no scope to
+        # give (the background sync worker, see `sync_worker`), and that boundary is named
+        # rather than papered over with a wrong value.
+        self.user_scope_id = user_scope_id
 
     @abstractmethod
     def authenticate(self) -> bool:
@@ -149,3 +157,44 @@ class CloudProvider(ABC):
     def search_files(self, query: str, mime_type: Optional[str] = None, limit: int = 100) -> List[CloudFileMetadata]:
         """Search entire cloud by filename. Override to support."""
         raise NotImplementedError(f"{self.provider_name} does not support cloud search")
+
+
+# ── One factory, not three ───────────────────────────────────────────────────────────
+#
+# `_create_provider` existed THREE times - `tools/cloud_storage.py`, `api/cloud_routes.py`
+# and `cloud/sync_worker.py` - byte-identical apart from a docstring, a local variable name
+# and the wording of one error. Measured before merging rather than assumed.
+#
+# The merge is not tidiness, it is the reason this round exists. The providers are about to
+# learn a `user_scope_id`, and with three factories that is three hand-applications of the
+# same change, with three chances to forget one - and a forgotten one does not fail, it
+# silently keeps resolving credentials as the machine owner. CLAUDE.md Rule 0b states the
+# early warning exactly: applying the same fix by hand to the Nth site means the fix is the
+# primitive, not the Nth application.
+#
+# Imports stay INSIDE the function: the subclasses import this module, so importing them at
+# module level would be a cycle. That is also why the three copies did it this way.
+def create_cloud_provider(
+    provider_name: str,
+    username: str,
+    account_id: str,
+    user_scope_id: Optional[str] = None,
+) -> "CloudProvider":
+    """Instantiate a cloud provider by name, for one identity."""
+    from vaf.cloud.dropbox_provider import DropboxProvider
+    from vaf.cloud.google_drive import GoogleDriveProvider
+    from vaf.cloud.icloud import ICloudProvider
+    from vaf.cloud.nextcloud import NextcloudProvider
+    from vaf.cloud.onedrive import OneDriveProvider
+
+    providers = {
+        "google_drive": GoogleDriveProvider,
+        "onedrive": OneDriveProvider,
+        "dropbox": DropboxProvider,
+        "nextcloud": NextcloudProvider,
+        "icloud": ICloudProvider,
+    }
+    cls = providers.get(provider_name)
+    if not cls:
+        raise ValueError(f"Unknown cloud provider: {provider_name}")
+    return cls(username=username, account_id=account_id, user_scope_id=user_scope_id)

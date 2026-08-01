@@ -45,6 +45,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Each user's cloud accounts are their own.** Connected cloud storage - Google Drive,
+  OneDrive, Dropbox, Nextcloud, iCloud - was addressed by user NAME, and any part of VAF
+  that had no name to give fell back to the machine owner's. On a shared installation that
+  meant another person's request could list, read and download from the owner's cloud
+  accounts using the owner's own login. Credentials are now addressed by the account they
+  belong to, end to end, including when a login token is refreshed. Existing connections
+  keep working and move across by themselves the first time they are used; the owner's own
+  accounts are unchanged. Cloud downloads follow the same rule: they used to land in the
+  owner's Downloads folder no matter who asked, and now arrive in the requester's own
+  space.
 - **The OAuth client secrets get the same treatment as the API keys - and stop travelling
   to the browser too.** The Google, Microsoft, Dropbox and GitHub client secrets in
   Settings showed their stored value to any admin session and echoed it back on every

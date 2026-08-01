@@ -39,33 +39,35 @@ def _store() -> SecureBlobStore:
     return _store_singleton
 
 
-# ── Credential keys: SHARED BUILDER, STILL WITHOUT A SCOPE (part 1 of 2) ────────────────────────
-# This lane calls the same builder as mail and github, which makes the three key formats one
-# decision instead of three copies. It does NOT pass `user_scope_id` yet.
+# ── Credential keys: SHARED BUILDER, NOW WITH THE SCOPE (part 2 of 2, 2026-08-01) ───────────────
+# The same builder as mail and github, so the three key formats are one decision rather than three
+# copies - and now with the identity that decides ownership.
 #
-# CORRECTED 2026-07-31, because this paragraph and the changelog said opposite things and a reader
-# had no way to tell which was stale. It used to read "without a scope every caller resolves to the
-# same key, so a tenant reaches the machine owner's cloud accounts". That premise no longer holds,
-# and it held for a reason that was never in this file: `cloud_storage` resolved its caller from an
-# environment variable nobody sets, so it handed this builder the OWNER's name every time. With the
-# tool taking its identity from the caller, the keys already diverge - `cloud:<provider>:<acct>` for
-# the owner, `cloud:<provider>:<name>:<acct>` for a named tenant, `cloud:<provider>:scope_<hex>:
-# <acct>` for one whose name is not known.
+# WHY THE SCOPE AND NOT THE NAME. A name is resolved per lane, so a lane that supplies none
+# collapses to the owner's key; the scope is the only thing that can answer "am I the owner" for a
+# caller who has no name. Part 1 (`579431b0`) fixed the TOOL's resolution and left this note saying
+# the question was answered per caller rather than removed. It is removed here.
 #
-# WHAT REMAINS, stated narrowly so it is not read as done: the key is keyed on a NAME, and a name is
-# resolved per lane. A lane that supplies no name still collapses to the owner's key, and the
-# librarian's dispatch path is exactly such a lane today. A scope would remove the question instead
-# of answering it per caller.
+# THE ORDER WAS MEASURED AND IT DECIDED THE ROUND: the hole is a READ. Nine callers reach these
+# functions, and all but three route through `get_valid_access_token(account_id, provider, ...)` in
+# the providers, which had no scope. Changing the WRITE key first would have left every reader on
+# the old form - the credentials would have gone missing for the very user who just connected,
+# while a tenant kept reading the owner's. So the providers learned the scope first (`base.py` plus
+# five subclasses plus ONE factory that used to be three copies), and only then this file.
 #
-# PART 2 adds it, and it is a bigger change than swapping this call: the four public functions below
-# take `username` and no scope, and the readers reach them through the provider classes -
-# `BaseProvider(username, account_id)` plus five subclasses and three `_create_provider` copies. The
-# ORDER matters and was measured: the hole is a READ, so the providers must carry a scope BEFORE the
-# key changes; changing the write key first would leave every reader on the old form. It also needs
-# the lock mail already has - once a scope format exists, a scoped user must never fall back to the
-# OWNERLESS form - plus a single migration probe on the caller's own non-empty name, which re-keys
-# and deletes rather than becoming a permanent second lookup.
+# THE LOCK, and its assurance points at the OWNERLESS form rather than at "fallbacks in general":
+# once a scoped key format exists, a scoped caller must never fall back to `cloud:<provider>:<acct>`
+# - that form IS the hole. Exactly one legacy probe is permitted, the caller's OWN non-empty name,
+# and on a hit the entry is re-keyed and the old one DELETED, so the branch drains instead of
+# becoming a second permanent truth. An empty name yields no probe at all: `_cred_key_username`
+# normalizes empty to None, and the name key would then collapse onto the ownerless form.
 from vaf.core.credential_store import build_credential_key
+
+
+def _scope_for_key(user_scope_id: Optional[str]) -> Optional[str]:
+    """Normalize a scope for the key builder: blank is no scope."""
+    s = (str(user_scope_id).strip() if user_scope_id else "")
+    return s or None
 
 def _cred_key_username(username: Optional[str]) -> Optional[str]:
     """Normalize username for credential key lookup: None for local admin (matches storage)."""
@@ -93,20 +95,75 @@ def _normalize_google_email(email: str) -> list:
     return [e]
 
 
-def get_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Retrieve stored credentials for a cloud account."""
+def get_cloud_credentials(
+    account_id: str,
+    provider: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Retrieve stored credentials for a cloud account, for one identity.
+
+    STRICT for a scoped caller: their key, then AT MOST their own named key, and never the
+    ownerless form. A found legacy entry is re-keyed and removed, so the probe drains.
+    """
     key_username = _cred_key_username(username)
+    scope = _scope_for_key(user_scope_id)
     account_ids_to_try = _normalize_google_email(account_id) if provider == "google_drive" else [account_id]
+
     for aid in account_ids_to_try:
         key = build_credential_key(aid, namespace="cloud", provider=provider,
-                                   username=key_username)  # no scope yet - part 2
+                                   username=key_username, user_scope_id=scope)
         raw = _get_credential_raw(key)
         if raw:
             try:
                 return json.loads(raw)
             except Exception:
                 continue
+
+        # THE ONE PERMITTED LEGACY PROBE. Only for a caller that HAS a scope (an unscoped
+        # caller's key already IS the ownerless form, so there is nothing to migrate) and
+        # only on their own non-empty name. Never the ownerless form: that is the hole this
+        # change closes, and reaching it from a scoped caller would reopen it under the name
+        # of compatibility.
+        if not scope or not key_username:
+            continue
+        legacy = build_credential_key(aid, namespace="cloud", provider=provider,
+                                      username=key_username, user_scope_id=None)
+        if legacy == key:
+            continue
+        raw = _get_credential_raw(legacy)
+        if not raw:
+            continue
+        try:
+            creds = json.loads(raw)
+        except Exception:
+            continue
+        _rekey_credential(legacy, key, raw)
+        return creds
     return None
+
+
+def _rekey_credential(old_key: str, new_key: str, raw: str) -> None:
+    """Move one credential onto its scoped key and DELETE the old one. Never raises.
+
+    Deleting is what makes the probe above temporary. Leaving the old entry would turn a
+    migration into a second permanent lookup - the shape recorded in `api_keys` as the
+    estate branch that has to end, one lane over. Soft on failure for the same reason the
+    key migration is: the credential was found and is usable, and a read-only data
+    directory says nothing about whether it is valid.
+    """
+    try:
+        _store().update(lambda d: (d.__setitem__(new_key, raw), d.pop(old_key, None))[0])
+    except Exception as e:                                  # noqa: BLE001 - see docstring
+        logger.debug("Cloud credential re-key failed for %s: %s", _mask(old_key), e)
+        return
+    if keyring_available():
+        try:
+            import keyring
+            keyring.set_password(SERVICE_NAME, new_key, raw)
+            keyring.delete_password(SERVICE_NAME, old_key)
+        except Exception as e:
+            logger.debug("Keyring re-key failed for cloud %s: %s", _mask(old_key), e)
 
 
 def _get_credential_raw(key: str) -> Optional[str]:
@@ -129,14 +186,16 @@ def set_cloud_oauth_tokens(
     refresh_token: str,
     expires_at: Optional[float] = None,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> None:
-    """Store OAuth tokens for a cloud account."""
+    """Store OAuth tokens for a cloud account, under the caller's identity."""
     # Use canonical @gmail.com for Google (googlemail.com equivalent)
     store_id = account_id
     if provider == "google_drive" and isinstance(account_id, str):
         store_id = (account_id or "").strip().lower().replace("@googlemail.com", "@gmail.com")
     key = build_credential_key(store_id, namespace="cloud", provider=provider,
-                               username=_cred_key_username(username))  # no scope yet - part 2
+                               username=_cred_key_username(username),
+                               user_scope_id=_scope_for_key(user_scope_id))
     value = json.dumps({
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -160,10 +219,12 @@ def set_cloud_webdav_credentials(
     webdav_username: str,
     password: str,
     username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> None:
     """Store WebDAV credentials (Nextcloud app password)."""
     key = build_credential_key(account_id, namespace="cloud", provider="nextcloud",
-                               username=_cred_key_username(username))  # no scope yet - part 2
+                               username=_cred_key_username(username),
+                               user_scope_id=_scope_for_key(user_scope_id))
     value = json.dumps({
         "url": url,
         "webdav_username": webdav_username,
@@ -180,10 +241,16 @@ def set_cloud_webdav_credentials(
     _store().update(lambda d: d.__setitem__(key, value))
 
 
-def delete_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> None:
+def delete_cloud_credentials(
+    account_id: str,
+    provider: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> None:
     """Remove stored credentials for a cloud account."""
     key = build_credential_key(account_id, namespace="cloud", provider=provider,
-                               username=_cred_key_username(username))  # no scope yet - part 2
+                               username=_cred_key_username(username),
+                               user_scope_id=_scope_for_key(user_scope_id))
     if keyring_available():
         try:
             import keyring

@@ -39,8 +39,8 @@ class OneDriveProvider(CloudProvider):
     supports_delta = True
     max_upload_size = 250 * 1024 * 1024 * 1024  # 250 GB
 
-    def __init__(self, username: str, account_id: str):
-        super().__init__(username, account_id)
+    def __init__(self, username: str, account_id: str, user_scope_id=None):
+        super().__init__(username, account_id, user_scope_id)
         self._access_token: Optional[str] = None
 
     # ------------------------------------------------------------------
@@ -108,7 +108,8 @@ class OneDriveProvider(CloudProvider):
         """Obtain and validate an OAuth2 access token for OneDrive."""
         from vaf.cloud.oauth_cloud import get_valid_access_token
 
-        token = get_valid_access_token(self.account_id, self.provider_name, self.username)
+        token = get_valid_access_token(self.account_id, self.provider_name, self.username,
+                                       user_scope_id=self.user_scope_id)
         if not token:
             logger.error("Failed to obtain OneDrive access token for %s", self.username)
             return False

@@ -54,8 +54,8 @@ class NextcloudProvider(CloudProvider):
     supports_delta = False
     max_upload_size = 16 * 1024 * 1024 * 1024  # 16 GB (Nextcloud chunked)
 
-    def __init__(self, username: str, account_id: str):
-        super().__init__(username, account_id)
+    def __init__(self, username: str, account_id: str, user_scope_id=None):
+        super().__init__(username, account_id, user_scope_id)
         self._server_url: Optional[str] = None
         self._webdav_username: Optional[str] = None
         self._password: Optional[str] = None
@@ -193,7 +193,8 @@ class NextcloudProvider(CloudProvider):
         """Load WebDAV credentials and validate connectivity."""
         from vaf.cloud.credential_cloud import get_cloud_credentials
 
-        creds = get_cloud_credentials(self.account_id, "nextcloud", self.username)
+        creds = get_cloud_credentials(self.account_id, "nextcloud", self.username,
+                                      user_scope_id=self.user_scope_id)
         if not creds:
             logger.error("No Nextcloud credentials found for %s", self.username)
             return False

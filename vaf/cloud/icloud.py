@@ -42,8 +42,8 @@ class ICloudProvider(CloudProvider):
     supports_delta = False
     max_upload_size = 50 * 1024 * 1024 * 1024  # 50 GB
 
-    def __init__(self, username: str, account_id: str):
-        super().__init__(username, account_id)
+    def __init__(self, username: str, account_id: str, user_scope_id=None):
+        super().__init__(username, account_id, user_scope_id)
         self._sync_root: Optional[Path] = None
 
     # ------------------------------------------------------------------

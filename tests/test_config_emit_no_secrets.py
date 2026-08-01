@@ -110,6 +110,97 @@ def test_the_patch_response_to_a_non_admin_is_the_scoped_view(_config):
     assert "secure_store_kek" not in out, "the KEK went to a non-admin in a PATCH response"
 
 
+# ── the widening: from an api_key_ carve-out to the classifier ──────────────────────
+
+def test_the_admin_view_blanks_every_classified_secret(_config):
+    """The api_key_-only cut was an enumeration bought one incident at a time.
+
+    The OAuth client secrets travelled by the identical mechanism and were one save away
+    from the identical damage; the JWT signing secret rode along too. One classifier
+    (`is_secret_config_key`) now decides what never travels, instead of a prefix list that
+    grows a member per incident.
+    """
+    _config["email_oauth_google_client_secret"] = "GOCSPX-demo-secret"
+    _config["local_network_jwt_secret"] = "jwt-demo"
+
+    view = Config.config_for_user(Config.load(), None, "admin")
+
+    assert view["email_oauth_google_client_secret"] == ""
+    assert view["local_network_jwt_secret"] == ""
+
+
+def test_the_echo_cannot_wipe_an_oauth_secret(_config):
+    """The regression that exists BETWEEN the two halves of the widening.
+
+    Blanking the admin view alone would make every save echo "" for every OAuth secret the
+    form did not retype - and the old merge guard only protected `api_key_*`, so the first
+    unrelated settings save would have wiped the client secrets from config.json. The two
+    halves (blank at the emit, keep-on-blank in the merge) are one change; this is the test
+    that fails if they are ever separated.
+    """
+    _config["email_oauth_google_client_secret"] = "GOCSPX-demo-secret"
+
+    echo = dict(Config.config_for_user(Config.load(), None, "admin"))
+    _patch(echo)
+
+    assert Config.load().get("email_oauth_google_client_secret") == "GOCSPX-demo-secret", (
+        "an unrelated settings save wiped an OAuth client secret"
+    )
+
+
+def test_a_deliberately_typed_oauth_secret_still_saves(_config):
+    _patch({"github_oauth_client_secret": "ghp-typed-by-a-person"})
+
+    assert Config.load().get("github_oauth_client_secret") == "ghp-typed-by-a-person"
+
+
+def test_every_ui_managed_secret_is_actually_classified_secret():
+    """The allowlist rides on the classifier; an entry the classifier does not cover would
+    travel to the browser with a hint saying it is protected."""
+    for key in Config.UI_MANAGED_SECRET_KEYS:
+        assert Config.is_secret_config_key(key), f"{key} is UI-managed but not classified secret"
+        assert not key.startswith("api_key_"), (
+            f"{key} belongs to the provider-key lane, which has its own revocation ordering"
+        )
+
+
+def test_deleting_a_ui_managed_secret_clears_it(_config):
+    import vaf.api.config_routes as routes
+
+    _config["github_oauth_client_secret"] = "ghp-old"
+
+    out = asyncio.run(routes.delete_config_secret("github_oauth_client_secret", _={"role": "admin"}))
+
+    assert out["status"] == "deleted"
+    assert not Config.load().get("github_oauth_client_secret")
+
+
+@pytest.mark.parametrize("key", ["secure_store_kek", "api_key_openai", "language"])
+def test_the_delete_endpoint_refuses_everything_off_the_allowlist(key, _config):
+    """The KEK from a settings page would be an outage button; provider keys have their own
+    ordered revocation; plain settings are not secrets at all."""
+    import vaf.api.config_routes as routes
+    from fastapi import HTTPException
+
+    _config[key] = "something"
+    with pytest.raises(HTTPException):
+        asyncio.run(routes.delete_config_secret(key, _={"role": "admin"}))
+
+
+def test_the_listing_hints_ui_managed_secrets_and_never_infrastructure(_config):
+    """A hint of the KEK would be a leak with no user need behind it."""
+    import vaf.api.config_routes as routes
+
+    _config["email_oauth_google_client_secret"] = "GOCSPX-demo-secret-long-enough"
+    _config["secure_store_kek"] = "kek-value-demo-long-enough-000"
+
+    out = asyncio.run(routes.list_api_keys(_={"role": "admin"}))
+
+    assert out["secrets"].get("email_oauth_google_client_secret", "").startswith("GOCSPX-dem")
+    assert "GOCSPX-demo-secret-long-enough" not in str(out), "the full secret left the server"
+    assert "secure_store_kek" not in out["secrets"], "the KEK got a hint"
+
+
 def test_the_websocket_config_path_routes_through_the_same_funnel():
     """Static, and honestly labelled as such: the WS handler cannot be driven headlessly
     here, so this pins that its config answer goes through `config_for_user` rather than

@@ -819,6 +819,23 @@ class Config:
     # Connection config keys that only admin may write (enabled/whitelist etc.). Non-admins write to connection_enabled_by_scope instead.
     CONNECTION_CONFIG_KEYS = frozenset({"telegram_config", "whatsapp_config", "discord_config"})
 
+    # Secrets a person MANAGES through Settings - the OAuth client secrets - as opposed to
+    # infrastructure secrets (the KEK, the JWT signing secret, DB URLs) that no UI has any
+    # business displaying, hinting at, or deleting. This is the allowlist behind the
+    # stored-state listing and the explicit-delete endpoint: `is_secret_config_key` decides
+    # what never TRAVELS, this decides the far smaller set a UI may ask ABOUT. A hint of the
+    # KEK would be a leak with no user need behind it; deleting the JWT secret from a
+    # settings page would be an outage button. CI-guarded: every entry here must also be
+    # classified secret, so the two sets cannot drift into contradiction.
+    UI_MANAGED_SECRET_KEYS = frozenset({
+        "email_oauth_google_client_secret",
+        "cloud_oauth_google_client_secret",
+        "email_oauth_microsoft_client_secret",
+        "cloud_oauth_microsoft_client_secret",
+        "cloud_oauth_dropbox_client_secret",
+        "github_oauth_client_secret",
+    })
+
     @classmethod
     def filter_for_non_admin(cls, config: dict) -> dict:
         """Return a copy of config with only keys non-admins are allowed to write (user-scoped settings)."""
@@ -861,17 +878,22 @@ class Config:
         Non-admins get connection data scoped to their user_scope_id only (no other users' mail, telegram, whatsapp, etc.).
         """
         if (role or "").lower() == "admin":
-            # Full config MINUS provider API key values - for admins too, since the keys
-            # moved into the encrypted store. Sending them was measured doing real damage
-            # (2026-08-01, live): the admin browser rendered the config.json estate values
-            # as dots in Settings, the next Save echoed them back, and `absorb_config_keys`
-            # stored the echo as if it were the key - for the one provider whose estate was
-            # base64-encoded, the store then held the base64 SHELL and every request with it
-            # would have been refused. Blanked rather than popped, so client code reading
-            # `config.api_key_x` keeps getting a defined empty string; state comes from
-            # `GET /api/config/api-keys`, which answers in booleans and never in values.
+            # Full config MINUS every secret VALUE - for admins too. Secrets are WRITE-ONLY
+            # through the config API: state travels as booleans and lossy hints via
+            # `GET /api/config/api-keys`, never as values. This started as an `api_key_`
+            # carve-out and was widened to the `is_secret_config_key` classifier the same
+            # day, because the narrow cut was an enumeration bought one incident at a time:
+            # the api_key echo had already poisoned a stored key (the browser echoed the
+            # estate value into a save, and it was stored AS the key), and the OAuth client
+            # secrets were still travelling by the identical mechanism, one save away from
+            # the identical damage. One classifier, one rule, instead of a prefix list that
+            # grows a member per incident. Measured before widening: no web surface reads
+            # any secret value - the client-id fields are not secrets, and the secret
+            # fields are exactly the ones being converted to stored-state display. Blanked
+            # rather than popped, so client code reading `config.<key>` keeps getting a
+            # defined empty string.
             out = dict(config)
-            for k in [k for k in out if k.startswith("api_key_")]:
+            for k in [k for k in out if cls.is_secret_config_key(k)]:
                 out[k] = ""
             return out
         out = dict(config)
@@ -955,7 +977,14 @@ class Config:
             return merged
 
         for key, value in incoming.items():
-            if key.startswith("api_key_"):
+            # EVERY secret, not only api_key_*: since the admin view blanks secret values,
+            # every save echoes "" for every secret the form did not retype - and with the
+            # old api_key_-only guard that echo would have WIPED the OAuth client secrets
+            # from config.json on the first unrelated settings save. Blank means "not
+            # re-sent" for all of them; removal is an explicit endpoint, never an empty
+            # field. (api_key_ is a secret prefix, so this deletes the special case rather
+            # than adding a second one beside it.)
+            if cls.is_secret_config_key(key):
                 if isinstance(value, str) and not value.strip():
                     if (existing or {}).get(key):
                         continue

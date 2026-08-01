@@ -45,6 +45,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The OAuth client secrets get the same treatment as the API keys - and stop travelling
+  to the browser too.** The Google, Microsoft, Dropbox and GitHub client secrets in
+  Settings showed their stored value to any admin session and echoed it back on every
+  save - the same mechanism that corrupted a stored API key. They are now write-only like
+  the keys: the field shows a partial glimpse and locks until you choose to change it,
+  deleting is its own confirmed action, and what never leaves the server cannot be echoed
+  back into it. One consequence to know: clearing such a field and saving no longer
+  removes the secret - the delete action does, deliberately.
 - **A stored key field shows you which key it holds.** "Key stored" answers whether, not
   which - so each field with a stored key now shows a recognisable glimpse in grey: the
   first characters, a run of dots, the tail (like `vaf_live_q0``...``Ab4d`). It is a display

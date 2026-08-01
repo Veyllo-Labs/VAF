@@ -53,20 +53,22 @@ def test_config_for_user_redacts_secrets_for_non_admin():
     assert out.get("language") == "de"
 
 
-def test_config_for_user_admin_keeps_secrets_except_provider_keys():
-    """The admin view keeps its secrets - EXCEPT `api_key_*`, and that carve-out is load-
-    bearing, not tidiness. This test used to assert the admin got the key value back, which
-    is precisely the behaviour that did live damage on 2026-08-01: the browser echoed the
-    estate values into the next save, `absorb_config_keys` stored the echo as the key, and
-    the one provider whose estate was base64 ended up authenticating with the base64 SHELL.
-    Provider keys live in the encrypted store now; their state travels as booleans via
-    `GET /api/config/api-keys`, never as values. The rest of the admin view is unchanged.
-    Guarded the other way in tests/test_config_emit_no_secrets.py, where the poisoning
-    round-trip is replayed against the real PATCH route."""
-    cfg = {"api_key_openai": "sk-SECRET", "local_network_jwt_secret": "JWT"}
+def test_config_for_user_admin_blanks_secret_values():
+    """This assertion has now moved TWICE in one day, and the history is the point.
+
+    It began as "admin keeps `sk-SECRET`" - pinning exactly the behaviour that poisoned a
+    stored key (the browser echoed the value into a save, and the echo was stored AS the
+    key). The first fix carved out `api_key_*` only, and this test then asserted the JWT
+    secret still travelled - pinning the same defect for every OTHER secret, one incident
+    later. Secrets are write-only through the config API now, admin included, decided by
+    `is_secret_config_key` rather than by an enumeration that grows a member per incident.
+    Non-secret values still travel; the round-trip damage case lives in
+    tests/test_config_emit_no_secrets.py against the real PATCH route."""
+    cfg = {"api_key_openai": "sk-SECRET", "local_network_jwt_secret": "JWT", "language": "de"}
     out = Config.config_for_user(cfg, user_scope_id=None, role="admin")
     assert out.get("api_key_openai") == "", "a provider key value travelled to the admin browser"
-    assert out.get("local_network_jwt_secret") == "JWT"
+    assert out.get("local_network_jwt_secret") == "", "the JWT signing secret travelled to the browser"
+    assert out.get("language") == "de"
 
 
 def test_is_secret_config_key_classification():

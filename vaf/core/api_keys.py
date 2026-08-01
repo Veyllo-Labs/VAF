@@ -335,6 +335,31 @@ def configured_providers() -> dict:
     return {name: True for name in sorted(names) if name}
 
 
+def lossy_hint(secret: str) -> str:
+    """Start, bullets, tail - the recognisable glimpse of a secret, never the secret.
+
+    ONE builder, shared, and the sharing is measured rather than speculative: provider API
+    keys needed it first, the OAuth client secrets needed the identical thing the same day,
+    and the mail/cloud credential stores are the named next candidates the moment their
+    surfaces want stored-state display. Two hand-rolled copies was the threshold (CLAUDE.md
+    Rule 0b: the Nth hand application of a fix means the fix is the primitive).
+
+    The bounds are the contract: at most 14 characters of a long secret (the visible start
+    is mostly the public prefix anyway), proportionally less below 24, nothing at all below
+    8 - a 7-character secret with 4 shown is half given away. Callers display the result as
+    a PLACEHOLDER, never as a form value: a value gets echoed by the next save, and that
+    echo loop has already poisoned a stored key once.
+    """
+    n = len(secret)
+    if n < 8:
+        return "••••••••"
+    if n < 16:
+        return secret[:3] + "•" * 10
+    if n < 24:
+        return secret[:6] + "•" * 12
+    return secret[:10] + "•" * 12 + secret[-4:]
+
+
 def stored_key_hints() -> dict:
     """A lossy, recognisable glimpse of each stored key: start, bullets, tail.
 
@@ -351,16 +376,6 @@ def stored_key_hints() -> dict:
     already. The UI therefore renders hints as placeholders, and this function must never
     grow into "return the key, the client will mask it".
     """
-    def _hint(key: str) -> str:
-        n = len(key)
-        if n < 8:
-            return "••••••••"
-        if n < 16:
-            return key[:3] + "•" * 10
-        if n < 24:
-            return key[:6] + "•" * 12
-        return key[:10] + "•" * 12 + key[-4:]
-
     hints: dict = {}
     try:
         stored = _store().load_strict()
@@ -368,14 +383,14 @@ def stored_key_hints() -> dict:
         return {}
     for name, value in stored.items():
         if value and str(value).strip():
-            hints[str(name).strip().lower()] = _hint(str(value).strip())
+            hints[str(name).strip().lower()] = lossy_hint(str(value).strip())
     for key, raw in (Config.load() or {}).items():
         if key.startswith("api_key_") and isinstance(raw, str) and raw.strip():
             name = key[len("api_key_"):].strip().lower()
             if name not in hints:
                 plain = _decode_estate(raw.strip())
                 if plain:
-                    hints[name] = _hint(plain)
+                    hints[name] = lossy_hint(plain)
     return hints
 
 

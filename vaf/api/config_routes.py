@@ -121,20 +121,65 @@ async def list_api_keys(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str,
     An unreadable store is a 503, not an empty list: "nothing configured" and "I cannot tell
     you" must not render as the same screen.
     """
-    from vaf.core.api_keys import configured_providers, stored_key_hints
+    from vaf.core.api_keys import configured_providers, lossy_hint, stored_key_hints
     from vaf.core.secure_store import SecureStoreUnreadable
 
+    # UI-managed config secrets (the OAuth client secrets) ride the same response: state
+    # and a lossy hint, never a value. Restricted to `UI_MANAGED_SECRET_KEYS` on purpose -
+    # `is_secret_config_key` also matches the KEK, the JWT signing secret and DB URLs, and
+    # a hint of THOSE would be a leak with no user need behind it.
+    cfg = Config.load()
+    secrets = {
+        key: lossy_hint(str(cfg.get(key)).strip())
+        for key in sorted(Config.UI_MANAGED_SECRET_KEYS)
+        if isinstance(cfg.get(key), str) and str(cfg.get(key)).strip()
+    }
     try:
         # `hints` are lossy display strings (start + bullets + tail), for the question a
         # boolean cannot answer: WHICH key is stored here. They are placeholders in the
         # UI, never form values - a value would be echoed by the next save and stored as
         # the key, the loop that already poisoned one entry.
-        return {"providers": configured_providers(), "hints": stored_key_hints()}
+        return {"providers": configured_providers(), "hints": stored_key_hints(), "secrets": secrets}
     except SecureStoreUnreadable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"The stored API keys could not be read ({exc}).",
         ) from exc
+
+
+@router.delete("/config/secrets/{key_name}")
+async def delete_config_secret(
+    key_name: str,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Remove one UI-managed config secret (an OAuth client secret). Explicit, like every
+    secret removal here: a blank field means "not re-sent" on the save path and never
+    deletes - the guard that keeps an unrelated save from wiping a secret is the same one
+    that makes deletion impossible without its own call.
+
+    The allowlist is the boundary, and it is deliberately much smaller than "everything
+    classified secret": provider API keys have their own revocation endpoint with
+    multi-source ordering this key shape does not need, and infrastructure secrets (the
+    KEK, the JWT signing secret, DB URLs) must not be deletable from a settings page at
+    all - that button would be an outage.
+    """
+    key = (key_name or "").strip()
+    if key not in Config.UI_MANAGED_SECRET_KEYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a UI-managed secret. Provider API keys use "
+                   "DELETE /api/config/api-keys/{provider}.",
+        )
+    cfg = Config.load()
+    if cfg.get(key):
+        cfg[key] = ""
+        Config.save(cfg)
+    if Config.load().get(key):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"'{key}' still holds a value after the delete; treat it as still set.",
+        )
+    return {"status": "deleted", "key": key}
 
 
 @router.post("/config/api-keys/{provider}/check")

@@ -608,13 +608,45 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // interrupting that window - a failed check, a closed laptop - leaves the installation
     // keyless. Unlock keeps the old key valid until the new one is actually saved.
     const [keyEditing, setKeyEditing] = useState<Record<string, boolean>>({});
+    // UI-managed config secrets (OAuth client secrets): config-key -> lossy hint. Same
+    // contract as the provider keys - the value never travels, the state does.
+    const [keySecrets, setKeySecrets] = useState<Record<string, string>>({});
     const refreshStoredKeys = useCallback(() => {
         fetch('/api/config/api-keys', { credentials: 'include' })
             .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-            .then(d => { setStoredKeys(d.providers || {}); setKeyHints(d.hints || {}); })
+            .then(d => { setStoredKeys(d.providers || {}); setKeyHints(d.hints || {}); setKeySecrets(d.secrets || {}); })
             .catch(() => setStoredKeys('error'));
         setKeyEditing({});   // a fresh state re-locks every stored field
     }, []);
+    const [secretConfirm, setSecretConfirm] = useState<string | null>(null);
+    const [secretDeleting, setSecretDeleting] = useState<string | null>(null);
+    const deleteSecretGroup = useCallback(async (keys: string[]) => {
+        setSecretDeleting(keys[0]);
+        setRevokeError(null);
+        try {
+            for (const k of keys) {
+                const res = await fetch(`/api/config/secrets/${encodeURIComponent(k)}`, {
+                    method: 'DELETE', credentials: 'include',
+                });
+                if (!res.ok) {
+                    const body = await res.json().catch(() => null);
+                    throw new Error(body?.detail || `HTTP ${res.status}`);
+                }
+            }
+            // Clear the local mirror too, or the next Save would re-send the old value.
+            setLocalConfig((prev: any) => {
+                const next = { ...prev };
+                keys.forEach(k => { next[k] = ''; });
+                return next;
+            });
+            refreshStoredKeys();
+        } catch (e: any) {
+            setRevokeError(String(e?.message || e));
+        } finally {
+            setSecretDeleting(null);
+            setSecretConfirm(null);
+        }
+    }, [refreshStoredKeys]);
     // `isOpen` belongs in here, and leaving it out was a real defect rather than a missing
     // optimisation: this modal is rendered unconditionally by the page, so closing it does
     // NOT unmount the component. `storedKeys` therefore survives a close, and with the
@@ -675,6 +707,95 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             }
         }));
     }, []);
+
+    // One OAuth client secret group: the same lock/state/change/delete contract as the
+    // provider keys, over one or more MIRRORED config keys (Google and Microsoft write an
+    // email_ and a cloud_ variant in one stroke, so state, delete and unlock all operate on
+    // the group). No provider check: unlike an API key there is nothing to ask "does this
+    // secret work" without running a full OAuth exchange.
+    const oauthSecretField = (keys: string[], label: string, placeholder?: string) => {
+        const group = keys[0];
+        const value = keys.map(k => localConfig[k]).find(v => v) || '';
+        const hint = keys.map(k => keySecrets[k]).find(h => h) || '';
+        const isSet = !!hint;
+        const typed = String(value).trim().length > 0;
+        const locked = isSet && !keyEditing[group] && !typed;
+        const confirming = secretConfirm === group;
+        const state = (
+            <span className="flex items-center gap-2 text-[11px] leading-none">
+                {isSet ? (
+                    <>
+                        <span className="inline-flex items-center gap-1 text-emerald-600">
+                            <ShieldCheck size={11} />{tGeneral('keyStored')}
+                        </span>
+                        <span className="text-gray-300">·</span>
+                        {confirming ? (
+                            <>
+                                <span className="text-gray-500">{tGeneral('keyRevokeConfirm')}</span>
+                                <button type="button" disabled={secretDeleting === group}
+                                    onClick={() => deleteSecretGroup(keys)}
+                                    className="font-semibold text-red-600 hover:underline disabled:opacity-50">
+                                    {secretDeleting === group ? tGeneral('keyRevoking') : tCommon('yes')}
+                                </button>
+                                <button type="button" onClick={() => setSecretConfirm(null)}
+                                    className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
+                            </>
+                        ) : locked ? (
+                            <>
+                                <button type="button" onClick={() => setKeyEditing(prev => ({ ...prev, [group]: true }))}
+                                    className="text-gray-500 hover:text-gray-300 hover:underline">
+                                    {tGeneral('keyChange')}
+                                </button>
+                                <span className="text-gray-300">·</span>
+                                <button type="button" onClick={() => { setRevokeError(null); setSecretConfirm(group); }}
+                                    className="text-gray-500 hover:text-red-600 hover:underline">
+                                    {tGeneral('keyRevoke')}
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {!typed && (
+                                    <>
+                                        <span className="text-gray-400">{tGeneral('keyChangeNow')}</span>
+                                        <button type="button" onClick={() => setKeyEditing(prev => ({ ...prev, [group]: false }))}
+                                            className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
+                                        <span className="text-gray-300">·</span>
+                                    </>
+                                )}
+                                <button type="button" onClick={() => { setRevokeError(null); setSecretConfirm(group); }}
+                                    className="text-gray-500 hover:text-red-600 hover:underline">
+                                    {tGeneral('keyRevoke')}
+                                </button>
+                            </>
+                        )}
+                    </>
+                ) : typed ? (
+                    <span className="text-gray-400">{tGeneral('keyPendingSave')}</span>
+                ) : storedKeys !== null ? (
+                    <span className="text-gray-400">{tGeneral('keyNotStored')}</span>
+                ) : null}
+            </span>
+        );
+        return (
+            <Input
+                key={group}
+                label={label}
+                value={value}
+                onChange={(v: string) => {
+                    setLocalConfig((prev: any) => {
+                        const next = { ...prev };
+                        keys.forEach(k => { next[k] = v; });
+                        return next;
+                    });
+                    setChanged(true);
+                }}
+                type="password"
+                placeholder={isSet ? hint : placeholder}
+                labelExtra={state}
+                disabled={locked}
+            />
+        );
+    };
 
     // One key field: the input, plus whether a key is actually stored and a way to revoke it.
     // The state sits in the LABEL row next to the provider link (owner 2026-08-01), not in a
@@ -2271,20 +2392,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         type="text"
                                                         placeholder="xxx.apps.googleusercontent.com"
                                                     />
-                                                    <Input
-                                                        label={tGeneral('googleClientSecret')}
-                                                        value={localConfig.email_oauth_google_client_secret || localConfig.cloud_oauth_google_client_secret || ''}
-                                                        onChange={(v: string) => {
-                                                            setLocalConfig((prev: any) => ({
-                                                                ...prev,
-                                                                email_oauth_google_client_secret: v,
-                                                                cloud_oauth_google_client_secret: v,
-                                                            }));
-                                                            setChanged(true);
-                                                        }}
-                                                        type="password"
-                                                        placeholder="Optional for desktop apps"
-                                                    />
+                                                    {oauthSecretField(
+                                                        ['email_oauth_google_client_secret', 'cloud_oauth_google_client_secret'],
+                                                        tGeneral('googleClientSecret'), 'Optional for desktop apps')}
                                                 </div>
                                             </div>
                                             <div>
@@ -2304,19 +2414,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         type="text"
                                                         placeholder="Azure App Registration"
                                                     />
-                                                    <Input
-                                                        label={tGeneral('microsoftClientSecret')}
-                                                        value={localConfig.email_oauth_microsoft_client_secret || localConfig.cloud_oauth_microsoft_client_secret || ''}
-                                                        onChange={(v: string) => {
-                                                            setLocalConfig((prev: any) => ({
-                                                                ...prev,
-                                                                email_oauth_microsoft_client_secret: v,
-                                                                cloud_oauth_microsoft_client_secret: v,
-                                                            }));
-                                                            setChanged(true);
-                                                        }}
-                                                        type="password"
-                                                    />
+                                                    {oauthSecretField(
+                                                        ['email_oauth_microsoft_client_secret', 'cloud_oauth_microsoft_client_secret'],
+                                                        tGeneral('microsoftClientSecret'))}
                                                 </div>
                                             </div>
                                             {/* Apple has no OAuth mail API; iCloud Mail connects via IMAP with an app-specific password. */}
@@ -2324,14 +2424,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('dropboxProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <Input label={tGeneral('dropboxAppKey')} value={localConfig.cloud_oauth_dropbox_client_id || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_id', v)} type="text" placeholder="Dropbox App Console" />
-                                                    <Input label={tGeneral('dropboxAppSecret')} value={localConfig.cloud_oauth_dropbox_client_secret || ''} onChange={(v: string) => handleChange('cloud_oauth_dropbox_client_secret', v)} type="password" />
+                                                    {oauthSecretField(['cloud_oauth_dropbox_client_secret'], tGeneral('dropboxAppSecret'))}
                                                 </div>
                                             </div>
                                             <div>
                                                 <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('githubProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">
                                                     <Input label={tGeneral('githubClientId')} value={localConfig.github_oauth_client_id || ''} onChange={(v: string) => handleChange('github_oauth_client_id', v)} type="text" placeholder="GitHub OAuth App Client ID" />
-                                                    <Input label={tGeneral('githubClientSecret')} value={localConfig.github_oauth_client_secret || ''} onChange={(v: string) => handleChange('github_oauth_client_secret', v)} type="password" placeholder="GitHub OAuth App Client Secret" />
+                                                    {oauthSecretField(['github_oauth_client_secret'], tGeneral('githubClientSecret'), 'GitHub OAuth App Client Secret')}
                                                 </div>
                                             </div>
                                         </div>

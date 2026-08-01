@@ -605,7 +605,7 @@ def _folder_owner(root_kind: str, dirname: str, uid8_names: Dict[str, str]) -> O
 
 def collect_workspace_metrics(uid8_names: Optional[Dict[str, str]] = None,
                               roots: Optional[List[Any]] = None) -> Dict[str, Any]:
-    """PER-USER folder totals (owner decision, round 2): who owns how many
+    """PER-USER folder totals: who owns how many
     isolated folders and how big they are in sum - plus the grand total.
 
     Two roots: ~/.vaf/users/<username> (identity/soul/logs per user) and
@@ -668,7 +668,7 @@ async def _verify_admin_totp(user: Dict[str, Any], code: str) -> None:
     """Verify the CURRENT admin's TOTP code or raise (403 wrong code, 400 no 2FA).
 
     The false-positive restore is the one action that deliberately re-exposes a
-    HIGH-scanned skill to the agent - the owner mandated a second factor for it,
+    HIGH-scanned skill to the agent - it deliberately requires a second factor,
     so a stolen admin session alone cannot lift a quarantine."""
     code = str(code or "").strip().replace(" ", "")
     if not code:
@@ -752,7 +752,7 @@ async def skill_acknowledge(skill_id: str,
                             payload: Dict[str, Any] = Body(...),
                             user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Acknowledge a MEDIUM-risk skill (admin reviewed + keeps it). Requires the
-    admin's 2FA code (owner mandate: silencing a security warning is a security
+    admin's 2FA code (deliberate: silencing a security warning is a security
     decision). The skill stays visible + still shown as medium, but the banner
     stops going amber for it. Refused for high-risk skills."""
     from vaf.core.skills_registry import get_skill_manifest_entry, set_skill_acknowledged, validate_skill_id
@@ -792,7 +792,7 @@ async def quarantined_skill_restore(skill_id: str,
                                     payload: Dict[str, Any] = Body(...),
                                     user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """False-positive resolution: lift the quarantine. Requires the admin's 2FA
-    code (owner mandate) - this re-exposes the skill to the agent."""
+    code (deliberate, same rule as acknowledge) - this re-exposes the skill to the agent."""
     from vaf.core.skills_registry import clear_skill_quarantine, get_skill_manifest_entry, validate_skill_id
     sid = validate_skill_id(skill_id)
     entry = get_skill_manifest_entry(sid)
@@ -821,7 +821,7 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
     sandbox = await run_in_threadpool(collect_sandbox_status)
     firewall = await run_in_threadpool(collect_firewall_status)
     # Docker network segmentation is the inner firewall and is shown regardless
-    # of LAN mode (owner request); it can independently flip the module amber.
+    # of LAN mode, deliberately; it can independently flip the module amber.
     try:
         firewall["docker"] = await run_in_threadpool(collect_docker_isolation)
     except Exception:

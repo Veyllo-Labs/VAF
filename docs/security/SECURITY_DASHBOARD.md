@@ -182,7 +182,7 @@ user record to verify against).
 | `/api/security/skills/{id}/acknowledge` | POST | yes | Mark a MEDIUM skill as reviewed-and-kept: it stays visible and truthfully medium, but stops ambering the banner. Refused for high. |
 | `/api/security/skills/{id}/restore` | POST | yes | False-positive resolution: lift a quarantine, re-exposing the skill to the agent. |
 
-The asymmetry is deliberate (owner mandate): silencing a warning
+The asymmetry is deliberate: silencing a warning
 (acknowledge) or re-exposing a flagged skill (restore) is a security decision,
 so a stolen admin session alone must not suffice; the second factor is
 required. Deleting or isolating a skill only reduces risk, so no second

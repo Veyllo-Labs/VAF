@@ -130,7 +130,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     never `setdefault`, so a model-written `user_role: "admin"` is overwritten rather than
     honoured. Before this, the child ran every inner tool as
     `compute_user_jail(None, None)` = the machine owner, for every caller.
-    **`bash` is the named exception** (owner decision): it declares nothing and stays at
+    **`bash` is the named exception**, deliberately: it declares nothing and stays at
     full strength - a shell confined to a per-user jail is not a shell. The containment for
     a user who should not have that power is ACCESS to the coder (the per-user tool
     permission), which is stored today and enforced by nobody (Phase 4). Until Phase 4

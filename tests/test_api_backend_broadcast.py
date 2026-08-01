@@ -226,7 +226,7 @@ def test_provider_change_broadcasts_without_force(monkeypatch):
 # ── and it stays internal ───────────────────────────────────────────────────────────
 
 def test_the_broadcast_is_not_on_the_public_facade():
-    """Owner decision 2026-07-31, pinned here because the argument is easy to forget.
+    """Deliberate, and pinned here because the argument is easy to forget.
 
     The obvious move after building this was to export it, and it is wrong: the
     broadcast refuses for any agent carrying config overrides, which is every agent an

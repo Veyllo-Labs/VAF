@@ -11,7 +11,7 @@ Backend selection at RUNTIME is explicit opt-in ONLY (deliberate deviation from
 vision's capable-main-provider cascade): audio is metered separately from chat,
 so a configured chat provider must never silently start paying for speech. Empty
 ``speech_tts_provider`` / ``speech_stt_provider`` means the local Docker lane.
-One owner-decided exception, applied at CONFIG-WRITE time (not here): when a
+One deliberate exception, applied at CONFIG-WRITE time (not here): when a
 Veyllo API key is first added and no STT provider was chosen, the config seeds
 ``speech_stt_provider = "veyllo"`` (``Config.apply_veyllo_stt_default``). Runtime
 selection still just reads that explicit value; the always-local fallback below

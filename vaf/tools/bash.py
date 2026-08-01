@@ -71,14 +71,13 @@ class BashTool(BaseTool):
     permission_level = "dangerous"
     side_effect_class = "irreversible"
     coder_only = True  # Only available to Coder Sub-Agent
-    # NAMED EXCEPTION (owner decision, 2026-08-01): this tool declares NO identity and NO
-    # file_access, and that is deliberate, not forgotten - the difference this comment
-    # exists to preserve. The coder must be able to use its tools at full strength (build,
-    # test, install), and a shell confined to a per-user file jail is not a shell. The
-    # containment for a user who should not have this power is ACCESS TO THE CODER, i.e.
-    # the per-user tool permission - which is stored today and enforced by nobody (measured;
-    # that enforcement is Phase 4). CONSEQUENCE, stated so the ordering cannot be lost:
-    # until Phase 4 enforces that permission, the coder must not be exposed to untrusted
+    # NAMED EXCEPTION: this tool declares NO identity and NO file_access, and that is
+    # deliberate, not forgotten - the difference this comment exists to preserve. The coder
+    # must be able to use its tools at full strength (build, test, install), and a shell
+    # confined to a per-user file jail is not a shell. The containment for a user who should
+    # not have this power is ACCESS TO THE CODER, i.e. the per-user tool permission - which
+    # is stored today and enforced by nobody. CONSEQUENCE, stated so the ordering cannot be
+    # lost: until that permission is enforced, the coder must not be exposed to untrusted
     # tenants at all, because through bash it is an unjailed shell. Frozen in
     # tests/test_coder_identity_boundary.py so a silent change in either direction shows up.
     description = """Execute a shell command in the project directory.

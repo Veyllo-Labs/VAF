@@ -182,7 +182,7 @@ class MailService:
 
     def relabel_and_learn(self, message_pk: int, category: str,
                           username: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Relabel one message, then (legacy parity, owner decision P5.4) add a
+        """Relabel one message, then (legacy parity, deliberate) add a
         sender rule for its From address and backfill every mail from that sender.
         Returns {category, updated} or None if the message is unknown."""
         from vaf.core.email_accounts import pattern_from_from_addr, upsert_sender_rule

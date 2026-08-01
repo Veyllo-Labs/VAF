@@ -209,3 +209,56 @@ def test_the_denylist_itself_is_ignored():
         ".hygiene-deny.local must be gitignored; it holds the literals this guard must "
         "keep OUT of the repo"
     )
+
+
+# ── decisions are justified by reasons, never attributed to process ──────────────────
+#
+# INCIDENT 2026-08-01: a comment shipped reading "NAMED EXCEPTION (owner decision, ...)".
+# A stranger reading public code cannot do anything with WHO decided - that is what git
+# history is for - and process attribution reads as noise where a REASON should stand. A
+# sweep found twenty-nine such sites across four rounds, so this is a class, not a slip.
+# The rule: write "Deliberate: <reason>", and let the reason carry the weight.
+#
+# The phrases are ATTRIBUTION shapes only. Domain uses of "owner" stay untouched - the
+# machine owner, the voice call's owner, chmod owner-only, GitHub's owner parameter - which
+# is why this is a phrase list and not a word ban. Assembled from parts so this guard does
+# not flag its own source.
+_ATTRIBUTION_PHRASES = tuple(
+    a + b for a, b in (
+        ("owner ", "decision"), ("owner-", "decided"), ("owner ", "mandate"),
+        ("owner-", "mandated"), ("owner ", "request"), ("owner ", "mandated"),
+        ("owner product ", "decision"), ("owner's design ", "rule"),
+        ("Owner-", "Entscheidung"), ("Owner-", "Auflage"),
+    )
+)
+
+
+def _attribution_hits(text: str):
+    low = text.lower()
+    return sorted({p for p in _ATTRIBUTION_PHRASES if p.lower() in low})
+
+
+def test_no_process_attribution_in_tracked_content():
+    offenders = {}
+    for rel, p in _tracked_text_files():
+        if rel == "tests/test_public_repo_hygiene.py":
+            continue
+        try:
+            text = p.read_bytes().decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        hits = _attribution_hits(text)
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "process attribution in committed content - state the technical reason instead "
+        f"('Deliberate: <reason>'); git history already records who and when: {offenders}"
+    )
+
+
+def test_the_attribution_detector_actually_detects():
+    """The detector's own floor, so an empty result means clean rather than blind."""
+    assert _attribution_hits("kept broad (owner " + "decision, 2026-08-01)")
+    assert _attribution_hits("Per Owner-" + "Auflage bleibt das so")
+    assert not _attribution_hits("the machine owner's key collapses to the ownerless form")
+    assert not _attribution_hits("chmod: restrict permissions (owner only)")

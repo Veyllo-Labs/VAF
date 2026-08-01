@@ -318,7 +318,7 @@ is precisely where a forged From lands.
 **The user's own knowledge** is retrieved the way the main agent and the voice agent
 retrieve it - `run_memory_search_sync` with the caller's scope, gated only on
 `memory_enabled`, with `memory_rag_k` (the main agent's own key) rather than a
-number invented here. UNCONDITIONALLY, by owner decision: a composer that only
+number invented here. UNCONDITIONALLY, and deliberately so: a composer that only
 sometimes remembers who you are is worse than one that never does, because you
 cannot tell which run you got. The query is the user's instruction, their prompt for
 this turn exactly as `task.input_text` is the main agent's; with nothing typed it
@@ -521,7 +521,7 @@ through only split-horizon names the local resolver does not know.
   error. The client shows a category chip on non-primary conversations and a
   relabel picker in the reader. Categories are applied on INSERT only, so a manual
   relabel is never overwritten by a later sync.
-- Sender-rule learning on relabel (owner decision: every relabel learns a rule):
+- Sender-rule learning on relabel (deliberate: every relabel learns a rule):
   `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
   it relabels the one message, derives a sender pattern from its From header
   (`email_accounts.pattern_from_from_addr`, the one SSOT copy re-exported by

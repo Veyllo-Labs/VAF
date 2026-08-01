@@ -1472,7 +1472,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   return (
     <div className="flex-1 overflow-auto" style={{ background: C.bg, padding: '16px 18px 26px' }}>
 
-      {/* ── Top layout (owner-decided 2026-07-22): ONE big protection panel left
+      {/* ── Top layout: ONE big protection panel left
            (hero shield + the eight modules as a status list with traffic-light
            dots: green ok, amber attention, red alert, grey not measured), and
            the audit-chain + skills panels STACKED in the right column. ── */}
@@ -1498,7 +1498,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: C.textDim, fontWeight: 600, marginBottom: 3 }}>{t('ovEyebrow')}</div>
           <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.01em', color: overallState === 'nodata' ? C.textMid : overall.color, ...(overall.pulse ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }}>{overall.head}</div>
           <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>{overall.sub}</div>
-          {/* Today's blocked/rejected attempts, AT THE SHIELD (owner 2026-07-31). The
+          {/* Today's blocked/rejected attempts, AT THE SHIELD. The
               only place a count of blocked events appeared was inside the skills panel
               and the firewall row, so the summary that people actually read carried
               none of it. Amber when a refusal was overridden or a re-scan raised an
@@ -1969,7 +1969,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
         )}
       </div>
 
-      {/* Security posture section removed by owner decision 2026-07-23: a
+      {/* Security posture section removed deliberately: a
           misconfiguration must surface as a warning in the module list above
           (single source of attention), not as a second static checklist. */}
 

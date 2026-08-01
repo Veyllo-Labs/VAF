@@ -90,7 +90,7 @@ def rescan_all_skills() -> Dict[str, Any]:
             if level_worsened(old_level, new_level):
                 summary["alerts"] += 1
                 cats = ",".join(sorted({str(f.get("category", "")) for f in (scan.get("findings") or []) if f.get("category")}))
-                # Worsened to HIGH -> immediate quarantine (owner decision): the
+                # Worsened to HIGH -> immediate quarantine, deliberately: the
                 # skill vanishes from every agent path until the admin resolves
                 # it (delete, or false-positive restore with 2FA). An
                 # override-installed high skill is untouched: its STORED level

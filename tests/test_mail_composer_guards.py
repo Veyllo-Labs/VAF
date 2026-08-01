@@ -380,7 +380,7 @@ def test_memory_query_comes_from_the_user_not_the_mail(monkeypatch):
 
 
 def test_memory_is_retrieved_even_without_an_instruction(monkeypatch):
-    """Owner decision: the Composer gets memory the way the main agent and the voice
+    """Deliberate: the Composer gets memory the way the main agent and the voice
     agent do - unconditionally. A composer that only sometimes remembers who you are
     is worse than one that never does, because you cannot tell which run you got.
     With nothing typed the query falls back to the subject being answered."""

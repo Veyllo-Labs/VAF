@@ -284,7 +284,7 @@ async def trash_message(message_pk: int,
 @router.patch("/messages/{message_pk}/category")
 async def set_message_category(message_pk: int, body: Dict[str, Any] = Body(...),
                                _user: Dict[str, Any] = Depends(_get_current_user)):
-    """Gmail-style category relabel: {category: str}. Per the owner decision (P5.4)
+    """Gmail-style category relabel: {category: str}. Deliberately
     this ALSO learns a sender rule for the message's From address and backfills every
     stored mail from that sender. All of it is a LOCAL classification (nothing is
     written to the mail server), so it needs only the v2 flag, not

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """P5.4: relabeling a mail learns a sender rule and backfills every stored mail of
-that sender (owner decision = legacy MailDashboard parity). Exercises the v2
+that sender (deliberate: legacy MailDashboard parity). Exercises the v2
 MailService store path against a mocked, scope-routed config blob (the SSOT
 sender_category_rules)."""
 import os

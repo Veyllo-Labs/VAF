@@ -317,7 +317,7 @@ def remove_account(account_id: str, username: Optional[str] = None,
 
 def set_mail_enabled(account_id: str, enabled: bool, username: Optional[str] = None,
                      user_scope_id: Optional[str] = None) -> bool:
-    """Owner decision (2026-07-24): deleting a mail account that ALSO backs Calendar
+    """Deliberate: deleting a mail account that ALSO backs Calendar
     keeps its shared OAuth token AND config entry, but flips mail_enabled=False so
     the mail account list hides it while Calendar still resolves it. The marker
     lives in the account dict - no new config key."""
@@ -335,7 +335,7 @@ def list_mail_accounts(username: Optional[str] = None,
 def delete_mail_account(account_id: str, username: Optional[str] = None,
                         cred_username: Optional[str] = None,
                         user_scope_id: Optional[str] = None) -> Dict[str, Any]:
-    """Calendar-safe account delete (owner decision + EMAIL_CLIENT.md fail-closed
+    """Calendar-safe account delete (EMAIL_CLIENT.md fail-closed
     lifecycle), centralized so the legacy route and the /api/mail endpoint share
     ONE cascade. Drops the v2 store rows/blobs/FTS/ops for the account and its
     MAIL-only IMAP credential lanes. A gmail/microsoft account shares its OAuth

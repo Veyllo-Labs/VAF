@@ -601,7 +601,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [revoking, setRevoking] = useState<string | null>(null);
     const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
     const [revokeError, setRevokeError] = useState<string | null>(null);
-    // A stored key's field is LOCKED until the user says "change" (owner 2026-08-01: being
+    // A stored key's field is LOCKED until the user says "change" (being
     // able to click into a field that already holds a key read as confusing). This map holds
     // the per-provider unlock. Deliberately NOT "delete first, then type": between a delete
     // and the save of its replacement there would be NO key at all, and anything
@@ -798,7 +798,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     // One key field: the input, plus whether a key is actually stored and a way to revoke it.
-    // The state sits in the LABEL row next to the provider link (owner 2026-08-01), not in a
+    // The state sits in the LABEL row next to the provider link, not in a
     // line under the box: nine key fields each carrying their own status line turns the panel
     // into a column of three-line blocks, and the state belongs to the provider rather than
     // to the input. The state itself was the part missing entirely - without it an empty box
@@ -2024,7 +2024,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         refreshStoredKeys();
         if (changedKeys.length) checkApiKeys(changedKeys);
 
-        // SAVING DOES NOT CLOSE THIS (owner 2026-08-01). Closing is the user's action - ESC
+        // SAVING DOES NOT CLOSE THIS. Closing is the user's action - ESC
         // or a click outside - and conflating it with "apply" costs them the result: a key
         // check reports back into this panel, and a panel that has closed cannot report
         // anything. The network branch still closes, because that path restarts the backend
@@ -2340,7 +2340,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {/* space-y here, not in Section: `Section` renders its children with no
                                         vertical gap at all, which passed unnoticed while the rows between
                                         boxes were bare labels. Now each label row carries state and actions,
-                                        and with zero gap it reads as a caption of the box ABOVE it (owner,
+                                        and with zero gap it reads as a caption of the box ABOVE it (found
                                         live). Scoped to the two key sections rather than fixed globally in
                                         Section - that would reflow every panel in Settings for one report. */}
                                     <div className="space-y-5">

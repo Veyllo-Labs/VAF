@@ -88,7 +88,7 @@ def test_config_for_user_redacts_key_keeps_provider():
     assert filtered.get("speech_tts_provider") == "elevenlabs"
 
 
-# ── Veyllo STT default-on-key-add (owner product decision) ────────────────────
+# ── Veyllo STT default-on-key-add (product decision) ─────────────────────────
 
 def test_veyllo_stt_default_seeded_on_key_add():
     """First Veyllo key added + no STT provider chosen -> default speech_stt_provider=veyllo."""

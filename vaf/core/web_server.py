@@ -7389,7 +7389,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     "since_wall": (_call.get("engage_guests") or {}).get(
                                         "since_wall") or time.time()}
                                 log("WebServer",
-                                    "voice_call: guest-engagement ON (owner request%s)"
+                                    "voice_call: guest-engagement ON (owner-initiated%s)"
                                     % (", command" if _cmd_arm else ""))
                             elif _call.get("engage_guests"):
                                 _call["engage_guests"]["expires_at"] = (

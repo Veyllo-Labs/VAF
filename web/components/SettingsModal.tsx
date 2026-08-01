@@ -2170,16 +2170,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {revokeError && (
                                         <p className="text-xs text-red-600 ml-1">{revokeError}</p>
                                     )}
-                                    {apiKeyField('veyllo', 'Veyllo Key', 'vaf_live_…', 'https://veyllo.app')}
-                                    {apiKeyField('openai', tGeneral('openaiKey'), 'sk-...', 'https://platform.openai.com/api-keys')}
-                                    {apiKeyField('anthropic', tGeneral('anthropicKey'), 'sk-ant-...', 'https://console.anthropic.com/settings/keys')}
-                                    {apiKeyField('deepseek', tGeneral('deepseekKey'), '', 'https://platform.deepseek.com/api_keys')}
-                                    {apiKeyField('google', tGeneral('googleKey'), '', 'https://aistudio.google.com/app/apikey')}
-                                    {apiKeyField('openrouter', tGeneral('openrouterKey'), '', 'https://openrouter.ai/settings/keys')}
-                                    {apiKeyField('elevenlabs', tGeneral('elevenlabsKey'), 'sk_...', 'https://elevenlabs.io/app/settings/api-keys')}
+                                    {/* space-y here, not in Section: `Section` renders its children with no
+                                        vertical gap at all, which passed unnoticed while the rows between
+                                        boxes were bare labels. Now each label row carries state and actions,
+                                        and with zero gap it reads as a caption of the box ABOVE it (owner,
+                                        live). Scoped to the two key sections rather than fixed globally in
+                                        Section - that would reflow every panel in Settings for one report. */}
+                                    <div className="space-y-5">
+                                        {apiKeyField('veyllo', 'Veyllo Key', 'vaf_live_…', 'https://veyllo.app')}
+                                        {apiKeyField('openai', tGeneral('openaiKey'), 'sk-...', 'https://platform.openai.com/api-keys')}
+                                        {apiKeyField('anthropic', tGeneral('anthropicKey'), 'sk-ant-...', 'https://console.anthropic.com/settings/keys')}
+                                        {apiKeyField('deepseek', tGeneral('deepseekKey'), '', 'https://platform.deepseek.com/api_keys')}
+                                        {apiKeyField('google', tGeneral('googleKey'), '', 'https://aistudio.google.com/app/apikey')}
+                                        {apiKeyField('openrouter', tGeneral('openrouterKey'), '', 'https://openrouter.ai/settings/keys')}
+                                        {apiKeyField('elevenlabs', tGeneral('elevenlabsKey'), 'sk_...', 'https://elevenlabs.io/app/settings/api-keys')}
+                                    </div>
                                 </Section>
                                 <Section title={tGeneral('webSearch')}>
                                     <p className="text-xs text-gray-500 mb-3">{tGeneral('webSearchDesc')}</p>
+                                    <div className="space-y-5">
                                     {apiKeyField('brave_search', tGeneral('braveSearchKey'), 'From api-dashboard.search.brave.com', 'https://api-dashboard.search.brave.com/')}
                                     {apiKeyField('google_search', tGeneral('googleSearchKey'), 'Cloud Console – Custom Search API', 'https://console.cloud.google.com/apis/credentials')}
                                     <Input
@@ -2190,6 +2199,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         placeholder="From Programmable Search Engine control panel"
                                         link="https://programmablesearchengine.google.com/controlpanel/all"
                                     />
+                                    </div>
                                 </Section>
 
                                 {currentUser?.role === 'admin' && (

@@ -1267,7 +1267,11 @@
       "tempPasswordHint": "Temporäres Passwort — gib es dem Nutzer; er ändert es beim nächsten Login.",
       "confirmResetTwoFa": "2FA dieses Nutzers löschen? Er richtet es beim nächsten Login neu ein.",
       "resetTwoFaFailed": "2FA-Reset fehlgeschlagen",
-      "twoFaResetDone": "Zurückgesetzt — Neueinrichtung beim nächsten Login"
+      "twoFaResetDone": "Zurückgesetzt — Neueinrichtung beim nächsten Login",
+      "accountActive": "Aktiv",
+      "accountDeactivated": "Deaktiviert",
+      "accountActiveDesc": "Dieser Nutzer kann sich anmelden und VAF verwenden. Zum Sperren ausschalten.",
+      "accountDeactivatedDesc": "Anmeldung und Token-Verlängerung sind nach dem Speichern gesperrt. Eine bereits angemeldete Sitzung endet, wenn ihr Token abläuft."
     },
     "userDetail": {
       "lastActive": "Zuletzt aktiv",

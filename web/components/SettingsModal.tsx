@@ -6452,10 +6452,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
                                         <div className="flex items-center gap-3">
-                                            <div className={cn("p-2 rounded-lg transition-colors", editingUser.status === 'active' ? "bg-green-50 text-green-600" : "bg-gray-100 text-gray-500")}>
+                                            <div className={cn("p-2 rounded-lg transition-colors", editingUser.status === 'active' ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")}>
                                                 {editingUser.status === 'active' ? <CheckCircle size={16} /> : <XCircle size={16} />}
                                             </div>
-                                            <span className="text-sm font-medium text-gray-700">{tModals('editUser.accountStatus')}</span>
+                                            <div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-gray-700">{tModals('editUser.accountStatus')}</span>
+                                                    <span className={cn("text-xs font-semibold px-2 py-0.5 rounded-full",
+                                                        editingUser.status === 'active'
+                                                            ? "bg-green-50 text-green-700 border border-green-200"
+                                                            : "bg-red-50 text-red-700 border border-red-200")}>
+                                                        {editingUser.status === 'active' ? tModals('editUser.accountActive') : tModals('editUser.accountDeactivated')}
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-gray-400 mt-0.5 max-w-md">
+                                                    {editingUser.status === 'active'
+                                                        ? tModals('editUser.accountActiveDesc')
+                                                        : tModals('editUser.accountDeactivatedDesc')}
+                                                </p>
+                                            </div>
                                         </div>
                                         <Switch 
                                             label="" 

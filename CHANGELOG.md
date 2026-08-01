@@ -45,6 +45,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The account status toggle says what it does.** It flips whether the user may sign
+  in, but showed only a nameless switch. It now shows the state in words - Active or
+  Deactivated - plus what each means, including the honest limit: deactivating blocks
+  sign-in and token renewal immediately, while a session that is already signed in ends
+  when its token expires.
 - **The per-user access picker is searchable.** With 117 tools in the grid, finding the
   one to grant or revoke meant scrolling; both the tool and the workflow list now have a
   search field. Filtering is visual only - presets and "Select All" keep operating on

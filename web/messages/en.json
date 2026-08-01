@@ -1267,7 +1267,11 @@
       "tempPasswordHint": "Temporary password — give it to the user; they change it on next login.",
       "confirmResetTwoFa": "Clear this user's 2FA? They will set it up again on next login.",
       "resetTwoFaFailed": "Failed to reset 2FA",
-      "twoFaResetDone": "Reset — re-setup on next login"
+      "twoFaResetDone": "Reset — re-setup on next login",
+      "accountActive": "Active",
+      "accountDeactivated": "Deactivated",
+      "accountActiveDesc": "This user can sign in and use VAF. Turn off to block the account.",
+      "accountDeactivatedDesc": "Sign-in and token renewal are blocked on save. A session that is already signed in ends when its token expires."
     },
     "userDetail": {
       "lastActive": "Last Active",

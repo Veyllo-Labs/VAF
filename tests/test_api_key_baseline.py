@@ -240,14 +240,29 @@ def test_every_write_site_routes_into_the_store():
         )
 
     # And nobody else merges a raw payload into the config without absorbing first.
+    #
+    # By CALL, not by substring. The substring version flagged `vaf/core/api_keys.py` for
+    # naming the helper in a docstring, which is the "a guard reading text instead of code"
+    # failure in tests/README.md - and the tempting fix, adding the file to the allow-list,
+    # would have blinded the guard to the one module most able to do the damage it watches
+    # for. An AST walk cannot be fooled by prose in either direction.
+    import ast as _ast
+
     offenders = []
     for f in sorted((root / "vaf").rglob("*.py")):
-        src = f.read_bytes().decode()
-        if "merge_preserving_nonempty_sensitive" not in src:
-            continue
         if f.relative_to(root).as_posix() in WRITE_SITES or f.name == "config.py":
             continue
-        offenders.append(f.relative_to(root).as_posix())
+        try:
+            tree = _ast.parse(f.read_bytes())
+        except SyntaxError:                                  # pragma: no cover
+            continue
+        calls = (
+            n for n in _ast.walk(tree)
+            if isinstance(n, _ast.Call)
+            and getattr(n.func, "attr", getattr(n.func, "id", "")) == "merge_preserving_nonempty_sensitive"
+        )
+        if next(calls, None) is not None:
+            offenders.append(f.relative_to(root).as_posix())
     assert not offenders, (
         f"a config-merge path that was not part of the measured write set: {offenders}. "
         f"It would write API keys raw into config.json where nothing asks for them."

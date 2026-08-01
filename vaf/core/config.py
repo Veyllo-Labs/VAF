@@ -861,7 +861,19 @@ class Config:
         Non-admins get connection data scoped to their user_scope_id only (no other users' mail, telegram, whatsapp, etc.).
         """
         if (role or "").lower() == "admin":
-            return dict(config)
+            # Full config MINUS provider API key values - for admins too, since the keys
+            # moved into the encrypted store. Sending them was measured doing real damage
+            # (2026-08-01, live): the admin browser rendered the config.json estate values
+            # as dots in Settings, the next Save echoed them back, and `absorb_config_keys`
+            # stored the echo as if it were the key - for the one provider whose estate was
+            # base64-encoded, the store then held the base64 SHELL and every request with it
+            # would have been refused. Blanked rather than popped, so client code reading
+            # `config.api_key_x` keeps getting a defined empty string; state comes from
+            # `GET /api/config/api-keys`, which answers in booleans and never in values.
+            out = dict(config)
+            for k in [k for k in out if k.startswith("api_key_")]:
+                out[k] = ""
+            return out
         out = dict(config)
         scope_str = str(user_scope_id).strip() if user_scope_id else None
 

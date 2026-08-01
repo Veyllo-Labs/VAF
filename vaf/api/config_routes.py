@@ -101,7 +101,11 @@ async def patch_config(
     from vaf.core.api_keys import absorb_config_keys
     merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
     Config.save(merged)
-    return merged
+    # Through the same funnel as GET, never raw: `merged` carries everything the file
+    # holds - estate API keys, the KEK, other users' connection configs - and this
+    # response goes to whoever sent the PATCH, admin or not. Returning it unfiltered was
+    # a second copy of the leak the GET route had, one save away from every reader.
+    return Config.config_for_user(merged, _user.get("user_scope_id"), _user.get("role", "user"))
 
 
 @router.get("/config/api-keys")

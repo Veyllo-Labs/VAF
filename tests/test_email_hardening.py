@@ -53,10 +53,19 @@ def test_config_for_user_redacts_secrets_for_non_admin():
     assert out.get("language") == "de"
 
 
-def test_config_for_user_admin_keeps_secrets():
+def test_config_for_user_admin_keeps_secrets_except_provider_keys():
+    """The admin view keeps its secrets - EXCEPT `api_key_*`, and that carve-out is load-
+    bearing, not tidiness. This test used to assert the admin got the key value back, which
+    is precisely the behaviour that did live damage on 2026-08-01: the browser echoed the
+    estate values into the next save, `absorb_config_keys` stored the echo as the key, and
+    the one provider whose estate was base64 ended up authenticating with the base64 SHELL.
+    Provider keys live in the encrypted store now; their state travels as booleans via
+    `GET /api/config/api-keys`, never as values. The rest of the admin view is unchanged.
+    Guarded the other way in tests/test_config_emit_no_secrets.py, where the poisoning
+    round-trip is replayed against the real PATCH route."""
     cfg = {"api_key_openai": "sk-SECRET", "local_network_jwt_secret": "JWT"}
     out = Config.config_for_user(cfg, user_scope_id=None, role="admin")
-    assert out.get("api_key_openai") == "sk-SECRET"
+    assert out.get("api_key_openai") == "", "a provider key value travelled to the admin browser"
     assert out.get("local_network_jwt_secret") == "JWT"
 
 

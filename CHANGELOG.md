@@ -45,6 +45,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Your API keys no longer travel to the browser at all - and a Settings save can no
+  longer corrupt a stored key.** The Settings page used to receive the key values still
+  sitting in the configuration file and showed them as dots; saving any setting then sent
+  them back, and VAF stored that echo as if it were the key. For most keys the echo
+  happened to be identical and nothing broke; for one whose on-disk form was encoded, the
+  stored key was silently replaced by its encoded shell and every request with it would
+  have been refused - found because one key field looked different from the others. Key
+  fields now always arrive empty (the stored value is confirmed, never displayed), the
+  save response no longer carries secrets to anyone, and the round trip is pinned by a
+  test that replays it against the real save route.
+- **"Fetch models" works again for a stored key.** It used to read the key from the form
+  field, which is empty by design now; the server resolves the stored key itself, and the
+  form only needs a value while you are typing a new one.
 - **A new or changed API key is checked against the provider when you save it.** Until now
   a wrong key looked exactly like a right one until the next message failed, and the answer
   arrived as a chat error with nothing connecting it to the screen that caused it. Saving a

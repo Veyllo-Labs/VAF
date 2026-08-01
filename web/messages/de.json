@@ -517,7 +517,8 @@
       "keyRevoke": "Schluessel loeschen",
       "keyRevokeConfirm": "Diesen Schluessel endgueltig loeschen?",
       "keyRevoking": "Wird geloescht…",
-      "keyStoredPlaceholder": "Ein Schluessel ist hinterlegt (neuen eingeben zum Ersetzen)"
+      "keyStoredPlaceholder": "Ein Schluessel ist hinterlegt (neuen eingeben zum Ersetzen)",
+      "keyPendingSave": "Noch nicht gespeichert"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Suchen (z. B. GitHub, E-Mail, Kalender)…",

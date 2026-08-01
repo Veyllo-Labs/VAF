@@ -517,7 +517,8 @@
       "keyRevoke": "Delete key",
       "keyRevokeConfirm": "Delete this key permanently?",
       "keyRevoking": "Deleting…",
-      "keyStoredPlaceholder": "A key is stored (enter a new one to replace it)"
+      "keyStoredPlaceholder": "A key is stored (enter a new one to replace it)",
+      "keyPendingSave": "Not saved yet"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",

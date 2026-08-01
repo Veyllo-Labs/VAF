@@ -602,10 +602,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .then(d => setStoredKeys(d.providers || {}))
             .catch(() => setStoredKeys('error'));
     }, []);
+    // `isOpen` belongs in here, and leaving it out was a real defect rather than a missing
+    // optimisation: this modal is rendered unconditionally by the page, so closing it does
+    // NOT unmount the component. `storedKeys` therefore survives a close, and with the
+    // effect keyed on `activeTab` alone it never ran again - a key saved while the modal was
+    // open kept reading "no key stored" until the tab was switched away and back, or the
+    // page was reloaded. Live-found immediately after shipping the state line it belongs to.
     useEffect(() => {
-        if (activeTab !== 'general' || currentUser?.role !== 'admin') return;
+        if (!isOpen || activeTab !== 'general' || currentUser?.role !== 'admin') return;
         refreshStoredKeys();
-    }, [activeTab, currentUser?.role, refreshStoredKeys]);
+    }, [isOpen, activeTab, currentUser?.role, refreshStoredKeys]);
 
     // Revoking is its own call, never an empty field on save: a blank field means "not
     // re-sent" everywhere else, and making it mean "delete" would rest on this component
@@ -641,6 +647,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const isSet = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
         const unknown = storedKeys === 'error';
         const confirming = revokeConfirm === provider;
+        // Something typed into the box that the store does not know about yet. Saying "no key
+        // stored" underneath it would be the same class of untrue statement this whole state
+        // line exists to remove, just pointing the other way.
+        const pending = !isSet && String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
         return (
             <div key={provider} className="flex flex-col gap-1">
                 <Input
@@ -677,6 +687,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </button>
                             )}
                         </>
+                    ) : pending ? (
+                        <span className="text-gray-400">{tGeneral('keyPendingSave')}</span>
                     ) : storedKeys !== null ? (
                         <span className="text-gray-400">{tGeneral('keyNotStored')}</span>
                     ) : null}
@@ -1779,7 +1791,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const handleSave = () => {
         const networkChanged = localConfig.local_network_enabled !== (config?.local_network_enabled || false);
         onSave(localConfig);
-        
+        // A save is the one moment the stored-key state is guaranteed to have changed, and
+        // it is not visible from anything this component already watches: the keys go into
+        // the encrypted store, so nothing in the config that comes back reflects them.
+        refreshStoredKeys();
+
         if (networkChanged) {
             setIsRestarting(true);
             setTimeout(() => {

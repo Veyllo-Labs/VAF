@@ -45,6 +45,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **A stored key field shows you which key it holds.** "Key stored" answers whether, not
+  which - so each field with a stored key now shows a recognisable glimpse in grey: the
+  first characters, a run of dots, the tail (like `vaf_live_q0``...``Ab4d`). It is a display
+  built on the server and deliberately partial; the key itself still never travels to the
+  browser, which is what keeps the save round-trip incapable of corrupting it.
 - **Your API keys no longer travel to the browser at all - and a Settings save can no
   longer corrupt a stored key.** The Settings page used to receive the key values still
   sitting in the configuration file and showed them as dots; saving any setting then sent

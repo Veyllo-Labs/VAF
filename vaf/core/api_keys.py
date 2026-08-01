@@ -335,6 +335,50 @@ def configured_providers() -> dict:
     return {name: True for name in sorted(names) if name}
 
 
+def stored_key_hints() -> dict:
+    """A lossy, recognisable glimpse of each stored key: start, bullets, tail.
+
+    Exists because "a key is stored" answers whether but not WHICH - the owner's question
+    was "was ist das für ein key?", and a boolean cannot answer it. The hint is built
+    server-side and deliberately lossy: for a normal-length key the first 10 and last 4
+    characters, which for real keys is mostly the public prefix (`sk-proj-`, `vaf_live_`,
+    `AIzaSy`) plus a few identifying characters - the same trade GitHub and Stripe make.
+    Short keys reveal proportionally less, and anything under 8 characters reveals nothing.
+
+    THE RULE THAT KEEPS THIS SAFE, learned the hard way the same day: the hint travels to
+    the browser as a DISPLAY, never as a form value. A value gets echoed by the next save,
+    and the echo gets stored as the key - that exact loop poisoned a stored key once
+    already. The UI therefore renders hints as placeholders, and this function must never
+    grow into "return the key, the client will mask it".
+    """
+    def _hint(key: str) -> str:
+        n = len(key)
+        if n < 8:
+            return "••••••••"
+        if n < 16:
+            return key[:3] + "•" * 10
+        if n < 24:
+            return key[:6] + "•" * 12
+        return key[:10] + "•" * 12 + key[-4:]
+
+    hints: dict = {}
+    try:
+        stored = _store().load_strict()
+    except SecureStoreUnreadable:
+        return {}
+    for name, value in stored.items():
+        if value and str(value).strip():
+            hints[str(name).strip().lower()] = _hint(str(value).strip())
+    for key, raw in (Config.load() or {}).items():
+        if key.startswith("api_key_") and isinstance(raw, str) and raw.strip():
+            name = key[len("api_key_"):].strip().lower()
+            if name not in hints:
+                plain = _decode_estate(raw.strip())
+                if plain:
+                    hints[name] = _hint(plain)
+    return hints
+
+
 def delete_api_key(provider: str) -> None:
     """Revoke a key everywhere it can be answered from. ESTATE FIRST, store second.
 

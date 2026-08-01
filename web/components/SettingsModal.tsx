@@ -593,13 +593,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // configured" and the field below looks empty. `null` = not loaded yet, 'error' = the
     // store could not be read, which must NOT render as "nothing configured".
     const [storedKeys, setStoredKeys] = useState<Record<string, boolean> | 'error' | null>(null);
+    // Lossy display hints per provider ("vaf_live_q0•••••••••••Ab4d") so "key stored" can
+    // also answer WHICH key. Rendered as PLACEHOLDERS only - a hint in the form value
+    // would be echoed by the next save and stored as the key, the exact loop that already
+    // poisoned a stored key once.
+    const [keyHints, setKeyHints] = useState<Record<string, string>>({});
     const [revoking, setRevoking] = useState<string | null>(null);
     const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
     const [revokeError, setRevokeError] = useState<string | null>(null);
     const refreshStoredKeys = useCallback(() => {
         fetch('/api/config/api-keys', { credentials: 'include' })
             .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-            .then(d => setStoredKeys(d.providers || {}))
+            .then(d => { setStoredKeys(d.providers || {}); setKeyHints(d.hints || {}); })
             .catch(() => setStoredKeys('error'));
     }, []);
     // `isOpen` belongs in here, and leaving it out was a real defect rather than a missing
@@ -746,7 +751,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     handleChange(`api_key_${provider}`, v);
                 }}
                 type="password"
-                placeholder={isSet ? tGeneral('keyStoredPlaceholder') : placeholder}
+                placeholder={isSet ? (keyHints[provider] || tGeneral('keyStoredPlaceholder')) : placeholder}
                 link={link}
                 labelExtra={state}
             />

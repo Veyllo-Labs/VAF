@@ -121,11 +121,15 @@ async def list_api_keys(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str,
     An unreadable store is a 503, not an empty list: "nothing configured" and "I cannot tell
     you" must not render as the same screen.
     """
-    from vaf.core.api_keys import configured_providers
+    from vaf.core.api_keys import configured_providers, stored_key_hints
     from vaf.core.secure_store import SecureStoreUnreadable
 
     try:
-        return {"providers": configured_providers()}
+        # `hints` are lossy display strings (start + bullets + tail), for the question a
+        # boolean cannot answer: WHICH key is stored here. They are placeholders in the
+        # UI, never form values - a value would be echoed by the next save and stored as
+        # the key, the loop that already poisoned one entry.
+        return {"providers": configured_providers(), "hints": stored_key_hints()}
     except SecureStoreUnreadable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

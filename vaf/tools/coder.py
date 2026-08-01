@@ -2519,6 +2519,43 @@ def _caller_identity(kwargs: dict) -> tuple:
     return (str(scope) if scope else None), (str(role) if role else None)
 
 
+# Inner tools that exist ONLY inside the coder's child process - never in the main
+# registry, so the admin's user-management picker cannot offer them from the registry list.
+# Exposed via GET /api/users/tool-universe so "the admin can disable bash for a user" is
+# expressible; guarded by tests/test_coder_permissions.py against drifting from the
+# local_tools construction below.
+CODER_ONLY_TOOL_NAMES = (
+    "bash",
+    "git_init", "git_add_commit", "git_status", "git_log",
+    "project_history", "project_rollback",
+    "update_codex", "add_memory",
+    "run_tests",
+)
+
+
+def _caller_allowed_tools(scope, role):
+    """The account allowlist, on whichever side of the process boundary we are.
+
+    In the child the parent has already resolved it and put it into VAF_ALLOWED_TOOLS
+    (absent = unrestricted, same contract as the identity vars). In the parent it is
+    resolved from the auth DB - the same resolver the funnel uses, so the coder cannot
+    disagree with the chat lane about what an account may run. None = unrestricted.
+    """
+    env = os.environ.get("VAF_ALLOWED_TOOLS")
+    if env is not None:
+        return frozenset(x for x in env.split(",") if x)
+    if not scope:
+        return None
+    try:
+        from vaf.core.config import is_admin_identity
+        if is_admin_identity(role, scope):
+            return None
+        from vaf.auth.permissions import resolve_allowed_tools
+        return resolve_allowed_tools(scope)
+    except Exception:
+        return None
+
+
 def _assign_caller_identity(tool, fn_args: dict, scope, role) -> dict:
     """Give an inner tool the caller's identity - by ASSIGNMENT, never setdefault.
 
@@ -2952,6 +2989,7 @@ Thumbs.db
         # the dispatcher) and the spawned child (kwargs empty, env set by the parent), and
         # the dispatch loop thousands of lines below needs the answer as locals.
         caller_scope, caller_role = _caller_identity(kwargs)
+        caller_allowed = _caller_allowed_tools(caller_scope, caller_role)
 
         # ── History/Rollback delegation fast path ────────────────────────────
         # The Main Agent talks to the coder like a tool: a task such as
@@ -3063,6 +3101,11 @@ Thumbs.db
                 _sub_env["VAF_USER_SCOPE_ID"] = _caller_scope_env
             if _caller_role_env:
                 _sub_env["VAF_USER_ROLE"] = _caller_role_env
+            if caller_allowed is not None:
+                # Tool NAMES only, never a secret: the child must enforce the same account
+                # allowlist, and it cannot ask the DB for it mid-run without re-deciding
+                # what the funnel already decided.
+                _sub_env["VAF_ALLOWED_TOOLS"] = ",".join(sorted(caller_allowed))
 
             # Pass provider configuration to sub-agent
             use_separate_provider = Config.get("subagent_use_separate_provider", False)
@@ -4382,7 +4425,7 @@ Task {task_idx + 1}: {current_task}
                 deduped.append(t)
             return deduped
 
-        def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
+        def _tools_schema_unfiltered(is_main_context: bool) -> List[Dict]:
             """Get tools schema based on context type. Enforces strict phase separation."""
 
             # ═══════════════════════════════════════════════════════════════════
@@ -4741,6 +4784,19 @@ Task {task_idx + 1}: {current_task}
                     }
                 ] + common_tools
         
+        def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
+            """The schema the model sees, minus tools the account may not use.
+
+            Filtering the SCHEMA is the primary enforcement: a tool the model cannot see is
+            a tool it cannot loop on. The dispatch-side refusal below is the backstop for a
+            hallucinated call to a hidden name.
+            """
+            schema = _tools_schema_unfiltered(is_main_context)
+            if caller_allowed is None:
+                return schema
+            return [e for e in schema
+                    if e.get("function", {}).get("name") in caller_allowed]
+
         # Initialize tools_schema (will be rebuilt dynamically in loop)
         tools_schema = []
         
@@ -8841,6 +8897,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 
                 elif fn_name in self.local_tools:
                     tool = self.local_tools[fn_name]
+                    if caller_allowed is not None and fn_name not in caller_allowed:
+                        # Backstop only - the schema filter above keeps blocked tools out of
+                        # the model's sight, so this fires only on a hallucinated name.
+                        class _RefusedTool:
+                            def run(self, **_kw):
+                                return (f"Security Error: The tool '{fn_name}' is not "
+                                        f"enabled for your account.")
+                        tool = _RefusedTool()
                     
                     # Fix relative paths and show in stream
                     if fn_name == "edit_file":

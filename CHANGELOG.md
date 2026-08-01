@@ -45,6 +45,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The per-user tool permission is now actually enforced.** Since user management
+  existed, an admin could choose which tools each user may use - and the choice was
+  saved, displayed, and checked by nothing (the interface said so honestly). It is now
+  enforced on every tool call: a user can only run the tools selected for their account,
+  in chat and inside the coding agent, and a revocation takes effect within seconds, not
+  at the next login. The coding agent's internal tools - the shell above all - now appear
+  in the admin's picker as well, so "this user gets the coder but not the shell" is a
+  choice the admin can express. Admins themselves are never restricted, an empty
+  selection means unrestricted, and workflow permissions remain display-only for now.
 - **The coding agent now acts as the person who asked.** It runs as a separate process,
   and no identity crossed that boundary - so its file tools ran with the machine owner's
   rights for every caller. The caller's identity now travels with the task, and the

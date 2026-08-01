@@ -358,11 +358,34 @@ their own tree for the first time.
 
 **`bash` is a named exception, in both directions.** It declares no identity and no
 `file_access`, deliberately: the coder must be able to build, test and install at full
-strength, and the containment for a user who should not have that power is access to the
-coder itself - the per-user tool permission. That permission is stored and displayed today
-and ENFORCED NOWHERE (Phase 4). Consequence, stated so the ordering cannot be lost: until
-Phase 4 lands, the coder is an unjailed shell for whoever can call it, and must not be
-exposed to untrusted tenants.
+strength, and the containment for a user who should not have that power is the per-user
+tool permission - which IS enforced now (see "The per-user tool permission is enforced"
+below). An admin can withhold the coder entirely, or allow the coder and withhold `bash`
+by name. What remains true by design: a tenant who is allowed `bash` has an unjailed
+shell, so granting it is the decision.
+
+### The per-user tool permission is enforced
+
+The admin's per-user tool selection (`LocalUser.permissions["tools"]`, an ALLOWLIST built
+by the user manager's presets) was stored, displayed and read by nothing - the JWT never
+carried it, and the only readers were the admin routes mirroring it back. It is now
+resolved per TURN from the auth DB (`vaf/auth/permissions.py`, short TTL, invalidated by
+the admin update route so a revocation beats the cache) and enforced in the dispatch
+funnel for every lane the funnel serves - after the hard policy block, BEFORE the
+embedder's authorizer, so an `allow()` cannot override an account-level ban. Inside the
+coder the same allowlist crosses the process boundary as data (`VAF_ALLOWED_TOOLS`,
+names only, never a secret): blocked tools are removed from the schema the model sees,
+with a dispatch-side refusal as backstop for hallucinated names. Coder-internal tools
+(`bash`, the git tools) are offered to the picker via `GET /api/users/tool-universe`,
+sourced from the coder module's own declaration so the picker cannot drift from what the
+child runs.
+
+Pinned semantics: no row, no `"tools"` key or an EMPTY list mean UNRESTRICTED - `[]` is
+the API model's creation default, and "block every tool" is deliberately not expressible
+here (deactivate the account instead). Admins are never restricted. A DB that is
+unreachable resolves as unrestricted, and on the desktop that is correct rather than
+merely safe: no reachable auth DB means no tenant can authenticate either. WORKFLOWS
+remain stored-only until the workflow lane gains its policy stage (C2).
 
 ### Cloud credentials are addressed by scope
 

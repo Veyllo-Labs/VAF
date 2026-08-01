@@ -75,11 +75,12 @@ class BashTool(BaseTool):
     # deliberate, not forgotten - the difference this comment exists to preserve. The coder
     # must be able to use its tools at full strength (build, test, install), and a shell
     # confined to a per-user file jail is not a shell. The containment for a user who should
-    # not have this power is ACCESS TO THE CODER, i.e. the per-user tool permission - which
-    # is stored today and enforced by nobody. CONSEQUENCE, stated so the ordering cannot be
-    # lost: until that permission is enforced, the coder must not be exposed to untrusted
-    # tenants at all, because through bash it is an unjailed shell. Frozen in
-    # tests/test_coder_identity_boundary.py so a silent change in either direction shows up.
+    # not have this power is the per-user tool permission, which the dispatch funnel and the
+    # coder's child process now ENFORCE (vaf/auth/permissions.py): an admin can withhold the
+    # coder entirely, or allow the coder and withhold bash by name - it is offered in the
+    # user manager's picker via GET /api/users/tool-universe. What remains true: a tenant
+    # who is ALLOWED bash has an unjailed shell, by design, so granting it is the decision.
+    # Frozen in tests/test_coder_identity_boundary.py so a silent change shows up.
     description = """Execute a shell command in the project directory.
     
 Use this tool to:

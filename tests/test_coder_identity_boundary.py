@@ -15,7 +15,7 @@ side), and this copies it rather than inventing a second one.
 
 THE DESIGN RULE that shaped the cut: the coder uses its tools at FULL strength;
 the containment for a user who should not have that power is access to the coder itself
-(the per-user tool permission - stored today, enforced by nobody, Phase 4). So identity
+(the per-user tool permission, enforced in the funnel and inside the child). So identity
 travels so tools act AS the caller, not to cripple them - and `bash` stays broad as a
 NAMED exception rather than a forgotten one.
 """
@@ -129,7 +129,7 @@ def test_only_declared_keys_are_touched():
 
 def test_bash_is_the_named_exception_and_stays_untouched():
     """Deliberate, and frozen in BOTH directions: bash declares nothing (a shell confined
-    to a per-user jail is not a shell - the containment is access to the coder, Phase 4),
+    to a per-user jail is not a shell - the containment is the per-user tool permission),
     and therefore the assignment must not hand it anything either. If either side changes,
     this fails and points at the class comment that says why it was this way."""
     from vaf.tools.bash import BashTool

@@ -421,9 +421,11 @@ function AccessPresetSection({
                     <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.access')}</h4>
                     <p className="text-xs text-gray-400">{tModals('addUser.accessDesc')}</p>
                 </div>
-                {/* The selection is persisted to LocalUser.permissions but no dispatch path reads it yet
-                    (see docs/web-ui/NETWORK_TAB.md). Say so here rather than let the labels imply a gate
-                    that does not exist. Amber 50/200/700 fold for dark mode via tailwind.config.ts. */}
+                {/* TOOLS are enforced per turn in the dispatch funnel (and inside the coder's
+                    child process); WORKFLOWS are still stored-only until the workflow lane gains
+                    its policy stage. The banner says exactly that split - it replaced an amber
+                    "stored but not enforced" notice that was true from a19 until the funnel
+                    check existed. Amber 50/200/700 fold for dark mode via tailwind.config.ts. */}
                 <div className="text-xs text-amber-700 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
                     {tModals('addUser.accessNotEnforced')}
                 </div>
@@ -1040,6 +1042,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [licenseModalContent, setLicenseModalContent] = useState<string | null>(null);
     const [licenseModalTitle, setLicenseModalTitle] = useState('');
 
+    // Coder-internal tool names (bash, git tools, ...) for the per-user access picker.
+    // They are deliberately NOT in the main registry, so without this the admin could
+    // never express "this user does not get bash": the allowlist cannot omit a name the
+    // picker never showed. Served by the backend from the coder's own declaration.
+    const [coderOnlyTools, setCoderOnlyTools] = useState<string[]>([]);
+    useEffect(() => {
+        if (activeTab !== 'users' || currentUser?.role !== 'admin') return;
+        fetch('/api/users/tool-universe', { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then(d => setCoderOnlyTools(Array.isArray(d.coder_only) ? d.coder_only : []))
+            .catch(() => setCoderOnlyTools([]));
+    }, [activeTab, currentUser?.role]);
+    // One merged list for BOTH the preset expansion and the picker grid - two lists would
+    // let 'full' omit what the grid shows, and a full-preset user would silently lose bash.
+    const pickerTools = useMemo(
+        () => [...tools, ...coderOnlyTools.map(n => ({ name: n, description: 'Coder sub-agent tool' }))],
+        [tools, coderOnlyTools]);
+
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
     const [skillsSearch, setSkillsSearch] = useState('');
@@ -1497,7 +1517,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     // Apply the chosen access preset to the new user's tool/workflow lists (covers custom tools too).
     useEffect(() => {
-        const resolved = resolveAccessPreset(accessPreset, tools, workflows);
+        const resolved = resolveAccessPreset(accessPreset, pickerTools, workflows);
         if (!resolved) return; // 'custom' keeps the manual grid selection
         setNewUser(prev => ({ ...prev, tools: resolved.tools, workflows: resolved.workflows }));
     }, [accessPreset, tools, workflows]);
@@ -1511,7 +1531,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [twoFaResetDone, setTwoFaResetDone] = useState(false);
     useEffect(() => {
         if (!editingUser || editAccessPreset === 'custom') return;
-        const resolved = resolveAccessPreset(editAccessPreset, tools, workflows);
+        const resolved = resolveAccessPreset(editAccessPreset, pickerTools, workflows);
         if (!resolved) return;
         setEditingUser((prev: any) => prev ? { ...prev, tools: resolved.tools, workflows: resolved.workflows } : prev);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6255,7 +6275,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
 
                             <AccessPresetSection
-                                tools={tools}
+                                tools={pickerTools}
                                 workflows={workflows}
                                 preset={accessPreset}
                                 selectedTools={newUser.tools}
@@ -6363,7 +6383,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <Section title={tModals('addUser.access')}>
                                 <div className="space-y-4">
                                     <AccessPresetSection
-                                        tools={tools}
+                                        tools={pickerTools}
                                         workflows={workflows}
                                         preset={editAccessPreset}
                                         selectedTools={editingUser.tools || []}

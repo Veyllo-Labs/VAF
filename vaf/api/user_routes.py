@@ -99,6 +99,23 @@ class UserResponse(BaseModel):
 
 # --- Endpoints ---
 
+@router.get("/tool-universe")
+async def tool_universe(_: dict = Depends(require_admin)):
+    """Every tool name the per-user picker may govern beyond the main registry.
+
+    The picker builds its list from the live registry, and the coder's inner tools -
+    bash above all - are deliberately NOT in that registry. Without this, "disable bash
+    for this user" is not expressible: the allowlist could never contain or omit a name
+    the admin was never shown. `coder_only` names come from the coder module's own
+    declaration, so the picker cannot drift from what the child actually runs.
+    """
+    try:
+        from vaf.tools.coder import CODER_ONLY_TOOL_NAMES
+        return {"coder_only": sorted(CODER_ONLY_TOOL_NAMES)}
+    except Exception:
+        return {"coder_only": []}
+
+
 @router.get("")
 async def list_users(_: Dict[str, Any] = Depends(require_admin)):
     """List all users (admin only). Returns empty list if DB not available."""
@@ -280,6 +297,14 @@ async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depend
             if data.workflows is not None:
                 permissions["workflows"] = data.workflows
             user.permissions = permissions
+            # A revocation must beat the resolver's TTL: the funnel caches the allowlist
+            # for a few seconds per scope, and "the admin just unticked it" is exactly the
+            # moment that cache would lie.
+            try:
+                from vaf.auth.permissions import invalidate_permissions_cache
+                invalidate_permissions_cache(str(user.user_scope_id))
+            except Exception:
+                pass
 
             user.updated_at = _utc_now_naive()
 

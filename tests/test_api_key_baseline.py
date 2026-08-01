@@ -167,15 +167,22 @@ def _get_api_key_callers():
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1] / "vaf"
-    out = set()
+    out = {}
     for f in sorted(root.rglob("*.py")):
         src = f.read_bytes().decode()
-        for i, line in enumerate(src.split("\n"), 1):
-            if re.search(r"\bget_api_key\s*\(", line) and "def get_api_key" not in line:
-                # `.as_posix()`: on Windows `relative_to` yields backslashes and every
-                # comparison below would miss. Same POSIX assumption that made a
-                # hardcoded /tmp accuse the code of the defect it guarded.
-                out.add(f"{f.relative_to(root.parent).as_posix()}:{i}")
+        n = sum(
+            1 for line in src.split("\n")
+            if re.search(r"\bget_api_key\s*\(", line) and "def get_api_key" not in line
+        )
+        if n:
+            # `.as_posix()`: on Windows `relative_to` yields backslashes and every
+            # comparison below would miss.
+            # FILE + COUNT, not file:line - keyed by line this froze twice in one day on
+            # pure line shifts from edits ABOVE the call (the identity wiring, then the
+            # allowlist wiring). A guard that needs updating when nothing it guards
+            # changed trains people to update it without reading; a new or vanished CALL
+            # still changes the count and still trips.
+            out[f.relative_to(root.parent).as_posix()] = n
     return out
 
 
@@ -185,22 +192,15 @@ def _get_api_key_callers():
 # by the web path, and therefore never base64. They were invisible to the count that shaped
 # the first plan; missing them would have taken the web search its keys.
 CALLERS = {
-    "vaf/api/voice_routes.py:82",
-    "vaf/cli/cmd/settings.py:718",
-    "vaf/cli/cmd/settings.py:913",
-    "vaf/core/api_backend.py:1376",
-    "vaf/core/headless_runner.py:919",
-    "vaf/core/speech_api.py:113",
-    "vaf/core/voice_agent.py:580",
-    "vaf/core/voice_agent.py:587",
-    # :3185 -> :3245 on 2026-08-01: the caller-identity wiring above it added lines.
-    # Same call, same boundary (the child process reads its own config).
-    "vaf/tools/coder.py:3245",
-    "vaf/tools/search.py:119",
-    "vaf/tools/search.py:146",
-    "vaf/tools/search.py:260",
-    "vaf/tools/search.py:269",
-    "vaf/whare_wananga/teacher.py:132",
+    "vaf/api/voice_routes.py": 1,
+    "vaf/cli/cmd/settings.py": 2,
+    "vaf/core/api_backend.py": 1,
+    "vaf/core/headless_runner.py": 1,
+    "vaf/core/speech_api.py": 1,
+    "vaf/core/voice_agent.py": 2,
+    "vaf/tools/coder.py": 1,
+    "vaf/tools/search.py": 4,
+    "vaf/whare_wananga/teacher.py": 1,
 }
 
 # The three places a key can ENTER storage. Frozen because the first version of this change

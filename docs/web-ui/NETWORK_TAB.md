@@ -47,7 +47,7 @@ Instead of ticking ~95 individual tool checkboxes (overwhelming for a non-expert
 
 The selected preset writes the resolved tool names and workflow ids into the user's `permissions` (`{"tools": [...], "workflows": [...]}`). **Full** therefore stores the complete current set of all tools and all workflows that exist; the default of **Standard** replaces the previous behaviour where a new user was created with zero tools selected.
 
-> Note: these per-user tool/workflow permissions are currently STORED but not yet enforced at agent runtime — `evaluate_tool_policy` gates on admin-only, channel restrictions, and the confirmation level, not on the per-user list. Treat the presets as the intended access model; runtime enforcement of the per-user list is a separate, still-open step.
+> Note: the per-user TOOL list is ENFORCED at runtime: the dispatch funnel resolves it per turn from the auth DB (`vaf/auth/permissions.py`, short TTL, invalidated on admin update) and refuses blocked tools after the hard policy block and before the embedder's authorizer. Inside the coding agent the allowlist crosses the process boundary as `VAF_ALLOWED_TOOLS`; blocked tools are removed from the model's schema, with a dispatch refusal as backstop. Coder-internal names (`bash`, git tools) are offered to the picker via `GET /api/users/tool-universe`. Pinned semantics: absent or EMPTY list = unrestricted; admins are never restricted; an unreachable DB resolves unrestricted. The per-user WORKFLOW list is still stored-only until the workflow lane gains its policy stage.
 
 #### **D. Server Info**
 *   **Display:** Status cards for "Container Name", "Port", "Uptime".

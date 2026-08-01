@@ -132,9 +132,11 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     `compute_user_jail(None, None)` = the machine owner, for every caller.
     **`bash` is the named exception**, deliberately: it declares nothing and stays at
     full strength - a shell confined to a per-user jail is not a shell. The containment for
-    a user who should not have that power is ACCESS to the coder (the per-user tool
-    permission), which is stored today and enforced by nobody (Phase 4). Until Phase 4
-    lands, the coder must not be exposed to untrusted tenants.
+    a user who should not have that power is the per-user tool permission, now ENFORCED:
+    the funnel refuses blocked tools per turn, and the account allowlist crosses into this
+    child as `VAF_ALLOWED_TOOLS` (names only) - blocked tools are filtered out of the
+    schema the model sees, with a dispatch-side refusal as backstop. `bash` and the git
+    tools are offered to the admin's picker via `GET /api/users/tool-universe`.
 *   **IF NOT (Main Process):**
     *   Check `Config.sub_agents_in_separate_terminals`.
     *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`.

@@ -582,6 +582,16 @@ class ToolCaller:
         if decision.blocked:
             return f"Security Error: {decision.reason}"
 
+        # The admin's per-user allowlist, in the SAME rank as the hard policy block: stored
+        # since the user manager existed, displayed honestly as unenforced since a19, read by
+        # nothing until now. Enforced here in the funnel rather than per lane, because five
+        # lanes with their own check is the shape where four forget. After `_policy` (admin
+        # exemption rides the same `policy_admin_flag` the other gates use) and BEFORE the
+        # authorizer - an account-level ban must not be overridable by an embedder's allow().
+        blocked_reason = self._account_allowlist_blocks(name)
+        if blocked_reason:
+            return f"Security Error: {blocked_reason}"
+
         # The application's own say, AFTER the hard block (an allow() must not be able to
         # defeat admin_only) and BEFORE everything else. Before the chat gates in particular:
         # whether an embedder's authorizer is consulted must not depend on turn bookkeeping it
@@ -648,6 +658,27 @@ class ToolCaller:
             is_channel_session=is_channel_session(self.source, self.session_id),
             is_admin=policy_admin_flag(self.user_role, self.user_scope_id),
         )
+
+    def _account_allowlist_blocks(self, name: str) -> str:
+        """The admin's per-user tool selection, as a refusal reason or "".
+
+        Admins are exempt by the same rule as every other gate; a caller with no scope is
+        the machine owner or a direct in-process lane, and both are unrestricted - the list
+        exists to constrain AUTHENTICATED tenants, and only they carry a scope.
+        """
+        if not self.user_scope_id:
+            return ""
+        if policy_admin_flag(self.user_role, self.user_scope_id):
+            return ""
+        try:
+            from vaf.auth.permissions import resolve_allowed_tools
+            allowed = resolve_allowed_tools(self.user_scope_id)
+        except Exception:
+            return ""                            # resolver failure = unrestricted, never a crash
+        if allowed is None or name in allowed:
+            return ""
+        return (f"The tool '{name}' is not enabled for your account. "
+                f"An administrator can enable it in user management.")
 
     def _preview(self, name, args):
         """Argument preview for the event stream - heavy fields stripped, Paths stringified."""

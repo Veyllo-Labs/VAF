@@ -45,6 +45,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The coding agent now acts as the person who asked.** It runs as a separate process,
+  and no identity crossed that boundary - so its file tools ran with the machine owner's
+  rights for every caller. The caller's identity now travels with the task, and the
+  coder's file tools are confined to that person's own workspace. The owner's own runs are
+  unchanged, and the shell deliberately keeps full strength - controlling who may use the
+  coder at all remains the admin's lever.
 - **Each user's cloud accounts are their own.** Connected cloud storage - Google Drive,
   OneDrive, Dropbox, Nextcloud, iCloud - was addressed by user NAME, and any part of VAF
   that had no name to give fell back to the machine owner's. On a shared installation that

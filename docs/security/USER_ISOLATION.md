@@ -342,6 +342,28 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
   (`get_session_attachments_dir`) - and cloud-synced files need none either, because
   `cloud_storage` is a separate tool that never hands out an absolute `cloud_sync` path.
 
+### The coder acts as its caller
+
+The coding sub-agent runs in its own process, and until 2026-08-01 nothing identity-shaped
+crossed that boundary: the child executed every inner tool with no scope and no role, which
+the shared jail rule answers as "the machine owner" - for every caller. Seven of the
+coder's eight inner tools already declared `identity_kwargs` and `file_access`; the
+machinery was attached and permanently resolving as the owner.
+
+The caller's scope and role now travel as DATA in the spawn environment
+(`VAF_USER_SCOPE_ID` / `VAF_USER_ROLE`, the librarian's pattern) and are ASSIGNED to every
+inner tool that declares them - never `setdefault`, so a prompt-injected admin role is
+overwritten. For the machine owner nothing changes; a tenant's coder run is confined to
+their own tree for the first time.
+
+**`bash` is a named exception, in both directions.** It declares no identity and no
+`file_access`, deliberately: the coder must be able to build, test and install at full
+strength, and the containment for a user who should not have that power is access to the
+coder itself - the per-user tool permission. That permission is stored and displayed today
+and ENFORCED NOWHERE (Phase 4). Consequence, stated so the ordering cannot be lost: until
+Phase 4 lands, the coder is an unjailed shell for whoever can call it, and must not be
+exposed to untrusted tenants.
+
 ### Cloud credentials are addressed by scope
 
 Mail and GitHub key their stored credentials on the caller's `user_scope_id`; the cloud

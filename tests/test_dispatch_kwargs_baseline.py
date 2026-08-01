@@ -69,7 +69,10 @@ KWARGS_BASELINE = {
     # codesearch/linter gained identity 2026-07-31 as consumers of file_access. The
     # count of hand-built jails did not move: N was 2, the primitive already existed.
     "codesearch":                ("chat", ["user_role", "user_scope_id"]),
-    "coding_agent":              ("chat", []),
+    # Gained both on 2026-08-01 (Phase 3): it declared nothing, so the child ran every
+    # inner tool as compute_user_jail(None, None) = owner. Seven of its eight inner
+    # tools already declared identity_kwargs; the wiring was the missing half.
+    "coding_agent":              ("chat", ["user_role", "user_scope_id"]),
     "create_agent_tool":         ("chat", ["_agent"]),
     "create_agent_workflow":     ("chat", ["_agent"]),
     "create_automation":         ("chat", ["user_role", "user_scope_id"]),

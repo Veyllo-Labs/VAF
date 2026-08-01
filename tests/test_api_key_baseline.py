@@ -193,7 +193,9 @@ CALLERS = {
     "vaf/core/speech_api.py:113",
     "vaf/core/voice_agent.py:580",
     "vaf/core/voice_agent.py:587",
-    "vaf/tools/coder.py:3185",
+    # :3185 -> :3245 on 2026-08-01: the caller-identity wiring above it added lines.
+    # Same call, same boundary (the child process reads its own config).
+    "vaf/tools/coder.py:3245",
     "vaf/tools/search.py:119",
     "vaf/tools/search.py:146",
     "vaf/tools/search.py:260",

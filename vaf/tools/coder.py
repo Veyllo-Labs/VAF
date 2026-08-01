@@ -2504,10 +2504,55 @@ class GitLogTool(BaseTool):
 # Main Coding Agent Tool
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _caller_identity(kwargs: dict) -> tuple:
+    """The caller's (scope, role), from the declaration or from the child's environment.
+
+    Two sources because this function runs on BOTH sides of the process boundary: in the
+    parent the dispatcher has assigned the kwargs (identity_kwargs), in the spawned child
+    the kwargs are empty and the parent's `_sub_env` put the identity into the environment -
+    the librarian's pattern, measured there before being copied here. LOCALS, not instance
+    state: the tool instance is shared across turns and users on a worker, and
+    `self._caller = ...` is exactly the cross-user leak the librarian's comment warns about.
+    """
+    scope = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID") or None
+    role = kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE") or None
+    return (str(scope) if scope else None), (str(role) if role else None)
+
+
+def _assign_caller_identity(tool, fn_args: dict, scope, role) -> dict:
+    """Give an inner tool the caller's identity - by ASSIGNMENT, never setdefault.
+
+    `fn_args` is what the MODEL wrote. A prompt-injected `user_role: "admin"` must be
+    overwritten, not honoured - the same rule the main dispatcher enforces and CI pins
+    (tool_dispatch assigns, and a guard exists precisely for this). Only keys the tool
+    DECLARES are touched: `bash` declares none, deliberately (see its class comment), and
+    handing identity to a tool that never asked would widen this change past what was
+    measured.
+    """
+    declared = getattr(tool, "identity_kwargs", ()) or ()
+    if "user_scope_id" in declared:
+        fn_args["user_scope_id"] = scope
+    if "user_role" in declared:
+        fn_args["user_role"] = role
+    return fn_args
+
+
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
     permission_level = "write"
     side_effect_class = "reversible"
+    # WHO IS ASKING, so the coder's inner tools can act as that person. This was `()` until
+    # boundary was even involved - and the child then ran every inner tool with
+    # `compute_user_jail(None, None)`, which answers is_admin=True with zero roots. Measured:
+    # seven of the eight inner tools already declare identity_kwargs and file_access, so the
+    # whole confinement machinery was attached and permanently resolving as the owner.
+    #
+    # DELIBERATELY NOT `file_access` on this tool itself: the coder manages its own project
+    # directory, and the boundary belongs around the INNER tools, which is where it already
+    # is. The identity crosses the process boundary as DATA (VAF_USER_SCOPE_ID/VAF_USER_ROLE,
+    # the librarian's proven pattern) - never as a callback, which cannot cross, and never as
+    # a secret, which must not.
+    identity_kwargs = ("user_scope_id", "user_role")
     
     # Class-level lock to prevent multiple instances running simultaneously
     _instance_lock = threading.Lock()
@@ -2903,6 +2948,11 @@ Thumbs.db
         if not task:
             return "Error: No task provided."
 
+        # Resolved ONCE, up here, because this same run() is both the parent (kwargs from
+        # the dispatcher) and the spawned child (kwargs empty, env set by the parent), and
+        # the dispatch loop thousands of lines below needs the answer as locals.
+        caller_scope, caller_role = _caller_identity(kwargs)
+
         # ── History/Rollback delegation fast path ────────────────────────────
         # The Main Agent talks to the coder like a tool: a task such as
         # "zeig die History" or "rollback auf <id>" is answered directly and
@@ -3003,6 +3053,16 @@ Thumbs.db
             _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "coding_agent"}
             if session_id:
                 _sub_env["VAF_SESSION_ID"] = session_id
+
+            # The caller's identity crosses the boundary as DATA (librarian pattern). A
+            # scope UUID and a role string - never a secret; what may enter a child's
+            # environment and what must not is the distinction EMBEDDING.md draws for this
+            # exact trio. Without these, the child resolves every inner tool as the owner.
+            _caller_scope_env, _caller_role_env = _caller_identity(kwargs)
+            if _caller_scope_env:
+                _sub_env["VAF_USER_SCOPE_ID"] = _caller_scope_env
+            if _caller_role_env:
+                _sub_env["VAF_USER_ROLE"] = _caller_role_env
 
             # Pass provider configuration to sub-agent
             use_separate_provider = Config.get("subagent_use_separate_provider", False)
@@ -9048,6 +9108,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         except Exception:
                             pass
 
+                        # As the CALLER, not as the process: assigns scope/role to every
+                        # inner tool that declares them (seven of eight do), overwriting
+                        # anything the model wrote into those keys.
+                        _assign_caller_identity(tool, fn_args, caller_scope, caller_role)
                         result = tool.run(**fn_args)
 
                         try:

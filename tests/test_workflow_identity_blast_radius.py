@@ -100,6 +100,10 @@ NEWLY_IDENTIFIED = {
     # the path pointed - codesearch previously returned file CONTENT from any absolute
     # path when constructed without a base_dir, which is how the main agent has it.
     "codesearch": ('user_role', 'user_scope_id'),
+    # Joined 2026-08-01 (Phase 3): the coder declared nothing, so a workflow step calling
+    # it spawned a child that ran every inner tool as the machine owner. The identity now
+    # crosses the process boundary as data (VAF_USER_SCOPE_ID/VAF_USER_ROLE).
+    "coding_agent": ('user_role', 'user_scope_id'),
     "linter": ('user_role', 'user_scope_id'),
     # Added 2026-07-31 as the first consumer of the `file_access` declaration: it is a
     # WRITE tool whose gap was closed by declaring the mode, and the declaration cannot

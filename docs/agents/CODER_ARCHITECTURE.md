@@ -121,6 +121,20 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
 
 ### A. Process Isolation & IPC (Lines ~1600-1700)
 *   **Check:** Is `VAF_IN_SUBAGENT_TERMINAL` env var set?
+*   **Caller identity crosses the boundary as data (2026-08-01).** `CodingAgentTool`
+    declares `identity_kwargs = ("user_scope_id", "user_role")`, the dispatcher assigns
+    them, and the spawn env carries them as `VAF_USER_SCOPE_ID` / `VAF_USER_ROLE` - the
+    librarian's proven pattern. In the child, `_caller_identity()` resolves kwargs-or-env
+    once at the top of `run()`, and `_assign_caller_identity()` hands the pair to every
+    inner tool that declares it (seven of eight do) at the dispatch site - by ASSIGNMENT,
+    never `setdefault`, so a model-written `user_role: "admin"` is overwritten rather than
+    honoured. Before this, the child ran every inner tool as
+    `compute_user_jail(None, None)` = the machine owner, for every caller.
+    **`bash` is the named exception** (owner decision): it declares nothing and stays at
+    full strength - a shell confined to a per-user jail is not a shell. The containment for
+    a user who should not have that power is ACCESS to the coder (the per-user tool
+    permission), which is stored today and enforced by nobody (Phase 4). Until Phase 4
+    lands, the coder must not be exposed to untrusted tenants.
 *   **IF NOT (Main Process):**
     *   Check `Config.sub_agents_in_separate_terminals`.
     *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`.

@@ -29,8 +29,9 @@ from vaf.core.api_keys import store_api_key
 
 
 class _Resp:
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, text: str = ""):
         self.status_code = status_code
+        self.text = text
 
 
 class _Client:
@@ -51,16 +52,17 @@ class _Client:
         _Client.seen = {"url": url, "headers": dict(headers or {}), "params": dict(params or {})}
         if _Client.raises is not None:
             raise _Client.raises
-        return _Resp(_Client.status)
+        return _Resp(_Client.status, _Client.body)
 
 
 _Client.status = 200
 _Client.raises = None
+_Client.body = ""
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    _Client.status, _Client.raises, _Client.seen = 200, None, {}
+    _Client.status, _Client.raises, _Client.body, _Client.seen = 200, None, "", {}
     yield
 
 
@@ -103,6 +105,43 @@ def test_a_provider_having_a_bad_day_is_NOT_a_verdict_on_the_key(status, monkeyp
     out = _check("openai", monkeypatch)
 
     assert out["result"] == "unreachable", f"HTTP {status} was read as a verdict on the key"
+
+
+def test_googles_400_with_the_invalid_key_marker_IS_a_verdict(monkeypatch):
+    """Google refuses a bad key with 400, not 401 - measured 2026-08-01, and found live.
+
+    The owner mistyped a Google key and was told "could not reach the provider": this
+    endpoint committed the exact confusion it exists to prevent, from the other side. The
+    response body carried `"reason": "API_KEY_INVALID"` - Google's machine-readable marker -
+    and that, not the bare status, is what makes a 400 a fact about the key.
+    """
+    store_api_key("google", "AIzaSy-wrong")
+    _Client.status = 400
+    _Client.body = (
+        '{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",'
+        ' "status": "INVALID_ARGUMENT", "details": [{"reason": "API_KEY_INVALID"}]}}'
+    )
+
+    out = _check("google", monkeypatch)
+
+    assert out["result"] == "rejected", "Google's invalid-key answer was read as an outage"
+    assert out["status"] == 400
+
+
+def test_a_bare_400_without_the_marker_stays_an_outage(monkeypatch):
+    """The half that keeps the Google fix honest.
+
+    A 400 with no auth marker can be a malformed request or a proxy answering in the
+    provider's place; reading every 400 as "your key is wrong" would re-create the collapse
+    this file forbids, one status code at a time.
+    """
+    store_api_key("google", "AIzaSy-fine")
+    _Client.status = 400
+    _Client.body = '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "bad page size"}}'
+
+    out = _check("google", monkeypatch)
+
+    assert out["result"] == "unreachable", "a markerless 400 was read as a verdict on the key"
 
 
 def test_a_network_failure_is_not_a_verdict_either(monkeypatch):

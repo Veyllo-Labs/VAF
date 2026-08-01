@@ -189,6 +189,19 @@ async def check_api_key(
     if resp.status_code in (401, 403):
         return {"result": "rejected", "status": resp.status_code}
     if resp.status_code >= 400:
+        # Google is the one provider that refuses a bad key WITHOUT a 401: measured
+        # 2026-08-01, an invalid key gets HTTP 400 with `"status": "INVALID_ARGUMENT"` and
+        # the machine-readable `"reason": "API_KEY_INVALID"` in the error body. Found live -
+        # the owner's mistyped Google key rendered as "could not reach the provider", which
+        # is this endpoint committing the exact confusion it exists to prevent, from the
+        # other side. So a 400-class answer is a verdict on the key precisely when the body
+        # says so; a bare 400 can just as well be a malformed request and stays an outage.
+        try:
+            body = resp.text[:4000]
+        except Exception:                                   # noqa: BLE001 - body is optional evidence
+            body = ""
+        if "API_KEY_INVALID" in body:
+            return {"result": "rejected", "status": resp.status_code}
         return {"result": "unreachable", "status": resp.status_code}
     return {"result": "ok", "status": resp.status_code}
 

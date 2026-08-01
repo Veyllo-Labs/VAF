@@ -518,7 +518,11 @@
       "keyRevokeConfirm": "Delete this key permanently?",
       "keyRevoking": "Deleting…",
       "keyStoredPlaceholder": "A key is stored (enter a new one to replace it)",
-      "keyPendingSave": "Not saved yet"
+      "keyPendingSave": "Not saved yet",
+      "keyChecking": "Checking key…",
+      "keyRejected": "Key not usable - provider rejected it (error {status})",
+      "keyUnreachable": "Could not reach the provider to check (error {status}) - the key was kept",
+      "keyUnsupported": "This provider offers no way to check a key"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",

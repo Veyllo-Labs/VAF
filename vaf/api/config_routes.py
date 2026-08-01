@@ -129,6 +129,70 @@ async def list_api_keys(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str,
         ) from exc
 
 
+@router.post("/config/api-keys/{provider}/check")
+async def check_api_key(
+    provider: str,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Ask the provider whether the STORED key is usable. The key never leaves the server.
+
+    Saving a wrong key used to be indistinguishable from saving a right one until the next
+    chat turn failed, which is a bad place to learn it: the answer arrives as a chat error,
+    detached from the screen that caused it.
+
+    THE DISTINCTION THAT DECIDES THE ANSWER, and collapsing it would be the defect: a key
+    the provider REJECTS (401/403) is a fact about the key, while a timeout, a DNS failure
+    or a 5xx is a fact about the network or about the provider's day. Both are "the check
+    did not succeed" and only the first says anything about what the user typed. They are
+    reported as different outcomes, so nothing downstream can treat an outage as proof that
+    a key is wrong.
+
+    Deliberately NOT destructive. A failed check leaves the key exactly where it is: the
+    user is told, and decides. Removing or rolling back on a failure would hand a provider's
+    bad afternoon the power to undo a correct key, and a check is not a revocation.
+    """
+    import httpx
+
+    from vaf.core.api_keys import ApiKeyUnavailable, resolve_api_key
+    from vaf.core.provider_registry import models_discovery
+
+    name = (provider or "").strip().lower()
+    try:
+        key = resolve_api_key(name)
+    except ApiKeyUnavailable as exc:
+        return {"result": "unreadable", "detail": str(exc)}
+    if not key:
+        return {"result": "missing"}
+
+    disc = models_discovery(name)
+    if disc is None:
+        # No live listing for this provider - saying "ok" would be a claim nothing measured.
+        return {"result": "unsupported"}
+
+    url, auth = disc
+    headers: Dict[str, str] = {}
+    params: Dict[str, str] = {}
+    if auth == "bearer":
+        headers["Authorization"] = f"Bearer {key}"
+    elif auth == "x-api-key":
+        headers["X-Api-Key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        params["key"] = key
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(url, headers=headers, params=params)
+    except Exception as exc:                                # noqa: BLE001 - see docstring
+        return {"result": "unreachable", "detail": type(exc).__name__}
+
+    if resp.status_code in (401, 403):
+        return {"result": "rejected", "status": resp.status_code}
+    if resp.status_code >= 400:
+        return {"result": "unreachable", "status": resp.status_code}
+    return {"result": "ok", "status": resp.status_code}
+
+
 @router.delete("/config/api-keys/{provider}")
 async def delete_api_key_route(
     provider: str,

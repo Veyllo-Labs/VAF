@@ -639,6 +639,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     }, [refreshStoredKeys]);
 
+    // Result of asking a provider whether the key it now has is usable. Per provider:
+    // 'checking' while in flight, then the server's verdict. The server distinguishes a
+    // REJECTED key from an UNREACHABLE provider, and so does this - reporting an outage as
+    // "your key is wrong" would send the user chasing a key that is fine.
+    const [keyCheck, setKeyCheck] = useState<Record<string, { result: string; status?: number }>>({});
+    const checkApiKeys = useCallback(async (providers: string[]) => {
+        setKeyCheck(prev => {
+            const next = { ...prev };
+            providers.forEach(p => { next[p] = { result: 'checking' }; });
+            return next;
+        });
+        await Promise.all(providers.map(async (p) => {
+            try {
+                const res = await fetch(`/api/config/api-keys/${encodeURIComponent(p)}/check`, {
+                    method: 'POST', credentials: 'include',
+                });
+                const body = res.ok ? await res.json() : { result: 'unreachable', status: res.status };
+                setKeyCheck(prev => ({ ...prev, [p]: body }));
+            } catch {
+                setKeyCheck(prev => ({ ...prev, [p]: { result: 'unreachable' } }));
+            }
+        }));
+    }, []);
+
     // One key field: the input, plus whether a key is actually stored and a way to revoke it.
     // The state sits in the LABEL row next to the provider link (owner 2026-08-01), not in a
     // line under the box: nine key fields each carrying their own status line turns the panel
@@ -654,9 +678,29 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // "no key stored" would be the same class of untrue statement this state exists to
         // remove, just pointing the other way.
         const pending = !isSet && String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
+        // The verdict from the provider outranks the stored/not-stored state while it has
+        // something to say: "key stored" is true and useless next to a key the provider just
+        // refused. It is cleared as soon as the field is edited again, so a stale rejection
+        // cannot sit under a key the user has since corrected.
+        const check = keyCheck[provider];
+        const verdict = check && check.result !== 'ok' ? check : null;
         const state = (
             <span className="flex items-center gap-2 text-[11px] leading-none">
-                {unknown ? (
+                {check?.result === 'checking' ? (
+                    <span className="inline-flex items-center gap-1 text-gray-400">
+                        <Loader2 size={11} className="animate-spin" />{tGeneral('keyChecking')}
+                    </span>
+                ) : verdict ? (
+                    <span className={verdict.result === 'rejected' ? 'text-red-500' : 'text-amber-600'}>
+                        {verdict.result === 'rejected'
+                            ? tGeneral('keyRejected', { status: verdict.status ?? 401 })
+                            : verdict.result === 'unreachable'
+                                ? tGeneral('keyUnreachable', { status: verdict.status ?? 0 })
+                                : verdict.result === 'unsupported'
+                                    ? tGeneral('keyUnsupported')
+                                    : tGeneral('keyStateUnknown')}
+                    </span>
+                ) : unknown ? (
                     <span className="text-amber-600">{tGeneral('keyStateUnknown')}</span>
                 ) : isSet ? (
                     <>
@@ -694,7 +738,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 key={provider}
                 label={label}
                 value={localConfig[`api_key_${provider}`] || ''}
-                onChange={(v: string) => handleChange(`api_key_${provider}`, v)}
+                onChange={(v: string) => {
+                    // Editing invalidates the verdict. Leaving a rejection under a key the
+                    // user is in the middle of correcting would be a claim about a value
+                    // that no longer exists.
+                    setKeyCheck(prev => (prev[provider] ? { ...prev, [provider]: undefined as any } : prev));
+                    handleChange(`api_key_${provider}`, v);
+                }}
                 type="password"
                 placeholder={isSet ? tGeneral('keyStoredPlaceholder') : placeholder}
                 link={link}
@@ -1796,20 +1846,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     const handleSave = () => {
         const networkChanged = localConfig.local_network_enabled !== (config?.local_network_enabled || false);
+        // WHICH keys changed has to be read BEFORE the save, because `config` is what the
+        // save replaces. Only these are checked against their provider afterwards: a save
+        // touching an unrelated setting must not re-interrogate six providers.
+        const changedKeys = Object.keys(localConfig)
+            .filter(k => k.startsWith('api_key_'))
+            .filter(k => String(localConfig[k] || '').trim())
+            .filter(k => String(localConfig[k] || '') !== String((config as any)?.[k] || ''))
+            .map(k => k.slice('api_key_'.length));
+
         onSave(localConfig);
         // A save is the one moment the stored-key state is guaranteed to have changed, and
         // it is not visible from anything this component already watches: the keys go into
         // the encrypted store, so nothing in the config that comes back reflects them.
         refreshStoredKeys();
+        if (changedKeys.length) checkApiKeys(changedKeys);
 
+        // SAVING DOES NOT CLOSE THIS (owner 2026-08-01). Closing is the user's action - ESC
+        // or a click outside - and conflating it with "apply" costs them the result: a key
+        // check reports back into this panel, and a panel that has closed cannot report
+        // anything. The network branch still closes, because that path restarts the backend
+        // and the window it belongs to is going away regardless.
         if (networkChanged) {
             setIsRestarting(true);
             setTimeout(() => {
                 setIsRestarting(false);
                 onClose();
             }, 5000);
-        } else {
-            onClose();
         }
     };
 

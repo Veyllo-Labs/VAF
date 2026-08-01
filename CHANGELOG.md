@@ -45,6 +45,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **A new or changed API key is checked against the provider when you save it.** Until now
+  a wrong key looked exactly like a right one until the next message failed, and the answer
+  arrived as a chat error with nothing connecting it to the screen that caused it. Saving a
+  key you entered or changed now asks the provider whether it works, and reports back next to
+  that key. A refused key says so with the provider's own error number and is left in place
+  for you to correct; VAF does not delete it, because a check is not a revocation. A provider
+  that cannot be reached is reported as exactly that and never as a bad key - an outage or a
+  rate limit says nothing about what you typed, and treating it as a verdict would send you
+  chasing a key that was never the problem.
+- **Settings no longer closes when you save.** Saving applies your changes; closing the
+  window is your decision, with Escape or a click outside. They used to be the same action,
+  which also meant a key check had nowhere to report to.
 - **You can now actually delete an API key, and Settings shows you which keys are stored.**
   Clearing the field and saving did nothing: a blank value has always meant "the form did not
   re-send this", which is what stops a half-filled page from wiping a key, so there was no way

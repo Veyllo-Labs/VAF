@@ -518,7 +518,11 @@
       "keyRevokeConfirm": "Diesen Schlüssel endgültig löschen?",
       "keyRevoking": "Wird gelöscht…",
       "keyStoredPlaceholder": "Ein Schlüssel ist hinterlegt (neuen eingeben zum Ersetzen)",
-      "keyPendingSave": "Noch nicht gespeichert"
+      "keyPendingSave": "Noch nicht gespeichert",
+      "keyChecking": "Schlüssel wird geprüft…",
+      "keyRejected": "Schlüssel nicht nutzbar - vom Anbieter abgelehnt (Fehler {status})",
+      "keyUnreachable": "Anbieter für die Prüfung nicht erreichbar (Fehler {status}) - Schlüssel wurde behalten",
+      "keyUnsupported": "Dieser Anbieter bietet keine Prüfmöglichkeit"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Suchen (z. B. GitHub, E-Mail, Kalender)…",

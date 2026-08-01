@@ -639,61 +639,67 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     }, [refreshStoredKeys]);
 
-    // One key field: the input, plus whether a key is actually stored and a way to revoke
-    // it. The status line is the part that was missing entirely - without it an empty box
-    // means both "no key" and "a key you cannot see", and those are very different answers
-    // to "is this thing configured".
+    // One key field: the input, plus whether a key is actually stored and a way to revoke it.
+    // The state sits in the LABEL row next to the provider link (owner 2026-08-01), not in a
+    // line under the box: nine key fields each carrying their own status line turns the panel
+    // into a column of three-line blocks, and the state belongs to the provider rather than
+    // to the input. The state itself was the part missing entirely - without it an empty box
+    // means both "no key" and "a key you cannot see", which are very different answers to
+    // "is this configured".
     const apiKeyField = (provider: string, label: string, placeholder: string, link?: string) => {
         const isSet = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
         const unknown = storedKeys === 'error';
         const confirming = revokeConfirm === provider;
-        // Something typed into the box that the store does not know about yet. Saying "no key
-        // stored" underneath it would be the same class of untrue statement this whole state
-        // line exists to remove, just pointing the other way.
+        // Something typed into the box that the store does not know about yet. Calling that
+        // "no key stored" would be the same class of untrue statement this state exists to
+        // remove, just pointing the other way.
         const pending = !isSet && String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
-        return (
-            <div key={provider} className="flex flex-col gap-1">
-                <Input
-                    label={label}
-                    value={localConfig[`api_key_${provider}`] || ''}
-                    onChange={(v: string) => handleChange(`api_key_${provider}`, v)}
-                    type="password"
-                    placeholder={isSet ? tGeneral('keyStoredPlaceholder') : placeholder}
-                    link={link}
-                />
-                <div className="flex items-center gap-2 ml-1 min-h-[20px] text-xs">
-                    {unknown ? (
-                        <span className="text-amber-600">{tGeneral('keyStateUnknown')}</span>
-                    ) : isSet ? (
-                        <>
-                            <span className="inline-flex items-center gap-1 text-emerald-600">
-                                <ShieldCheck size={11} />{tGeneral('keyStored')}
-                            </span>
-                            {confirming ? (
-                                <>
-                                    <span className="text-gray-500">{tGeneral('keyRevokeConfirm')}</span>
-                                    <button type="button" disabled={revoking === provider}
-                                        onClick={() => revokeApiKey(provider)}
-                                        className="font-semibold text-red-600 hover:underline disabled:opacity-50">
-                                        {revoking === provider ? tGeneral('keyRevoking') : tCommon('yes')}
-                                    </button>
-                                    <button type="button" onClick={() => setRevokeConfirm(null)}
-                                        className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
-                                </>
-                            ) : (
-                                <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
-                                    className="text-gray-500 hover:text-red-600 hover:underline">
-                                    {tGeneral('keyRevoke')}
+        const state = (
+            <span className="flex items-center gap-2 text-[11px] leading-none">
+                {unknown ? (
+                    <span className="text-amber-600">{tGeneral('keyStateUnknown')}</span>
+                ) : isSet ? (
+                    <>
+                        <span className="inline-flex items-center gap-1 text-emerald-600">
+                            <ShieldCheck size={11} />{tGeneral('keyStored')}
+                        </span>
+                        <span className="text-gray-300">·</span>
+                        {confirming ? (
+                            <>
+                                <span className="text-gray-500">{tGeneral('keyRevokeConfirm')}</span>
+                                <button type="button" disabled={revoking === provider}
+                                    onClick={() => revokeApiKey(provider)}
+                                    className="font-semibold text-red-600 hover:underline disabled:opacity-50">
+                                    {revoking === provider ? tGeneral('keyRevoking') : tCommon('yes')}
                                 </button>
-                            )}
-                        </>
-                    ) : pending ? (
-                        <span className="text-gray-400">{tGeneral('keyPendingSave')}</span>
-                    ) : storedKeys !== null ? (
-                        <span className="text-gray-400">{tGeneral('keyNotStored')}</span>
-                    ) : null}
-                </div>
-            </div>
+                                <button type="button" onClick={() => setRevokeConfirm(null)}
+                                    className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
+                            </>
+                        ) : (
+                            <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
+                                className="text-gray-500 hover:text-red-600 hover:underline">
+                                {tGeneral('keyRevoke')}
+                            </button>
+                        )}
+                    </>
+                ) : pending ? (
+                    <span className="text-gray-400">{tGeneral('keyPendingSave')}</span>
+                ) : storedKeys !== null ? (
+                    <span className="text-gray-400">{tGeneral('keyNotStored')}</span>
+                ) : null}
+            </span>
+        );
+        return (
+            <Input
+                key={provider}
+                label={label}
+                value={localConfig[`api_key_${provider}`] || ''}
+                onChange={(v: string) => handleChange(`api_key_${provider}`, v)}
+                type="password"
+                placeholder={isSet ? tGeneral('keyStoredPlaceholder') : placeholder}
+                link={link}
+                labelExtra={state}
+            />
         );
     };
     useEffect(() => {
@@ -6658,9 +6664,13 @@ interface InputProps {
     placeholder?: string;
     disabled?: boolean;
     link?: string;
+    // Rendered in the LABEL row, after the provider link. For state that belongs to the
+    // field but must not cost it a row of its own - nine API-key fields each carrying a
+    // status line below the box turns the panel into a list of three-line blocks.
+    labelExtra?: React.ReactNode;
 }
 
-const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link }: InputProps) => (
+const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link, labelExtra }: InputProps) => (
     <div className="flex flex-col gap-1.5 w-full">
         <div className="flex items-center gap-1.5 ml-1">
             <label className="text-sm font-medium text-gray-700">{label}</label>
@@ -6676,6 +6686,7 @@ const Input = ({ label, value, onChange, type = "text", placeholder, disabled, l
                     <ExternalLink size={9} />
                 </a>
             )}
+            {labelExtra}
         </div>
         <input
             type={type}

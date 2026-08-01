@@ -414,6 +414,17 @@ function AccessPresetSection({
 }) {
     const tModals = useTranslations('modals');
     const tCommon = useTranslations('common');
+    // Search over 117+ tools; purely visual - selection state and "Select All" keep
+    // operating on the FULL list, so a filter can never silently shrink what a preset or
+    // the button applies to.
+    const [toolQuery, setToolQuery] = useState('');
+    const [wfQuery, setWfQuery] = useState('');
+    const q = toolQuery.trim().toLowerCase();
+    const visibleTools = q
+        ? tools.filter(t => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
+        : tools;
+    const wq = wfQuery.trim().toLowerCase();
+    const visibleWorkflows = wq ? workflows.filter(w => w.name.toLowerCase().includes(wq)) : workflows;
     return (
         <>
             <div className="space-y-3">
@@ -479,8 +490,15 @@ function AccessPresetSection({
                                 {tools.length > 0 && tools.every(t => selectedTools.includes(t.name)) ? tCommon('deselectAll') : tCommon('selectAll')}
                             </button>
                         </div>
+                        <input
+                            type="text"
+                            value={toolQuery}
+                            onChange={(e) => setToolQuery(e.target.value)}
+                            placeholder={tCommon('search')}
+                            className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
+                        />
                         <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-2 gap-2">
-                            {tools.length > 0 ? tools.map(tool => (
+                            {visibleTools.length > 0 ? visibleTools.map(tool => (
                                 <label key={tool.name} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
                                     <input
                                         type="checkbox"
@@ -514,8 +532,15 @@ function AccessPresetSection({
                                 {workflows.length > 0 && workflows.every(w => selectedWorkflows.includes(w.id)) ? tCommon('deselectAll') : tCommon('selectAll')}
                             </button>
                         </div>
+                        <input
+                            type="text"
+                            value={wfQuery}
+                            onChange={(e) => setWfQuery(e.target.value)}
+                            placeholder={tCommon('search')}
+                            className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-gray-400"
+                        />
                         <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-1 gap-2">
-                            {workflows.length > 0 ? workflows.map(workflow => (
+                            {visibleWorkflows.length > 0 ? visibleWorkflows.map(workflow => (
                                 <label key={workflow.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
                                     <input
                                         type="checkbox"

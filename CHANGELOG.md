@@ -45,6 +45,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **The per-user access picker is searchable.** With 117 tools in the grid, finding the
+  one to grant or revoke meant scrolling; both the tool and the workflow list now have a
+  search field. Filtering is visual only - presets and "Select All" keep operating on
+  the full list, so a filter can never silently shrink what they apply to.
 - **The per-user tool permission is now actually enforced.** Since user management
   existed, an admin could choose which tools each user may use - and the choice was
   saved, displayed, and checked by nothing (the interface said so honestly). It is now

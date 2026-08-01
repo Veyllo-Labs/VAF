@@ -15,7 +15,11 @@ SOURCES, IN ORDER. Only the second is ever written to.
   1. the caller's config      `Agent(config={"api_key_<provider>": "..."})`
   2. the encrypted store      the same envelope encryption that already holds mail,
                               GitHub and cloud credentials
-  3. `config.json`, base64    the estate, READ ONLY
+  3. `config.json`, base64    the estate, READ ONLY - with exactly one exception, named so
+                              it cannot become a quiet contradiction: `delete_api_key`
+                              blanks the estate entry, because a revocation that leaves a
+                              readable copy behind is not a revocation. Nothing WRITES a key
+                              there any more; removal is the opposite operation.
 
 WHAT "ENCRYPTED" MEANS HERE, and it belongs next to the code rather than in a release note.
 Without a master passphrase - the default, and the headless case - the KEK is a random key
@@ -60,6 +64,18 @@ class ApiKeyUnavailable(RuntimeError):
     Deliberately NOT the same as "no key configured", which is an empty string and a normal
     state. Raised per provider at the moment it is asked for, never at import or startup: a
     damaged entry for a provider nobody uses must not take the installation down.
+    """
+
+
+class ApiKeyRevocationFailed(RuntimeError):
+    """An explicit deletion did not remove the key from everywhere it can be answered from.
+
+    Its own error, and loud, because of WHY people delete a key: usually because it leaked.
+    That makes a half-completed deletion the worst outcome on this path - the operator is
+    told the key is gone, stops rotating it upstream, and the installation keeps
+    authenticating with it. A revocation either completed or it did not; there is no
+    best-effort reading of it, and nothing here may swallow a failure the way the migration
+    deliberately does.
     """
 
 
@@ -295,3 +311,91 @@ def clear_estate_entry(provider: str) -> None:
     if config.get(key):
         config[key] = ""
         Config.save(config)
+
+
+def configured_providers() -> dict:
+    """Which providers have a key, WITHOUT revealing one. Never returns a value.
+
+    The Settings page needs this and, since keys left `config.json`, has nothing else to go
+    on: `GET /api/config` answers `api_key_<provider>` with the empty default, so a
+    perfectly good key reads as "not configured" in the only place a person looks. That was
+    a side effect of moving the keys and it is repaired here rather than by handing the
+    secret back to a browser.
+
+    STRICT on purpose. An unreadable store raises rather than reporting every provider as
+    unset - "nothing is configured" and "I cannot tell you what is configured" must not
+    render as the same screen, which is the same honesty rule the dashboard applies to
+    absent module data.
+    """
+    stored = _store().load_strict()          # raises SecureStoreUnreadable; caller converts
+    names = {str(k).strip().lower() for k, v in stored.items() if v and str(v).strip()}
+    for key, value in (Config.load() or {}).items():
+        if key.startswith("api_key_") and isinstance(value, str) and value.strip():
+            names.add(key[len("api_key_"):].strip().lower())
+    return {name: True for name in sorted(names) if name}
+
+
+def delete_api_key(provider: str) -> None:
+    """Revoke a key everywhere it can be answered from. ESTATE FIRST, store second.
+
+    THE ORDER IS THE WHOLE FUNCTION, and getting it wrong produces a deletion that undoes
+    itself while reporting success. Clear the encrypted store first and the estate second,
+    and any failure in between leaves `config.json` holding the key - so the very next
+    `resolve_api_key` finds it there, returns it, AND writes it back into the store through
+    `_migrate_into_store`. The key is fully restored, by the repair path, with nothing
+    logged. Estate first cannot do that: whatever fails afterwards, no source remains that
+    can re-seed the store, and the failure stays visible instead of healing.
+
+    An empty value never reaches here. Blank means "the form did not re-send it", and
+    `merge_preserving_nonempty_sensitive` plus `absorb_config_keys` both keep it that way;
+    deleting is a separate, explicit call. The alternative - blank means delete - would have
+    rested on the web UI distinguishing "cleared" from "never touched" and transmitting that
+    distinction intact, and that layer rebuilds its payloads field by field and has silently
+    dropped a field twice (CLAUDE.md Rule 2). The damage there would be a key that outlives
+    its revocation.
+
+    THIS IS THE ONE PLACE THAT WRITES `config.json`, and the module header calls source 3
+    read-only, so it needs naming rather than an exception being quietly true. Reading is
+    still all the estate is used for; this is the opposite operation, removal, and it is
+    reached only by an operator asking for it. Note that it does NOT contradict the reasons
+    `clear_estate_entry` stays off for the MIGRATION: those protect a key the user still
+    wants (the rollback path back to a version that can only read `config.json`). A revoked
+    key is not one the user still wants, and preserving a rollback to a version that would
+    resurrect it would be the defect, not the feature.
+
+    Raises `ApiKeyRevocationFailed` if the key can still be resolved afterwards. The check
+    is a real second resolution rather than an assumption that the two writes worked - which
+    is also what makes it catch a future fourth source for free.
+    """
+    name = (provider or "").strip().lower()
+    if not name:
+        raise ApiKeyRevocationFailed("No provider given; nothing was revoked.")
+
+    problems = []
+    try:
+        clear_estate_entry(name)                                # 1. estate, see docstring
+    except Exception as exc:                                    # noqa: BLE001 - reported, not swallowed
+        problems.append(f"config.json: {exc}")
+    try:
+        _store().update(lambda data: data.pop(name, None))      # 2. encrypted store
+    except Exception as exc:                                    # noqa: BLE001 - reported, not swallowed
+        problems.append(f"encrypted store: {exc}")
+
+    # Running agents must stop using it now, not after a restart. The critical-key list in
+    # `Config.save` is a hardcoded six, so a seventh provider would notify nobody; announcing
+    # by name here is provider-agnostic and reaches the tray's broadcast either way.
+    _announce_change(name)
+
+    try:
+        leftover = resolve_api_key(name)
+    except ApiKeyUnavailable as exc:
+        problems.append(f"the store is unreadable, so the key cannot be confirmed gone: {exc}")
+        leftover = ""
+    if leftover:
+        problems.append("the key still resolves after both writes")
+
+    if problems:
+        raise ApiKeyRevocationFailed(
+            f"The API key for '{name}' was NOT fully revoked ({'; '.join(problems)}). "
+            f"Treat it as still live: rotate it at the provider."
+        )

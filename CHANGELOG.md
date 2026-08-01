@@ -45,6 +45,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **You can now actually delete an API key, and Settings shows you which keys are stored.**
+  Clearing the field and saving did nothing: a blank value has always meant "the form did not
+  re-send this", which is what stops a half-filled page from wiping a key, so there was no way
+  at all to remove one. That matters more than it sounds, because the usual reason to delete a
+  key is that it leaked - and the interface reported success while the key stayed live. Each
+  key now has its own delete action, and it removes the key from both places it can be stored,
+  in the order that matters: get it wrong and the next use quietly restores it from the older
+  location. If any part of the removal fails, you are told the key is still live and should be
+  rotated at the provider instead of being told it worked.
 - **Changing your API key now takes effect without restarting VAF.** Saving a new key
   appeared to work while the old one kept answering, and only a full restart applied the
   change - which meant a key you had just deleted or replaced could still be in use, with

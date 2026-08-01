@@ -20,10 +20,24 @@ There are two ways to supply configuration, and they compose:
    The dict is merged on top of the on-disk config for that `Agent` instance only; nothing
    is written to `~/.vaf/config.json`. See [EMBEDDING.md](../EMBEDDING.md).
 
-> **API keys — disk vs. programmatic.** On disk, `api_key_*` values are Base64-encoded
-> (light obfuscation, not encryption). When you pass an `api_key_*` **programmatically**
-> via `Agent(config={...})`, give the **raw** key (`"sk-..."`) — it is used as-is and never
-> Base64-decoded.
+> **API keys — where they live.** They are no longer written to `config.json` at all: a key
+> set through the product goes into the same envelope-encrypted store that already holds mail,
+> GitHub and cloud credentials. `config.json` is still READ for `api_key_*`, because installs
+> that predate the move still carry a Base64 value there, and such a key is migrated into the
+> store the first time it is used. Be precise about what the encryption buys: without a master
+> passphrase (the default, and the headless case) the key-encryption key sits in `config.json`
+> itself, which is equivalent to file-permission protection - the gain is that the secret is no
+> longer in the file everything else reads, and no longer travels in a config backup.
+>
+> Two consequences worth knowing. `GET /api/config` therefore answers `api_key_<provider>`
+> with the empty default even when a key is configured; `GET /api/config/api-keys` reports
+> which providers have one, as booleans, and never returns a value. And **a blank value never
+> deletes**: it means "not re-sent", which is what keeps a partially filled form from wiping a
+> key. Removing one is an explicit call, `DELETE /api/config/api-keys/{provider}`.
+>
+> When you pass an `api_key_*` **programmatically** via `Agent(config={...})`, give the **raw**
+> key (`"sk-..."`). It is used as-is, never decoded, never stored, and takes precedence over
+> both locations above.
 
 The keys in the "Essential for embedding" section below are the ones most embedders
 need; everything else has a sensible default.
@@ -36,7 +50,7 @@ need; everything else has a sensible default.
 |-----|---------|---------|
 | `provider` | `"local"` | LLM provider: `local`, `veyllo`, `openai`, `anthropic`, `deepseek`, `google`, `openrouter`. |
 | `model` | `"auto"` | Local GGUF model. `"auto"` = VRAM-adaptive default, or set `"repo/file.gguf"`. Ignored for API providers. |
-| `api_key_<provider>` | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; Base64 on disk. |
+| `api_key_<provider>` | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; kept in the encrypted store, not in this file (see the note above). |
 | `api_model_<provider>` | per provider (see below) | Model name for the API provider (e.g. `api_model_openai`). |
 | `n_ctx` | `32768` | Context window in tokens. Values below 32768 are clamped up to it. |
 | `temperature` | `0.7` | Sampling temperature (API + local). |
@@ -265,7 +279,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speech_tts_api_voice` | `""` | Voice for the cloud TTS provider: ElevenLabs voice ID or OpenAI voice name (`""` = default). |
 | `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `veyllo`, `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. Seeded to `veyllo` the first time a Veyllo key is added (onboarding OR later in Settings) while no STT provider was chosen (`Config.apply_veyllo_stt_default`); an explicit later choice overwrites it. |
 | `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: Veyllo `veyllo-transcribe`, ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
-| `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Base64 on disk; redacted for non-admin reads. |
+| `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Kept in the encrypted store; redacted for non-admin reads. |
 | `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |
 | `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. |
 | `speaker_id_band` | `0.05` | Band below the threshold labeled "unsure" (triggers confirmation). |

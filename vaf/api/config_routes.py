@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from vaf.api.user_routes import require_admin
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 logger = logging.getLogger(__name__)
@@ -101,3 +102,52 @@ async def patch_config(
     merged = Config.merge_preserving_nonempty_sensitive(current, absorb_config_keys(body))
     Config.save(merged)
     return merged
+
+
+@router.get("/config/api-keys")
+async def list_api_keys(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Which providers have a key. Booleans only - a value is never returned.
+
+    Settings has no other way to know since keys left `config.json`: `GET /api/config`
+    answers `api_key_<provider>` with the empty default, so a working key reads there as
+    "not configured". Handing the secret back to the browser to fix that would be the wrong
+    repair; a per-provider boolean is the whole requirement, for showing the state and for
+    offering the delete this sits next to.
+
+    An unreadable store is a 503, not an empty list: "nothing configured" and "I cannot tell
+    you" must not render as the same screen.
+    """
+    from vaf.core.api_keys import configured_providers
+    from vaf.core.secure_store import SecureStoreUnreadable
+
+    try:
+        return {"providers": configured_providers()}
+    except SecureStoreUnreadable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"The stored API keys could not be read ({exc}).",
+        ) from exc
+
+
+@router.delete("/config/api-keys/{provider}")
+async def delete_api_key_route(
+    provider: str,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Revoke one provider key. Its own call, deliberately, not an empty field on save.
+
+    People delete a key because it leaked, so this is a revocation and it reports like one:
+    either the key is gone from every source that can answer for it, or this fails with the
+    instruction to rotate it upstream. A blank field on the ordinary save path still means
+    "not re-sent" and still changes nothing - that guard is what keeps a partially filled
+    form from wiping a key, and it stays.
+    """
+    from vaf.core.api_keys import ApiKeyRevocationFailed, delete_api_key
+
+    try:
+        delete_api_key(provider)
+    except ApiKeyRevocationFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    return {"status": "revoked", "provider": (provider or "").strip().lower()}

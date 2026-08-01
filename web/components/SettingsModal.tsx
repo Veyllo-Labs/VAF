@@ -1882,8 +1882,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     const handleFetchModels = (provider: string) => {
-        const apiKey = localConfig[`api_key_${provider}`];
-        if (!apiKey) {
+        // The form field only carries a key while the user is typing a NEW one - a stored
+        // key never travels to the browser. An empty payload key is fine: the server
+        // resolves the stored one itself. The refusal below is only for the case where
+        // neither exists, which the state endpoint can tell us.
+        const apiKey = localConfig[`api_key_${provider}`] || '';
+        const stored = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
+        if (!apiKey && !stored) {
             alert(`Please enter an API Key for ${provider} first.`);
             return;
         }

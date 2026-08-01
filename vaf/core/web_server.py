@@ -3913,6 +3913,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # base); the response FILTERING below stays provider-specific.
                     provider = cmd.get("provider", "openai")
                     api_key = cmd.get("api_key", "")
+                    # The stored key, when the client sends none. The client USED to send
+                    # one because the form field carried it - but since keys moved into the
+                    # encrypted store the field is empty by design (the value never travels
+                    # to the browser), so a payload key only exists while the user is
+                    # typing a new one. Without this fallback, "fetch models" refused for
+                    # every already-configured provider.
+                    if not str(api_key or "").strip():
+                        try:
+                            from vaf.core.api_keys import resolve_api_key
+                            api_key = resolve_api_key(provider)
+                        except Exception:                    # noqa: BLE001 - unreadable store = no key here
+                            api_key = ""
                     models = []
 
                     try:

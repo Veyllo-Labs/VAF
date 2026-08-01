@@ -474,7 +474,7 @@ function AccessPresetSection({
             {preset === 'custom' && (
                 <div className="grid lg:grid-cols-2 gap-4 items-start">
                     <div className="space-y-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-start justify-between gap-2 min-h-[3.25rem]">
                             <div>
                                 <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableTools')}</h4>
                                 <p className="text-xs text-gray-400">{tModals('addUser.availableToolsDesc')}</p>
@@ -485,7 +485,7 @@ function AccessPresetSection({
                                     const all = tools.map(t => t.name);
                                     onToolsChange(all.every(n => selectedTools.includes(n)) ? [] : all);
                                 }}
-                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors whitespace-nowrap shrink-0"
                             >
                                 {tools.length > 0 && tools.every(t => selectedTools.includes(t.name)) ? tCommon('deselectAll') : tCommon('selectAll')}
                             </button>
@@ -516,7 +516,7 @@ function AccessPresetSection({
                     </div>
 
                     <div className="space-y-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-start justify-between gap-2 min-h-[3.25rem]">
                             <div>
                                 <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableWorkflows')}</h4>
                                 <p className="text-xs text-gray-400">{tModals('addUser.availableWorkflowsDesc')}</p>
@@ -527,7 +527,7 @@ function AccessPresetSection({
                                     const all = workflows.map(w => w.id);
                                     onWorkflowsChange(all.every(id => selectedWorkflows.includes(id)) ? [] : all);
                                 }}
-                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors whitespace-nowrap shrink-0"
                             >
                                 {workflows.length > 0 && workflows.every(w => selectedWorkflows.includes(w.id)) ? tCommon('deselectAll') : tCommon('selectAll')}
                             </button>

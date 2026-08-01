@@ -601,11 +601,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [revoking, setRevoking] = useState<string | null>(null);
     const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
     const [revokeError, setRevokeError] = useState<string | null>(null);
+    // A stored key's field is LOCKED until the user says "change" (owner 2026-08-01: being
+    // able to click into a field that already holds a key read as confusing). This map holds
+    // the per-provider unlock. Deliberately NOT "delete first, then type": between a delete
+    // and the save of its replacement there would be NO key at all, and anything
+    // interrupting that window - a failed check, a closed laptop - leaves the installation
+    // keyless. Unlock keeps the old key valid until the new one is actually saved.
+    const [keyEditing, setKeyEditing] = useState<Record<string, boolean>>({});
     const refreshStoredKeys = useCallback(() => {
         fetch('/api/config/api-keys', { credentials: 'include' })
             .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
             .then(d => { setStoredKeys(d.providers || {}); setKeyHints(d.hints || {}); })
             .catch(() => setStoredKeys('error'));
+        setKeyEditing({});   // a fresh state re-locks every stored field
     }, []);
     // `isOpen` belongs in here, and leaving it out was a real defect rather than a missing
     // optimisation: this modal is rendered unconditionally by the page, so closing it does
@@ -682,13 +690,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // Something typed into the box that the store does not know about yet. Calling that
         // "no key stored" would be the same class of untrue statement this state exists to
         // remove, just pointing the other way.
-        const pending = !isSet && String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
+        const typed = String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
+        const pending = !isSet && typed;
         // The verdict from the provider outranks the stored/not-stored state while it has
         // something to say: "key stored" is true and useless next to a key the provider just
         // refused. It is cleared as soon as the field is edited again, so a stale rejection
         // cannot sit under a key the user has since corrected.
         const check = keyCheck[provider];
         const verdict = check && check.result !== 'ok' ? check : null;
+        // Locked while a key is stored and nobody asked to change it. `typed` keeps an
+        // already-typed value editable even after a state refresh re-locks the map -
+        // trapping a half-typed replacement inside a disabled box would eat it.
+        const locked = isSet && !keyEditing[provider] && !typed;
         const state = (
             <span className="flex items-center gap-2 text-[11px] leading-none">
                 {check?.result === 'checking' ? (
@@ -724,11 +737,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <button type="button" onClick={() => setRevokeConfirm(null)}
                                     className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
                             </>
+                        ) : locked ? (
+                            <>
+                                <button type="button" onClick={() => setKeyEditing(prev => ({ ...prev, [provider]: true }))}
+                                    className="text-gray-500 hover:text-gray-300 hover:underline">
+                                    {tGeneral('keyChange')}
+                                </button>
+                                <span className="text-gray-300">·</span>
+                                <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
+                                    className="text-gray-500 hover:text-red-600 hover:underline">
+                                    {tGeneral('keyRevoke')}
+                                </button>
+                            </>
                         ) : (
-                            <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
-                                className="text-gray-500 hover:text-red-600 hover:underline">
-                                {tGeneral('keyRevoke')}
-                            </button>
+                            <>
+                                {!typed && (
+                                    <>
+                                        <span className="text-gray-400">{tGeneral('keyChangeNow')}</span>
+                                        <button type="button" onClick={() => setKeyEditing(prev => ({ ...prev, [provider]: false }))}
+                                            className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
+                                        <span className="text-gray-300">·</span>
+                                    </>
+                                )}
+                                <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
+                                    className="text-gray-500 hover:text-red-600 hover:underline">
+                                    {tGeneral('keyRevoke')}
+                                </button>
+                            </>
                         )}
                     </>
                 ) : pending ? (
@@ -754,6 +789,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 placeholder={isSet ? (keyHints[provider] || tGeneral('keyStoredPlaceholder')) : placeholder}
                 link={link}
                 labelExtra={state}
+                disabled={locked}
             />
         );
     };

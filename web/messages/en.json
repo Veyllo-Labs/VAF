@@ -522,7 +522,9 @@
       "keyChecking": "Checking key…",
       "keyRejected": "Key not usable - provider rejected it (error {status})",
       "keyUnreachable": "Could not reach the provider to check (error {status}) - the key was kept",
-      "keyUnsupported": "This provider offers no way to check a key"
+      "keyUnsupported": "This provider offers no way to check a key",
+      "keyChange": "Change key",
+      "keyChangeNow": "Enter the new key above"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",

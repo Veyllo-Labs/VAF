@@ -99,6 +99,22 @@ def test_saving_refreshes_the_key_state():
     )
 
 
+def test_a_stored_key_field_is_locked_until_change_is_asked_for():
+    """Owner 2026-08-01: clicking into a field that already holds a key read as confusing.
+
+    The lock is deliberately NOT "delete first, then type": between a delete and the save
+    of its replacement there is no key at all, and anything interrupting that window leaves
+    the installation keyless. The unlock is an explicit action, and a typed value keeps the
+    field editable so a state refresh cannot trap a half-typed replacement in a disabled
+    box.
+    """
+    assert re.search(r"const locked = isSet && !keyEditing\[provider\] && !typed", CODE), (
+        "the lock derivation is gone, or no longer spares a typed value"
+    )
+    assert "disabled={locked}" in CODE, "the lock is computed but the input ignores it"
+    assert "keyChange" in CODE, "there is no explicit unlock, so a stored key cannot be replaced"
+
+
 def test_a_filled_field_is_never_labelled_as_having_no_key():
     """"No key stored" under a box the user just typed into is untrue in the other direction.
 

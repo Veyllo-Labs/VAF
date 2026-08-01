@@ -81,6 +81,19 @@ correct and fully covered, and the caller never passes it what it checks. Every 
 green because every test drives the stage directly. Whenever a test proves that a component
 behaves correctly, a second one has to prove that its caller actually reaches it that way.
 
+It also has a version one layer higher than the one people watch for, and that version is
+invisible to a suite that stops at the API. **When a change MOVES a data source, the question
+is not only "does the reader still find it" but "does the surface still show the same
+thing".** Moving the provider API keys out of `config.json` into the encrypted store was
+measured at the resolver and passed everywhere: every consumer still received its key, the
+migration was proven against a real config, the suite was green, CI was green. What nobody
+asked was what the Settings page would render afterwards - `GET /api/config` answers
+`api_key_<provider>` with the empty default once the value is not in that file, so every key
+field went blank and stayed blank on main. A configured, working key looked exactly like no
+key at all, on the one screen a user opens to check. The reader was verified; the display was
+never part of the question. Both halves have to be, and the second one needs an assertion that
+names what the surface actually reads.
+
 **A guard that reads text instead of code.** Assertions over `inspect.getsource` or a file
 grep break when code moves and pass when it is renamed. `test_markers_sync` once stayed
 green while the constant it guards had moved away, because the prompt text further down the

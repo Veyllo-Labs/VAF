@@ -54,6 +54,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   in the order that matters: get it wrong and the next use quietly restores it from the older
   location. If any part of the removal fails, you are told the key is still live and should be
   rotated at the provider instead of being told it worked.
+- **Settings tells you again which API keys are stored.** When keys moved out of the plain
+  configuration file into the encrypted store, the key fields in Settings went blank and
+  stayed blank - a configured, working key looked exactly like no key at all, on the one page
+  where you go to check. Each field now says whether a key is stored, without ever showing the
+  key itself, and says so honestly when the stored keys cannot be read rather than reporting
+  "none".
 - **Changing your API key now takes effect without restarting VAF.** Saving a new key
   appeared to work while the old one kept answering, and only a full restart applied the
   change - which meant a key you had just deleted or replaced could still be in use, with

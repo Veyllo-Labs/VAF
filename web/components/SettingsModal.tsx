@@ -120,7 +120,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink, Sparkles
+    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -586,6 +586,104 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // model options and a plain voice-ID input.
     const [elevenVoices, setElevenVoices] = useState<Array<{ voice_id: string; name: string; category?: string }>>([]);
     const [elevenModels, setElevenModels] = useState<Array<{ model_id: string; name: string }>>([]);
+
+    // WHICH providers have a key. Booleans from `GET /api/config/api-keys`, never a value.
+    // Needed because keys live in the encrypted store now: `GET /api/config` answers
+    // `api_key_<provider>` with the empty default, so a working key reads here as "not
+    // configured" and the field below looks empty. `null` = not loaded yet, 'error' = the
+    // store could not be read, which must NOT render as "nothing configured".
+    const [storedKeys, setStoredKeys] = useState<Record<string, boolean> | 'error' | null>(null);
+    const [revoking, setRevoking] = useState<string | null>(null);
+    const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
+    const [revokeError, setRevokeError] = useState<string | null>(null);
+    const refreshStoredKeys = useCallback(() => {
+        fetch('/api/config/api-keys', { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then(d => setStoredKeys(d.providers || {}))
+            .catch(() => setStoredKeys('error'));
+    }, []);
+    useEffect(() => {
+        if (activeTab !== 'general' || currentUser?.role !== 'admin') return;
+        refreshStoredKeys();
+    }, [activeTab, currentUser?.role, refreshStoredKeys]);
+
+    // Revoking is its own call, never an empty field on save: a blank field means "not
+    // re-sent" everywhere else, and making it mean "delete" would rest on this component
+    // transmitting cleared-vs-untouched intact - the layer that has silently dropped a
+    // field twice. Clearing the local field afterwards matters: a stale value left in form
+    // state would be re-absorbed by the next Save and resurrect the key we just revoked.
+    const revokeApiKey = useCallback(async (provider: string) => {
+        setRevoking(provider);
+        setRevokeError(null);
+        try {
+            const res = await fetch(`/api/config/api-keys/${encodeURIComponent(provider)}`, {
+                method: 'DELETE', credentials: 'include',
+            });
+            if (!res.ok) {
+                const body = await res.json().catch(() => null);
+                throw new Error(body?.detail || `HTTP ${res.status}`);
+            }
+            setLocalConfig((prev: any) => ({ ...prev, [`api_key_${provider}`]: '' }));
+            refreshStoredKeys();
+        } catch (e: any) {
+            setRevokeError(String(e?.message || e));
+        } finally {
+            setRevoking(null);
+            setRevokeConfirm(null);
+        }
+    }, [refreshStoredKeys]);
+
+    // One key field: the input, plus whether a key is actually stored and a way to revoke
+    // it. The status line is the part that was missing entirely - without it an empty box
+    // means both "no key" and "a key you cannot see", and those are very different answers
+    // to "is this thing configured".
+    const apiKeyField = (provider: string, label: string, placeholder: string, link?: string) => {
+        const isSet = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
+        const unknown = storedKeys === 'error';
+        const confirming = revokeConfirm === provider;
+        return (
+            <div key={provider} className="flex flex-col gap-1">
+                <Input
+                    label={label}
+                    value={localConfig[`api_key_${provider}`] || ''}
+                    onChange={(v: string) => handleChange(`api_key_${provider}`, v)}
+                    type="password"
+                    placeholder={isSet ? tGeneral('keyStoredPlaceholder') : placeholder}
+                    link={link}
+                />
+                <div className="flex items-center gap-2 ml-1 min-h-[20px] text-xs">
+                    {unknown ? (
+                        <span className="text-amber-600">{tGeneral('keyStateUnknown')}</span>
+                    ) : isSet ? (
+                        <>
+                            <span className="inline-flex items-center gap-1 text-emerald-600">
+                                <ShieldCheck size={11} />{tGeneral('keyStored')}
+                            </span>
+                            {confirming ? (
+                                <>
+                                    <span className="text-gray-500">{tGeneral('keyRevokeConfirm')}</span>
+                                    <button type="button" disabled={revoking === provider}
+                                        onClick={() => revokeApiKey(provider)}
+                                        className="font-semibold text-red-600 hover:underline disabled:opacity-50">
+                                        {revoking === provider ? tGeneral('keyRevoking') : tCommon('yes')}
+                                    </button>
+                                    <button type="button" onClick={() => setRevokeConfirm(null)}
+                                        className="text-gray-500 hover:underline">{tCommon('cancel')}</button>
+                                </>
+                            ) : (
+                                <button type="button" onClick={() => { setRevokeError(null); setRevokeConfirm(provider); }}
+                                    className="text-gray-500 hover:text-red-600 hover:underline">
+                                    {tGeneral('keyRevoke')}
+                                </button>
+                            )}
+                        </>
+                    ) : storedKeys !== null ? (
+                        <span className="text-gray-400">{tGeneral('keyNotStored')}</span>
+                    ) : null}
+                </div>
+            </div>
+        );
+    };
     useEffect(() => {
         if (activeTab !== 'voice' || currentUser?.role !== 'admin') return;
         if (localConfig.speech_tts_provider !== 'elevenlabs') return;
@@ -1984,76 +2082,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'general' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
                                 <Section title={tGeneral('apiKeys')}>
-                                    <Input
-                                        label="Veyllo Key"
-                                        value={localConfig.api_key_veyllo || ''}
-                                        onChange={(v: string) => handleChange('api_key_veyllo', v)}
-                                        type="password"
-                                        placeholder="vaf_live_…"
-                                        link="https://veyllo.app"
-                                    />
-                                    <Input
-                                        label={tGeneral('openaiKey')}
-                                        value={localConfig.api_key_openai || ''}
-                                        onChange={(v: string) => handleChange('api_key_openai', v)}
-                                        type="password" placeholder="sk-..."
-                                        link="https://platform.openai.com/api-keys"
-                                    />
-                                    <Input
-                                        label={tGeneral('anthropicKey')}
-                                        value={localConfig.api_key_anthropic || ''}
-                                        onChange={(v: string) => handleChange('api_key_anthropic', v)}
-                                        type="password" placeholder="sk-ant-..."
-                                        link="https://console.anthropic.com/settings/keys"
-                                    />
-                                    <Input
-                                        label={tGeneral('deepseekKey')}
-                                        value={localConfig.api_key_deepseek || ''}
-                                        onChange={(v: string) => handleChange('api_key_deepseek', v)}
-                                        type="password"
-                                        link="https://platform.deepseek.com/api_keys"
-                                    />
-                                    <Input
-                                        label={tGeneral('googleKey')}
-                                        value={localConfig.api_key_google || ''}
-                                        onChange={(v: string) => handleChange('api_key_google', v)}
-                                        type="password"
-                                        link="https://aistudio.google.com/app/apikey"
-                                    />
-                                    <Input
-                                        label={tGeneral('openrouterKey')}
-                                        value={localConfig.api_key_openrouter || ''}
-                                        onChange={(v: string) => handleChange('api_key_openrouter', v)}
-                                        type="password"
-                                        link="https://openrouter.ai/settings/keys"
-                                    />
-                                    <Input
-                                        label={tGeneral('elevenlabsKey')}
-                                        value={localConfig.api_key_elevenlabs || ''}
-                                        onChange={(v: string) => handleChange('api_key_elevenlabs', v)}
-                                        type="password"
-                                        placeholder="sk_..."
-                                        link="https://elevenlabs.io/app/settings/api-keys"
-                                    />
+                                    {revokeError && (
+                                        <p className="text-xs text-red-600 ml-1">{revokeError}</p>
+                                    )}
+                                    {apiKeyField('veyllo', 'Veyllo Key', 'vaf_live_…', 'https://veyllo.app')}
+                                    {apiKeyField('openai', tGeneral('openaiKey'), 'sk-...', 'https://platform.openai.com/api-keys')}
+                                    {apiKeyField('anthropic', tGeneral('anthropicKey'), 'sk-ant-...', 'https://console.anthropic.com/settings/keys')}
+                                    {apiKeyField('deepseek', tGeneral('deepseekKey'), '', 'https://platform.deepseek.com/api_keys')}
+                                    {apiKeyField('google', tGeneral('googleKey'), '', 'https://aistudio.google.com/app/apikey')}
+                                    {apiKeyField('openrouter', tGeneral('openrouterKey'), '', 'https://openrouter.ai/settings/keys')}
+                                    {apiKeyField('elevenlabs', tGeneral('elevenlabsKey'), 'sk_...', 'https://elevenlabs.io/app/settings/api-keys')}
                                 </Section>
                                 <Section title={tGeneral('webSearch')}>
                                     <p className="text-xs text-gray-500 mb-3">{tGeneral('webSearchDesc')}</p>
-                                    <Input
-                                        label={tGeneral('braveSearchKey')}
-                                        value={localConfig.api_key_brave_search || ''}
-                                        onChange={(v: string) => handleChange('api_key_brave_search', v)}
-                                        type="password"
-                                        placeholder="From api-dashboard.search.brave.com"
-                                        link="https://api-dashboard.search.brave.com/"
-                                    />
-                                    <Input
-                                        label={tGeneral('googleSearchKey')}
-                                        value={localConfig.api_key_google_search || ''}
-                                        onChange={(v: string) => handleChange('api_key_google_search', v)}
-                                        type="password"
-                                        placeholder="Cloud Console – Custom Search API"
-                                        link="https://console.cloud.google.com/apis/credentials"
-                                    />
+                                    {apiKeyField('brave_search', tGeneral('braveSearchKey'), 'From api-dashboard.search.brave.com', 'https://api-dashboard.search.brave.com/')}
+                                    {apiKeyField('google_search', tGeneral('googleSearchKey'), 'Cloud Console – Custom Search API', 'https://console.cloud.google.com/apis/credentials')}
                                     <Input
                                         label={tGeneral('googleSearchEngineId')}
                                         value={localConfig.google_search_engine_id || ''}

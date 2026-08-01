@@ -510,7 +510,14 @@
       "dropboxAppSecret": "Dropbox App Secret",
       "githubProvider": "GitHub (Verbindungen)",
       "githubClientId": "GitHub Client-ID",
-      "githubClientSecret": "GitHub Client-Secret"
+      "githubClientSecret": "GitHub Client-Secret",
+      "keyStored": "Schluessel hinterlegt",
+      "keyNotStored": "Kein Schluessel hinterlegt",
+      "keyStateUnknown": "Hinterlegte Schluessel nicht lesbar - Status unbekannt",
+      "keyRevoke": "Schluessel loeschen",
+      "keyRevokeConfirm": "Diesen Schluessel endgueltig loeschen?",
+      "keyRevoking": "Wird geloescht…",
+      "keyStoredPlaceholder": "Ein Schluessel ist hinterlegt (neuen eingeben zum Ersetzen)"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Suchen (z. B. GitHub, E-Mail, Kalender)…",

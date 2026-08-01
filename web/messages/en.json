@@ -510,7 +510,14 @@
       "dropboxAppSecret": "Dropbox App Secret",
       "githubProvider": "GitHub (Connections)",
       "githubClientId": "GitHub Client ID",
-      "githubClientSecret": "GitHub Client Secret"
+      "githubClientSecret": "GitHub Client Secret",
+      "keyStored": "Key stored",
+      "keyNotStored": "No key stored",
+      "keyStateUnknown": "Stored keys unreadable - state unknown",
+      "keyRevoke": "Delete key",
+      "keyRevokeConfirm": "Delete this key permanently?",
+      "keyRevoking": "Deleting…",
+      "keyStoredPlaceholder": "A key is stored (enter a new one to replace it)"
     },
     "connectionsPanel": {
       "searchPlaceholder": "Search (e.g. GitHub, Email, Calendar)…",

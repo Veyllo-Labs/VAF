@@ -65,8 +65,9 @@ def test_all_messenger_send_paths_use_the_shared_chain():
     src = Path(hr.__file__).read_text(encoding="utf-8")
     assert src.count("_prepare_channel_outbound(") >= 6  # def + 3 normal paths + drain uses
     body = src.split("def _prepare_channel_outbound", 1)[1]
-    assert "_sanitize_outgoing_message(out)" in body.split("def ", 1)[0], (
-        "shared chain lost the internal-phrase net"
+    assert "sanitize_outgoing_message(out)" in body.split("def ", 1)[0], (
+        "shared chain lost the internal-phrase net (now imported from "
+        "vaf.core.outbound_sanitizer)"
     )
     # the old short hand-copied chain must not exist anymore
     assert '"[No summary generated]"' not in src, (
@@ -80,3 +81,75 @@ def test_drain_summary_based_on_chat_step_return():
         "drain messenger summary must be based on chat_step's reasoning-stripped return"
     )
     assert "_prepare_channel_outbound(drain_summary_text" in src
+
+
+# ── the net's neutral home (vaf/core/outbound_sanitizer.py) ─────────────────────────
+# The four send TOOLS consumed the net as a private import from this runner - the
+# extension layer depending on a private harness symbol. The net moved to a neutral,
+# stdlib-only module; these tests pin the move in both directions: the behavior lives
+# there, every send tool consumes it, and no tool reaches into the runner again.
+
+def test_the_net_blocks_a_contaminated_message():
+    from vaf.core.outbound_sanitizer import sanitize_outgoing_message
+
+    assert sanitize_outgoing_message("[TOOL BLOCKED] do not send this") == ""
+    assert sanitize_outgoing_message("prefix REPLY IN: German suffix") == ""
+
+
+def test_the_net_passes_clean_messages_and_empties():
+    from vaf.core.outbound_sanitizer import sanitize_outgoing_message
+
+    assert sanitize_outgoing_message("Hallo Alice, dein Report ist fertig.") == \
+        "Hallo Alice, dein Report ist fertig."
+    assert sanitize_outgoing_message("") == ""
+    assert sanitize_outgoing_message("   ") == ""
+
+
+_SEND_TOOLS = (
+    "vaf/tools/send_telegram.py",
+    "vaf/tools/send_whatsapp.py",
+    "vaf/tools/send_discord.py",
+    "vaf/tools/send_to_user.py",
+)
+
+
+def test_every_send_tool_calls_the_shared_net():
+    import ast
+
+    root = Path(hr.__file__).resolve().parents[2]
+    for rel in _SEND_TOOLS:
+        tree = ast.parse((root / rel).read_bytes())
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "sanitize_outgoing_message"
+        ]
+        assert calls, (
+            f"{rel}: no sanitize_outgoing_message(...) call - this send path would "
+            f"deliver internal phrases to a contact"
+        )
+
+
+def test_no_tool_imports_the_runner():
+    """The dependency this move fixed, kept fixed: the tool layer (offered to third
+    parties for extension) must not import the product's worker loop. AST, so
+    function-local imports are seen - that is where all four sat."""
+    import ast
+
+    root = Path(hr.__file__).resolve().parents[2]
+    offenders = []
+    for f in sorted((root / "vaf" / "tools").rglob("*.py")):
+        tree = ast.parse(f.read_bytes())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and \
+                    "headless_runner" in node.module:
+                offenders.append(f"{f.relative_to(root)}:{node.lineno}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "headless_runner" in alias.name:
+                        offenders.append(f"{f.relative_to(root)}:{node.lineno}")
+    assert not offenders, (
+        f"tools import the runner again: {offenders} - shared pieces belong in a "
+        f"neutral vaf/core module (pattern: outbound_sanitizer)"
+    )

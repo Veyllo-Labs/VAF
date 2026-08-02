@@ -35,8 +35,8 @@ def test_send_telegram_uses_direct_fallback_without_bridge_callback(monkeypatch)
 
     _install_fake_module(
         monkeypatch,
-        "vaf.core.headless_runner",
-        _sanitize_outgoing_message=lambda text: text,
+        "vaf.core.outbound_sanitizer",
+        sanitize_outgoing_message=lambda text: text,
     )
 
     class FakeSession:

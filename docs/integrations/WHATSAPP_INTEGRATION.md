@@ -208,7 +208,7 @@ The contact must have that E.164 number in whitelist or in Front Office with “
 **Fix (applied in code):**
 1. **Prompt guard:** The front-office input now explicitly states: *"CRITICAL: Do NOT call send_whatsapp — your reply text is automatically delivered to the contact. Just write your reply as plain text."*
 2. **Tool guard:** `send_whatsapp` checks `_agent._front_office_mode` at the top of `run()`. When the agent is handling an inbound contact message (no explicit `to_phone`) and `_front_office_mode` is `True`, the tool returns `[TOOL BLOCKED]` immediately instead of sending.
-3. **Sanitize filter:** `[TOOL BLOCKED]` is in `_INTERNAL_PHRASES` so it is never delivered to the contact even if the agent quotes the blocked message.
+3. **Sanitize filter:** `[TOOL BLOCKED]` is in `_INTERNAL_PHRASES` (`vaf/core/outbound_sanitizer.py` - the shared net the send tools and the headless runner both consume) so it is never delivered to the contact even if the agent quotes the blocked message.
 
 ### Troubleshooting: Error message was read aloud as voice ("Sorry, something went wrong: …")
 

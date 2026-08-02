@@ -79,8 +79,8 @@ def test_send_whatsapp_tool_relies_on_bridge_helper_not_local_process_state(monk
 
     _install_fake_module(
         monkeypatch,
-        "vaf.core.headless_runner",
-        _sanitize_outgoing_message=lambda text: text,
+        "vaf.core.outbound_sanitizer",
+        sanitize_outgoing_message=lambda text: text,
     )
     _install_fake_module(
         monkeypatch,

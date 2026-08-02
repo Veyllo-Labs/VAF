@@ -85,8 +85,8 @@ class SendDiscordTool(BaseTool):
         out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
         out = re.sub(r"\n{3,}", "\n\n", out).strip()
         try:
-            from vaf.core.headless_runner import _sanitize_outgoing_message
-            out = _sanitize_outgoing_message(out)
+            from vaf.core.outbound_sanitizer import sanitize_outgoing_message
+            out = sanitize_outgoing_message(out)
         except Exception:
             pass
         if not out:

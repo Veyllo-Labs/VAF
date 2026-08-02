@@ -152,21 +152,10 @@ def _strip_tool_calls_json(text: str) -> str:
     return out.strip()
 
 
-# Phrases that must never appear in messages sent to contacts via Telegram/WhatsApp/Discord.
-# If any of these are found in the outgoing text, the message is blocked or sanitized.
-_INTERNAL_PHRASES = [
-    "[SYSTEM_LOG_ONLY]",
-    "[FRONT OFFICE",
-    "[TOOL BLOCKED]",
-    "MESSAGE FROM A CONTACT",
-    "NOT FROM THE ACCOUNT OWNER",
-    "API returned empty responses",
-    "Do NOT report to the account owner",
-    "Do NOT repeat or echo the contact",
-    "REPLY IN:",
-    "Contact details (use Language",
-    "contact preferred_language",
-]
+# The internal-phrase net lives in vaf/core/outbound_sanitizer.py now: the four send
+# TOOLS consume it too, and the extension layer must not import a private symbol of
+# this worker loop. The runner's own chain below keeps calling the same net.
+from vaf.core.outbound_sanitizer import sanitize_outgoing_message
 
 # Regex to strip [WORKFLOW_ASYNC:...] lines so the rest of the message can be sent if only that line is internal.
 _WORKFLOW_ASYNC_LINE = re.compile(r"^\[WORKFLOW_ASYNC:[^\]]+\][^\n]*\n?", re.MULTILINE)
@@ -179,27 +168,6 @@ def _strip_workflow_async_from_message(text: str) -> str:
     cleaned = _WORKFLOW_ASYNC_LINE.sub("", text)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
-
-
-def _sanitize_outgoing_message(text: str) -> str:
-    """
-    Safety net: strip internal system phrases from outgoing messages before sending
-    to external channels (Telegram/WhatsApp/Discord). If the entire message is just
-    internal content, return empty string.
-    """
-    if not text or not text.strip():
-        return ""
-    # Check if any internal phrase is present
-    text_lower = text.lower()
-    for phrase in _INTERNAL_PHRASES:
-        if phrase.lower() in text_lower:
-            # Try to extract just the agent's actual response by removing the contaminated block.
-            # If the FRONT OFFICE prompt leaked, it's typically at the start or end — drop the whole thing.
-            logging.getLogger(__name__).warning(
-                "SANITIZE: blocked internal phrase %r in outgoing message (len=%d)", phrase, len(text)
-            )
-            return ""
-    return text
 
 
 # Paragraph openers that mark model deliberation (chain-of-thought emitted as plain
@@ -257,7 +225,7 @@ def _prepare_channel_outbound(text: str) -> str:
     out = _strip_tool_calls_json(out)
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     out = _strip_workflow_async_from_message(out)
-    out = _sanitize_outgoing_message(out)
+    out = sanitize_outgoing_message(out)
     out = _strip_untagged_cot_prefix(out)
     return (out or "").strip()
 

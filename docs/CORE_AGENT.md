@@ -7,7 +7,7 @@ reference for the parts an embedder can rely on; start with
 control. Design map of the turn loop: [AGENT_LOOP.md](agents/AGENT_LOOP.md).
 
 Stability: `CoreAgent` is part of the declared stable surface at the level
-documented HERE (constructor, lifecycle, `chat_step`, `execute_tool`,
+documented HERE (constructor, lifecycle, `chat_step`, `complete`, `execute_tool`,
 `set_tool_authorizer`, `set_event_sink`, the accessors below). Underscore-prefixed attributes are
 internal; the ones listed at the end are known extension points that may
 change with a changelog note.
@@ -108,6 +108,29 @@ the real answer; the return value is a status:
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).
+
+## complete
+
+```python
+complete(prompt, *, max_tokens=512, temperature=0.2, timeout=None,
+         strip_think=True) -> Optional[str]
+```
+
+One completion with this agent's backend - no tools, no history, no memory. The
+opposite return contract from `chat_step`, on purpose: the RETURN VALUE is the
+answer (reasoning stripped), or `None` when no backend answered; it never raises
+and never returns an error message dressed as content, so the result is safe to
+store without inspection. The conversation is untouched - a `chat_step` after a
+`complete` sees nothing of it.
+
+Backend dispatch follows the documented selection order with the compound gate
+(an API provider whose backend failed to initialize falls through to the local
+lanes, exactly as `load_model` does), and the API lane reuses `self.api_backend`,
+so an embedder's passed keys and the attached event sink travel with the call.
+The shared mechanics live in `vaf/core/completion.py` (metadata-frame filter,
+error-sentinel handling, the local `enable_thinking:false` lane that never
+starts the server); `BaseTool.query_llm` and several CLI features consume the
+same primitive.
 
 ## execute_tool
 

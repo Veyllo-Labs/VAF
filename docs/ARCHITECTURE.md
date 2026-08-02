@@ -125,6 +125,8 @@ This is the contract. Treat it as a stable API.
   `Agent` and `CoreAgent` - running and vetoing a tool call. Their documented
   arguments are in [EMBEDDING.md](EMBEDDING.md); `ToolCaller`'s remaining
   constructor parameters are not part of the promise.
+- `vaf.set_account_allowlist_resolver` - the per-account tool allowlist hook
+  (contract in [EMBEDDING.md](EMBEDDING.md))
 - the `vaf.tools` entry-point group
 - documented config keys
 

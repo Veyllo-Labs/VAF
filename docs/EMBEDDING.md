@@ -880,8 +880,8 @@ Three companion pages cover the operational side of embedding:
   does not) silence, and how to read a session JSON. Note: an embedded agent
   **does write log files by default**; set `VAF_LOG_DIR` if you care where.
 - [CORE_AGENT.md](CORE_AGENT.md) - the `vaf.CoreAgent` reference: constructor,
-  lifecycle, the `chat_step`/`execute_tool` contracts, and the concurrency
-  rules.
+  lifecycle, the `chat_step`/`complete`/`execute_tool` contracts, and the
+  concurrency rules.
 
 **Concurrency contract (short version):** one `Agent` is one conversation and
 is effectively single-threaded - drive it from one thread at a time. For

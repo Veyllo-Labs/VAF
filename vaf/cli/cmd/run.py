@@ -708,13 +708,15 @@ def run(
 ):
     """
     Start the VAF Agent interaction loop.
-    
-    Uses modern TUI by default. Use --classic for simple prompt.
-    
+
+    Opens the full-screen terminal app by default. Use --classic for the plain
+    prompt, or set the tui_mode config key to "modern" for the previous lane.
+
     Examples:
-        vaf run                      Start fresh session
+        vaf run                      Start fresh session (full-screen app)
         vaf run --session abc123     Resume session abc123
         vaf run --classic            Use simple text interface
+        vaf run --web                Also start the Web UI (modern lane)
     """
     if ctx.invoked_subcommand:
         return
@@ -736,15 +738,34 @@ def run(
     except Exception:
         pass
 
-    # Determine UI mode from flag (default to modern)
-    ui_mode = "classic" if classic else "modern"
-    
+    # UI mode: --classic wins, then the tui_mode config key. "app" (default) is
+    # the full-screen terminal app; "modern" the previous prompt-toolkit lane;
+    # "classic" the plain prompt.
+    if classic:
+        ui_mode = "classic"
+    else:
+        ui_mode = str(Config.get("tui_mode", "app") or "app").strip().lower()
+        if ui_mode not in ("app", "modern", "classic"):
+            ui_mode = "app"
+
     # Get theme from config if not specified
     if not theme:
         theme = Config.get("theme", "vaf")
-    
+
+    if web and not classic and ui_mode != "modern":
+        # Named boundary: only the modern lane owns the web-server startup
+        # wiring (heartbeat, web-input watcher, result notifier) - an explicit
+        # --web therefore routes there, whatever tui_mode says. The --classic
+        # FLAG keeps its long-standing behavior: plain prompt, web flag unused.
+        ui_mode = "modern"
+
     # Run appropriate interface
-    if ui_mode == "modern":
+    if ui_mode == "app":
+        # Lazy on purpose: textual loads only on this lane, so the slim import
+        # graph of every other command stays flat.
+        from vaf.cli.tui_app.app import run_tui
+        run_tui(message=message, theme=theme, session_id=session, verbose=verbose)
+    elif ui_mode == "modern":
         _run_modern(message, verbose, theme, session, web_enabled=web)
     else:
         _run_classic(message, verbose, session)

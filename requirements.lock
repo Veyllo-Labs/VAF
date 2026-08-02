@@ -1292,6 +1292,10 @@ keyring==25.7.0 \
     --hash=sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f \
     --hash=sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b
     # via -r requirements.txt
+linkify-it-py==2.1.0 \
+    --hash=sha256:0d252c1594ecba2ecedc444053db5d3a9b7ec1b0dd929c8f1d74dce89f86c05e \
+    --hash=sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b
+    # via markdown-it-py
 lxml==6.1.1 \
     --hash=sha256:05a82eb6e1530a64f26225b55cbd178113bd0b5af1c2b625f25e5296742c26d2 \
     --hash=sha256:07a4a68e286ee7a1ed7dfb8af83e615757c0ccfe9f18c6b4ea6771388d9ba8c9 \
@@ -1430,10 +1434,13 @@ lxml==6.1.1 \
     # via
     #   python-docx
     #   python-pptx
-markdown-it-py==4.2.0 \
+markdown-it-py[linkify]==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
     --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
-    # via rich
+    # via
+    #   mdit-py-plugins
+    #   rich
+    #   textual
 markdownify==1.2.2 \
     --hash=sha256:3f02d3cc52714084d6e589f70397b6fc9f2f3a8531481bf35e8cc39f975e186a \
     --hash=sha256:b274f1b5943180b031b699b199cbaeb1e2ac938b75851849a31fd0c3d6603d09
@@ -1535,6 +1542,10 @@ mcp==1.26.0 \
     --hash=sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca \
     --hash=sha256:db6e2ef491eecc1a0d93711a76f28dec2e05999f93afd48795da1c1137142c66
     # via browser-use
+mdit-py-plugins==0.6.1 \
+    --hash=sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d \
+    --hash=sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0
+    # via textual
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
@@ -2073,6 +2084,10 @@ pillow==12.2.0 \
     #   python-pptx
     #   qrcode
     #   reportlab
+platformdirs==4.11.0 \
+    --hash=sha256:0555d18370482847566ffabcaa53ad7c6c1c29f195989ae1ed634a05f76ea1e0 \
+    --hash=sha256:360ccded2b7fce0af0ff80cc8f5942a1c5d99b0e856033acb030bfc634709e74
+    # via textual
 playwright==1.60.0 ; python_version >= "3.11" \
     --hash=sha256:1c2bfae7884fb3fb05b853290eab8f343d524e5016f2f1def702acbbdf14c93e \
     --hash=sha256:2581d0e6a3392c71f91b27460c7fd093356818dc430f48153896c8aeeaef7705 \
@@ -2489,6 +2504,7 @@ pygments==2.20.0 \
     # via
     #   pytest
     #   rich
+    #   textual
 pyjwt[crypto]==2.13.0 \
     --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
     --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
@@ -2884,6 +2900,7 @@ rich==14.3.1 \
     # via
     #   -r requirements.txt
     #   browser-use
+    #   textual
     #   typer
 rpds-py==0.30.0 \
     --hash=sha256:07ae8a593e1c3c6b82ca3292efbe73c30b61332fd612e05abee07c79359f292f \
@@ -3375,6 +3392,10 @@ tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
     --hash=sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a
     # via google-genai
+textual==8.2.8 \
+    --hash=sha256:267375fd402dc8d981457212efa71f0e3365fd17bba144ba9bb3ed7563cb374a \
+    --hash=sha256:3f106a9fbc73e39dd266c9712432087de78a6d644084c7c241d6a25c3169115b
+    # via -r requirements.txt
 threadpoolctl==3.6.0 \
     --hash=sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb \
     --hash=sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e
@@ -3499,6 +3520,7 @@ typing-extensions==4.15.0 \
     #   sentence-transformers
     #   speechrecognition
     #   sqlalchemy
+    #   textual
     #   torch
     #   typing-inspection
 typing-inspection==0.4.2 \
@@ -3513,6 +3535,10 @@ tzdata==2026.2 \
     --hash=sha256:9173fde7d80d9018e02a662e168e5a2d04f87c41ea174b139fbef642eda62d10 \
     --hash=sha256:bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7
     # via -r requirements.txt
+uc-micro-py==2.0.0 \
+    --hash=sha256:3603a3859af53e5a39bc7677713c78ea6589ff188d70f4fee165db88e22b242c \
+    --hash=sha256:c53691e495c8db60e16ffc4861a35469b0ba0821fe409a8a7a0a71864d33a811
+    # via linkify-it-py
 uritemplate==4.2.0 \
     --hash=sha256:480c2ed180878955863323eea31b0ede668795de182617fef9c6ca09e6ec9d0e \
     --hash=sha256:962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686

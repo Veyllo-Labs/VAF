@@ -12,6 +12,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **`vaf run` opens a full-screen terminal app.** The terminal chat is no longer a
+  scrolling prompt: it is a full-screen app with a live transcript (strictly
+  chronological, streamed answers with the model's reasoning as a separate muted
+  think block), tool cards, event narration, the sub-agent status line, the
+  context-usage bar, the agent's animated avatar beside the newest reply, and
+  keyboard-complete overlays for settings, model, history, sessions and help. The
+  classic run-loop letters (`s`, `c`, `t`, `h`, `l`, `?`) still work typed into the
+  prompt, as do slash commands and `@file` attachments. Tool confirmations finally
+  work in the terminal: previously they silently waited on the web dashboard and
+  timed out after five minutes if no browser was open; the app shows the question
+  and answers it in place. The previous interfaces stay available - `vaf run
+  --classic` for the plain prompt, and the new `tui_mode` config key to pick the
+  default lane (`vaf run --web` keeps the previous lane, which owns the web-server
+  startup). Voice capture and provider switching inside the app land next.
 - **You can now ask for one completion without a conversation.** Building something on
   VAF that just needs one answer - a classification, a summary, a commit message -
   meant either running a full chat turn (history, tools, memory, routers) or

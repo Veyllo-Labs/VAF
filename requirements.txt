@@ -5,6 +5,7 @@
 typer>=0.9.0
 rich>=13.0.0
 prompt_toolkit>=3.0.0
+textual>=8.2.8
 colorama>=0.4.0
 shellingham>=1.5.0
 psutil>=5.9.0

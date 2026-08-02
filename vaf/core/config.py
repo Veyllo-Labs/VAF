@@ -200,6 +200,11 @@ class Config:
         # Lower = faster LLM inference + less context pollution. Range: 1–100.
         "router_max_tools": 12,
 
+        # Terminal UI lane for `vaf run`: "app" opens the full-screen terminal
+        # app, "modern" the prompt-toolkit lane, "classic" the plain prompt.
+        # The `vaf run --classic` flag overrides this per invocation.
+        "tui_mode": "app",
+
         # UX toggles (opt-in; off by default – user must enable)
         # Auto open web search source links in the user's default browser (tabs)
         "ux_auto_open_links": False,

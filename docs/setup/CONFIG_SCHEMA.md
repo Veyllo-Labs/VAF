@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (287 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (288 keys).
 
 ## How configuration is set
 
@@ -320,6 +320,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `use_docker` | `True` | Use Docker-backed services (DB/Redis/TTS/...). |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
+| `tui_mode` | `app` | Terminal UI lane for `vaf run`: `app` (full-screen terminal app), `modern` (prompt-toolkit lane), `classic` (plain prompt). `vaf run --classic` overrides per invocation. |
 | `ux_auto_open_links` | `False` | Auto-open `web_search` source links as browser tabs (skipped in non-interactive runs, `VAF_NONINTERACTIVE`). |
 | `ux_auto_open_outputs` | `True` | Auto-open finished outputs: HTML reports in the browser, other output files via their folder in the file manager, created project folders (skipped in non-interactive runs). |
 | `ux_auto_open_max_tabs` | `8` | Cap on browser tabs auto-opened per search; clamped to 1-20. |

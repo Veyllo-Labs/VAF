@@ -1196,6 +1196,36 @@ class UI:
         sys.stdout.write("\033[2J\033[H")
         sys.stdout.flush()
 
+    # ── console sinks (the narration channel, made subscribable) ────────────────────
+    # A full-screen app (the Textual lane behind `vaf run`) needs the Router/Context/
+    # Memory narration that today only exists as console prints from UI.event's ~150
+    # engine call sites. Sinks make that ONE funnel subscribable instead of the
+    # monkeypatch the gateway documents on itself as "a hacky global patch". With no
+    # sink registered and app mode off - the state of every other lane, always - this
+    # path is behaviorally identical to before: an empty-list check and two falsy
+    # branches. Sinks receive (type_name, message, style); a raising sink is swallowed,
+    # the same polarity as the event-sink contract (a broken observer must not fail a
+    # run). App mode suppresses only the CONSOLE print (the app owns the terminal);
+    # the Web UI bridge below still runs, so web parity is untouched.
+    _console_sinks: list = []
+    _app_mode: bool = False
+
+    @staticmethod
+    def add_console_sink(fn) -> None:
+        if callable(fn) and fn not in UI._console_sinks:
+            UI._console_sinks.append(fn)
+
+    @staticmethod
+    def remove_console_sink(fn) -> None:
+        try:
+            UI._console_sinks.remove(fn)
+        except ValueError:
+            pass
+
+    @staticmethod
+    def set_app_mode(active: bool) -> None:
+        UI._app_mode = bool(active)
+
     @staticmethod
     def event(type_name: str, title: str, style: str = "info", end: str = "\n"):
         """Print event in OpenCode style."""
@@ -1203,6 +1233,7 @@ class UI:
 
         # In workflow/subagent context the Rich Console lock can block (background threads
         # hold it); skip the console entirely and just push to Web UI via non-blocking path.
+        # This branch stays FIRST and sink-free: those are separate processes with no app.
         if _os.environ.get("VAF_IN_WORKFLOW_TERMINAL") == "1" or \
                 _os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1":
             try:
@@ -1213,6 +1244,12 @@ class UI:
             except Exception:
                 pass
             return
+
+        for _sink in UI._console_sinks:
+            try:
+                _sink(type_name, title, style)
+            except Exception:
+                pass
 
         # CRITICAL: Suppress Main Agent events if Coder TUI is active!
         # This prevents debug messages from breaking the active TUI layout
@@ -1225,19 +1262,20 @@ class UI:
         except Exception:
             pass
 
-        color_map = {
-            "info": "cyan",
-            "warning": "yellow",
-            "error": "red",
-            "success": "green",
-            "highlight": "magenta",
-            "dim": "dim"
-        }
-        color = color_map.get(style, "white")
-        bar = f"[{color}]|[/{color}]"
-        type_str = f"[dim] {type_name:<7}[/dim]"
-        title_str = f"[{color}]{title}[/{color}]"
-        UI.console.print(f"{bar}{type_str} {title_str}", end=end)
+        if not (UI._app_mode and UI._console_sinks):
+            color_map = {
+                "info": "cyan",
+                "warning": "yellow",
+                "error": "red",
+                "success": "green",
+                "highlight": "magenta",
+                "dim": "dim"
+            }
+            color = color_map.get(style, "white")
+            bar = f"[{color}]|[/{color}]"
+            type_str = f"[dim] {type_name:<7}[/dim]"
+            title_str = f"[{color}]{title}[/{color}]"
+            UI.console.print(f"{bar}{type_str} {title_str}", end=end)
 
         # BRIDGE TO WEB UI
         try:

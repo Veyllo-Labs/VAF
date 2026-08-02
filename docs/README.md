@@ -107,6 +107,7 @@ Docs are grouped into category folders. Full index by category:
 - [SECURITY_DASHBOARD.md](security/SECURITY_DASHBOARD.md) - Admin security dashboard: `/api/security` aggregator, the always-on security event log, and the skill quarantine lifecycle.
 
 ### platform/ — per-OS runtime, tray, automations, i18n
+- [TUI.md](platform/TUI.md) - The full-screen terminal app behind `vaf run` (lanes, seams, keys, boundaries).
 - [LINUX.md](platform/LINUX.md) — How VAF runs on Linux (Qt/QtWebEngine window, tray, X11/GPU notes).
 - [WINDOWS.md](platform/WINDOWS.md) — How VAF runs on Windows (WebView2, `.lnk` launcher, tray).
 - [MACOS.md](platform/MACOS.md) — How VAF runs on macOS (WKWebView, menu-bar tray, startup splash).

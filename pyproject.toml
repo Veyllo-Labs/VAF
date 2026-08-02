@@ -45,6 +45,9 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "prompt_toolkit>=3.0.0",
+    # The full-screen terminal app (vaf run). Pure-Python transitive set; imported
+    # lazily inside the command body so the slim import graph stays flat.
+    "textual>=8.2.8",
     "colorama>=0.4.0",
     "shellingham>=1.5.0",
     "psutil>=5.9.0",

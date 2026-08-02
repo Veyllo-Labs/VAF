@@ -831,6 +831,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // to the input. The state itself was the part missing entirely - without it an empty box
     // means both "no key" and "a key you cannot see", which are very different answers to
     // "is this configured".
+    // ONE derivation of "does this provider have a key", for every render site outside
+    // apiKeyField (which needs stored and typed as SEPARATE states). Six sites hand-rolled
+    // this against localConfig - the source that stopped carrying stored keys when they
+    // moved into the encrypted store, so a perfectly good key rendered as "API key
+    // missing" in the provider section. Stored state comes from /api/config/api-keys;
+    // something freshly typed counts too, because "no key" would be untrue while a key
+    // sits in the box waiting for Save.
+    const providerHasKey = (provider: string): boolean => {
+        const stored = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
+        const typed = String(localConfig[`api_key_${provider}`] || '').trim().length > 0;
+        return stored || typed;
+    };
+    // Gate for every "key missing" claim: while the state is not loaded (null) or the
+    // store is unreadable ('error'), "nothing configured" and "I cannot tell" must not
+    // render as the same warning - the rule the whole stored-state lane is built on.
+    const keyStateKnown = storedKeys !== null && storedKeys !== 'error';
+
     const apiKeyField = (provider: string, label: string, placeholder: string, link?: string) => {
         const isSet = storedKeys !== null && storedKeys !== 'error' && storedKeys[provider] === true;
         const unknown = storedKeys === 'error';
@@ -2767,14 +2784,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 {PROVIDERS.map(p => {
                                     if (localConfig.provider !== p.id) return null;
-                                    const hasKey = !!localConfig[`api_key_${p.id}`];
-                                    
+                                    const hasKey = providerHasKey(p.id);
+
                                     return (
                                         <Section key={p.id} title={`${p.label} – ${tAi('provider')}`}>
-                                            {!hasKey && (
+                                            {keyStateKnown && !hasKey && (
                                                 <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded-lg mb-4 flex items-center gap-2">
                                                     <Shield size={16} />
                                                     <span>{tAi('apiKeyMissing')}</span>
+                                                </div>
+                                            )}
+                                            {storedKeys === 'error' && (
+                                                <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded-lg mb-4 flex items-center gap-2">
+                                                    <Shield size={16} />
+                                                    <span>{tGeneral('keyStateUnknown')}</span>
                                                 </div>
                                             )}
                                             <div className="flex gap-2 items-end">
@@ -2874,7 +2897,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 fetchingProvider === selectedVisionProvider && "animate-pulse"
                                                             )}
                                                             title={tAi('fetchModels')}
-                                                            disabled={!localConfig[`api_key_${selectedVisionProvider}`]}
+                                                            disabled={!providerHasKey(selectedVisionProvider)}
                                                         >
                                                             <RefreshCw size={18} className={cn(fetchingProvider === selectedVisionProvider && "animate-spin")} />
                                                         </button>
@@ -3225,15 +3248,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                             )}
 
-                                            {localConfig.speech_stt_provider === 'veyllo' && !localConfig.api_key_veyllo && (
+                                            {keyStateKnown && localConfig.speech_stt_provider === 'veyllo' && !providerHasKey('veyllo') && (
                                                 <p className="text-xs text-amber-600">{tVoice('veylloKeyHint')}</p>
                                             )}
-                                            {(localConfig.speech_tts_provider === 'elevenlabs' || localConfig.speech_stt_provider === 'elevenlabs')
-                                                && !localConfig.api_key_elevenlabs && (
+                                            {keyStateKnown && (localConfig.speech_tts_provider === 'elevenlabs' || localConfig.speech_stt_provider === 'elevenlabs')
+                                                && !providerHasKey('elevenlabs') && (
                                                 <p className="text-xs text-amber-600">{tVoice('elevenKeyHint')}</p>
                                             )}
-                                            {(localConfig.speech_tts_provider === 'openai' || localConfig.speech_stt_provider === 'openai')
-                                                && !localConfig.api_key_openai && (
+                                            {keyStateKnown && (localConfig.speech_tts_provider === 'openai' || localConfig.speech_stt_provider === 'openai')
+                                                && !providerHasKey('openai') && (
                                                 <p className="text-xs text-amber-600">{tVoice('openaiKeyHint')}</p>
                                             )}
 
@@ -3284,7 +3307,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     const vp = PROVIDERS.find(pr => pr.id === vProv);
                                                     const fetched = apiModels[vProv];
                                                     const list = fetched && fetched.length > 0 ? fetched : (vp?.staticModels || []);
-                                                    const hasKey = !!localConfig[`api_key_${vProv}`];
+                                                    const hasKey = providerHasKey(vProv);
                                                     const seen = new Set<string>();
                                                     return (
                                                         <>
@@ -3314,7 +3337,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     <RefreshCw size={18} className={cn(fetchingProvider === vProv && "animate-spin")} />
                                                                 </button>
                                                             </div>
-                                                            {!hasKey && (
+                                                            {keyStateKnown && !hasKey && (
                                                                 <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
                                                             )}
                                                         </>

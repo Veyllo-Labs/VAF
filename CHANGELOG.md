@@ -57,6 +57,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Settings no longer claims "API key missing" for a key that is safely stored.** Since
+  keys moved into the encrypted store, the browser's copy of the config deliberately
+  carries no key values - but six places in Settings still judged "is a key configured"
+  from that copy: the warning banner in the provider section, the model-refresh buttons
+  next to the provider, vision and voice-agent model pickers, and the three voice hints.
+  A stored key therefore showed as missing, and refresh buttons stayed disabled although
+  the server could resolve the key fine. All of them now ask the same stored-state the
+  key fields already use, count a freshly typed key as present, and stay silent while the
+  state is still loading or unreadable - "nothing configured" and "cannot tell" are
+  different answers and no longer render as the same warning.
 - **Editing an offline user no longer deactivates their account.** The user table showed
   "Active/Inactive" for presence - is the user connected right now - but the edit dialog
   read that same field as the account state and wrote it back on save. Editing anyone who

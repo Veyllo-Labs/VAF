@@ -16,7 +16,14 @@ from vaf.tools.filesystem import is_safe_path
 
 def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
     """Resolve file path (supports file:// URLs, absolute/relative paths, folder aliases like Downloads).
-    Returns (resolved_path, error_message). Exactly one is None."""
+    Returns (resolved_path, error_message). Exactly one is None.
+
+    Shared by every outgoing-attachment sender (send_discord, send_to_user,
+    send_whatsapp, send_mail import this). Containment is not this function's
+    job: the per-user jail is declared as ``file_access`` on each sender and
+    installed around run() by BaseTool, and symlink resolve-then-recheck lives
+    in ``is_safe_path`` itself - so the returned path is the UNRESOLVED one and
+    must stay that way (a resolved return would leak the link target)."""
     s = (path_str or "").strip()
     if not s:
         return None, None
@@ -36,7 +43,10 @@ class SendTelegramTool(BaseTool):
     For documents (invoices, contracts, PDFs): pass file_path after creating/finding the file.
     """
     name = "send_telegram"
-    identity_kwargs = ("user_scope_id", "username")
+    identity_kwargs = ("user_role", "user_scope_id", "username")
+    # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
+    # make skill files shared by OTHER users attachable to an outgoing message.
+    file_access = "write"
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (

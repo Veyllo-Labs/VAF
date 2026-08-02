@@ -344,6 +344,10 @@ def test_the_shape_of_the_lane_is_still_what_was_measured():
     Measured 2026-07-30: 31 tools declare a path-shaped parameter, 9 of those parameters are
     not local paths, leaving 22 - of which 15 ask (13 directly, 2 through the shared
     resolver) and 7 do not.
+
+    Re-measured 2026-08-02: 32 declare, 9 not local, 23 local - 18 ask (send_whatsapp moved
+    from its own resolver copy to the shared one, i.e. to the delegation branch) and 5 are
+    listed (2 UNGUARDED + 3 CONTAINED_ELSEWHERE).
     """
     all_params = _tool_classes()
     local = list(_local_path_tools())

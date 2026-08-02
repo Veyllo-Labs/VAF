@@ -416,6 +416,10 @@ however, is channel-agnostic and exists exactly once:
   preview, and for automations the result lane) - content is never dropped silently.
 - **Explicit platform requests** stay on the per-channel tools: "send this via
   Telegram" uses `send_telegram`.
+- **Attachments are confined per user, on every channel**: each sender declares
+  `file_access = "write"`, so a non-admin can only attach files from their own
+  tree, and the shared path rule resolves symlinks and re-checks the real target
+  (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
 Adding a new platform means extending adapters and registries, NOT the rule. The
 prompt surfaces that teach delivery (automation workflow generator, calendar check

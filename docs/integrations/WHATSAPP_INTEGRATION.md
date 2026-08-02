@@ -8,7 +8,7 @@ The WhatsApp bridge allows users to interact with VAF through WhatsApp, supporti
 
 - **Text Messages**: Standard text-based conversations
 - **Voice Messages**: Incoming voice transcribed via the configured STT lane, outgoing voice synthesized via the configured TTS lane (local containers by default, or cloud providers via `speech_stt_provider`/`speech_tts_provider` - see [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)); auto-reply or via `send_whatsapp(voice_lang="...")`
-- **Documents**: Agent can send PDF, DOCX, and other files via `send_whatsapp(file_path="...")`
+- **Documents**: Agent can send PDF, DOCX, and other files via `send_whatsapp(file_path="...")`; the path is confined to the caller's own data like every other path tool (`file_access = "write"`, see [USER_ISOLATION.md](../security/USER_ISOLATION.md))
 - **Per-User Isolation**: Each VAF user has a separate WhatsApp session; credentials stored under `~/.vaf/users/<username>/whatsapp/`
 - **Whitelist**: Only configured phone numbers (E.164) and contacts with "Can reach your assistant" (Front Office) can send messages and receive replies
 - **Agent Tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat`, `send_whatsapp` for listing, searching, reading, and sending

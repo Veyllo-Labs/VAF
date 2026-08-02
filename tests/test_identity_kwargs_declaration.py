@@ -115,12 +115,16 @@ IDENTITY_BASELINE = {
     "reply_mail": ["user_scope_id", "username"],
     "restore_automation": ["user_role", "user_scope_id"],
     "schedule_reminder": ["user_scope_id", "username"],
-    "send_discord": ["user_scope_id", "username"],
+    # The four messenger senders gained user_role on 2026-08-02: `file_access` refuses
+    # to be declared without the identity that resolves it, and the role is what
+    # recognises a SECOND admin - who would otherwise be jailed to their own tree while
+    # attaching a file to an outgoing message. send_slack stays: no path parameter.
+    "send_discord": ["user_role", "user_scope_id", "username"],
     "send_mail": ["user_role", "user_scope_id", "username"],
     "send_slack": ["user_scope_id", "username"],
-    "send_telegram": ["user_scope_id", "username"],
-    "send_to_user": ["user_scope_id", "username"],
-    "send_whatsapp": ["user_scope_id", "username"],
+    "send_telegram": ["user_role", "user_scope_id", "username"],
+    "send_to_user": ["user_role", "user_scope_id", "username"],
+    "send_whatsapp": ["user_role", "user_scope_id", "username"],
     "telegram_inbox": ["user_scope_id", "username"],
     "thinking_workspace_handoff": ["user_scope_id"],
     "thinking_workspace_read": ["user_scope_id"],

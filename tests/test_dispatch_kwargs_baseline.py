@@ -165,12 +165,14 @@ KWARGS_BASELINE = {
     "save_thinking_suggestion":  ("chat", []),
     "schedule_reminder":         ("chat", ["user_scope_id", "username"]),
     "search_tools":              ("chat", []),
-    "send_discord":              ("chat", ["_agent", "user_scope_id", "username"]),
+    # The four messenger senders gained user_role on 2026-08-02 with their file_access
+    # declaration (attachment containment); send_slack has no path parameter and stays.
+    "send_discord":              ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
     "send_mail":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "send_slack":                ("chat", ["_agent", "user_scope_id", "username"]),
-    "send_telegram":             ("chat", ["_agent", "user_scope_id", "username"]),
-    "send_to_user":              ("chat", ["_agent", "user_scope_id", "username"]),
-    "send_whatsapp":             ("chat", ["_agent", "user_scope_id", "username"]),
+    "send_telegram":             ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
+    "send_to_user":              ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
+    "send_whatsapp":             ("chat", ["_agent", "user_role", "user_scope_id", "username"]),
     "set_git_coauthor":          ("chat", []),
     "set_timer":                 ("chat", ["_agent"]),
     "telegram_inbox":            ("chat", ["user_scope_id", "username"]),

@@ -23,12 +23,13 @@ _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # the CALLER's OWN data - never another user's VAF_Projects/<uid8>/. This is a contextvar so it is
 # scoped to that run only: when unset (the default) it has ZERO effect. Set/reset via
 # set_librarian_scope/reset_librarian_scope; the jail info comes from compute_user_jail (single
-# source - do not re-derive it per tool). Installed today by ELEVEN TOOLS in five files - named
-# rather than counted, because a bare number is what went wrong three times in the round that
-# grew this list: list_files, folder_size, read_file, write_file, edit_file, tree, find_files
-# (all here), plus document_viewer, learn_document, librarian_agent and send_mail attachment
-# resolution. `tests/test_path_tools_ask_the_shared_rule.py` is the guard that keeps a new
-# path-taking tool from quietly joining without asking.
+# source - do not re-derive it per tool). Installed by MECHANISM, not by roster: every tool
+# that declares `file_access` on BaseTool enters this jail around run() (base.py wraps it in
+# user_jail - that declaration is the supported form), plus the librarian's env-carried lane,
+# which cannot use the declaration and installs it by hand. An earlier version of this comment
+# listed the declaring tools by name and was stale within two rounds - the guards are
+# `tests/test_path_tools_ask_the_shared_rule.py` (a new path-taking tool cannot quietly skip
+# asking) and `tests/test_file_access_declaration.py` (the declaration wires the jail).
 import contextlib as _contextlib
 import contextvars as _contextvars
 _librarian_scope_ctx = _contextvars.ContextVar("vaf_librarian_scope", default=None)
@@ -388,6 +389,19 @@ def is_safe_path(path):
         # Librarian per-user jail (no-op unless a librarian run set the scope contextvar).
         if not _librarian_jail_ok(abs_path):
             return False, "Access denied: outside your own data"
+        # Every check above (except the VAF-root check and the jail, which resolve for
+        # themselves) ran against the UNRESOLVED path - os.path.abspath follows no
+        # symlinks - so a link inside an allowed folder could smuggle in a protected
+        # target: the downstream open() follows the link. Resolve, and when the real
+        # path differs, ask this same rule about the real one. Termination is
+        # structural: a fully resolved path resolves to itself, so the nested call
+        # cannot recurse a second time. The RETURN VALUE stays the unresolved
+        # abs_path - callers pin that.
+        real = str(Path(abs_path).resolve())
+        if real != abs_path:
+            ok, verdict = is_safe_path(real)
+            if not ok:
+                return False, verdict
         return True, abs_path
     except Exception:
         return False, "Invalid path"

@@ -29,7 +29,10 @@ class SendToUserTool(BaseTool):
     their configured main messenger, whichever platform that is.
     """
     name = "send_to_user"
-    identity_kwargs = ("user_scope_id", "username")
+    identity_kwargs = ("user_role", "user_scope_id", "username")
+    # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
+    # make skill files shared by OTHER users attachable to an outgoing message.
+    file_access = "write"
     permission_level = "write"
     side_effect_class = "irreversible"
     channel_restrictions = ()

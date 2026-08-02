@@ -66,6 +66,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Files sent through the messengers are confined to your own data on shared
+  machines.** Attaching a file to an outgoing Telegram, WhatsApp or Discord message
+  (or to the main-messenger delivery) accepted any path the general safety checks
+  allow - including another user's project tree. Only email attachments were
+  confined. All senders now enter the same per-user boundary as the file tools, so
+  a non-admin can only send files from their own tree.
+- **A symbolic link can no longer smuggle a protected file into a file operation or
+  an outgoing attachment.** The shared path rule checked the link's own location and
+  the file was then opened at the link's target - so a link inside an allowed folder
+  could reach VAF's credential store or system files. The rule now resolves links
+  and re-checks the real target, for every caller.
 - **Generated text no longer carries stream debris or hidden reasoning.** Several
   features collected the model's streamed answer with their own hand-written loops,
   and the loops disagreed: AI git commit messages could end in a raw

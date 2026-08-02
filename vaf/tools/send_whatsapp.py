@@ -10,20 +10,7 @@ import tempfile
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
-from vaf.tools.filesystem import is_safe_path
-
-
-def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
-    """Resolve file path (folder aliases like Downloads, absolute paths). Returns (resolved_path, error_message)."""
-    s = (path_str or "").strip()
-    if not s:
-        return None, None
-    if s.lower().startswith("file://"):
-        s = s[7:]
-    safe, result = is_safe_path(s)
-    if not safe:
-        return None, result
-    return Path(result), None
+from vaf.tools.send_telegram import _resolve_path
 
 
 class SendWhatsAppTool(BaseTool):
@@ -32,7 +19,10 @@ class SendWhatsAppTool(BaseTool):
     Use to_phone when the user asks to send a message to someone (e.g. Alice); get the number from get_contact(name='Alice').
     """
     name = "send_whatsapp"
-    identity_kwargs = ("user_scope_id", "username")
+    identity_kwargs = ("user_role", "user_scope_id", "username")
+    # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
+    # make skill files shared by OTHER users attachable to an outgoing message.
+    file_access = "write"
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
@@ -146,7 +136,11 @@ class SendWhatsAppTool(BaseTool):
             if path_error:
                 return path_error
             if resolved and resolved.is_file():
-                document_path = str(resolved.resolve())
+                # Deliberate: the UNRESOLVED path goes to the bridge, like every other
+                # sender. Resolving here would hand out the link target after the check
+                # ran (the old check-then-resolve ordering bug); is_safe_path already
+                # vetted the real target itself.
+                document_path = str(resolved)
             else:
                 return f"File not found or not a file: {file_path_str}"
         elif voice_lang:

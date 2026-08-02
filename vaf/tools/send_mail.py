@@ -10,15 +10,11 @@ Supports optional file attachments (e.g. invoices, documents).
 import mimetypes
 import re
 from email.utils import parseaddr
-from pathlib import Path
 
 from vaf.core.config import Config
 from vaf.core.email_transport import get_account
 from vaf.mail import compose, sender
 from vaf.tools.base import BaseTool
-from vaf.tools.filesystem import (
-    is_safe_path,
-)
 from vaf.tools.mail_utils import (
     _EXEC_IMPERSONATION_WORDS,
     _FREE_MAIL_DOMAINS,
@@ -26,34 +22,7 @@ from vaf.tools.mail_utils import (
     cred_username_from_kwargs,
     list_accounts_for_user,
 )
-
-
-def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
-    """Resolve file path (supports file:// URLs, folder aliases like Downloads).
-    Returns (resolved_path, error_message). Exactly one is None.
-    Callers must have the per-user jail installed (see run) so a non-admin
-    user cannot attach files outside their own data. Symlinks are resolved
-    BEFORE the check and the real path is re-checked, so a link inside the
-    user's data cannot point outside it. The transport reads the file after
-    the jail is released; v2 serves attachments from the per-user store,
-    which closes that remaining swap window."""
-    s = (path_str or "").strip()
-    if not s:
-        return None, None
-    if s.lower().startswith("file://"):
-        s = s[7:]
-    safe, result = is_safe_path(s)
-    if not safe:
-        return None, result  # result = error message
-    try:
-        real = Path(result).resolve()
-    except OSError:
-        return None, "Invalid path"
-    if str(real) != str(result):
-        safe, result = is_safe_path(str(real))
-        if not safe:
-            return None, result
-    return Path(result), None
+from vaf.tools.send_telegram import _resolve_path
 
 
 _HIGH_RISK_REQUEST_WORDS = (
@@ -220,11 +189,10 @@ class SendMailTool(BaseTool):
         if not subject:
             subject = "(No subject)"
 
-        # Per-user filesystem jail while resolving attachment paths: a non-admin
-        # user's agent must not be able to attach (= exfiltrate) files outside
-        # their own data. Same mechanism as LibrarianTool/WriteFileTool; the
-        # contextvar is set here, in the tool itself, because a dispatcher is not always
-        # in the picture - direct consumers call run() with none.
+        # The delegate tail passes PATHS, and its transport reads them after the
+        # jail is released; v2 serves attachments from the per-user store, which
+        # closes that remaining swap window. The native path reads bytes below,
+        # inside the jail.
         attachments = []      # {path, filename} - for the high-risk gate + delegate tail
         att_bytes = []        # {filename, content_type, payload} - read INSIDE the jail
         if attachment_paths:

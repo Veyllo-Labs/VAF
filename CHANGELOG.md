@@ -108,8 +108,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   in chat and inside the coding agent, and a revocation takes effect within seconds, not
   at the next login. The coding agent's internal tools - the shell above all - now appear
   in the admin's picker as well, so "this user gets the coder but not the shell" is a
-  choice the admin can express. Admins themselves are never restricted, an empty
-  selection means unrestricted, and workflow permissions remain display-only for now.
+  choice the admin can express. Admins themselves are never restricted and an empty
+  selection means unrestricted.
+- **The per-user workflow permission is enforced as well.** The other half of the same
+  admin choice - which saved workflows a user may run - was also stored and checked by
+  nothing. A saved workflow now passes that list when it starts, wherever it is started
+  from: chat, the workflow tool, an automation, the command line, or the resume of a
+  paused run - so revoking a workflow while it is paused means it does not come back.
+  The same rules apply as for tools: admins are never restricted, an empty selection
+  means unrestricted. One-off workflows the agent designs on the fly have no saved
+  identity to check; what governs them is the tool permission of the feature that
+  builds them.
 - **The coding agent now acts as the person who asked.** It runs as a separate process,
   and no identity crossed that boundary - so its file tools ran with the machine owner's
   rights for every caller. The caller's identity now travels with the task, and the
@@ -312,6 +321,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   request with no user attached was already refused rather than answered broadly.
 
 ### Changed
+- **Workflow steps now pass the same security checks as chat.** A step used to run its
+  tool directly, skipping every rule a chat turn answers: admin-only tools, channel
+  policy, the per-user tool selection, and the veto an application embedding VAF can
+  attach. Steps now run through the shared dispatch pipeline, so all of those hold
+  inside workflows too. Three deliberate differences remain: the confirmation question
+  stays off for workflows (they run unattended - taking that away is its own decision),
+  the heavy sub-agent steps of a temporary workflow still run as child processes outside
+  the step pipeline (their internal tools remain constrained separately), and a step
+  whose tool crashes now fails that step and lets the workflow branch, instead of
+  aborting the whole run. Malformed step arguments are now refused cleanly before the
+  tool runs. The existing rollback switch restores the entire previous behaviour if
+  needed.
 - **A workflow now runs as the person who started it, by default.** Until this release a
   saved workflow always acted as the machine owner, whoever ran it: its files went to the
   owner's folders, its GitHub calls used the owner's account, and anything it created was

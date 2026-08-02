@@ -147,11 +147,13 @@ def test_mail_tool_registry_copies_stay_in_sync():
     engine_src = (root / "vaf" / "workflows" / "engine.py").read_text(encoding="utf-8")
 
     # The two lanes now express the same thing differently: the AGENT dispatcher reads each
-    # tool's BaseTool.identity_kwargs declaration, while the workflow ENGINE still carries a
-    # hardcoded name tuple (its migration is deliberately deferred to the step that also adds
-    # the missing policy checks - see the plan). Until then this is exactly the Rule-2 drift
-    # worth guarding: every mail tool the engine lists must also declare, or the same mail
-    # tool would reach its store with an identity in one lane and without one in the other.
+    # tool's BaseTool.identity_kwargs declaration, while the workflow ENGINE keeps a
+    # hardcoded name tuple inside its legacy branch - retained as the shipped rollback lane
+    # (workflow_identity_injection = legacy/off restores the whole pre-funnel dispatch; the
+    # lane retires after the funnel lane survives one released version with policy on).
+    # Until that retirement this is exactly the Rule-2 drift worth guarding: every mail tool
+    # the engine lists must also declare, or the same mail tool would reach its store with
+    # an identity in one lane and without one in the other.
     m = _re.search(r'\("mail_inbox", "read_mail"[^)]*\)', engine_src)
     assert m, "mail kwargs-injection tuple not found in engine.py"
     engine_tools = set(_re.findall(r'"([a-z_]+)"', m.group(0)))

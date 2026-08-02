@@ -158,6 +158,7 @@ def try_resume_paused_workflow(agent: Any, task: Any) -> Tuple[bool, Optional[st
             getattr(agent, "tools", {}) or {},
             user_scope_id=claimed.user_scope_id,
             username=claimed.username,
+            authorize=getattr(agent, "_tool_authorizer", None),
         )
         engine._workflow_name = claimed.workflow_name
         engine._template_id = claimed.template_id

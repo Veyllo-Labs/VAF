@@ -45,8 +45,9 @@ iteration and commits on every exit path, so a flat timeout would abandon it mid
 file half-written).
 
 **The workflow engine reverses this for one tool.** A workflow step computes
-`SELF_SUPERVISED_TOOLS - {"browser_agent"}` handed to `run_tool_bounded(self_supervised=...)`, so `browser_agent` *is*
-bounded inside a workflow while it stays self-supervised as a standalone `execute_tool` call. A
+`SELF_SUPERVISED_TOOLS - {"browser_agent"}`, handed to its `ToolCaller` (which passes it
+to `run_tool_bounded(self_supervised=...)`), so `browser_agent` *is* bounded inside a
+workflow while it stays self-supervised as a standalone `execute_tool` call. A
 workflow must not be able to stall forever on one browsing step.
 
 ### Cooperative cancel

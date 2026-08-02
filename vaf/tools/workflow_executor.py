@@ -495,6 +495,7 @@ class ExecuteWorkflowTool(BaseTool):
                     user_role=getattr(_agent, "_current_user_role", None),
                     session_id=session_id,
                 ),
+                authorize=getattr(_agent, "_tool_authorizer", None),
             )
             # Run identity, so a pause on an async sub-agent step produces a record that can
             # be routed back to THIS session and THIS panel (see engine's pause branch).

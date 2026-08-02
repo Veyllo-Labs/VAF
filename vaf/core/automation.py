@@ -1399,6 +1399,7 @@ vaf automation delete <id>   # Delete task
                     callback=workflow_callback,
                     user_scope_id=task.user_scope_id,
                     username=agent._current_username,
+                    authorize=getattr(agent, "_tool_authorizer", None),
                 )
                 # Add 'date' to workflow defaults so {date} can be resolved in templates
                 engine._workflow_defaults = {"date": date_str}

@@ -270,6 +270,9 @@ def run_workflow(
         # The only consumer with no agent object at all - this runs as its own subprocess and
         # builds its tools from workflow_primitives(). The identity therefore comes from the
         # session's own metadata, the way the engine already derives the project path.
+        # No authorize= here, for the same reason: a callable cannot cross a process
+        # boundary. The account allowlist still holds in this lane - its answer comes from
+        # the resolver this process registers itself at vaf.main import.
         from vaf.workflows.engine import identity_for_engine
         engine = WorkflowEngine(
             tools, callback=progress_callback,

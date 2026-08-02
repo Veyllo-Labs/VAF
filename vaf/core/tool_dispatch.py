@@ -549,6 +549,47 @@ def resolve_account_allowlist(user_scope_id: str):
     return frozenset(str(t) for t in answer if str(t).strip())
 
 
+# The WORKFLOW twin of the tool allowlist: which saved workflow TEMPLATES may this
+# account start. Same registration shape, same contract, separate slot - a workflow id
+# is not a tool name, and mixing the two answer spaces in one resolver would make every
+# collision silent. Consulted by the workflow engine's start gate, ONCE per run at its
+# convergence point, instead of at each of the seven places a workflow can be started.
+# Deliberately NOT on the facade: workflows are not a documented embedding surface; the
+# export is one lazy __getattr__ branch the day they become one.
+_workflow_allowlist_resolver = None
+
+
+def set_workflow_allowlist_resolver(resolver) -> None:
+    """Register the application's answer to "which saved workflows may this ACCOUNT start?".
+
+    ``resolver(user_scope_id: str) -> None | iterable of workflow template ids``
+
+    Contract identical to ``set_account_allowlist_resolver``: None or unregistered =
+    unrestricted; any other answer is normalized to a frozenset and an EMPTY answer
+    allows nothing; exemptions (no scope, admin identity) live at the consuming gate,
+    never in the resolver; a RAISING resolver is a refusal at the gate; process-wide,
+    last registration wins, ``None`` deregisters.
+    """
+    global _workflow_allowlist_resolver
+    _workflow_allowlist_resolver = resolver
+
+
+def get_workflow_allowlist_resolver():
+    """The currently registered workflow resolver, or None. For wiring checks."""
+    return _workflow_allowlist_resolver
+
+
+def resolve_workflow_allowlist(user_scope_id: str):
+    """Internal: the registered workflow resolver's answer, normalized like the tool one."""
+    fn = _workflow_allowlist_resolver         # local capture: a mid-call detach is safe
+    if fn is None:
+        return None
+    answer = fn(user_scope_id)
+    if answer is None:
+        return None
+    return frozenset(str(t) for t in answer if str(t).strip())
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 

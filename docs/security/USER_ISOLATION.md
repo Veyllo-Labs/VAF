@@ -393,7 +393,23 @@ DB errors and resolves unreachable as unrestricted, and on the desktop that is c
 rather than merely safe, because no reachable auth DB means no tenant can authenticate
 either. A hypothetical deployment that served `vaf.core.web_server:app` without importing
 `vaf.main` would run unregistered; no product path does that, and the wiring test is the
-fence. WORKFLOWS remain stored-only until the workflow lane gains its policy stage (C2).
+fence.
+
+The WORKFLOW half is enforced the same way, in two pieces. Non-spawn workflow steps run
+through the same dispatch funnel (one `ToolCaller` per engine run: hard policy, the tool
+allowlist above, the embedder authorizer; the confirmation gate stays off for that lane,
+and spawn-mode sub-agent steps stay off the funnel - their inner tools remain constrained
+by `VAF_ALLOWED_TOOLS` in the child). And saved workflow TEMPLATES pass a START gate:
+`WorkflowEngine.execute()` checks `permissions["workflows"]` once, at the point all seven
+entry lanes converge, resume included - so a revocation between pause and resume bites.
+Same pinned semantics as the tool list (absent or empty stored list = unrestricted,
+admins never restricted, a raising registered resolver refuses, the harness resolver
+itself never raises); the resolver is registered in `vaf/main.py` next to the tool one.
+Ad-hoc runs without a template id (run_temp, automation inline steps) are governed by the
+TOOL permission of the lane that builds them. The rollback switch
+(`workflow_identity_injection` = legacy/off) restores the entire pre-funnel step lane -
+identity name list and absence of per-step policy alike; the start gate is not behind the
+switch.
 
 ### Cloud credentials are addressed by scope
 

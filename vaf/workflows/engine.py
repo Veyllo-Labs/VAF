@@ -398,6 +398,7 @@ class WorkflowEngine:
         user_scope_id: Optional[str] = None,
         username: Optional[str] = None,
         user_role: Optional[str] = None,
+        authorize: Optional[Callable] = None,
     ):
         """
         Initialize the workflow engine.
@@ -407,6 +408,9 @@ class WorkflowEngine:
             callback: Optional callback for progress updates
             user_scope_id: Optional user scope UUID for tool isolation (memory, calendar, etc.)
             username: Optional username for tools that need it (messaging, contacts, etc.)
+            authorize: The embedder's per-call veto, threaded into the shared funnel for
+                non-spawn steps. A callable cannot cross a process boundary, so the
+                workflow CLI subprocess lane runs without one.
         """
         self.tools = tools
         self.callback = callback or (lambda *args: None)
@@ -421,6 +425,7 @@ class WorkflowEngine:
         # so a workflow step could not be role-aware. None keeps the previous answer: the
         # jail resolves admin-ness from the scope half alone, exactly as before.
         self.user_role = user_role
+        self._authorize = authorize
 
         # Per-step output validation (opt-in). Set by the caller (run_temp) when an agent is
         # available: _validate_step(goal, result, tool, user_intent) -> (fulfilled, retry_hint).
@@ -441,6 +446,36 @@ class WorkflowEngine:
         from vaf.core.context import ContextManager
         self.context_manager = ContextManager(max_tokens=8192)
     
+    def _workflow_allowlist_blocks(self) -> str:
+        """The account-level workflow allowlist, as a refusal reason or "".
+
+        Mirrors the funnel's account stage, one layer up: exemptions live HERE (no scope
+        = machine owner or a direct in-process lane; admins by the shared
+        policy_admin_flag rule), the resolver only answers "which template ids for this
+        scope". No template id means an ad-hoc run and is never checked - the lever for
+        those is the TOOL permission of the lane that builds them. A RAISING registered
+        resolver refuses, the same polarity as the tool stage: a registered guard that
+        crashed must not quietly become no guard (the harness resolver catches its own
+        DB errors and stays fail-open internally).
+        """
+        template_id = str(getattr(self, "_template_id", "") or "").strip()
+        if not template_id:
+            return ""
+        if not self.user_scope_id:
+            return ""
+        from vaf.core.tool_dispatch import policy_admin_flag, resolve_workflow_allowlist
+        if policy_admin_flag(self.user_role, self.user_scope_id):
+            return ""
+        try:
+            allowed = resolve_workflow_allowlist(self.user_scope_id)
+        except Exception:
+            return ("The workflow allowlist resolver failed, so this workflow is "
+                    "refused. A broken guard must not quietly become no guard.")
+        if allowed is None or template_id in allowed:
+            return ""
+        return ("This workflow is not enabled for your account. "
+                "An administrator can enable it in user management.")
+
     def execute(
         self,
         steps: List[WorkflowStep],
@@ -466,6 +501,20 @@ class WorkflowEngine:
         Returns:
             WorkflowResult with all outputs and status
         """
+        # THE START GATE: which saved workflow templates may this ACCOUNT run. One check
+        # at the one place every lane converges - the seven construction sites all end
+        # up here, including both resume lanes, so a revocation between pause and resume
+        # bites. Checked BEFORE any step runs; ad-hoc runs (empty template id: run_temp,
+        # automations with inline steps) are governed by the TOOL permission of the lane
+        # that builds them, not by a template id they do not have.
+        _wf_blocked = self._workflow_allowlist_blocks()
+        if _wf_blocked:
+            UI.error(f"  [BLOCKED] {_wf_blocked}")
+            return WorkflowResult(
+                success=False, outputs={}, final_output=None, steps=steps,
+                total_duration=0.0, error=_wf_blocked,
+            )
+
         # Store defaults for use in template resolution (defaults not passed for automations)
         self._workflow_defaults = {}
 
@@ -569,6 +618,66 @@ class WorkflowEngine:
                                        variables=list(variables.keys()) if variables else [])
         except Exception:
             pass
+
+        # Bounded execution: a single tool/sub-agent call may never block the
+        # worker forever. Pick a wall-clock timeout (sub-agents get more) and poll
+        # the user's Stop flag during the call so a hung step can't freeze the
+        # backend and the Stop button works mid-step. See vaf/core/bounded_run.py.
+        # Loop-invariant, hoisted: recomputing these per step answered the same
+        # question once per retry for no gain.
+        from vaf.core.bounded_run import is_abort_sentinel, SELF_SUPERVISED_TOOLS
+        from vaf.core.config import Config as _CfgTO
+        from vaf.core.tool_dispatch import ToolCaller, run_tool_bounded
+        # As a WORKFLOW STEP, browser_agent must be BOUNDED: it runs in-process and
+        # blocks the workflow, so leaving it unbounded lets a hung browser freeze the
+        # whole workflow (and the main agent waiting on it). It gets a generous budget
+        # (browser_timeout_seconds) + its own _stop_monitor/max_steps. Only the
+        # workflow orchestrators stay self-supervised here (they are never steps in
+        # practice). Standalone browser_agent (via execute_tool) stays self-supervised.
+        # The exempt set this lane uses, as a value rather than a branch - it is one of
+        # the three arguments run_tool_bounded takes precisely so a second caller does
+        # not have to reimplement execution control.
+        _workflow_self_supervised = SELF_SUPERVISED_TOOLS - {"browser_agent"}
+        _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
+
+        # THE FUNNEL for non-spawn steps: one ToolCaller, built once per run, carrying
+        # this lane's differences as arguments. Every step through it gets the hard
+        # policy block, the account allowlist and the embedder's authorizer - the three
+        # questions this lane never asked before. gate_enabled=False is this lane's
+        # standing state (tool_dispatch documents it: taking that away is a separate
+        # decision); with the gate off, an authorizer's ask() degrades to no opinion -
+        # only deny() binds here. No on_event: this lane reports through its own
+        # callback protocol. No source: the engine has none; channel-ness rides the
+        # session-id prefix.
+        # Built CONDITIONALLY: under the rollback modes (workflow_identity_injection =
+        # legacy/off) the funnel is not even constructed - the rollback restores the
+        # ENTIRE pre-C2 lane, name-list identity and absence of per-step policy alike.
+        # The legacy lane retires after the funnel lane has survived one released
+        # version with the policy stages on and no rollback report.
+        _use_funnel = _identity_is_declared()
+        caller = None
+        if _use_funnel:
+            _sess = getattr(self, "_session_id", None)
+            if not _sess:
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    _sess = get_current_session_id()
+                except Exception:
+                    _sess = None
+            caller = ToolCaller(
+                self.tools,
+                user_scope_id=self.user_scope_id,
+                username=self.username,
+                user_role=self.user_role,
+                session_id=_sess,
+                gate_enabled=False,
+                max_result_chars=None,   # step outputs are chained into later steps
+                timeout_for=_workflow_step_timeout,
+                self_supervised=_workflow_self_supervised,
+                stop_check=check_stop,
+                poll=_stop_poll,
+                authorize=self._authorize,
+            )
 
         # While-loop with manual index to support on_success/on_failure jumps.
         # Infinite-loop guard: allow at most len(steps) * 3 iterations.
@@ -993,32 +1102,12 @@ class WorkflowEngine:
                 retry_count = 0
                 result = None
 
-                # Bounded execution: a single tool/sub-agent call may never block the
-                # worker forever. Pick a wall-clock timeout (sub-agents get more) and poll
-                # the user's Stop flag during the call so a hung step can't freeze the
-                # backend and the Stop button works mid-step. See vaf/core/bounded_run.py.
-                from vaf.core.bounded_run import (
-                    is_abort_sentinel, SELF_SUPERVISED_TOOLS, agent_timeout_seconds,
-                )
-                from vaf.core.config import Config as _CfgTO
-                from vaf.core.tool_dispatch import run_tool_bounded
-                # As a WORKFLOW STEP, browser_agent must be BOUNDED: it runs in-process and
-                # blocks the workflow, so leaving it unbounded lets a hung browser freeze the
-                # whole workflow (and the main agent waiting on it). It gets a generous budget
-                # (browser_timeout_seconds) + its own _stop_monitor/max_steps. Only the
-                # workflow orchestrators stay self-supervised here (they are never steps in
-                # practice). Standalone browser_agent (via execute_tool) stays self-supervised.
-                # The exempt set this lane uses, as a value rather than a branch - it is one of
-                # the three arguments run_tool_bounded takes precisely so a second caller does
-                # not have to reimplement execution control.
-                _workflow_self_supervised = SELF_SUPERVISED_TOOLS - {"browser_agent"}
                 _step_timeout = _workflow_step_timeout(step.tool)  # still needed by the spawn branch below
-                _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
 
                 while retry_count < max_retries:
-                    _inject_user_scope(step.tool, args)
                     # Route file-producing steps into the shared project dir. Inside the
                     # retry loop (idempotent) so a context-error retry keeps the routing.
+                    # All branches: paths are args plumbing, not identity.
                     _inject_workflow_paths(step.tool, args, _workflow_project_path)
                     try:
                         if _spawn_and_wait:
@@ -1026,13 +1115,22 @@ class WorkflowEngine:
                             # [SUBAGENT_ASYNC:id] fast), then wait for its IPC result bounded
                             # + stop-aware. Isolated → no in-process hang, and no abandoned
                             # thread can hold the main agent's LLM lock.
+                            # Stays OFF the funnel (spawn + IPC wait, not a tool run), so it
+                            # needs the identity injection in BOTH modes.
+                            _inject_user_scope(step.tool, args)
                             _spawn_out = tool.run(**args)
                             result = self._await_subagent(
                                 _spawn_out, step.tool, check_stop, _step_timeout, _stop_poll,
                             )
+                        elif _use_funnel:
+                            # THE FUNNEL: policy, account allowlist, authorizer; declared
+                            # identity is assigned inside the pipeline; args are copied
+                            # inside, so this dict stays clean for the retry snapshot.
+                            result = caller.execute(step.tool, args)
                         else:
-                            # Same execution path the chat lane uses; this lane's three
-                            # differences travel as arguments instead of as a second copy.
+                            # The pre-C2 lane, VERBATIM: the shipped rollback
+                            # (workflow_identity_injection = legacy/off).
+                            _inject_user_scope(step.tool, args)
                             result = run_tool_bounded(
                                 tool, args, tool_name=step.tool,
                                 timeout_for=_workflow_step_timeout,

@@ -38,10 +38,13 @@ def test_importing_vaf_main_registers_the_harness_resolver():
     """
     script = (
         "import vaf.main\n"
-        "from vaf.core.tool_dispatch import get_account_allowlist_resolver\n"
-        "from vaf.auth.permissions import resolve_allowed_tools\n"
+        "from vaf.core.tool_dispatch import (\n"
+        "    get_account_allowlist_resolver, get_workflow_allowlist_resolver)\n"
+        "from vaf.auth.permissions import resolve_allowed_tools, resolve_allowed_workflows\n"
         "assert get_account_allowlist_resolver() is resolve_allowed_tools, (\n"
         "    'vaf.main did not register the harness account-allowlist resolver')\n"
+        "assert get_workflow_allowlist_resolver() is resolve_allowed_workflows, (\n"
+        "    'vaf.main did not register the harness workflow-allowlist resolver')\n"
         "print('REGISTERED_OK')\n"
     )
     env = dict(os.environ)

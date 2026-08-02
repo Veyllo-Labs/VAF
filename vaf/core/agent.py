@@ -6011,6 +6011,7 @@ class Agent:
                     getattr(self, "_current_username", None),
                     user_role=getattr(self, "_current_user_role", None),
                 ),
+                authorize=getattr(self, "_tool_authorizer", None),
             )
 
             # Execute workflow
@@ -6020,6 +6021,9 @@ class Agent:
             engine._workflow_defaults = template_defaults
             # Set workflow name for paused state tracking
             engine._workflow_name = workflow_id
+            # Saved-template lane: the start gate keys on this id. Without it this lane
+            # was the one saved-template entry the per-user workflow list could not see.
+            engine._template_id = workflow_id
             
             # ═══════════════════════════════════════════════════════════════
             # ASYNC WORKFLOW: Run entire workflow in separate terminal

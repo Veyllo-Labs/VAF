@@ -200,7 +200,7 @@ create_agent_workflow(
 - No file is written to disk. Nothing is saved after execution.
 - Ideal for complex one-off tasks: the agent designs a multi-step plan, executes it, and returns the result.
 - Available to the agent in **any session** (not admin-only).
-- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones.
+- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
 - Each step's `output` is available as `{variable}` in subsequent steps.
 - **Weak-model step repair (`_repair_raw_step`):** the canonical step shape is `input` + `tool`,
   but a weak model reliably mangles the FIELD NAMES while getting the plan right - live incident:
@@ -275,7 +275,7 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat** — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 

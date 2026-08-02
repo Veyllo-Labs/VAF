@@ -299,15 +299,35 @@ stages on top, and it adds them as hooks at the points below rather than by keep
 dispatcher of its own - a second dispatcher is how identity assignment came to exist in five
 places and be correct in one.
 
-**The workflow engine is NOT on this pipeline yet, and the difference is security-relevant.**
-It builds no `ToolCaller`; it imports two pieces of it - `run_tool_bounded` for execution
-bounds and `assign_declared_identity` for identity - and calls the tool itself. A workflow
-step therefore gets no `admin_only` block, no `channel_restrictions` check, no account
-allowlist, no confirmation gate, no argument repair, no authorizer and no
-`tool_start`/`tool_end` pair. Do not read the
-order below as describing what a workflow step does. Bringing that lane onto the pipeline is
-open work; until it lands, "which door did the caller come through" is still a security
-answer for workflows.
+**The workflow engine IS on this pipeline for non-spawn steps.** It builds ONE
+`ToolCaller` per run, carrying this lane's differences as arguments (`timeout_for` = the
+workflow step floor, `self_supervised` minus `browser_agent`, its own `stop_check`,
+`max_result_chars=None` because step outputs are chained, `gate_enabled=False`). A
+non-spawn workflow step therefore gets the `admin_only` block, the channel check, the
+account allowlist, the embedder's authorizer, argument repair and declared identity -
+the same answers as a chat turn. What stays off, each deliberately: the confirmation
+gate (this lane has run gated tools without asking since it existed; taking that away
+is a separate decision - with the gate off, an authorizer's `ask()` degrades to no
+opinion here, only `deny()` binds), `tool_start`/`tool_end` events (the lane reports
+through its own step callback protocol), and result truncation (`None`). What stays off
+by BRANCH: spawn-mode sub-agent steps (`wait_for_subagents=True`, e.g. every heavy step
+in a run_temp workflow) still call `tool.run()` directly - spawn plus IPC wait is not a
+tool run; the sub-agent's INNER tools remain constrained by `VAF_ALLOWED_TOOLS` in the
+child. And the rollback modes (`workflow_identity_injection` = `legacy`/`off`) restore
+the ENTIRE pre-funnel lane: name-list identity and absence of per-step policy alike -
+under rollback the funnel is not even constructed. Guard:
+`tests/test_workflow_steps_take_the_policy_funnel.py`.
+
+**Saved workflow templates additionally pass a START gate.** `WorkflowEngine.execute()`
+checks the per-user workflow list (`permissions["workflows"]`) ONCE, at the point every
+lane converges - all seven construction sites, both resume lanes included, so a
+revocation between pause and resume bites. Runs without a template id (run_temp,
+automation inline steps) are governed by the TOOL permission of the lane that builds
+them, not by an id they do not have. The list is resolved through
+`set_workflow_allowlist_resolver` (registered by the harness in `vaf/main.py`, next to
+the tool resolver; same semantics: absent or empty stored list = unrestricted, admins
+never restricted, a raising registered resolver refuses). Guard:
+`tests/test_workflow_start_gate.py`.
 
 **The shared pipeline, in order:**
 
@@ -320,7 +340,7 @@ answer for workflows.
 5. **Input validation & repair** - the model-supplied arguments are validated against the tool's `parameters` schema and common weak-model shape mistakes are repaired (bare string for an array, stringified array, `null` on an optional field, single-key placeholder). Runs on the raw model arguments, before runtime kwargs are injected. See [TOOL_INPUT_REPAIR.md](TOOL_INPUT_REPAIR.md).
 6. **Identity injection** - the keys named in the tool's `identity_kwargs` are ASSIGNED from the caller's context, overwriting anything the model supplied under those names. A tool that declares nothing receives nothing. If arguments still violate the schema after repair, the tool is not run and a localized `Tool Error: invalid arguments for '<tool>': <detail>` is returned; that error outranks any refusal a hook raises about a *different* call already in flight.
 7. **Bounded execution** - per-tool timeout and stop polling; see [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md).
-8. **`tool_end` event**, then truncation of the result (the chat lane cuts at 2000 chars; the workflow engine does not truncate at all, because step outputs are chained into later steps).
+8. **`tool_end` event**, then truncation of the result (the chat lane cuts at 2000 chars; the workflow engine passes `max_result_chars=None`, because step outputs are chained into later steps).
 
 **What the chat lane adds**, each at the position where it belongs:
 

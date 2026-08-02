@@ -432,11 +432,12 @@ function AccessPresetSection({
                     <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.access')}</h4>
                     <p className="text-xs text-gray-400">{tModals('addUser.accessDesc')}</p>
                 </div>
-                {/* TOOLS are enforced per turn in the dispatch funnel (and inside the coder's
-                    child process); WORKFLOWS are still stored-only until the workflow lane gains
-                    its policy stage. The banner says exactly that split - it replaced an amber
-                    "stored but not enforced" notice that was true from a19 until the funnel
-                    check existed. Amber 50/200/700 fold for dark mode via tailwind.config.ts. */}
+                {/* Both halves are enforced now: TOOLS per turn in the dispatch funnel (chat,
+                    coder child, non-spawn workflow steps), WORKFLOWS at the engine's start gate
+                    (saved-template ids, checked where every entry lane converges). Named limits
+                    live server-side: spawn-mode sub-agent steps bypass the step funnel (their
+                    inner tools stay constrained), and the workflow confirmation gate is off.
+                    Amber 50/200/700 fold for dark mode via tailwind.config.ts. */}
                 <div className="text-xs text-amber-700 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
                     {tModals('addUser.accessNotEnforced')}
                 </div>

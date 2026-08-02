@@ -746,10 +746,16 @@ Four limits worth knowing before you rely on it:
   the reason it is one: the coder DOES enforce it, because its answer is data -
   resolved once from your registered resolver and carried into the child as
   `VAF_ALLOWED_TOOLS` (next section) - while a callback is not.
-- **The workflow engine does not consult it yet.** A saved workflow's steps run
-  through the shared execution path but not yet through the full pipeline, so
-  they are not authorized. If that matters to your deployment, do not enable
-  workflows for those users.
+- **The workflow engine consults it for non-spawn steps - with three limits of its
+  own.** A workflow step now runs through the full pipeline: your authorizer, the
+  account allowlist and the hard policy blocks all apply. Still outside: `ask()` -
+  the workflow lane runs with the confirmation gate off, so an `ask()` degrades to
+  no opinion there and only `deny()` binds; spawn-mode sub-agent steps (the heavy
+  steps of a temporary workflow run as child processes, which is a spawn plus an
+  IPC wait, not a tool run - the sub-agent's inner tools remain constrained by
+  `VAF_ALLOWED_TOOLS`); and the workflow CLI subprocess, which no callable can
+  reach across a process boundary (the account allowlist still holds there, because
+  its answer comes from the resolver that process registers itself).
 
 ---
 

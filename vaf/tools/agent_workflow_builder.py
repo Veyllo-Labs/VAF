@@ -635,6 +635,7 @@ class AgentWorkflowBuilderTool(BaseTool):
             callback      = _ws_callback,
             user_scope_id = user_scope_id,
             username      = username,
+            authorize     = getattr(agent, "_tool_authorizer", None),
         )
         engine._workflow_name = name   # used in debug logs
         # Run identity for the pause record (routing back to this session and this panel).

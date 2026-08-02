@@ -333,9 +333,13 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
                 getattr(paused_wf, "username", None),
                 user_role=getattr(paused_wf, "user_role", None),
             ),
+            authorize=getattr(agent, "_tool_authorizer", None),
         )
         engine._workflow_name = paused_wf.workflow_name
-        
+        # The start gate keys on the template id; a revocation between pause and resume
+        # must bite here exactly as it does on a fresh start.
+        engine._template_id = getattr(paused_wf, "template_id", "") or ""
+
         # Resume the workflow
         result = engine.resume_workflow(paused_wf, subagent_result)
         

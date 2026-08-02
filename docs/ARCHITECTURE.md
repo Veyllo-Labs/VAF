@@ -71,7 +71,7 @@ stay stable while the engine underneath evolves.
 
 | Surface | Where | Purpose |
 |---|---|---|
-| `from vaf import Agent` | [vaf/framework.py](../vaf/framework.py), [vaf/__init__.py](../vaf/__init__.py) | Embed the agent: `Agent(config=...).run(prompt)` |
+| `from vaf import Agent` | [vaf/framework.py](../vaf/framework.py), [vaf/__init__.py](../vaf/__init__.py) | Embed the agent: `Agent(config=...).run(prompt)`; one-shots via `.complete(prompt)` |
 | `vaf.CoreAgent` | re-export of `vaf.core.agent.Agent` | Advanced/full engine access |
 | `BaseTool` | [vaf/tools/base.py](../vaf/tools/base.py) | The tool contract; `parameters` is validated and weak-model shape mistakes are repaired at dispatch (see [agents/TOOL_INPUT_REPAIR.md](agents/TOOL_INPUT_REPAIR.md)) |
 | `vaf.tools` entry points | discovered in `_load_tools` | Ship tools as pip packages |
@@ -114,7 +114,7 @@ This is the contract. Treat it as a stable API.
 
 **Stable (safe to build on; changes are versioned and announced):**
 
-- `from vaf import Agent` — `Agent(config=...)`, `.run(prompt, on_token=...)`, `.core`
+- `from vaf import Agent` — `Agent(config=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`
 - `vaf.CoreAgent`
 - `BaseTool` and its declared attributes (`name`, `description`, `parameters`,
   `permission_level`, `side_effect_class`, `admin_only`, `channel_restrictions`,

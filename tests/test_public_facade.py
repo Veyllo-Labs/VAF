@@ -70,6 +70,8 @@ def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():
     never repeated - anything new is spelled identically on both."""
     assert callable(Agent.set_tool_authorizer)
     assert callable(CoreAgent.set_tool_authorizer)
+    assert callable(Agent.complete)
+    assert callable(CoreAgent.complete)
 
 
 def test_an_authorizer_survives_being_set_before_the_engine_exists():
@@ -171,7 +173,7 @@ def test_coreagent_is_the_engine_class():
 
     assert CoreAgent is EngineAgent
     # Engine entry points the facade and documented embedding recipes rely on.
-    for method in ("init_chat", "chat_step", "execute_tool", "set_event_sink"):
+    for method in ("init_chat", "chat_step", "execute_tool", "set_event_sink", "complete"):
         assert callable(getattr(CoreAgent, method)), method
     engine_init = inspect.signature(CoreAgent.__init__).parameters
     for kw in ("verbose", "register_signals", "config_overrides"):
@@ -274,6 +276,10 @@ class _StubCore:
             stream_callback("hi")
         return "hi"
 
+    def complete(self, prompt, **kwargs):
+        type(self).calls.append("complete")
+        return "done"
+
     def _clean_reasoning(self, s):
         return s
 
@@ -304,6 +310,52 @@ def test_facade_skips_load_model_when_api_backend_exists(monkeypatch):
     agent = fw.Agent(config={"provider": "deepseek"})
     assert agent.run("hello") == "hi"
     assert _StubCore.calls == ["init_chat"]
+
+
+def test_complete_goes_through_the_engine_build_like_run(monkeypatch):
+    """First use pays the documented .core cost (init_chat; local also load_model),
+    then delegates to the engine's complete - the same-name method, not chat_step."""
+    import vaf.framework as fw
+
+    _StubCore.calls = []
+    monkeypatch.setattr(fw, "CoreAgent", _StubCore)
+    agent = fw.Agent(config={"provider": "local"})
+    assert agent.complete("side question") == "done"
+    assert _StubCore.calls == ["init_chat", "load_model", "complete"]
+
+
+def test_complete_on_api_skips_load_model(monkeypatch):
+    import vaf.framework as fw
+
+    class _ApiStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+    _StubCore.calls = []
+    monkeypatch.setattr(fw, "CoreAgent", _ApiStub)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    assert agent.complete("side question") == "done"
+    assert _StubCore.calls == ["init_chat", "complete"]
+
+
+def test_complete_never_enters_the_conversation(monkeypatch):
+    """The facade guarantee: complete() must not run a chat turn. Pinned with a bomb -
+    a stub whose chat_step raises proves the delegation target by absence."""
+    import vaf.framework as fw
+
+    class _BombStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+        def chat_step(self, prompt, stream_callback=None):
+            raise AssertionError("complete() entered the conversation lane")
+
+    _StubCore.calls = []
+    monkeypatch.setattr(fw, "CoreAgent", _BombStub)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    assert agent.complete("side question") == "done"
 
 
 def test_add_tool_registers_before_engine_build(monkeypatch):

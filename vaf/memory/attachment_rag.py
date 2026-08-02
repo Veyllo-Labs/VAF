@@ -457,29 +457,19 @@ def _summarize_section_llm(
     """
     fallback = (section_text or "").strip()[:300]
     try:
-        from vaf.core.api_backend import APIBackendManager
-        provider = str(Config.get("provider", "local") or "local")
-        backend = APIBackendManager(provider)
         prompt = (
             f"Summarize the following document section in 1-2 sentences.\n"
             f"Section title: {section_title}\n\n"
             f"{section_text[:2000]}\n\n"
             f"Output only the summary, no preamble."
         )
-        raw_chunks = list(
-            backend.chat_completion(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=512,  # headroom for reasoning models (they emit <think>...</think> first)
-                stream=False,
-            )
-        )
-        result = "".join(c if isinstance(c, str) else str(c) for c in raw_chunks if c)
-        # Strip reasoning-model <think>...</think> so it never becomes the section summary/title.
-        result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE)
-        if "<think>" in result.lower():
-            result = re.split(r"(?i)<think>", result)[0]
-        result = result.strip()
+        # The shared one-shot primitive carries this site's own think-strip semantics
+        # (they were adopted as THE contract: unclosed <think> truncates) - and it makes
+        # timeout_sec finally DO something: the parameter was declared and never read,
+        # so the per-section call was unbounded despite the caller computing a budget.
+        from vaf.core.completion import complete
+        result = complete(prompt, max_tokens=512, temperature=0.2, timeout=timeout_sec,
+                          caller="memory:attachment-section")
         return result if result else fallback
     except Exception:
         return fallback

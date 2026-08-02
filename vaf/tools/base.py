@@ -262,9 +262,7 @@ class BaseTool(ABC):
             Optional[str]: Generated text or None if failed
         """
         from vaf.core.config import Config
-        import requests
-        import json
-        
+
         config = Config.load()
         # Explicit provider/model override (e.g. the Whare Wananga teacher): force this exact
         # provider+model, bypassing the configured main model. No global Config mutation.
@@ -304,114 +302,22 @@ class BaseTool(ABC):
                 print(f"[WARN] Tool {self.name}: No model configured. Skipping LLM query.")
                 return None
         
-        # 1. API Backend Mode
+        # The shared one-shot primitive carries everything this method used to hand-roll
+        # (the collector with the metadata filter, the executor timeout, the self-heal
+        # retry, the local enable_thinking:false POST) plus the two fixes the hand-roll
+        # lacked: an error sentinel is None instead of content, and <think> blocks are
+        # stripped. The wrapper above keeps what is TOOL policy, not completion
+        # mechanics: provider/model resolution and the VAF_TOOL_MODEL override.
+        from vaf.core.completion import complete as _complete
+        fallback = None
         if provider != "local":
-            def _execute_query(target_model):
-                from vaf.core.api_backend import APIBackendManager
-                backend = APIBackendManager(provider)
-                response_text = ""
-                for chunk in backend.chat_completion(
-                    messages=messages, 
-                    temperature=temperature, 
-                    max_tokens=max_tokens, 
-                    stream=True, 
-                    model=target_model
-                ):
-                    # Only skip metadata chunks (tool_calls, finish_reason), NOT actual content.
-                    # Document agent and other tools often request JSON - that content must be kept.
-                    strip_chunk = chunk.strip()
-                    if strip_chunk.startswith("{") and (
-                        "tool_calls" in chunk or "tool_use" in chunk or "finish_reason" in chunk
-                    ):
-                        continue
-                    response_text += chunk
-                return response_text.strip()
-
-            import concurrent.futures as _cf
-            _executor = _cf.ThreadPoolExecutor(max_workers=1)
-            _fut = _executor.submit(_execute_query, model)
-            try:
-                return _fut.result(timeout=timeout)
-            except _cf.TimeoutError:
-                print(f"[WARN] Tool {self.name}: query_llm timeout after {timeout}s")
-                return None
-            except Exception as e:
-                err_str = str(e).lower()
-                # Self-Healing: If Invalid Model (400) or Model Not Found (404), try fallback
-                if "400" in err_str or "404" in err_str or "invalid model" in err_str:
-                    fallback = "gpt-4o" if provider == "openai" else ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-2.5-flash")
-                    if fallback and fallback != model:
-                        print(f"[WARN] Tool {self.name}: API Error with model '{model}'. Retrying with fallback '{fallback}'...")
-                        _fut2 = _executor.submit(_execute_query, fallback)
-                        try:
-                            return _fut2.result(timeout=timeout)
-                        except _cf.TimeoutError:
-                            print(f"[WARN] Tool {self.name}: query_llm fallback timeout after {timeout}s")
-                            return None
-                        except Exception as e2:
-                            print(f"[ERROR] Tool {self.name}: Fallback failed too: {e2}")
-                            return None
-
-                print(f"[ERROR] Tool {self.name}: Query failed: {e}")
-                return None
-            finally:
-                _executor.shutdown(wait=False)
-        
-        # 2. Local Server Mode (Fallback)
-        try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                # Qwen-class local models burn the whole (small) token budget
-                # on reasoning_content and return EMPTY content for these
-                # utility calls (observed live: finish_reason=length,
-                # reasoning_len=2691, max_tokens=600 on web_search summaries).
-                # Same fix as the voice lane: disable thinking for tool-side
-                # utility completions; non-thinking templates ignore the flag.
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            res = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json=payload,
-                timeout=(timeout or 120),  # honour the caller's timeout (was hardcoded 60s)
-            )
-            if res.status_code == 200:
-                data = res.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    choice = data["choices"][0] or {}
-                    msg = choice.get("message", {}) or {}
-                    content = (msg.get("content") or "").strip()
-                    if content:
-                        return content
-                    # Reasoning models (e.g. qwen) put the chain-of-thought in reasoning_content and the
-                    # final answer in content. If generation was cut off while still reasoning
-                    # (finish_reason="length"), content is empty even though the model produced plenty.
-                    # Log the cause, then fall back to the reasoning text -- it already holds the substance
-                    # -- instead of returning nothing.
-                    # EXCEPTION: callers generating long-form output (e.g. research report
-                    # sections) must NEVER receive chain-of-thought as the answer — a run
-                    # once filled every report section with "Thinking Process: ...". They
-                    # pass allow_reasoning_fallback=False and handle the empty return via
-                    # their own retry paths.
-                    if not allow_reasoning_fallback:
-                        return None
-                    reasoning = (msg.get("reasoning_content") or "").strip()
-                    try:
-                        from vaf.core.log_helper import append_domain_log
-                        append_domain_log(
-                            "backend",
-                            f"query_llm({self.name}) empty content: finish_reason={choice.get('finish_reason')} "
-                            f"reasoning_len={len(reasoning)} max_tokens={max_tokens}",
-                        )
-                    except Exception:
-                        pass
-                    if reasoning:
-                        return reasoning
-            return None
-        except Exception:
-            return None
+            fallback = Config.PROVIDER_MODELS.get(provider, {}).get("default")
+        return _complete(
+            messages, provider=provider, model=model,
+            max_tokens=max_tokens, temperature=temperature, timeout=timeout,
+            allow_reasoning_fallback=allow_reasoning_fallback,
+            fallback_model=fallback, caller=f"tool:{self.name}",
+        )
 
     def _stream_local_completion(self, messages, max_tokens: int, temperature: float = 0.2,
                                  idle_timeout: int = 75, on_progress=None) -> str:

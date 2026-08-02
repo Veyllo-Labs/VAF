@@ -695,54 +695,55 @@ Always cite which source(s) you used."""
                 yield (token, None)
     
     async def _generate_answer(self, prompt: str) -> str:
-        """Generate answer using VAF's API backend."""
-        try:
-            from vaf.core.api_backend import APIBackendManager
+        """Generate answer using the shared one-shot primitive.
 
-            provider = Config.get("provider", "local")
-            backend = APIBackendManager(provider)
-            
-            # chat_completion is a generator, collect all chunks
+        The hand-rolled collector this replaces dug a dict shape the backend never
+        yields and concatenated error sentinels INTO the answer; the primitive returns
+        None on a backend error, so the error prefix below finally fires instead of a
+        poisoned answer being stored.
+        """
+        try:
             def get_response():
-                result = ""
-                for chunk in backend.chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    max_tokens=1024,
-                    stream=False
-                ):
-                    if isinstance(chunk, dict):
-                        content = chunk.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        if content:
-                            result = content
-                    elif isinstance(chunk, str):
-                        result += chunk
-                return result
+                from vaf.core.completion import complete
+                return complete(prompt, max_tokens=1024, temperature=0.3,
+                                caller="memory:rag-answer")
 
             response = await asyncio.get_event_loop().run_in_executor(None, get_response)
-            return response
+            return response or "Error generating answer: no response from the model backend"
         except Exception as e:
             logger.error(f"Error generating answer: {e}")
             return f"Error generating answer: {str(e)}"
     
     async def _stream_answer(self, prompt: str) -> AsyncGenerator[str, None]:
-        """Stream answer tokens using VAF's API backend."""
+        """Stream answer tokens using VAF's API backend.
+
+        chat_completion_stream yields STRINGS (it is a stream=True alias); the previous
+        code called .get() on them and crashed on the first chunk, so every streamed
+        answer was an error string. Filters share the one-shot primitive's predicates -
+        no second copy. No think-tag handling here on purpose: a chunk-spanning strip is
+        a stateful machine (the voice lane owns one) and out of scope for this stream.
+        """
         try:
             from vaf.core.api_backend import APIBackendManager
+            from vaf.core.completion import is_metadata_frame
 
             provider = Config.get("provider", "local")
             backend = APIBackendManager(provider)
-            
-            # Use streaming API
+
             for chunk in backend.chat_completion_stream(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1024
             ):
-                if chunk:
-                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if content:
-                        yield content
+                if not isinstance(chunk, str) or not chunk:
+                    continue
+                if "[API Error from" in chunk:
+                    logger.error(f"Stream backend error: {chunk[:200]}")
+                    yield "Error: model backend unavailable"
+                    return
+                if is_metadata_frame(chunk):
+                    continue
+                yield chunk
         except Exception as e:
             logger.error(f"Error streaming answer: {e}")
             yield f"Error: {str(e)}"

@@ -106,38 +106,14 @@ def get_changed_files() -> tuple[List[str], List[str], List[str]]:
     
     return staged, unstaged, untracked
 
-def call_local_llm(prompt: str, temperature: float = 0.3) -> str:
-    """Call the local LLM via VAF server."""
-    try:
-        from vaf.core.config import Config
-        provider = Config.get("provider", "local")
-        messages = [{"role": "user", "content": prompt}]
-        if provider != "local":
-            # Cloud provider: route via APIBackendManager (model=None -> api_model_{provider}),
-            # instead of the local :8080 server (which only exists in local mode).
-            from vaf.core.api_backend import APIBackendManager
-            return "".join(
-                c for c in APIBackendManager(provider).chat_completion(
-                    messages=messages, temperature=temperature, max_tokens=500, stream=True, model=None
-                ) if isinstance(c, str)
-            )
-        response = requests.post(
-            "http://127.0.0.1:8080/v1/chat/completions",
-            json={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": 500,
-                "stream": False
-            },
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            return None
-    except:
-        return None
+def _generate_commit_message_llm(prompt: str):
+    """One completion through the shared primitive: metadata frames filtered, think
+    blocks stripped, local lane thinking-disabled - the hand-rolled copy this replaces
+    concatenated the streamed {"finish_reason": ...} frame into the commit message."""
+    from vaf.core.completion import complete
+    return complete(prompt, max_tokens=500, temperature=0.3, timeout=60,
+                    caller="cli:git")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GIT COMMANDS
@@ -336,7 +312,7 @@ def git_commit(
 '''
             
             with UI.console.status("[bold cyan]AI is analyzing changes...[/bold cyan]", spinner="dots"):
-                ai_message = call_local_llm(prompt)
+                ai_message = _generate_commit_message_llm(prompt)
             
             if ai_message:
                 # Clean up

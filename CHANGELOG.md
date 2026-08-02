@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **You can now ask for one completion without a conversation.** Building something on
+  VAF that just needs one answer - a classification, a summary, a commit message -
+  meant either running a full chat turn (history, tools, memory, routers) or
+  hand-rolling the backend call, and about twenty places inside VAF had done exactly
+  that, each slightly differently wrong. `agent.complete(prompt)` is one call with the
+  agent's configured backend: it never enters the conversation, runs no tools, writes
+  no memory, strips model reasoning from the result, and returns text or None - never
+  an exception and never an error message dressed as an answer. The same primitive now
+  powers the tools' own utility completions and the CLI features below.
 - **An application built on VAF now decides which tools each account may use - with one
   registered resolver instead of VAF's own user database.** The per-account tool allowlist
   used to be wired straight to the product's auth DB inside the dispatch pipeline, so an
@@ -57,6 +66,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Documented in the embedding guide.
 
 ### Fixed
+- **Generated text no longer carries stream debris or hidden reasoning.** Several
+  features collected the model's streamed answer with their own hand-written loops,
+  and the loops disagreed: AI git commit messages could end in a raw
+  `{"finish_reason": "stop"}` control frame, tool utility completions could return a
+  provider ERROR message as if it were the answer, and on local reasoning models the
+  coder's template detection and other short calls received empty text because the
+  whole token budget went into hidden reasoning. All of these now share one collector
+  that filters control frames, treats backend errors as "no answer", strips reasoning
+  blocks, and disables reasoning for local utility calls.
+- **Streamed memory answers work again.** Asking the memory panel a question with
+  streaming on crashed on the very first token and returned an error string instead of
+  the answer - every time, on every backend. The stream now delivers the text.
+- **Attachment summaries respect their time budget.** The per-section summarizer
+  declared a timeout that was never wired up, so a slow backend could stall document
+  ingestion far beyond the budget the caller computed. The timeout now binds.
 - **Settings no longer claims "API key missing" for a key that is safely stored.** Since
   keys moved into the encrypted store, the browser's copy of the config deliberately
   carries no key values - but six places in Settings still judged "is a key configured"

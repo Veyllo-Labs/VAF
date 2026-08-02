@@ -95,6 +95,25 @@ is always the cleaned final answer.
 One `Agent` instance keeps one conversation — repeated `run()` calls continue
 the same history. Create a new `Agent` for an independent conversation.
 
+### One-shot completions
+
+For one prompt and one answer with no conversation at all - a classification, a
+summary, a generated snippet - use `complete()`:
+
+```python
+answer = agent.complete("Classify this ticket: ...", max_tokens=200)
+```
+
+The guarantees, each the reason this exists instead of "just call run()":
+it does NOT enter the conversation (the history is untouched - a `run()` after a
+`complete()` sees nothing of it), no tools run, nothing is written to memory or a
+session, `<think>` reasoning blocks are stripped, and the return value is
+`Optional[str]`: text, or `None` when no backend answered - never an exception
+and never an error message dressed as content, so the result is safe to store
+without inspection. The first use pays the same one-time engine build as the
+first `run()` (system prompt; in local mode the model load); after that a
+completion is a single backend call.
+
 ### Persistent conversations
 
 ```python
@@ -902,7 +921,7 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `BaseTool` - the tool contract, including the `identity_kwargs` declaration.

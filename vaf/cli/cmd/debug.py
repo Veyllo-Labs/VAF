@@ -62,40 +62,16 @@ Provide a detailed analysis:
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def call_local_llm(prompt: str, temperature: float = 0.3) -> str:
-    """Call the local LLM via VAF server."""
-    try:
-        from vaf.core.config import Config
-        provider = Config.get("provider", "local")
-        messages = [{"role": "user", "content": prompt}]
-        if provider != "local":
-            # Cloud provider: route via APIBackendManager (model=None -> api_model_{provider}),
-            # instead of the local :8080 server (which only exists in local mode).
-            from vaf.core.api_backend import APIBackendManager
-            return "".join(
-                c for c in APIBackendManager(provider).chat_completion(
-                    messages=messages, temperature=temperature, max_tokens=2048, stream=True, model=None
-                ) if isinstance(c, str)
-            )
-        response = requests.post(
-            "http://127.0.0.1:8080/v1/chat/completions",
-            json={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": 2048,
-                "stream": False
-            },
-            timeout=120
-        )
-        
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            return f"Error: Server returned {response.status_code}"
-    except requests.exceptions.ConnectionError:
-        return "Error: VAF Server not reachable. Start 'vaf run' first."
-    except Exception as e:
-        return f"Error: {e}"
+_LLM_UNAVAILABLE = "Error: no LLM backend reachable. Start 'vaf run' or configure an API provider."
+
+
+def _explain_llm(prompt: str) -> str:
+    """One completion through the shared primitive; user-visible errors keep their
+    'Error: ...' shape, now provider-neutral (the old wording assumed local mode)."""
+    from vaf.core.completion import complete
+    return complete(prompt, max_tokens=2048, temperature=0.3, timeout=120,
+                    caller="cli:debug") or _LLM_UNAVAILABLE
+
 
 def read_file_context(file_path: str, line_number: int, context_lines: int = 5) -> str:
     """Read context around a specific line in a file."""
@@ -186,7 +162,7 @@ def explain_error(
     UI.print()
     
     with UI.console.status("[bold cyan]AI is analyzing the error...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _explain_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -260,7 +236,7 @@ def analyze_trace(
     )
     
     with UI.console.status("[bold cyan]AI is analyzing the stack trace...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _explain_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -295,7 +271,7 @@ Provide a clear, understandable answer with:
     UI.event("Debug", f"Question: {question[:50]}...", style="cyan")
     
     with UI.console.status("[bold cyan]AI is answering the question...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _explain_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -371,7 +347,7 @@ def suggest_fix(
     UI.event("Debug", f"Analyzing {file}...", style="cyan")
     
     with UI.console.status("[bold cyan]AI is looking for a solution...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _explain_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)

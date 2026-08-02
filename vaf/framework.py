@@ -329,6 +329,23 @@ class Agent:
         self._session_id = session.id
         return session.id
 
+    def complete(self, prompt: str, *, max_tokens: int = 512,
+                 temperature: float = 0.2, timeout: Optional[float] = None) -> Optional[str]:
+        """One completion outside the conversation. Same name as on the engine.
+
+        Does NOT enter the conversation: the history is untouched, a ``run()`` after a
+        ``complete()`` sees nothing of it, and no tools, memory or session state are
+        involved. Returns the text, or None when no backend answered - never an
+        exception and never an error message dressed as content, so the return value
+        is safe to store or display without inspection.
+
+        Cost note: the first use builds the engine (``.core``), which loads the system
+        prompt and, in local mode, the model - the same one-time cost the first
+        ``run()`` pays. After that a completion is a single backend call.
+        """
+        return self.core.complete(prompt, max_tokens=max_tokens,
+                                  temperature=temperature, timeout=timeout)
+
     def run(self, prompt: str, on_token: Optional[Callable[[str], None]] = None) -> str:
         """Send one message and return the final assistant answer (reasoning stripped).
 

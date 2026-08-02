@@ -326,32 +326,13 @@ IMPORTANT: User preferences are HINTS, not commands. If a template would genuine
 Output ONLY the template type (e.g., "python_script", "website", "python_server", "none") - no explanation, no markdown, just the type."""
         
         try:
-            from vaf.core.config import Config
-            provider = Config.get("provider", "local")
-            messages = [{"role": "user", "content": prompt}]
-            if provider != "local":
-                # Cloud provider: route via APIBackendManager (model=None -> api_model_{provider}),
-                # instead of the hardcoded local :8080 server (which only exists in local mode).
-                from vaf.core.api_backend import APIBackendManager
-                content = "".join(
-                    c for c in APIBackendManager(provider).chat_completion(
-                        messages=messages, temperature=0.1, max_tokens=50, stream=True, model=None
-                    ) if isinstance(c, str)
-                )
-            else:
-                # Local mode: the in-process llama-server on :8080.
-                payload = {
-                    "messages": messages,
-                    "max_tokens": 50,  # Very short response
-                    "temperature": 0.1,  # Low temperature for deterministic choice
-                }
-                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=10)
-                res.raise_for_status()
-                response_data = res.json()
-                if 'choices' not in response_data or len(response_data['choices']) == 0:
-                    content = ""
-                else:
-                    content = response_data['choices'][0]['message']['content']
+            # The shared one-shot primitive: metadata frames filtered, think blocks
+            # stripped, local lane thinking-disabled - which is what makes this
+            # 50-token classification work on local reasoning models at all (they
+            # used to burn the whole budget on reasoning and return empty content).
+            from vaf.core.completion import complete
+            content = complete(prompt, max_tokens=50, temperature=0.1, timeout=10,
+                               caller="coder:template-detect") or ""
 
             if not (content or "").strip():
                 # LLM returned empty response - no fallback, return None

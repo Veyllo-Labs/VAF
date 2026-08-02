@@ -177,40 +177,16 @@ Output ONLY the Vue SFC code, no explanations.''',
 # GENERATE COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def call_local_llm(prompt: str, temperature: float = 0.2) -> str:
-    """Call the local LLM via VAF server."""
-    try:
-        from vaf.core.config import Config
-        provider = Config.get("provider", "local")
-        messages = [{"role": "user", "content": prompt}]
-        if provider != "local":
-            # Cloud provider: route via APIBackendManager (model=None -> api_model_{provider}),
-            # instead of the local :8080 server (which only exists in local mode).
-            from vaf.core.api_backend import APIBackendManager
-            return "".join(
-                c for c in APIBackendManager(provider).chat_completion(
-                    messages=messages, temperature=temperature, max_tokens=4096, stream=True, model=None
-                ) if isinstance(c, str)
-            )
-        response = requests.post(
-            "http://127.0.0.1:8080/v1/chat/completions",
-            json={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": 4096,
-                "stream": False
-            },
-            timeout=120
-        )
-        
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            return f"Error: Server returned {response.status_code}"
-    except requests.exceptions.ConnectionError:
-        return "Error: VAF Server not reachable. Start 'vaf run' first."
-    except Exception as e:
-        return f"Error: {e}"
+_LLM_UNAVAILABLE = "Error: no LLM backend reachable. Start 'vaf run' or configure an API provider."
+
+
+def _generate_llm(prompt: str) -> str:
+    """One completion through the shared primitive; same error-string contract as the
+    deleted hand-roll, provider-neutral wording."""
+    from vaf.core.completion import complete
+    return complete(prompt, max_tokens=4096, temperature=0.2, timeout=120,
+                    caller="cli:generate") or _LLM_UNAVAILABLE
+
 
 @app.command("api")
 def generate_api(
@@ -249,7 +225,7 @@ def generate_api(
     UI.event("Config", f"Language: {language}, Framework: {framework}", style="dim")
     
     with UI.console.status("[bold cyan]Generating code...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _generate_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -292,7 +268,7 @@ def generate_function(
     UI.event("Generate", f"Creating function: {description[:50]}...", style="cyan")
     
     with UI.console.status("[bold cyan]Generating code...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _generate_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -334,7 +310,7 @@ def generate_class(
     UI.event("Generate", f"Creating class: {description[:50]}...", style="cyan")
     
     with UI.console.status("[bold cyan]Generating code...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _generate_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -376,7 +352,7 @@ def generate_test(
     UI.event("Generate", f"Creating tests: {description[:50]}...", style="cyan")
     
     with UI.console.status("[bold cyan]Generating tests...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _generate_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -414,7 +390,7 @@ def generate_component(
     UI.event("Generate", f"Creating {framework} component...", style="cyan")
     
     with UI.console.status("[bold cyan]Generating component...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(prompt)
+        result = _generate_llm(prompt)
     
     if result.startswith("Error:"):
         UI.error(result)
@@ -446,7 +422,7 @@ def generate_free(
     UI.event("Generate", f"Free generation...", style="cyan")
     
     with UI.console.status("[bold cyan]Generating code...[/bold cyan]", spinner="dots"):
-        result = call_local_llm(full_prompt)
+        result = _generate_llm(full_prompt)
     
     if result.startswith("Error:"):
         UI.error(result)

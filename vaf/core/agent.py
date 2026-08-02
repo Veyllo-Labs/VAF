@@ -4744,6 +4744,54 @@ class Agent:
 
         return total_tokens, self.config.get("n_ctx", 8192)
 
+    def complete(self, prompt, *, max_tokens: int = 512, temperature: float = 0.2,
+                 timeout=None, strip_think: bool = True):
+        """One completion with THIS agent's backend. No tools, no history, no memory.
+
+        ``prompt`` is a string or a messages list. Returns ``Optional[str]``: text, or
+        None when no backend answered - never an exception, never an error sentinel as
+        content. The conversation is untouched: a ``chat_step`` after ``complete`` sees
+        nothing of it, and nothing is written to working memory or the session.
+
+        Branch order is the documented backend selection (API > local server >
+        in-process library), with the Rule-4.6 compound gate: ``provider`` alone lies
+        after a failed API init, so the API lane requires ``api_backend`` too, and the
+        fall-through to the local lanes mirrors ``load_model``'s own fallback. The API
+        lane reuses ``self.api_backend`` on purpose - it carries an embedder's passed
+        keys and the attached event sink, both of which a fresh manager would drop.
+        The in-process ``self.llm`` branch lives HERE and not in the shared primitive:
+        an in-process Llama exists only inside an engine.
+        """
+        from vaf.core.completion import complete as _complete, strip_think_blocks
+
+        if isinstance(prompt, str):
+            messages = [{"role": "user", "content": prompt}]
+        else:
+            messages = prompt
+
+        if self.provider != "local" and self.api_backend is not None:
+            return _complete(messages, provider=self.provider, backend=self.api_backend,
+                             max_tokens=max_tokens, temperature=temperature,
+                             timeout=timeout, strip_think=strip_think,
+                             caller="agent.complete")
+        if self.use_server:
+            return _complete(messages, provider="local",
+                             max_tokens=max_tokens, temperature=temperature,
+                             timeout=timeout, strip_think=strip_think,
+                             caller="agent.complete")
+        if self.llm:
+            try:
+                out = self.llm.create_chat_completion(
+                    messages=messages, max_tokens=max_tokens, temperature=temperature,
+                )
+                text = ((out.get("choices") or [{}])[0].get("message", {}) or {}).get("content") or ""
+                if strip_think:
+                    text = strip_think_blocks(text)
+                return text.strip() or None
+            except Exception:
+                return None
+        return None
+
     def _generate_summary(self, messages: list) -> str:
         """
         Generates a concise narrative summary of the provided messages using the LLM.

@@ -484,6 +484,71 @@ def consult_authorizer(authorize, request: "ToolRequest") -> "ToolRequest":
     return request
 
 
+# ── the account allowlist resolver ───────────────────────────────────────────
+#
+# Process-wide, like the auth backend it fronts: one per process, registered by the
+# application at startup (VAF's own harness registers in vaf/main.py, which every product
+# process imports; an embedder that registers nothing gets "unrestricted", the library
+# default). A module global with local capture is enough - the same shape as the reply
+# callbacks in telegram_reply.py - because the value changes at startup and is only read
+# afterwards.
+_account_allowlist_resolver = None
+
+
+def set_account_allowlist_resolver(resolver) -> None:
+    """Register the application's answer to "which tools may this ACCOUNT use?".
+
+    ``resolver(user_scope_id: str) -> None | iterable of tool names``
+
+    This is the fourth question the funnel asks before a tool runs, and the only one
+    answered from the ACCOUNT rather than from the tool's own declarations. It is
+    consulted after the hard policy block and BEFORE the authorizer, so an account-level
+    ban cannot be lifted by an authorizer's ``allow()``.
+
+    Contract, each choice against its failure mode:
+
+    - ``None`` from the resolver means unrestricted. Any other answer is normalized to a
+      frozenset of names; an EMPTY answer allows nothing.
+    - No resolver registered means unrestricted - a bare library embedder has not opted
+      into account policy and must not be locked out by a default.
+    - Callers with no scope and admin identities are exempt in the funnel and never reach
+      the resolver: it only answers "which list for this scope", never "who is exempt".
+    - A RAISING resolver is a refusal (the authorizer's polarity, not the event sink's):
+      a broken guard must not quietly become no guard. A resolver that must fail open
+      catches its own errors and returns ``None`` - VAF's product resolver does exactly
+      that for an unreachable auth DB.
+    - Consulted per call, not cached here: revocation latency is the resolver's own
+      business, so cache inside it if lookups are expensive.
+
+    Process-wide; the last registration wins and ``None`` deregisters. The answer also
+    crosses into the coder child process as data (``VAF_ALLOWED_TOOLS``, tool names only),
+    because a callable cannot cross a process boundary. See docs/EMBEDDING.md.
+    """
+    global _account_allowlist_resolver
+    _account_allowlist_resolver = resolver
+
+
+def get_account_allowlist_resolver():
+    """The currently registered resolver, or None. For wiring checks and the coder."""
+    return _account_allowlist_resolver
+
+
+def resolve_account_allowlist(user_scope_id: str):
+    """Internal: the registered resolver's answer for one scope, normalized.
+
+    None when no resolver is registered or the resolver answers None (both mean
+    unrestricted); otherwise a frozenset of names, possibly empty (nothing allowed).
+    A raising resolver raises through - the callers own the fail-closed handling.
+    """
+    fn = _account_allowlist_resolver          # local capture: a mid-call detach is safe
+    if fn is None:
+        return None
+    answer = fn(user_scope_id)
+    if answer is None:
+        return None
+    return frozenset(str(t) for t in answer if str(t).strip())
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 
@@ -553,7 +618,8 @@ class ToolCaller:
         self.poll = poll
         self.max_result_chars = max_result_chars
         # The application's veto. In-process only: a callable cannot cross into a subprocess,
-        # which is why the per-user tool allowlist is DATA and this is not.
+        # which is why the account allowlist's ANSWER travels as data (VAF_ALLOWED_TOOLS)
+        # while its SOURCE is the process-wide resolver registered above.
         self.authorize = authorize
         self.on_event = on_event
         self.hooks = hooks or ToolCallHooks()
@@ -582,9 +648,10 @@ class ToolCaller:
         if decision.blocked:
             return f"Security Error: {decision.reason}"
 
-        # The admin's per-user allowlist, in the SAME rank as the hard policy block: stored
-        # since the user manager existed, displayed honestly as unenforced since a19, read by
-        # nothing until now. Enforced here in the funnel rather than per lane, because five
+        # The account-level allowlist, in the SAME rank as the hard policy block. The list
+        # comes from whatever the application registered via set_account_allowlist_resolver
+        # (VAF's harness registers its auth-DB resolver in vaf/main.py; nothing registered
+        # means unrestricted). Enforced here in the funnel rather than per lane, because five
         # lanes with their own check is the shape where four forget. After `_policy` (admin
         # exemption rides the same `policy_admin_flag` the other gates use) and BEFORE the
         # authorizer - an account-level ban must not be overridable by an embedder's allow().
@@ -660,21 +727,25 @@ class ToolCaller:
         )
 
     def _account_allowlist_blocks(self, name: str) -> str:
-        """The admin's per-user tool selection, as a refusal reason or "".
+        """The account-level tool allowlist, as a refusal reason or "".
 
         Admins are exempt by the same rule as every other gate; a caller with no scope is
         the machine owner or a direct in-process lane, and both are unrestricted - the list
-        exists to constrain AUTHENTICATED tenants, and only they carry a scope.
+        exists to constrain AUTHENTICATED tenants, and only they carry a scope. The list
+        itself comes from the registered resolver (set_account_allowlist_resolver above);
+        a RAISING resolver refuses, because a registered guard that crashed must not
+        quietly become no guard - the fail-open trade for an unreachable backend belongs
+        INSIDE the resolver that knows its backend, and VAF's own resolver makes it there.
         """
         if not self.user_scope_id:
             return ""
         if policy_admin_flag(self.user_role, self.user_scope_id):
             return ""
         try:
-            from vaf.auth.permissions import resolve_allowed_tools
-            allowed = resolve_allowed_tools(self.user_scope_id)
+            allowed = resolve_account_allowlist(self.user_scope_id)
         except Exception:
-            return ""                            # resolver failure = unrestricted, never a crash
+            return (f"The account allowlist resolver failed, so '{name}' is refused. "
+                    f"A broken guard must not quietly become no guard.")
         if allowed is None or name in allowed:
             return ""
         return (f"The tool '{name}' is not enabled for your account. "

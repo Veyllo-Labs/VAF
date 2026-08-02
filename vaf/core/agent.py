@@ -10888,8 +10888,10 @@ class Agent:
         swallows failures because a broken observer must not fail a run, a broken guard must
         not degrade into "allowed".
 
-        In-process only. It cannot cross into the coder's subprocess, which is why a per-user
-        tool allowlist has to travel as data rather than as this.
+        In-process only. It cannot cross into the coder's subprocess. The per-account tool
+        allowlist is its own primitive for exactly that reason: registered as a resolver
+        (``set_account_allowlist_resolver``), consulted in the funnel BEFORE this hook, and
+        crossing the process boundary as data (``VAF_ALLOWED_TOOLS``).
         """
         self._tool_authorizer = authorize
 

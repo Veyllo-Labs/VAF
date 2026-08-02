@@ -275,6 +275,19 @@ def bootstrap():
 
 bootstrap()
 
+# The harness's account-allowlist resolver, registered on EVERY process lane that passes
+# through this module: the console script (pyproject [project.scripts] vaf = "vaf.main:main"),
+# tray/web (tray_command below; systemd and `vaf start` spawn `-m vaf.main tray`), and all
+# subagent children (`-m vaf.main subagent run`). Embedders import only `vaf` and never reach
+# this line: unregistered = unrestricted is the documented library default.
+# Deliberately OUTSIDE bootstrap(): its early returns (VAF_SKIP_DEP_CHECK, missing
+# requirements.txt on pip installs) would silently skip registration exactly where enforcement
+# matters. No try/except: a failed registration must crash the process, not degrade every
+# tenant to "unrestricted". Wiring pinned by tests/test_account_allowlist_wiring.py.
+from vaf.core.tool_dispatch import set_account_allowlist_resolver
+from vaf.auth.permissions import resolve_allowed_tools as _account_allowlist_resolver
+set_account_allowlist_resolver(_account_allowlist_resolver)
+
 import typer
 from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update
 from vaf.core.session import session_app

@@ -369,23 +369,31 @@ shell, so granting it is the decision.
 The admin's per-user tool selection (`LocalUser.permissions["tools"]`, an ALLOWLIST built
 by the user manager's presets) was stored, displayed and read by nothing - the JWT never
 carried it, and the only readers were the admin routes mirroring it back. It is now
-resolved per TURN from the auth DB (`vaf/auth/permissions.py`, short TTL, invalidated by
-the admin update route so a revocation beats the cache) and enforced in the dispatch
-funnel for every lane the funnel serves - after the hard policy block, BEFORE the
-embedder's authorizer, so an `allow()` cannot override an account-level ban. Inside the
-coder the same allowlist crosses the process boundary as data (`VAF_ALLOWED_TOOLS`,
-names only, never a secret): blocked tools are removed from the schema the model sees,
-with a dispatch-side refusal as backstop for hallucinated names. Coder-internal tools
-(`bash`, the git tools) are offered to the picker via `GET /api/users/tool-universe`,
-sourced from the coder module's own declaration so the picker cannot drift from what the
-child runs.
+enforced in the dispatch funnel for every lane the funnel serves - after the hard policy
+block, BEFORE the embedder's authorizer, so an `allow()` cannot override an account-level
+ban. The funnel gets the list through the framework's account-allowlist resolver
+(`set_account_allowlist_resolver`, a facade primitive): the harness registers its auth-DB
+resolver (`vaf/auth/permissions.py`, resolved per TURN with a short TTL, invalidated by
+the admin update route so a revocation beats the cache) at `vaf/main.py` import, which
+every product process passes through - web/tray, CLI and every subagent child (wiring
+pinned by `tests/test_account_allowlist_wiring.py`). An embedded library process that
+registers nothing runs unrestricted, by contract. Inside the coder the same allowlist
+crosses the process boundary as data (`VAF_ALLOWED_TOOLS`, names only, never a secret):
+blocked tools are removed from the schema the model sees, with a dispatch-side refusal
+as backstop for hallucinated names. Coder-internal tools (`bash`, the git tools) are
+offered to the picker via `GET /api/users/tool-universe`, sourced from the coder
+module's own declaration so the picker cannot drift from what the child runs.
 
-Pinned semantics: no row, no `"tools"` key or an EMPTY list mean UNRESTRICTED - `[]` is
-the API model's creation default, and "block every tool" is deliberately not expressible
-here (deactivate the account instead). Admins are never restricted. A DB that is
-unreachable resolves as unrestricted, and on the desktop that is correct rather than
-merely safe: no reachable auth DB means no tenant can authenticate either. WORKFLOWS
-remain stored-only until the workflow lane gains its policy stage (C2).
+Pinned semantics: no row, no `"tools"` key or an EMPTY stored list mean UNRESTRICTED -
+`[]` is the API model's creation default, and "block every tool" is deliberately not
+expressible here (deactivate the account instead). Admins are never restricted. A
+REGISTERED resolver that raises refuses the call (fail-closed; a broken guard must not
+quietly become no guard) - the harness resolver itself never raises: it catches its own
+DB errors and resolves unreachable as unrestricted, and on the desktop that is correct
+rather than merely safe, because no reachable auth DB means no tenant can authenticate
+either. A hypothetical deployment that served `vaf.core.web_server:app` without importing
+`vaf.main` would run unregistered; no product path does that, and the wiring test is the
+fence. WORKFLOWS remain stored-only until the workflow lane gains its policy stage (C2).
 
 ### Cloud credentials are addressed by scope
 

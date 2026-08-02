@@ -10,13 +10,13 @@ if TYPE_CHECKING:
     # API to the real classes so `from vaf import Agent` autocompletes and type-checks.
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
-    from .core.tool_dispatch import ToolCaller, ToolRequest
+    from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
 __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest",
-           "markers", "user_jail"]
+           "markers", "set_account_allowlist_resolver", "user_jail"]
 
 
 def __getattr__(name):
@@ -54,6 +54,14 @@ def __getattr__(name):
         # unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import ToolCaller, ToolRequest
         return ToolCaller
+    if name == "set_account_allowlist_resolver":
+        # Which tools each ACCOUNT may use, answered by YOUR backend. One resolver per
+        # process, consulted in the funnel after the hard policy block and BEFORE the
+        # authorizer, so an account-level ban cannot be lifted by an allow(). The answer
+        # also crosses into the coder child as data (VAF_ALLOWED_TOOLS). Stdlib-only
+        # underneath, so the slim base is unaffected. See docs/EMBEDDING.md.
+        from .core.tool_dispatch import set_account_allowlist_resolver
+        return set_account_allowlist_resolver
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

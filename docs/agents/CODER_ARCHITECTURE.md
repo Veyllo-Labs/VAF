@@ -135,8 +135,12 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     a user who should not have that power is the per-user tool permission, now ENFORCED:
     the funnel refuses blocked tools per turn, and the account allowlist crosses into this
     child as `VAF_ALLOWED_TOOLS` (names only) - blocked tools are filtered out of the
-    schema the model sees, with a dispatch-side refusal as backstop. `bash` and the git
-    tools are offered to the admin's picker via `GET /api/users/tool-universe`.
+    schema the model sees, with a dispatch-side refusal as backstop. On the parent side
+    the list comes from the registered account-allowlist resolver
+    (`set_account_allowlist_resolver` in `vaf/core/tool_dispatch.py` - the same registry
+    the funnel consults, so the coder cannot disagree with the chat lane; the harness
+    registers its resolver in `vaf/main.py`). `bash` and the git tools are offered to the
+    admin's picker via `GET /api/users/tool-universe`.
 *   **IF NOT (Main Process):**
     *   Check `Config.sub_agents_in_separate_terminals`.
     *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`.

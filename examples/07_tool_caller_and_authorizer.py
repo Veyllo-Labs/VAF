@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Run a tool without a conversation, and decide about each call yourself.
 
-Two pieces of the framework that need no model at all:
+Three pieces of the framework that need no model at all:
 
   ToolCaller           runs one tool with VAF's own rules - policy, the
                        confirmation gate, the identity a tool declares, a
@@ -11,16 +11,20 @@ Two pieces of the framework that need no model at all:
   set_tool_authorizer  lets your application refuse a call, insist on a
                        confirmation, or wave one through - per call, per user,
                        per argument.
+  set_account_allowlist_resolver
+                       lets your backend say which tools each ACCOUNT may use
+                       at all - checked before the authorizer, so an allow()
+                       cannot lift an account-level ban.
 
 Unlike the other examples this one needs NO provider, NO API key and NO network:
 it never talks to a model. Run it anywhere:
 
     venv/bin/python examples/07_tool_caller_and_authorizer.py
 
-Docs: docs/EMBEDDING.md, "Running a tool yourself" and "Deciding about a tool
-call".
+Docs: docs/EMBEDDING.md, "Running a tool yourself", "Deciding about a tool
+call" and "Which tools an account may use".
 """
-from vaf import BaseTool, ToolCaller
+from vaf import BaseTool, ToolCaller, set_account_allowlist_resolver
 
 # Two synthetic tenants. In a real application these come from your own auth,
 # and VAF takes them as an assertion - it authenticates nobody.
@@ -162,12 +166,39 @@ def part_five_events() -> None:
     print(f"   a blocked call emitted {len(blocked)} events")
 
 
+def part_six_account_allowlist() -> None:
+    print("\n6. Which tools an account may use - answered by YOUR backend, once per process")
+
+    # In a real application this reads your plans table. None = unrestricted.
+    PLANS = {BOB: {"delete_everything"}}
+    set_account_allowlist_resolver(lambda scope: PLANS.get(scope))
+
+    print("   alice, unrestricted   ->", caller_for(ALICE).execute("tenant_notes", {}))
+    print("   bob, not on his plan  ->", caller_for(BOB).execute("tenant_notes", {}))
+
+    # The ban outranks the authorizer: a blanket allow() cannot lift it.
+    print("   allow() cannot lift it->", caller_for(BOB, authorize=lambda req: req.allow())
+          .execute("tenant_notes", {}))
+
+    # Same polarity as the authorizer: a crashing resolver refuses. Catch inside
+    # your resolver and return None if you want fail-open instead.
+    def broken_resolver(scope):
+        raise RuntimeError("the plans service is down")
+
+    set_account_allowlist_resolver(broken_resolver)
+    print("   crashing resolver     ->", caller_for(BOB).execute("tenant_notes", {}))
+
+    # None detaches - the process is back to unrestricted.
+    set_account_allowlist_resolver(None)
+
+
 def main() -> None:
     part_one_identity()
     part_two_policy()
     part_three_gate()
     part_four_authorizer()
     part_five_events()
+    part_six_account_allowlist()
     print("\nNo model was involved. See docs/EMBEDDING.md for the full contract.")
 
 

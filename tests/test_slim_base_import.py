@@ -107,6 +107,7 @@ def test_library_facade_imports_on_base_only():
     result = _run_with_blocker(
         "import vaf\n"
         "from vaf import Agent\n"
+        "from vaf import set_account_allowlist_resolver\n"
         "print('FACADE_OK', vaf.__version__)\n"
     )
     assert result.returncode == 0, (

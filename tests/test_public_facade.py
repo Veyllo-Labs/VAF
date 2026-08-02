@@ -37,7 +37,7 @@ def test_facade_exports_exactly_the_documented_surface():
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
         "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "__version__",
-        "markers", "user_jail",
+        "markers", "set_account_allowlist_resolver", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
 
@@ -53,6 +53,15 @@ def test_the_newly_public_names_actually_resolve():
     assert vaf.ToolRequest.__name__ == "ToolRequest"
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
+    assert callable(vaf.set_account_allowlist_resolver)
+
+
+def test_the_resolver_setter_is_the_same_object_on_facade_and_engine():
+    """Same rule as the authorizer's name test, extended to identity: the facade serves
+    the engine's function itself, not a wrapper - a wrapper would let the two drift."""
+    import vaf.core.tool_dispatch as td
+
+    assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
 
 
 def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():

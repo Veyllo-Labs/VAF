@@ -90,6 +90,24 @@ def test_a_blocked_call_stays_silent(output):
     assert "a blocked call emitted 0 events" in output
 
 
+def test_the_account_allowlist_blocks_a_scoped_user(output):
+    assert "alice, unrestricted   -> buy milk" in output
+    assert "bob, not on his plan  -> Security Error:" in output
+    assert "not enabled for your account" in output
+
+
+def test_the_account_ban_is_not_liftable_by_allow(output):
+    """The rank promise from docs/EMBEDDING.md: the account stage sits before the
+    authorizer, so a blanket allow() cannot lift what the backend revoked."""
+    assert "allow() cannot lift it-> Security Error:" in output
+
+
+def test_a_crashing_account_resolver_refuses(output):
+    """Same polarity as the authorizer: a registered guard that crashed refuses."""
+    assert "crashing resolver     -> Security Error:" in output
+    assert "resolver failed" in output
+
+
 def test_it_really_needs_no_backend(output):
     """If this example ever grows a model call it stops being CI-runnable, and the README
     tells readers it needs no provider."""

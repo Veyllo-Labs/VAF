@@ -416,6 +416,10 @@ What an embedded agent can and cannot do on the host - the short version of
   the intended single-tenant default: embedding VAF on your own machine
   means acting as yourself. For anything multi-tenant, read the next
   section.
+- **No account allowlist applies until you register one.** A bare agent
+  consults no per-account tool list, because nothing is registered; a
+  multi-tenant application registers one resolver process-wide with
+  `set_account_allowlist_resolver` (its own section below).
 
 ---
 
@@ -544,6 +548,11 @@ Hard limits you must respect (they are architecture, not fine print):
   `_agent` to a fixed set of built-in NAMES, there is no declaration for it, and a tool
   you register never receives it. Do not reach for it; it may disappear without a
   major version. `identity_kwargs` is the surface that is kept.
+- **Which tools an account may use at all is YOUR backend's answer.** Register
+  one resolver process-wide with `set_account_allowlist_resolver` (its own
+  section below) and every scoped, non-admin call is checked against it in the
+  funnel - before your authorizer, so an `allow()` cannot lift an account-level
+  ban.
 - Passing the local admin's scope id IS full admin (tools and files) - hand
   it out deliberately or never.
 
@@ -626,11 +635,13 @@ Runnable version, including the authorizer below:
 It is the one example that needs no provider and no network.
 
 What one `execute()` does, in order: evaluate policy (`admin_only`,
-`channel_restrictions`), consult the confirmation gate, emit `tool_start`,
-validate and repair the arguments against the tool's schema, assign the declared
-identity, run the tool under a timeout with stop polling, emit `tool_end`, and
-truncate. Same order, same rules, same event schema as a chat turn - the
-ordering is pinned by a measurement, not by convention.
+`channel_restrictions`), consult the account allowlist (the resolver you
+registered, if any - its own section below), consult your authorizer, consult
+the confirmation gate, emit `tool_start`, validate and repair the arguments
+against the tool's schema, assign the declared identity, run the tool under a
+timeout with stop polling, emit `tool_end`, and truncate. Same order, same
+rules, same event schema as a chat turn - the ordering is pinned by a
+measurement, not by convention.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
 back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`
@@ -651,7 +662,7 @@ The supported arguments:
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy. Defaults to the configured agent timeout. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
-| `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. |
+| `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
 
 Two limits, stated plainly:
@@ -670,9 +681,11 @@ Two limits, stated plainly:
 VAF answers three questions before a tool runs: may this caller use it at all
 (`admin_only`, `channel_restrictions`), does a person have to confirm it
 (`permission_level`), and who is calling (`identity_kwargs`). All three are
-answered from what the *tool* declares. Your application knows things the tool
-cannot: which tenant is on which plan, which paths this customer owns, that this
-account is thirty seconds from its quota.
+answered from what the *tool* declares - plus a fourth, which tools this
+ACCOUNT may use, answered by the resolver your application registers (the next
+section). Your application also knows things no declaration can carry: which
+paths this customer owns, that this account is thirty seconds from its quota,
+that THIS argument is the problem.
 
 `set_tool_authorizer` is where you say so. It runs on every call that got past
 policy, on both the agent and a bare `ToolCaller`:
@@ -729,12 +742,73 @@ Four limits worth knowing before you rely on it:
   are not put to your authorizer - not because of the process boundary (embedded,
   the coder runs inline in yours) but because its own loop calls `tool.run()`
   directly instead of going through the dispatcher. A callable also cannot cross
-  into the terminal-spawned coder, which is why a per-user tool allowlist has to
-  travel as data rather than as a callback.
+  into the terminal-spawned coder. The account allowlist is the exception, and
+  the reason it is one: the coder DOES enforce it, because its answer is data -
+  resolved once from your registered resolver and carried into the child as
+  `VAF_ALLOWED_TOOLS` (next section) - while a callback is not.
 - **The workflow engine does not consult it yet.** A saved workflow's steps run
   through the shared execution path but not yet through the full pipeline, so
   they are not authorized. If that matters to your deployment, do not enable
   workflows for those users.
+
+---
+
+## Which tools an account may use: `set_account_allowlist_resolver`
+
+The authorizer above decides per CALL. One question sits below it: which tools
+does this account get at all - the thing a plans table or an admin panel
+answers. That answer lives in your backend, so you register a resolver for it,
+once per process:
+
+```python
+from vaf import set_account_allowlist_resolver
+
+def allowed_tools(user_scope_id):
+    plan = plans.get(user_scope_id)          # your own storage
+    return None if plan is None else plan.tool_names
+
+set_account_allowlist_resolver(allowed_tools)
+```
+
+Every scoped, non-admin call in the funnel - the agent's chat lane and a bare
+`ToolCaller` alike - is checked against it, after the hard policy block and
+BEFORE your authorizer, so an account-level ban cannot be lifted by an
+`allow()`. A blocked call is refused with `Security Error: ...` and emits no
+events, exactly like a policy block.
+
+The contract, each choice against its failure mode:
+
+- **`None` means unrestricted** - from the resolver, or because none is
+  registered. A bare embedder has not opted into account policy and must not be
+  locked out by a default.
+- **Any other answer is normalized to a frozenset of tool names; an EMPTY
+  answer allows nothing.** If your storage treats an empty list as "no
+  restriction", map it to `None` yourself - that is a statement about your data
+  model, not about the primitive.
+- **Callers with no scope and admin identities are exempt** and never reach the
+  resolver: it answers "which list for this scope", never "who is exempt". A
+  resolver that crashed on the admin's own scope cannot lock the admin out.
+- **A raising resolver is a refusal** - the authorizer's polarity, not the
+  event sink's: a broken guard must not quietly become no guard. If you want
+  fail-open for an unreachable backend, catch inside your resolver and return
+  `None`; VAF's own product resolver does exactly that for its auth database.
+- **Consulted per call, not cached.** Revocation latency is your resolver's own
+  business - cache inside it if lookups are expensive.
+- **Process-wide.** One resolver per process (the same topology as "one tenant
+  per process" above); the last registration wins and `None` deregisters.
+
+**The answer crosses process boundaries as data.** A callable cannot follow the
+coder into a spawned child, so the resolved allowlist travels in the child's
+environment as `VAF_ALLOWED_TOOLS`: comma-separated tool NAMES, never a secret
+(the same rule the sub-agent section draws for scope ids), absent meaning
+unrestricted. The coder filters blocked tools out of the schema its model sees
+and refuses hallucinated names at dispatch, on both sides of the boundary - so
+"block the coder entirely" stops being the only expressible opinion about what
+runs inside it. If you spawn VAF child processes yourself, set the variable in
+the CHILD's environment only, never process-globally in a multi-tenant parent.
+
+Runnable demonstration: part 6 of
+[examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).
 
 ---
 
@@ -836,9 +910,13 @@ Stable public surface (safe to build on):
   not.
 - `set_tool_authorizer(fn)` on both `Agent` and `CoreAgent`, and `vaf.ToolRequest`
   with `deny()` / `ask()` / `allow()` and its context fields.
+- `vaf.set_account_allowlist_resolver(fn)` - the per-account tool allowlist hook,
+  with the contract its section documents (None/unregistered = unrestricted,
+  empty = nothing, exemptions framework-side, raising = refusal, and the
+  `VAF_ALLOWED_TOOLS` child-process transport).
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
-`vaf.ToolCaller` and `vaf.ToolRequest` are the deliberate exceptions: both live in
-`vaf.core` but are re-exported on the façade, and the façade names are the ones to
-import.
+`vaf.ToolCaller`, `vaf.ToolRequest` and `vaf.set_account_allowlist_resolver` are the
+deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and
+the façade names are the ones to import.

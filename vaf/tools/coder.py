@@ -2522,7 +2522,7 @@ def _caller_identity(kwargs: dict) -> tuple:
 # Inner tools that exist ONLY inside the coder's child process - never in the main
 # registry, so the admin's user-management picker cannot offer them from the registry list.
 # Exposed via GET /api/users/tool-universe so "the admin can disable bash for a user" is
-# expressible; guarded by tests/test_coder_permissions.py against drifting from the
+# expressible; guarded by tests/test_tool_account_allowlist.py against drifting from the
 # local_tools construction below.
 CODER_ONLY_TOOL_NAMES = (
     "bash",
@@ -2537,23 +2537,22 @@ def _caller_allowed_tools(scope, role):
     """The account allowlist, on whichever side of the process boundary we are.
 
     In the child the parent has already resolved it and put it into VAF_ALLOWED_TOOLS
-    (absent = unrestricted, same contract as the identity vars). In the parent it is
-    resolved from the auth DB - the same resolver the funnel uses, so the coder cannot
-    disagree with the chat lane about what an account may run. None = unrestricted.
+    (absent = unrestricted, same contract as the identity vars). In the parent it comes
+    from the registered account-allowlist resolver - the same registry the funnel
+    consults, so the coder cannot disagree with the chat lane about what an account may
+    run. None = unrestricted. A RAISING resolver propagates: run() resolves this once at
+    the top, so the whole coder call fails closed as a unit instead of silently falling
+    back to unrestricted.
     """
     env = os.environ.get("VAF_ALLOWED_TOOLS")
     if env is not None:
         return frozenset(x for x in env.split(",") if x)
     if not scope:
         return None
-    try:
-        from vaf.core.config import is_admin_identity
-        if is_admin_identity(role, scope):
-            return None
-        from vaf.auth.permissions import resolve_allowed_tools
-        return resolve_allowed_tools(scope)
-    except Exception:
+    from vaf.core.tool_dispatch import policy_admin_flag, resolve_account_allowlist
+    if policy_admin_flag(role, scope):
         return None
+    return resolve_account_allowlist(scope)
 
 
 def _assign_caller_identity(tool, fn_args: dict, scope, role) -> dict:
@@ -3103,7 +3102,7 @@ Thumbs.db
                 _sub_env["VAF_USER_ROLE"] = _caller_role_env
             if caller_allowed is not None:
                 # Tool NAMES only, never a secret: the child must enforce the same account
-                # allowlist, and it cannot ask the DB for it mid-run without re-deciding
+                # allowlist, and it cannot ask the resolver mid-run without re-deciding
                 # what the funnel already decided.
                 _sub_env["VAF_ALLOWED_TOOLS"] = ",".join(sorted(caller_allowed))
 

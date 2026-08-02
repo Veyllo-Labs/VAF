@@ -17,7 +17,7 @@ venv/bin/python examples/01_hello_agent.py
 | [04_inline_tool.py](04_inline_tool.py) | Per-instance tool registration with `agent.add_tool()` - no package, no file drop-in |
 | [05_chatbot_with_memory.py](05_chatbot_with_memory.py) | A chatbot that survives restarts: `save_session()` + `Agent(session=...)` |
 | [06_custom_persona.py](06_custom_persona.py) | Give the agent its own voice and instructions with `Agent(system_prompt=...)` |
-| [07_tool_caller_and_authorizer.py](07_tool_caller_and_authorizer.py) | Running a tool with VAF's own rules but no conversation (`ToolCaller`), and vetoing a call per user and per argument (`set_tool_authorizer`). **Needs no provider, no API key and no network** - it never talks to a model |
+| [07_tool_caller_and_authorizer.py](07_tool_caller_and_authorizer.py) | Running a tool with VAF's own rules but no conversation (`ToolCaller`), vetoing a call per user and per argument (`set_tool_authorizer`), and restricting which tools an account may use at all (`set_account_allowlist_resolver`). **Needs no provider, no API key and no network** - it never talks to a model |
 | [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
 
 ## Prerequisites

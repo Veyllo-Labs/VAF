@@ -12,6 +12,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **An application built on VAF now decides which tools each account may use - with one
+  registered resolver instead of VAF's own user database.** The per-account tool allowlist
+  used to be wired straight to the product's auth DB inside the dispatch pipeline, so an
+  application embedding VAF got a check it could neither feed nor replace.
+  `set_account_allowlist_resolver` is now part of the public interface: register one
+  function that answers "which tools for this account" from your own storage, and it is
+  enforced everywhere the pipeline runs - before the per-call authorizer, so an `allow()`
+  cannot lift an account-level ban, and inside the coding agent, where the answer crosses
+  into the child process as data. VAF's own product registers its resolver through the
+  same primitive, and the pipeline no longer imports the product's auth layer at all (a
+  test now keeps it that way). A registered resolver that crashes refuses rather than
+  quietly enforcing nothing; registering nothing means unrestricted, as before.
 - **A tool can now say that it touches files, and the per-user boundary is installed for
   it.** Building something on VAF that reads or writes a user's files meant declaring who is
   calling and then writing the confinement yourself, inside every tool, exactly right, every

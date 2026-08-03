@@ -169,16 +169,27 @@ def test_a_chosen_theme_survives_the_next_start(monkeypatch, tmp_path):
     import importlib
 
     import vaf.core.config as config_mod
+
+    # The reload has to be undone, and monkeypatch cannot do it: the rebinding happens
+    # INSIDE reload(). `importlib.reload` gives config_mod a NEW Config class while every
+    # module that already did `from vaf.core.config import Config` keeps the old one. Code
+    # that imports Config lazily inside a function then reads the new class, so a later
+    # test patching the old one patches something nobody reads. Measured before this
+    # restore existed: six unrelated tests went red, three of them the fail-closed
+    # WebSocket auth checks, and only when run after this file.
+    _original_config = config_mod.Config
     importlib.reload(config_mod)
+    try:
+        from vaf.cli.tui_app.theme_bridge import persist_theme
 
-    from vaf.cli.tui_app.theme_bridge import persist_theme
+        other = next(k for k in THEMES if k != "vaf")
+        assert initial_theme_key(None) == "vaf", "a fresh install must start on vaf"
 
-    other = next(k for k in THEMES if k != "vaf")
-    assert initial_theme_key(None) == "vaf", "a fresh install must start on vaf"
-
-    persist_theme(other)
-    assert config_mod.Config.get("theme") == other, "the choice never reached disk"
-    assert initial_theme_key(None) == other, "the next start ignored the choice"
+        persist_theme(other)
+        assert config_mod.Config.get("theme") == other, "the choice never reached disk"
+        assert initial_theme_key(None) == other, "the next start ignored the choice"
+    finally:
+        config_mod.Config = _original_config
 
 
 def test_no_theme_can_paint_the_terminal_light():

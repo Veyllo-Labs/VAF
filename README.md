@@ -118,6 +118,11 @@ VAF runs in three modes depending on your use case.
 
 ### Desktop (recommended for personal use)
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/desktop.png" width="880"
+       alt="The VAF desktop window: conversation list on the left, the agent's mark, and a prompt">
+</p>
+
 The desktop app: system-tray icon + agent window, web UI at `http://localhost:3000`. Easiest start: double-click the **VAF Agent** shortcut the installer created, or run:
 
 ```bash
@@ -154,6 +159,11 @@ vaf status     # systemctl --user status vaf
 LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md).
 
 ### Terminal (CLI)
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/terminal.png" width="880"
+       alt="The full-screen terminal app with the sessions panel open: every conversation, walkable, enter loads">
+</p>
 
 Interactive chat in the terminal with themes, session management, and streaming output.
 

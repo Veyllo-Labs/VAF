@@ -99,6 +99,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   terminal art rather than drawn in solid blocks.
 - The README opens on the mark rather than on an ASCII wordmark, and shows the
   terminal and the web UI as one image above the installation steps.
+  The desktop and terminal modes each show what they look like.
 
 ### Fixed
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"

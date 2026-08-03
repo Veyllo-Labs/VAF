@@ -51,8 +51,8 @@ runnable examples: [examples/](https://github.com/Veyllo-Labs/VAF/tree/main/exam
 ---
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/hero.gif"
-       width="880" alt="The same agent in two places: the full-screen terminal app and the web UI">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/hero.png"
+       width="880" alt="The same agent in two places: the full-screen terminal app and the web UI, split down the middle">
 </p>
 
 <p align="center"><em>One agent, one session store, one config - in your terminal or in your browser.</em></p>

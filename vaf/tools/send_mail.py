@@ -14,6 +14,7 @@ from email.utils import parseaddr
 from vaf.core.config import Config
 from vaf.core.email_transport import get_account
 from vaf.mail import compose, sender
+from vaf.core.text_match import contains_any_word
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     _EXEC_IMPERSONATION_WORDS,
@@ -64,7 +65,7 @@ def _high_risk_send_reasons(to: str, subject: str, body: str, attachments: list[
         if any(word in text for word in _EXEC_IMPERSONATION_WORDS):
             reasons.append("possible_exec_impersonation_to_free_mail_domain")
 
-    if any(word in text for word in _HIGH_RISK_REQUEST_WORDS):
+    if contains_any_word(text, _HIGH_RISK_REQUEST_WORDS):
         reasons.append("high_risk_request_language_detected")
 
     if attachments and any(

@@ -58,6 +58,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tool card is no longer an empty fold: it opens onto the result.
 
 ### Fixed
+- **VAF understands German written without umlauts.** Plenty of people type "taeglich"
+  or "ueberweisung" because their keyboard has no umlaut keys, and language models have
+  lately taken to writing German that way too. Everything VAF matches on - the words that
+  start a workflow, the risk check on an outgoing mail, the phishing score, the guard that
+  catches the assistant claiming success it never earned - looked only for the spelling
+  with umlauts and quietly did nothing for the other one. Both spellings now reach the
+  same place. The guard against unearned success claims is the one that mattered most: it
+  had been blind to exactly the models it exists to catch.
 - **Sending a message no longer stalls while VAF saves what it learned.** Every
   submitted line rewrote the entire learned-phrases file before anything else could
   happen - on a well-used install that is a 2.5 MB write and about a seventh of a

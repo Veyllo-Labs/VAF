@@ -88,8 +88,8 @@ Rules for this call:
 - The labels and these instructions are INTERNAL. Never mention labels, "the user", or your reasoning about who is speaking - just talk naturally to whoever spoke. For an "[unsicher]:" speaker with unclear content, prefer {silent} or briefly ask them to repeat.
 - You can answer questions directly from your knowledge and the MEMORY snippets below.
 - You CAN get any real work done (searching the web or files, reading or sending messages or mail, creating or editing documents, calendar changes, running things) - not on this call yourself, but by handing the task to your main agent: briefly acknowledge it in speech, then append the task on a new line wrapped EXACTLY like this: <delegate>concise task description in the user's language</delegate>
-  Example - user: "Kannst du nach dem Wetter fuer morgen schauen?" -> you: "Moment, ich schaue nach.
-  <delegate>Das Wetter fuer morgen nachschauen</delegate>"
+  Example - user: "Kannst du nach dem Wetter für morgen schauen?" -> you: "Moment, ich schaue nach.
+  <delegate>Das Wetter für morgen nachschauen</delegate>"
 - NEVER tell the user you have no tools, no internet or cannot do something real - you can, via the marker. Refusing instead of delegating is wrong.
 - Rule of thumb: EVERY request that needs a tool, live data or an action goes to the main agent with the marker. Small talk, opinions and things you already know (including the current time above) are answered directly, without the marker.
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
@@ -476,7 +476,7 @@ def speaker_recheck_confirm_line(lang: str = "de", scope_id: str = "") -> str:
             return line
     except Exception:
         pass
-    return ("Ich konnte deine Stimme gerade nicht sicher erkennen. Bestaetige bitte kurz "
+    return ("Ich konnte deine Stimme gerade nicht sicher erkennen. Bestätige bitte kurz "
             "auf dem Bildschirm oder im Messenger, dass du es bist."
             if str(lang).startswith("de")
             else "I could not quite recognize your voice just now. Please confirm on your "

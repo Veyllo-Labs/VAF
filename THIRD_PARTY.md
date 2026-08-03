@@ -254,6 +254,36 @@ the license requires.
 
 ---
 
+## Container images and model weights
+
+Not installed from PyPI/npm and therefore absent from the tables above, but pulled
+and run as part of a default VAF install, so their licenses belong in this
+inventory. Speech recognition is the case that matters: it ships a model, and model
+weights carry their own license independent of the code that loads them.
+
+| Component | Where | License | Copyright / source |
+|---|---|---|---|
+| whisper-asr-webservice (the container) | image `onerahmet/openai-whisper-asr-webservice`, service `vaf-stt` in `docker-compose.memory.yml` | MIT | Copyright (c) 2022 Ahmet Oner & Besim Alibegovic — https://github.com/ahmetoner/whisper-asr-webservice |
+| openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI — https://github.com/openai/whisper |
+| Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI — "Whisper's code and model weights are released under the MIT License" (upstream README) |
+
+All three are MIT, so shipping and commercial use are unrestricted beyond retaining
+the notices above. The licenses were read from the running container
+(`/app/LICENCE`, `/app/pyproject.toml`, and the `openai_whisper-*.dist-info`
+license file) rather than from upstream documentation, so this row states what the
+image actually contains.
+
+**The rule this row establishes, because model weights are the easy thing to get
+wrong:** VAF ships only weights under MIT, Apache-2.0, BSD or CC-BY-4.0. Weights
+carrying a non-commercial clause, a revenue threshold, a registration requirement or
+any other use restriction are neither shipped nor offered as a default, because VAF
+is distributed under the AGPL (which forbids adding such restrictions downstream)
+and is also licensed commercially. This is not hypothetical: the openWakeWord
+weights are excluded in `.gitignore` for exactly this reason (CC-BY-NC-SA-4.0), and
+CrisperWhisper 2.0 was evaluated and rejected on the same ground in August 2026.
+
+---
+
 ## Notes and caveats
 
 - **Qt binding in `requirements.lock`:** the lockfile pins **PySide6 (LGPL-3.0)**
@@ -263,9 +293,11 @@ the license requires.
   `pycryptodome`) are used under the most permissive applicable option; the table
   records the upstream-declared expression.
 - **System tools** required at runtime but installed outside Python/Node (Git,
-  Poppler, Tesseract, Docker, and the model/runtime stack pulled by
-  Hugging Face) are out of scope for this dependency inventory; see
-  `requirements.txt` and the setup docs for those.
+  Poppler, Tesseract, Docker) are out of scope for this dependency inventory; see
+  `requirements.txt` and the setup docs for those. Model weights are NOT out of
+  scope, whatever the mechanism that fetches them: see the container-and-weights
+  section above, which exists because "pulled by Hugging Face" used to excuse the
+  whole model stack from being inventoried at all.
 - Packages marked "well-known; not installed in this venv" had their license
   taken from the documented upstream license rather than a local `METADATA`
   file, because they were not present in the inspected environment (platform- or

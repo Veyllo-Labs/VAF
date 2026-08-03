@@ -29,6 +29,7 @@ from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
+from vaf.core.text_match import compile_de, contains_any, fold, fold_all
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
     ToolCaller as _ToolCaller,
@@ -120,9 +121,9 @@ _READ_TOOLS_THINKING = frozenset({
 # firewall additionally requires an action-noun so user-stated facts ("der
 # Server läuft laut User") are never caught, and it only fires while NO
 # non-bookkeeping tool has run this turn.
-_UNEARNED_OUTCOME_VERB_RE = re.compile(
-    r"(erfolgreich|successfully|abgeschlossen|completed|durchgef(?:ü|ue)hrt|ausgef(?:ü|ue)hrt"
-    r"|executed|gestartet|started|l(?:ä|ae)uft|running|erledigt|done|fertig|finished)",
+_UNEARNED_OUTCOME_VERB_RE = compile_de(
+    r"(erfolgreich|successfully|abgeschlossen|completed|durchgeführt|ausgeführt"
+    r"|executed|gestartet|started|läuft|running|erledigt|done|fertig|finished)",
     re.IGNORECASE,
 )
 _UNEARNED_OUTCOME_NOUN_RE = re.compile(
@@ -1083,10 +1084,15 @@ class Agent:
             "neuer", "neue", "neu", "new", "mein", "meine", "dein", "deine", "my", "your", "ein", "eine",
             "der", "die", "das", "the", "a", "an", "test", "tests", "plan", "plans", "plane", "planen",
             "placeholder", "platzhalter", "todo", "tbd", "tba", "na", "xxx", "hier", "here", "beispiel",
-            "example", "dummy", "temp", "temporary", "schritt", "step", "ist", "is", "und", "and", "fuer", "for",
+            "example", "dummy", "temp", "temporary", "schritt", "step", "ist", "is", "und", "and", "für", "for",
         }
+        # Exact membership against a FOLDED vocabulary: the list is written in proper
+        # German, and folding both sides is what lets a plan titled "Plan fuer Tests"
+        # be recognised as a placeholder just like "Plan für Tests". Before this the
+        # entry read "fuer" and therefore never matched anything a person typed.
+        _filler_folded = fold_all(_filler)
         words = core.split()
-        return bool(words) and all(w in _filler for w in words)
+        return bool(words) and all(fold(w) in _filler_folded for w in words)
 
     def _anti_spin_step(self, function_name: str):
         """Anti-spin guard: track CONSECUTIVE bookkeeping calls (update_working_memory /
@@ -1426,9 +1432,9 @@ class Agent:
     _DELEGATION_TOOLS = frozenset({
         "coding_agent", "librarian_agent", "research_agent", "document_agent",
     })
-    _DESTRUCTIVE_TEXT_RE = re.compile(
+    _DESTRUCTIVE_TEXT_RE = compile_de(
         r"\b(delete[ds]?|deleting|remove[ds]?|removing|erase[ds]?|erasing|unlink\w*|rm|rmdir"
-        r"|l(?:ö|oe)sch\w*|gel(?:ö|oe)scht|entfern\w*)\b",
+        r"|lösch\w*|gelöscht|entfern\w*)\b",
         re.IGNORECASE,
     )
     _NEGATION_RE = re.compile(r"\b(nicht|nein|kein\w*|no|not|don'?t|stop|niemals|never)\b", re.IGNORECASE)
@@ -11222,7 +11228,12 @@ class Agent:
             "task complete", "fehlgeschlagen", "gespeichert", "erstellt", "gelöscht", "gesendet",
             "ausgeführt", "bestätigt", "nicht gefunden", "kein ergebnis",
         )
-        _has_outcome = any(k in _low for k in _outcome_kw) or bool(
+        # contains_any, deliberately NOT the whole-word variant: these needles are
+        # matched as stems ("success" has to reach "successfully", "gespeichert" has to
+        # reach "abgespeichert"), and none of them folds into an English word. This
+        # prefilter gates the entire ungrounded-claim check, so a miss disables it
+        # silently - which is what happened for models that write "ausgefuehrt".
+        _has_outcome = contains_any(_low, _outcome_kw) or bool(
             _re.search(r'[✗✅❌]|found\s+\d+|\b\d+\s+(results|treffer|dateien|files)\b', text, _re.I)
         )
         if not _has_outcome:

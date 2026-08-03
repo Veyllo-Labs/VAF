@@ -7,6 +7,7 @@ from email.utils import parseaddr
 from typing import List, Optional, Tuple
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.text_match import contains_any_word
 
 
 def _local_admin() -> str:
@@ -171,7 +172,7 @@ def _phishing_score(message: dict) -> tuple[int, List[str]]:
     if domain.startswith("xn--"):
         score += 3
         reasons.append("punycode_domain")
-    if any(word in text for word in _SOCIAL_ENGINEERING_WORDS):
+    if contains_any_word(text, _SOCIAL_ENGINEERING_WORDS):
         score += 2
         reasons.append("social_engineering_language")
     if any(word in sender_lower for word in _EXEC_IMPERSONATION_WORDS) and domain in _FREE_MAIL_DOMAINS:

@@ -11,6 +11,8 @@ import re
 import json
 import time
 import requests
+
+from vaf.core.text_match import compile_de
 import sys
 import subprocess
 import platform
@@ -51,9 +53,9 @@ except ImportError:
 # Per SENTENCE: a destructive verb governing a file/folder/path target. The
 # per-sentence rule keeps legitimate verification tasks alive: "Answer YES if
 # it exists, NO if deleted" carries the verb but no target in that sentence.
-_DESTRUCTIVE_VERB_RE = re.compile(
+_DESTRUCTIVE_VERB_RE = compile_de(
     r"\b(delete[ds]?|deleting|remove[ds]?|removing|erase[ds]?|erasing|unlink(?:ed|ing)?"
-    r"|rm|rmdir|l(?:ö|oe)sch\w*|entfern\w*)\b",
+    r"|rm|rmdir|lösch\w*|entfern\w*)\b",
     re.IGNORECASE,
 )
 _DESTRUCTIVE_TARGET_RE = re.compile(

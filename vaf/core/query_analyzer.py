@@ -12,6 +12,8 @@ Detects intent and suggests appropriate sources:
 """
 
 import re
+
+from vaf.core.text_match import contains_any
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 
@@ -74,7 +76,7 @@ class QueryAnalyzer:
     
     FINANCE_KEYWORDS = {
         "de": [
-            "börse", "boerse", "aktie", "aktien", "finanzen", "wirtschaft", "markt",
+            "börse", "aktie", "aktien", "finanzen", "wirtschaft", "markt",
             "investment", "trading", "kurs", "kurse", "dax", "dow jones"
         ],
         "en": [
@@ -246,10 +248,14 @@ class QueryAnalyzer:
             return 0.0
         
         # Count matches (check if keyword is in query as whole word or part of word)
+        # contains_any folds both sides, so a keyword written with umlauts also matches a
+        # query typed without them - the ASCII twins that used to sit next to their umlaut
+        # form in these lists are gone, the matcher covers them. Substring, not whole word,
+        # because the lists carry stems ("aktie" has to reach "aktien"), and no German
+        # entry here folds into an English word.
         matches = 0
         for kw in keywords:
-            # Check for whole word match or substring
-            if f" {kw} " in f" {query} " or kw in query:
+            if contains_any(query, (kw,)):
                 matches += 1
         
         # Normalize by number of keywords (with ceiling to prevent overshooting)

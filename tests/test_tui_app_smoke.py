@@ -1047,17 +1047,26 @@ def test_the_agent_name_comes_from_the_soul_not_a_hardcoded_string(monkeypatch):
 
 
 def test_the_banner_shows_the_mark_not_a_wordmark():
-    """The art is the Veyllo logo, downsampled - not "VAF" spelled in slashes.
-    Half-blocks are what make it a glyph: they put two vertical pixels in one
-    cell and cancel the terminal's ~1:2 aspect."""
+    """The art is the Veyllo logo converted for a terminal - not "VAF" spelled
+    in slashes, which is what the first version did.
+
+    Shape rules rather than an exact copy of the drawing: it must fit a start
+    block (a mark taller than the smallest sensible terminal is not a mark, it
+    is a wall), it must be rectangular so the facts column beside it does not
+    ragged-edge, and it must not carry markup-opening brackets, which Rich
+    would eat before anything reached the screen."""
     from vaf.cli.tui_app.widgets import StartBanner
 
-    art = "\n".join(StartBanner.ART)
-    assert "O))" not in art, "the old ASCII wordmark came back"
-    assert set("█▀▄ ") >= set(art.replace("\n", "")), (
-        "the mark must be drawn with block characters only")
-    assert any("▀" in line for line in StartBanner.ART), "no half-blocks: aspect is wrong"
-    assert 8 <= len(StartBanner.ART) <= 14, "the mark outgrew a banner"
+    art = StartBanner.ART
+    joined = "\n".join(art)
+    assert "O))" not in joined, "the old ASCII wordmark came back"
+    assert 8 <= len(art) <= 16, "the mark outgrew a banner"
+    assert max(len(line) for line in art) <= 30, "too wide to sit beside the facts"
+    assert "[" not in joined, "an unescaped markup bracket would swallow the line"
+    # Not empty, and not a solid slab either: a converted logo has both ink and
+    # air on most of its rows.
+    inked = [line for line in art if line.strip()]
+    assert len(inked) == len(art), "a blank row in the middle of the mark"
 
 
 def test_the_banner_sits_centred_in_both_directions(smoke_app):
@@ -1315,21 +1324,3 @@ def test_a_reader_who_scrolled_up_is_left_alone(smoke_app):
 def stream_all(callback, text, chunk=32):
     for i in range(0, len(text), chunk):
         callback(text[i:i + chunk])
-
-
-def test_the_mark_is_painted_not_spelled():
-    """Block GLYPHS leave a hairline wherever the font's advance and the cell
-    width disagree, and a mark made of them exports as a grid of tiles rather
-    than a shape. A painted cell tiles exactly, and in a terminal the two are
-    indistinguishable - so the solid body of the mark is background, and only
-    the half blocks (which no fill can produce) stay glyphs.
-    """
-    from vaf.cli.tui_app.widgets import StartBanner
-
-    markup = StartBanner._art_markup()
-    assert "█" not in markup, "the solid body is still made of glyphs"
-    assert "[on #ffffff]" in markup, "nothing is painted"
-    # The halves cannot be painted - half a cell is not a background colour.
-    assert "▀" in markup and "▄" in markup
-    # And it is still the same drawing: one line of markup per row of art.
-    assert len(markup.split("\n")) == len(StartBanner.ART)

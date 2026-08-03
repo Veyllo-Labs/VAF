@@ -2,7 +2,7 @@
 
 `vaf run` opens a full-screen terminal app (built on Textual). A session opens
 with a start block in the shape of `neofetch`, centred rather than pinned to a
-corner: the Veyllo mark drawn in half-blocks, then version, the agent's name
+corner: the Veyllo mark as terminal art, then version, the agent's name
 from its identity, the session name and id, the active model, the local date
 and time, and the one line that says how to reach older sessions. Below
 that: a scrolling

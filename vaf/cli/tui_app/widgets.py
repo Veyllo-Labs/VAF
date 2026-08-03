@@ -185,22 +185,24 @@ class StartBanner(Vertical):
     reads as "the session started here".
     """
 
-    # The real mark, downsampled from the Veyllo logo and drawn with
-    # half-blocks so two vertical pixels share one character cell - which is
-    # what corrects the ~1:2 aspect of a terminal cell and lets the glyph read
-    # as itself rather than as a stack of letters. The old art spelled "VAF" in
-    # slashes and was not the logo at all.
+    # The Veyllo mark as terminal art, converted from the logo. It is a line
+    # drawing: the characters trace the mark's edges and the interior stays
+    # open, so it reads as a drawing rather than as a slab, and it carries no
+    # block glyphs at all - which is also why no exporter has to guess how to
+    # tile it.
     ART = (
-        "        ███▄",
-        "▄▄▄▄▄▄▄▄████▄▄▄▄▄▄▄▄",
-        "████████████████████",
-        "   ▀███      ███▀",
-        "    ▀███    ████",
-        "     ▀███▄▄███▀",
-        "       ██████▀",
-        "     ▄▄███████▄▄",
-        "▄▄██████▀▀ ▀██████▄▄",
-        "▀███▀▀        ▀▀███▀",
+        "          @@@g",
+        " __________@@@i___ _____",
+        "@@@@@@@@@@W@@g@@@@R@@@@@@",
+        ' """8@@@""""""""T@@@D""\'',
+        "     B@@,       @W@@",
+        "     '@@@,     g@@@",
+        "      '@@@B  _@B@W",
+        "        tB@RW@B@F",
+        "         ]@@@@@L",
+        "     _a@@@@@M@@@@@b__",
+        '_@@@@@@@P"     <B@@WW@@@,',
+        "'@@QB+             %Mg@B",
     )
 
     def __init__(self, rows, hint: str = "") -> None:
@@ -209,34 +211,8 @@ class StartBanner(Vertical):
         self._rows = list(rows)
         self._hint = hint
 
-    @classmethod
-    def _art_markup(cls) -> str:
-        """A full block is drawn as a PAINTED CELL, not as a glyph.
-
-        Adjacent block glyphs leave a hairline between them wherever the font's
-        advance and the cell width disagree, which turns the mark into a grid of
-        tiles in exported screenshots. A background fill tiles exactly. Half
-        blocks still need their glyph - only a glyph can split a cell - so they
-        keep it, and carry the same white.
-        """
-        lines = []
-        for line in cls.ART:
-            out, run = [], ""
-            for char in line:
-                if char == "\u2588":
-                    run += " "
-                    continue
-                if run:
-                    out.append(f"[on {WHITE}]{run}[/]")
-                    run = ""
-                out.append(f"[{WHITE}]{char}[/]" if char != " " else " ")
-            if run:
-                out.append(f"[on {WHITE}]{run}[/]")
-            lines.append("".join(out))
-        return "\n".join(lines)
-
     def compose(self) -> ComposeResult:
-        art = self._art_markup()
+        art = "\n".join(f"[{WHITE}]{_escape(line)}[/]" for line in self.ART)
         with Center(classes="banner-center"):
             with Horizontal(classes="banner-row-wrap"):
                 yield Static(art, classes="banner-art")

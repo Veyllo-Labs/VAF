@@ -23,8 +23,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SPDX_TAG = "SPDX-License-Identifier: AGPL-3.0-or-later"
 
-# Root files that must exist for the dual-license setup to be coherent.
-REQUIRED_FILES = ["LICENSE", "LICENSING.md", "COMMERCIAL.md"]
+# Files that must exist for the dual-license setup to be coherent. LICENSE and
+# LICENSING.md stay at the repo root on purpose: GitHub detects the licence there,
+# and every SPDX header in the tree points at LICENSING.md by that path. The
+# commercial terms are ordinary documentation and live with the rest of it.
+REQUIRED_FILES = ["LICENSE", "LICENSING.md", "docs/legal/COMMERCIAL.md"]
 
 # Directories scanned for first-party source.
 PY_ROOTS = ["vaf", "tests", "scripts", "examples"]

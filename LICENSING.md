@@ -5,7 +5,7 @@
 | | Open Source | Commercial |
 |---|---|---|
 | **License** | GNU AGPL-3.0-or-later (see [LICENSE](LICENSE)) | Proprietary, granted by Veyllo GmbH |
-| **Price** | Free | Paid — see [COMMERCIAL.md](COMMERCIAL.md) |
+| **Price** | Free | Paid — see [COMMERCIAL.md](docs/legal/COMMERCIAL.md) |
 | **Use it for** | Anything, as long as you honor AGPL copyleft | Closed-source products and hosted SaaS without copyleft |
 | **Source disclosure** | Required for modified versions you convey **or run as a network service** | Not required |
 
@@ -52,7 +52,7 @@ your source — Veyllo GmbH offers a commercial license that:
 - includes support, maintenance, and legal-certainty options;
 - can include warranty and indemnification terms not available under the AGPL.
 
-Details, scope, and how to obtain one: **[COMMERCIAL.md](COMMERCIAL.md)**.
+Details, scope, and how to obtain one: **[COMMERCIAL.md](docs/legal/COMMERCIAL.md)**.
 
 ### Why dual licensing?
 
@@ -63,7 +63,7 @@ companies that need proprietary terms.
 
 ### Additional Permission under Section 7 of the AGPL — Plugins, Tools & Workflows
 
-As the copyright holder — and, through the contributor terms in [CONTRIBUTING.md](CONTRIBUTING.md),
+As the copyright holder — and, through the contributor terms in [CONTRIBUTING.md](.github/CONTRIBUTING.md),
 on behalf of the VAF copyright holders — **Veyllo GmbH grants the following additional
 permission under Section 7 of the GNU AGPL-3.0**:
 
@@ -158,7 +158,7 @@ die:
 - Gewährleistungs- und Freistellungsregelungen enthalten kann, die unter der AGPL nicht
   verfügbar sind.
 
-Details, Umfang und Bezug: **[COMMERCIAL.md](COMMERCIAL.md)**.
+Details, Umfang und Bezug: **[COMMERCIAL.md](docs/legal/COMMERCIAL.md)**.
 
 ### Warum Dual Licensing?
 
@@ -169,7 +169,7 @@ Unternehmen, die proprietäre Bedingungen benötigen.
 
 ### Zusatzgenehmigung nach Abschnitt 7 der AGPL — Plugins, Tools & Workflows
 
-Als Rechteinhaberin — und, über die Beitragsbedingungen in [CONTRIBUTING.md](CONTRIBUTING.md),
+Als Rechteinhaberin — und, über die Beitragsbedingungen in [CONTRIBUTING.md](.github/CONTRIBUTING.md),
 im Namen der VAF-Rechteinhaber — **gewährt die Veyllo GmbH folgende Zusatzgenehmigung nach
 Abschnitt 7 der GNU AGPL-3.0**:
 

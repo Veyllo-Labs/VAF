@@ -1,7 +1,7 @@
 # Commercial License / Kommerzielle Lizenz
 
-VAF is dual-licensed (see [LICENSING.md](LICENSING.md)). This document describes the
-**commercial license** — the paid alternative to the open source [AGPL-3.0](LICENSE) — for
+VAF is dual-licensed (see [LICENSING.md](../../LICENSING.md)). This document describes the
+**commercial license** — the paid alternative to the open source [AGPL-3.0](../../LICENSE) — for
 organizations that cannot or do not want to comply with the AGPL's copyleft obligations.
 
 > Contact: **legal@veyllo.io** · **https://veyllo.io**
@@ -17,7 +17,7 @@ You **do not** need one — the free AGPL-3.0 is enough — if you:
 - use VAF internally, for personal use, or for evaluation;
 - run **unmodified** VAF, even commercially and even on your own servers;
 - build and distribute Plugins, Tools, or Workflows on top of VAF (covered by the
-  Section 7 Additional Permission in [LICENSING.md](LICENSING.md));
+  Section 7 Additional Permission in [LICENSING.md](../../LICENSING.md));
 - are happy to release your modifications under the AGPL, including the source of any
   modified version you offer as a network service.
 
@@ -79,7 +79,7 @@ Du brauchst **keine** — die kostenlose AGPL-3.0 genügt — wenn du:
 - VAF intern, privat oder zur Evaluierung nutzt;
 - **unverändertes** VAF betreibst, auch kommerziell und auch auf eigenen Servern;
 - Plugins, Tools oder Workflows auf Basis von VAF erstellst und weitergibst (abgedeckt
-  durch die Zusatzgenehmigung nach Abschnitt 7 in [LICENSING.md](LICENSING.md));
+  durch die Zusatzgenehmigung nach Abschnitt 7 in [LICENSING.md](../../LICENSING.md));
 - bereit bist, deine Änderungen unter der AGPL offenzulegen — einschließlich des Quellcodes
   einer veränderten Version, die du als Netzwerkdienst anbietest.
 

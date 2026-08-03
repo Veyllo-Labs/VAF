@@ -131,7 +131,7 @@ def about():
     
     UI.print("[bold]License:[/bold]")
     UI.print("Dual-licensed: [bold]GNU AGPL-3.0-or-later[/bold] (open source) or a [bold]Commercial License[/bold].")
-    UI.print("See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]COMMERCIAL.md[/bold] for full terms.")
+    UI.print("See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]docs/legal/COMMERCIAL.md[/bold] for full terms.")
     UI.print("Commercial / OEM licensing: [bold]legal@veyllo.io[/bold]")
     UI.print()
     

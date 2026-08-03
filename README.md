@@ -7,9 +7,9 @@
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 
-[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)
+[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
 
-**Dual-licensed:** free under the [GNU AGPL-3.0](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE), or a [commercial license](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
+**Dual-licensed:** free under the [GNU AGPL-3.0](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE), or a [commercial license](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
 
 **Requires:** Git to clone, and a container runtime. VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. All three installers set the engine up for you: Windows installs the free Rancher Desktop, macOS auto-installs the free Colima (or uses Docker Desktop if present), and Linux auto-installs your distro's Docker (systemd + `docker` group). The installer also provisions Python and Node itself.
 
@@ -393,12 +393,12 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## License
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
 
 VAF is **dual-licensed**:
 
 - **Open source - [GNU AGPL-3.0-or-later](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use (even commercial) triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
-- **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)**.
+- **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)**.
 
 See **[LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.
 

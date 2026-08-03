@@ -69,6 +69,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tool card is no longer an empty fold: it opens onto the result.
 
 ### Changed
+- **The repository root is quieter.** The contributor, conduct and security documents
+  moved into `.github/`, where GitHub still finds them, and the commercial terms and
+  third-party inventory moved to `docs/legal/`. The separate `ruff.toml` is gone; its one
+  setting lives in `pyproject.toml`. Nothing a user runs changed: the installers, the
+  start scripts and the licence files stayed exactly where they were.
 - **The default look is monochrome.** The terminal theme is a black-to-white ramp
   now, so nothing in the frame competes with what the agent is actually saying, and
   the agent's white dot is the brightest thing on screen. Success, warning and error

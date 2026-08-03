@@ -103,5 +103,5 @@ possible and are announced in the changelog. See
 **Can I use VAF inside a closed-source product?**
 VAF is AGPL-3.0-or-later with an additional permission for plugins, tools and
 workflows, and commercial licensing exists - read
-[LICENSING.md](../LICENSING.md) and [COMMERCIAL.md](../COMMERCIAL.md); this
+[LICENSING.md](../LICENSING.md) and [COMMERCIAL.md](legal/COMMERCIAL.md); this
 FAQ is not the authoritative text.

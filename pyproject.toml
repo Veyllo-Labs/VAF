@@ -170,3 +170,11 @@ vaf = ["py.typed", "media/*", "media/**/*"]
 # package is NOT imported at build time (same guarantee the old setup.py
 # exec() approach had).
 version = { attr = "vaf.version.__version__" }
+
+[tool.ruff]
+# Vendored third-party code (e.g. vaf/vendor/langid) and generated coder template
+# placeholders are not our code to lint, so they are excluded from checks. This keeps
+# the CI lint gate (E9,F63,F7,F82) green without patching vendored upstream files.
+# Lives here rather than in a separate ruff.toml so the repo root carries one
+# configuration file instead of two: ruff reads [tool.ruff] from pyproject.
+extend-exclude = ["vaf/vendor", "vaf/tools/coder_templates"]

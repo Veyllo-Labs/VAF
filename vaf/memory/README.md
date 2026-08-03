@@ -203,4 +203,4 @@ pytest tests/test_memory_store_tool.py tests/test_working_memory.py -v
 ## License
 
 Dual-licensed: GNU AGPL-3.0-or-later or a Commercial License. See [LICENSE](../../LICENSE),
-[LICENSING.md](../../LICENSING.md), and [COMMERCIAL.md](../../COMMERCIAL.md) in the project root.
+[LICENSING.md](../../LICENSING.md), and [COMMERCIAL.md](../../docs/legal/COMMERCIAL.md).

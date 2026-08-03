@@ -196,7 +196,7 @@ Built a tool or workflow you're proud of? Share it with the community - record a
 
 VAF is **dual-licensed**: open source under the **GNU AGPL-3.0-or-later** and, separately,
 under a **commercial license** sold by Veyllo GmbH (see [LICENSING.md](LICENSING.md) and
-[COMMERCIAL.md](COMMERCIAL.md)). For this dual model to work, every contribution must be
+[COMMERCIAL.md](../docs/legal/COMMERCIAL.md)). For this dual model to work, every contribution must be
 usable under **both** licenses — which is what the terms below establish.
 
 **Opening a pull request (or otherwise submitting a patch or material) constitutes your

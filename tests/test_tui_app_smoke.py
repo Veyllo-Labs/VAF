@@ -1140,3 +1140,196 @@ def test_the_hint_line_is_centred_too(smoke_app):
 
     asyncio.run(_drive())
     bridge.shutdown()
+
+
+# ── the bottom row, the help columns and the following transcript (round 10) ─────────
+
+def test_the_status_strip_never_cuts_a_hint_in_half():
+    """The measured defect: full hints are 68 cells and a full context bar is
+    51, so below ~120 columns Textual resolved the overflow by CLIPPING the
+    left widget - mid-label. Screenshots showed `/exit` with no `Quit`, and at
+    a busier context bar even `Help` was gone, which reads as a broken render
+    rather than as a hint that had to go.
+    """
+    from vaf.cli.tui_app.widgets import ContextBar, KeyHints, StatusStrip
+
+    strip = StatusStrip()
+    hints, context = KeyHints(), ContextBar()
+    # The arithmetic, without a terminal: the pieces have to FIT the row.
+    for width in (200, 130, 120, 104, 96, 80, 60, 40):
+        level, count = _fit_plan(width)
+        used = KeyHints.width_for(count) + (2 if count else 0) + _ctx_width(level)
+        assert used <= width, f"{width} cols: strip needs {used}"
+        # ...and whatever is shown is shown WHOLE: width_for counts complete
+        # pairs only, so a fitting count can never be a half label.
+        assert KeyHints.width_for(count) == _plain_hint_width(count)
+
+    assert hints.shown == len(KeyHints.PAIRS)      # constructed without a screen
+    assert context.width_for("full") > context.width_for("bare")
+    assert strip is not None
+
+
+def _ctx_width(level: str) -> int:
+    from vaf.cli.tui_app.widgets import ContextBar
+    return ContextBar().width_for(level, used=8420, total=32768)
+
+
+def _plain_hint_width(count: int) -> int:
+    from vaf.cli.tui_app.widgets import KeyHints
+    pairs = KeyHints.PAIRS[:count]
+    if not pairs:
+        return 0
+    return len("  ".join(f"{k} {label}" for k, label in pairs))
+
+
+def _fit_plan(width: int):
+    """The same decision StatusStrip.fit makes, as data."""
+    from vaf.cli.tui_app.widgets import ContextBar, KeyHints
+    full = len(KeyHints.PAIRS)
+    for level in ContextBar.LEVELS:
+        if KeyHints.width_for(full) + 2 + _ctx_width(level) <= width:
+            return level, full
+    room = width - _ctx_width("bare") - 2
+    count = full
+    while count > 0 and KeyHints.width_for(count) > room:
+        count -= 1
+    return "bare", count
+
+
+def test_the_strip_fits_itself_in_a_real_terminal(smoke_app):
+    """The wiring half: the arithmetic above is worth nothing if `fit` never
+    runs. An ordinary 100-column terminal is the case that used to clip."""
+    from vaf.cli.tui_app.widgets import ContextBar, KeyHints
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(); await pilot.pause()
+            app.set_context(8420, 32768)
+            await pilot.pause(); await pilot.pause()
+
+            hints = app.query_one(KeyHints)
+            context = app.query_one(ContextBar)
+            strip = app.query_one("#statusstrip")
+
+            assert hints.region.right <= context.region.x, (
+                f"hints {hints.region} run into the context bar {context.region}")
+            assert context.region.right <= strip.region.right + 1, (
+                "the context bar hangs off the right edge")
+            # Whole pairs only, and the row it drew is the row it planned.
+            assert hints.shown == _fit_plan(100)[1]
+            assert hints.region.width >= KeyHints.width_for(hints.shown)
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_a_long_help_description_wraps_under_itself(smoke_app):
+    """A single padded Static wraps at the box edge and continues at column
+    ZERO, so `/restore`'s description reappeared beneath the KEY column and
+    read like another command."""
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.press("f1")
+            await pilot.pause(); await pilot.pause()
+
+            keys = app.screen.query(".help-key")
+            descs = app.screen.query(".help-desc")
+            assert len(keys) == len(descs) > 6
+
+            columns = {d.region.x for d in descs}
+            assert len(columns) == 1, f"descriptions start in {len(columns)} columns"
+            assert descs.first().region.x > keys.first().region.right - 1, (
+                "the description column overlaps the key column")
+            # And a wrapped description stays inside its own column: it grows
+            # its row taller instead of spilling left.
+            for key, desc in zip(keys, descs):
+                if desc.region.height > 1:
+                    assert desc.region.x == descs.first().region.x
+                    break
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_transcript_follows_a_streaming_answer(smoke_app):
+    """Mounting scrolled; GROWING did not. A long answer streamed on below the
+    fold while the view sat on its first lines - the whole reason the classic
+    lane felt live and this one did not."""
+    app, bridge, agent = smoke_app.app, smoke_app.bridge, smoke_app.bridge.agent
+    long_answer = "\n\n".join(f"Paragraph {i} of the answer." for i in range(40))
+    agent.script = lambda cb: (stream_all(cb, long_answer), long_answer)[1]
+
+    async def _drive():
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            app._send_user("tell me at length")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await _settle(pilot, lambda: app.transcript.max_scroll_y > 5)
+            await pilot.pause(); await pilot.pause()
+
+            transcript = app.transcript
+            assert transcript.max_scroll_y > 5, "the answer never got long enough"
+            assert transcript.max_scroll_y - transcript.scroll_offset.y <= 2, (
+                f"the view stayed at {transcript.scroll_offset.y} of "
+                f"{transcript.max_scroll_y} while the answer streamed on")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_a_reader_who_scrolled_up_is_left_alone(smoke_app):
+    """The other half of the same rule, and the reason this is not just
+    `scroll_end` on every chunk: a transcript that yanks itself down while the
+    user is reading further up is worse than one that lags."""
+    app, bridge, agent = smoke_app.app, smoke_app.bridge, smoke_app.bridge.agent
+    first = "\n\n".join(f"Paragraph {i}." for i in range(40))
+    agent.script = lambda cb: (stream_all(cb, first), first)[1]
+
+    async def _drive():
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            app._send_user("first")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await pilot.pause(); await pilot.pause()
+
+            transcript = app.transcript
+            transcript.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            assert transcript.scroll_offset.y == 0
+
+            app._send_user("second")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await pilot.pause(); await pilot.pause()
+            assert transcript.scroll_offset.y == 0, (
+                "the transcript pulled the reader away from what they were reading")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def stream_all(callback, text, chunk=32):
+    for i in range(0, len(text), chunk):
+        callback(text[i:i + chunk])
+
+
+def test_the_mark_is_painted_not_spelled():
+    """Block GLYPHS leave a hairline wherever the font's advance and the cell
+    width disagree, and a mark made of them exports as a grid of tiles rather
+    than a shape. A painted cell tiles exactly, and in a terminal the two are
+    indistinguishable - so the solid body of the mark is background, and only
+    the half blocks (which no fill can produce) stay glyphs.
+    """
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    markup = StartBanner._art_markup()
+    assert "█" not in markup, "the solid body is still made of glyphs"
+    assert "[on #ffffff]" in markup, "nothing is painted"
+    # The halves cannot be painted - half a cell is not a background colour.
+    assert "▀" in markup and "▄" in markup
+    # And it is still the same drawing: one line of markup per row of art.
+    assert len(markup.split("\n")) == len(StartBanner.ART)

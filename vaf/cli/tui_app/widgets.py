@@ -98,6 +98,10 @@ class AgentMessage(Vertical):
         self._answer += chunk
         self._pending += chunk
 
+    class Grew(events.Message):
+        """The bubble got taller. Only the transcript can decide what to do
+        about that, because only it knows whether the user has scrolled away."""
+
     async def _flush(self) -> None:
         # `append` reads self.source eagerly, so two un-awaited calls in flight
         # would silently swallow one another. Textual awaits an async interval
@@ -108,6 +112,9 @@ class AgentMessage(Vertical):
         text, self._pending = self._pending, ""
         self._flushes += 1
         await self._body.append(text)
+        # A mount scrolls the transcript; growth did not, so a long answer
+        # streamed on below the fold while the view sat on its first lines.
+        self.post_message(self.Grew())
 
     def feed_think(self, chunk: str) -> None:
         self._think += chunk
@@ -202,8 +209,34 @@ class StartBanner(Vertical):
         self._rows = list(rows)
         self._hint = hint
 
+    @classmethod
+    def _art_markup(cls) -> str:
+        """A full block is drawn as a PAINTED CELL, not as a glyph.
+
+        Adjacent block glyphs leave a hairline between them wherever the font's
+        advance and the cell width disagree, which turns the mark into a grid of
+        tiles in exported screenshots. A background fill tiles exactly. Half
+        blocks still need their glyph - only a glyph can split a cell - so they
+        keep it, and carry the same white.
+        """
+        lines = []
+        for line in cls.ART:
+            out, run = [], ""
+            for char in line:
+                if char == "\u2588":
+                    run += " "
+                    continue
+                if run:
+                    out.append(f"[on {WHITE}]{run}[/]")
+                    run = ""
+                out.append(f"[{WHITE}]{char}[/]" if char != " " else " ")
+            if run:
+                out.append(f"[on {WHITE}]{run}[/]")
+            lines.append("".join(out))
+        return "\n".join(lines)
+
     def compose(self) -> ComposeResult:
-        art = "\n".join(f"[{WHITE}]{line}[/]" for line in self.ART)
+        art = self._art_markup()
         with Center(classes="banner-center"):
             with Horizontal(classes="banner-row-wrap"):
                 yield Static(art, classes="banner-art")
@@ -501,27 +534,147 @@ class TasksLine(Static):
 
 
 class ContextBar(Static):
-    """The classic usage bar: ▰▱ cells, green under 70, yellow over, red over 90."""
+    """The classic usage bar: ▰▱ cells, green under 70, yellow over, red over 90.
+
+    It shares its row with the key hints and gives ground first when the two
+    do not fit: the token counts go, then the caption and half the bar. The
+    percentage is the last thing standing, because it is the number a user
+    actually reads off this bar.
+    """
+
+    LEVELS = ("full", "short", "bare")
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._used = 0
+        self._total = 1
+        self._level = "full"
 
     def on_mount(self) -> None:
         self.set_usage(0, 1)
 
-    def set_usage(self, used: int, total: int) -> None:
+    def set_level(self, level: str) -> None:
+        if level in self.LEVELS and level != self._level:
+            self._level = level
+            self.set_usage(self._used, self._total)
+
+    def width_for(self, level: str, used: int = None, total: int = None) -> int:
+        """Cells this bar would occupy at `level` - what the strip budgets on."""
+        used = self._used if used is None else used
+        total = self._total if total is None else total
+        return len(self._plain(*self._parts(used, total, level)))
+
+    @staticmethod
+    def _plain(caption: str, bar: str, pct: str, tail: str) -> str:
+        return " ".join(p for p in (caption, bar, pct, tail) if p)
+
+    @staticmethod
+    def _parts(used: int, total: int, level: str):
         total = max(1, int(total or 1))
         used = max(0, int(used or 0))
         pct = min(100, int(used / total * 100))
-        color = "$success"
-        if pct > 70:
-            color = "$warning"
-        if pct > 90:
-            color = "$error"
-        cells = 18
+        cells = 18 if level != "bare" else 10
         filled = int(pct / 100 * cells)
-        bar = "▰" * filled + "▱" * (cells - filled)
-        self.update(
-            f"[$vaf-muted]Context[/] [{color}]{bar}[/] [bold $text]{pct}%[/] "
-            f"[$vaf-muted]({used:,}/{total:,} Tok)[/]"
+        return (
+            "Context" if level != "bare" else "",
+            "▰" * filled + "▱" * (cells - filled),
+            f"{pct}%",
+            f"({used:,}/{total:,} Tok)" if level == "full" else "",
         )
+
+    def set_usage(self, used: int, total: int) -> None:
+        self._used, self._total = used, total
+        caption, bar, pct, tail = self._parts(used, total, self._level)
+        percent = int(pct.rstrip("%"))
+        color = "$success"
+        if percent > 70:
+            color = "$warning"
+        if percent > 90:
+            color = "$error"
+        chunks = []
+        if caption:
+            chunks.append(f"[$vaf-muted]{caption}[/]")
+        chunks.append(f"[{color}]{bar}[/]")
+        chunks.append(f"[bold $text]{pct}[/]")
+        if tail:
+            chunks.append(f"[$vaf-muted]{tail}[/]")
+        self.update(" ".join(chunks))
+
+
+class KeyHints(Static):
+    """The left half of the status strip: whole hints, or fewer hints.
+
+    Clipping is what Textual does by default when the row runs out, and it
+    lands mid-label - "/exit" without its "Quit" reads as a rendering fault
+    rather than as a hint that had to go. Dropping whole pairs from the right
+    is the same information loss, told honestly.
+    """
+
+    PAIRS = (("S", "Settings"), ("C", "Model"), ("L", "Voice"),
+             ("T", "Theme"), ("H", "History"), ("?", "Help"), ("/exit", "Quit"))
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._shown = len(self.PAIRS)
+
+    @property
+    def shown(self) -> int:
+        """How many hint pairs are on screen - whole ones, always."""
+        return self._shown
+
+    def on_mount(self) -> None:
+        self._paint()
+
+    @classmethod
+    def width_for(cls, count: int) -> int:
+        pairs = cls.PAIRS[:max(0, count)]
+        if not pairs:
+            return 0
+        return sum(len(k) + 1 + len(label) for k, label in pairs) + 2 * (len(pairs) - 1)
+
+    def show(self, count: int) -> None:
+        count = max(0, min(len(self.PAIRS), count))
+        if count != self._shown:
+            self._shown = count
+            self._paint()
+
+    def _paint(self) -> None:
+        self.update("  ".join(f"[bold $text]{key}[/] [$vaf-muted]{label}[/]"
+                              for key, label in self.PAIRS[:self._shown]))
+
+
+class StatusStrip(Horizontal):
+    """One row, two tenants, and the arithmetic that keeps them off each other.
+
+    The full hints are 68 cells and the full context bar is 51; below ~120
+    columns they do not both fit, which is every ordinary terminal. Textual
+    resolves that overflow by clipping the left widget, so the fix cannot live
+    in CSS - somebody has to decide what gives way. Live state gives up its
+    detail first, static hints go last and whole.
+    """
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.fit(event.size.width)
+
+    def fit(self, width: int) -> None:
+        try:
+            hints = self.query_one(KeyHints)
+            context = self.query_one(ContextBar)
+        except Exception:
+            return                          # composed but not mounted yet
+        gap = 2
+        for level in ContextBar.LEVELS:
+            need = context.width_for(level)
+            if KeyHints.width_for(len(KeyHints.PAIRS)) + gap + need <= width:
+                context.set_level(level)
+                hints.show(len(KeyHints.PAIRS))
+                return
+        context.set_level("bare")
+        room = width - context.width_for("bare") - gap
+        count = len(KeyHints.PAIRS)
+        while count > 0 and KeyHints.width_for(count) > room:
+            count -= 1
+        hints.show(count)
 
 
 class CompletionPopup(OptionList):

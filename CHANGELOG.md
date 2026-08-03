@@ -80,6 +80,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   white accent simply disappeared. Anyone who had it selected comes up on the
   default instead.
 
+- The terminal app's bottom row no longer cuts itself in half. The key hints and
+  the context usage share one line and do not fit together below roughly 120
+  columns, and the overflow used to be resolved by clipping - mid-label, so
+  `/exit` appeared without its `Quit` and on a busy context bar even `Help` was
+  gone. Now the context bar gives up its token counts first and hint pairs drop
+  whole, so whatever is on the line is readable.
+- The terminal transcript follows a streaming answer again. It scrolled when a
+  message was mounted but not while one grew, so a long reply ran on below the
+  fold while the view sat on its first lines. It now follows the text - and
+  stops following the moment you scroll up to read something, instead of
+  yanking you back down.
+- Long command descriptions in the terminal help wrap under themselves instead
+  of continuing beneath the key column, where they read like another command.
+  The session list, the start block and the mark itself also survive a narrow
+  window now rather than losing their last characters.
+
 ### Fixed
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"
   or "ueberweisung" because their keyboard has no umlaut keys, and language models have

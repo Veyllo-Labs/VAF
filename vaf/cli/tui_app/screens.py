@@ -12,12 +12,10 @@ agent rebuild or a real backend (provider/model switches, context limit, model
 download, microphone) display live values but route to `vaf settings` for now;
 each says so instead of pretending.
 """
-import time
-
 from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
 
@@ -672,17 +670,28 @@ class HelpScreen(ModalScreen[None]):
             rows.append((keys, cmd.help))
         return rows
 
+    @staticmethod
+    def _two_col(key: str, desc: str) -> ComposeResult:
+        """Two widgets, not one padded string.
+
+        A single Static wraps at the box edge and continues at column ZERO, so
+        a long description reappeared underneath the key column and read like
+        another command. Giving the description its own column makes the wrap
+        land under itself.
+        """
+        with Horizontal(classes="help-row"):
+            yield Static(f"[$text]{key}[/]", classes="help-key")
+            yield Static(f"[$vaf-muted]{desc}[/]", classes="help-desc")
+
     def compose(self) -> ComposeResult:
         with Vertical(id="help-box", classes="modal-box"):
             yield Static("[bold $text]Keys[/]", classes="modal-title")
             for key, desc in self.KEY_ROWS:
-                yield Static(f"[$text]{key:<26}[/] [$vaf-muted]{desc}[/]",
-                             classes="settings-row")
-            yield Static("[bold $text]Commands[/]", classes="modal-title")
+                yield from self._two_col(key, desc)
+            yield Static("[bold $text]Commands[/]", classes="modal-title-mid")
             with VerticalScroll(id="help-commands"):
                 for key, desc in self.command_rows():
-                    yield Static(f"[$text]{key:<26}[/] [$vaf-muted]{desc}[/]",
-                                 classes="settings-row")
+                    yield from self._two_col(key, desc)
             yield Static("[$text-disabled]esc closes[/]", classes="modal-keys")
 
     def action_close_help(self) -> None:

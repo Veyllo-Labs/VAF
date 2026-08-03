@@ -17,7 +17,10 @@ mounted below the live reply seals it; the next chunk opens a new one at the
 bottom). Answers render as markdown - headings, lists, emphasis and fenced
 code with syntax highlighting - not as raw `**stars**`. Streaming chunks are
 coalesced at 100 ms rather than re-rendered per token: the parser reparses only
-the tail, so the cost stays flat as the answer grows. The reasoning block is
+the tail, so the cost stays flat as the answer grows. The view follows a
+growing answer, but only while the reader is already at the newest line -
+scroll up to read something and the transcript leaves you there until you come
+back down. The reasoning block is
 deliberately NOT markdown; it is plain muted text, because reasoning is not
 authored as markup. The avatar is the agent's bracket body with the animated eye,
 `[ ● ]`, drawn in the head row of the NEWEST reply (`[ ● ] VAF · HH:MM`);
@@ -35,6 +38,13 @@ theme. The previous lanes remain available:
 The `tui_mode` config key picks the default lane; the `--classic` flag
 overrides it per invocation (see
 [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)).
+
+The bottom row carries the key hints on the left and the live context usage on
+the right, and the two do not fit together below roughly 120 columns. Rather
+than let the row clip mid-label, the strip does the arithmetic itself: the
+context bar drops its token counts first, then its caption and half its cells,
+and only when that is not enough do whole hint pairs drop from the right. What
+is shown is always shown whole.
 
 ## Architecture: a client over the framework seams
 

@@ -1,14 +1,9 @@
-# VAF - Veyllo Agentic Framework
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/logo.gif"
+       width="880" alt="Veyllo">
+</p>
 
-```
-O))         O))       O))))))))
- O))       O))))      O))
-  O))     O))  O))    O))
-   O))   O))    O))   O))))))
-    O)) O)) )))) O))  O))
-     O))))        O)) O))
-      O))          O))O))     (OO )
-```
+# VAF - Veyllo Agentic Framework
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 
@@ -52,6 +47,15 @@ nothing leaves the machine) or any supported API provider (`veyllo`, `openai`,
 heavy features are opt-in extras like `vaf[memory]` and `vaf[server]`.
 Developer guide: [docs/EMBEDDING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) ·
 runnable examples: [examples/](https://github.com/Veyllo-Labs/VAF/tree/main/examples/)
+
+---
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/hero.gif"
+       width="880" alt="The same agent in two places: the full-screen terminal app and the web UI">
+</p>
+
+<p align="center"><em>One agent, one session store, one config - in your terminal or in your browser.</em></p>
 
 ---
 

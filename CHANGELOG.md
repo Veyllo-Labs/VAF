@@ -97,6 +97,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   window now rather than losing their last characters.
 - The mark in the terminal's start block is now the Veyllo logo converted to
   terminal art rather than drawn in solid blocks.
+- The README opens on the mark rather than on an ASCII wordmark, and shows the
+  terminal and the web UI as one image above the installation steps.
 
 ### Fixed
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"

@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A session now opens by telling you where you are.** Instead of a bare "new
+  session" line, `vaf run` greets you with the Veyllo mark and the facts beside it,
+  centred on screen: version, your agent's name, the session name and id, the
+  active model, the local date and time - and the one line that was missing
+  entirely, how to get back into an earlier conversation.
+
 - **Most settings are editable inside the terminal app now.** Rows that used to say
   "use `vaf settings`" work where they can: the AI provider and its model take effect
   on the running agent without a restart, and the speech engine, input language,
@@ -19,6 +25,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   auto-start are simply set. The three that genuinely need a fresh start - the local
   model, the context limit and downloading a model - still point at `vaf settings`,
   and now say why rather than just deferring.
+- **Sessions you never wrote in do not pile up any more.** Opening `vaf run` and
+  closing it again left an empty session behind every time, and the list filled up
+  with rows that held nothing. An untouched session is now dropped when you leave
+  it, whether you quit or load a different one; anything you actually wrote in is
+  kept as before.
 - **You can switch sessions from inside the terminal app.** The sessions panel was
   a list you could look at but not use; the only way back into an earlier
   conversation was quitting and passing its id on the command line. Ctrl+S now
@@ -56,6 +67,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cut to a different length. The `tool_end` event now carries a `result` field
   (capped at 800 characters, always a string, safe to serialize). In `vaf run` the
   tool card is no longer an empty fold: it opens onto the result.
+
+### Changed
+- **The default look is monochrome.** The terminal theme is a black-to-white ramp
+  now, so nothing in the frame competes with what the agent is actually saying, and
+  the agent's white dot is the brightest thing on screen. Success, warning and error
+  keep a colour, muted enough to belong but distinct enough to still be read at a
+  glance. Both terminal interfaces share the theme, so both change together, and
+  whichever one you pick is the one you get next time. The light theme is gone:
+  it sat at the end of the cycle, so pressing the theme key often enough landed
+  on it and stuck, and on a white background the agent's white mark and every
+  white accent simply disappeared. Anyone who had it selected comes up on the
+  default instead.
 
 ### Fixed
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"

@@ -16,7 +16,7 @@ import time
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Center, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
@@ -162,6 +162,63 @@ class EventNote(Static):
             f"[{color}]{_escape(str(message))}[/]"
         )
         self.add_class("event-note")
+
+
+class StartBanner(Vertical):
+    """The first thing a session shows: the mark left, the facts right.
+
+    Laid out like `neofetch` because that shape answers "what am I looking at"
+    in one glance - and because the alternative, a lone "new session" line, told
+    the user nothing about which agent, which session or how to get back to an
+    older one.
+
+    A Vertical wrapping a centered row: the block sits in the middle of an empty
+    transcript rather than pinned to the top-left corner, and it stops being
+    centered the moment real content pushes it up, which is the behaviour that
+    reads as "the session started here".
+    """
+
+    # The real mark, downsampled from the Veyllo logo and drawn with
+    # half-blocks so two vertical pixels share one character cell - which is
+    # what corrects the ~1:2 aspect of a terminal cell and lets the glyph read
+    # as itself rather than as a stack of letters. The old art spelled "VAF" in
+    # slashes and was not the logo at all.
+    ART = (
+        "        ███▄",
+        "▄▄▄▄▄▄▄▄████▄▄▄▄▄▄▄▄",
+        "████████████████████",
+        "   ▀███      ███▀",
+        "    ▀███    ████",
+        "     ▀███▄▄███▀",
+        "       ██████▀",
+        "     ▄▄███████▄▄",
+        "▄▄██████▀▀ ▀██████▄▄",
+        "▀███▀▀        ▀▀███▀",
+    )
+
+    def __init__(self, rows, hint: str = "") -> None:
+        super().__init__()
+        self.add_class("start-banner")
+        self._rows = list(rows)
+        self._hint = hint
+
+    def compose(self) -> ComposeResult:
+        art = "\n".join(f"[{WHITE}]{line}[/]" for line in self.ART)
+        with Center(classes="banner-center"):
+            with Horizontal(classes="banner-row-wrap"):
+                yield Static(art, classes="banner-art")
+                with Vertical(classes="banner-facts"):
+                    for label, value in self._rows:
+                        if label is None:              # a spacer row
+                            yield Static("")
+                            continue
+                        yield Static(
+                            f"[$vaf-muted]{label:<9}[/] [$text]{_escape(value)}[/]",
+                            classes="banner-row")
+        if self._hint:
+            with Center():
+                yield Static(f"[$text-disabled]{_escape(self._hint)}[/]",
+                             classes="banner-hint")
 
 
 class SystemNote(Static):

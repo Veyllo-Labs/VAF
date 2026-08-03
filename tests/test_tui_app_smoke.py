@@ -954,3 +954,189 @@ def test_switching_reports_the_new_session_in_the_transcript(smoke_app):
 
     asyncio.run(_drive())
     bridge.shutdown()
+
+
+# ── the start banner (round 9) ──────────────────────────────────────────────────────
+
+def test_a_new_session_opens_with_the_facts_not_a_bare_line(smoke_app):
+    """It used to say "new session" and nothing else - no version, no agent
+    name, no id, and no hint that older sessions can be loaded at all."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            banners = app.query(StartBanner)
+            assert len(banners) == 1
+            banner = banners.first()
+
+            rendered = " ".join(
+                str(w.render()) for w in banner.query("Static"))
+            assert "Veyllo Agentic Framework" in rendered
+            assert bridge.session.id in rendered
+            assert "ctrl+s" in rendered, "no way to discover session loading"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_banner_puts_the_wordmark_left_of_the_facts(smoke_app):
+    """neofetch shape: the art and the facts sit side by side, not stacked."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            banner = app.query(StartBanner).first()
+            art = banner.query_one(".banner-art")
+            facts = banner.query_one(".banner-facts")
+            assert art.region.right <= facts.region.x, (art.region, facts.region)
+            assert art.region.y == facts.region.y or abs(
+                art.region.y - facts.region.y) <= 1
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_a_resumed_session_says_so_with_its_message_count(smoke_app):
+    app, bridge = smoke_app.app, smoke_app.bridge
+    bridge.session.messages = [("user", "a"), ("assistant", "b")]
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            from vaf.cli.tui_app.widgets import StartBanner
+            banner = app.query(StartBanner).first()
+            rendered = " ".join(str(w.render()) for w in banner.query("Static"))
+            assert "resumed" in rendered and "2 messages" in rendered
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_banner_time_goes_through_the_user_timezone_helper(monkeypatch):
+    """Never the raw server clock: `vaf/core/user_time.py` is the single source
+    for user-facing time, and it honours the configured timezone and format."""
+    import vaf.core.user_time as user_time
+    from vaf.cli.tui_app.app import _local_datetime
+
+    monkeypatch.setattr(user_time, "format_user_datetime",
+                        lambda *a, **k: "TIMEZONE-AWARE")
+    assert _local_datetime() == "TIMEZONE-AWARE"
+
+
+def test_the_agent_name_comes_from_the_soul_not_a_hardcoded_string(monkeypatch):
+    """identity.json is where a user names their agent; the system prompt reads
+    the same place. Hardcoding "VAF" would contradict the persona."""
+    from types import SimpleNamespace as NS
+
+    import vaf.auth.user_workspace as ws_mod
+    from vaf.cli.tui_app.app import _agent_name
+
+    monkeypatch.setattr(ws_mod, "get_user_workspace",
+                        lambda user: NS(get_identity=lambda: {"name": "Aurora"}))
+    assert _agent_name() == "Aurora"
+
+    monkeypatch.setattr(ws_mod, "get_user_workspace",
+                        lambda user: NS(get_identity=lambda: {}))
+    assert "Settings" in _agent_name(), "an unnamed agent must say how to name it"
+
+
+def test_the_banner_shows_the_mark_not_a_wordmark():
+    """The art is the Veyllo logo, downsampled - not "VAF" spelled in slashes.
+    Half-blocks are what make it a glyph: they put two vertical pixels in one
+    cell and cancel the terminal's ~1:2 aspect."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    art = "\n".join(StartBanner.ART)
+    assert "O))" not in art, "the old ASCII wordmark came back"
+    assert set("█▀▄ ") >= set(art.replace("\n", "")), (
+        "the mark must be drawn with block characters only")
+    assert any("▀" in line for line in StartBanner.ART), "no half-blocks: aspect is wrong"
+    assert 8 <= len(StartBanner.ART) <= 14, "the mark outgrew a banner"
+
+
+def test_the_banner_sits_centred_in_both_directions(smoke_app):
+    """It was flush against the top-left corner. An empty session should read
+    as a beginning, which means centred - horizontally AND vertically."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            banner = app.query(StartBanner).first()
+            art = banner.query_one(".banner-art")
+            facts = banner.query_one(".banner-facts")
+            transcript = app.transcript.region
+
+            centre = transcript.width // 2
+            block_centre = (art.region.x + facts.region.right) // 2
+            assert abs(block_centre - centre) <= 3, (
+                f"horizontal: block {block_centre} vs screen {centre}")
+
+            above = banner.region.y - transcript.y
+            below = transcript.bottom - banner.region.bottom
+            assert abs(above - below) <= 2, (
+                f"vertical: {above} above, {below} below - not centred")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_banner_stops_being_centred_once_content_arrives(smoke_app):
+    """Centring an empty session is a greeting; centring a session with a
+    transcript in it would push every message around."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(100, 34)) as pilot:
+            await pilot.pause(); await pilot.pause()
+            assert app.transcript.has_class("only-banner")
+            centred_y = app.query(StartBanner).first().region.y
+
+            app._send_user("a first message")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await pilot.pause()
+
+            assert not app.transcript.has_class("only-banner")
+            assert app.query(StartBanner).first().region.y < centred_y, (
+                "the block stayed centred and pushed the conversation down")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_hint_line_is_centred_too(smoke_app):
+    """A Static fills its parent by default, so centring it moves nothing -
+    the line has to size to its text first."""
+    from vaf.cli.tui_app.widgets import StartBanner
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        # A WIDE terminal on purpose: at 100 columns the line nearly fills the
+        # width, so a stretched box and a centred one look identical and the
+        # test proves nothing. The gap only opens up when there is room.
+        async with app.run_test(size=(150, 34)) as pilot:
+            await pilot.pause(); await pilot.pause()
+            hint = app.query(StartBanner).first().query_one(".banner-hint")
+            transcript = app.transcript.region
+
+            assert hint.region.width < transcript.width - 20, (
+                "the line stretched to fill instead of hugging its text")
+            left = hint.region.x - transcript.x
+            right = transcript.right - hint.region.right
+            assert abs(left - right) <= 3, f"{left} left, {right} right"
+            assert left > 10, "the hint is still flush left"
+
+    asyncio.run(_drive())
+    bridge.shutdown()

@@ -1,6 +1,11 @@
 # The Terminal App (`vaf run`)
 
-`vaf run` opens a full-screen terminal app (built on Textual): a scrolling
+`vaf run` opens a full-screen terminal app (built on Textual). A session opens
+with a start block in the shape of `neofetch`, centred rather than pinned to a
+corner: the Veyllo mark drawn in half-blocks, then version, the agent's name
+from its identity, the session name and id, the active model, the local date
+and time, and the one line that says how to reach older sessions. Below
+that: a scrolling
 transcript with streamed answers and the model's reasoning as a separate muted
 think block, tool cards, event narration, the sub-agent status line, the
 context-usage bar, the agent's avatar, and keyboard-complete overlays for
@@ -38,7 +43,16 @@ second turn implementation:
 
 - **Module map** (`vaf/cli/tui_app/`): `theme_bridge.py` converts the vaf theme
   catalog (`vaf.cli.themes.THEMES`, single source of truth) into Textual
-  themes; `widgets.py` holds transcript and chrome widgets; `screens.py` the
+  themes - the default theme is monochrome, a black-to-white ramp so the chrome
+  never competes with the content, with only the three semantic colours
+  (success, warning, error) kept as desaturated hues because telling a gate
+  warning from an error is the one job colour still has. Both terminal lanes
+  read that catalog, so the look is the same in either. The active theme is the
+  `theme` config key, so a choice made with `t`, `theme <name>` or the Settings
+  row is what the next start uses - and a stored theme that no longer exists
+  falls back to the default rather than stranding the user. Every theme in the
+  catalog is dark by contract (pinned by a test): the agent's mark and several
+  accents are white, so a light background would make them invisible. `widgets.py` holds transcript and chrome widgets; `screens.py` the
   overlays; `agent_bridge.py` the single agent lane; `app.py` the assembly and
   `run_tui` entry point. Textual is imported lazily inside the `vaf run`
   dispatch, so every other command keeps the slim import graph.
@@ -110,7 +124,10 @@ The prompt carries the affordances the classic one had, from the same code:
 
 Ctrl+S opens the sessions panel: arrows walk it, enter loads the highlighted
 session (through the complete context swap, so tool calls and images survive),
-esc closes it. Reading the list happens off the UI thread. On the way out, the
+esc closes it. A session nobody actually wrote in is discarded rather than
+kept - on leaving it and on quitting - using the same criterion
+`SessionManager.cleanup_empty` applies (no message with role `user`), so
+starting the app and closing it again does not grow the list. Reading the list happens off the UI thread. On the way out, the
 plain terminal gets the session id and both ways back into it - the classic
 lane printed the same thing, minus its blocking "save?" question, since the
 app saves unconditionally.

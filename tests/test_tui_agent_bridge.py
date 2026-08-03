@@ -579,3 +579,96 @@ def test_an_empty_session_says_nothing_on_the_way_out(quiet_run_module):
     bridge = AgentBridge(FakeAgent(), FakeSession(), mgr, events)
     bridge.shutdown()
     assert bridge.farewell == ""
+
+
+# ── abandoned sessions (round 9) ────────────────────────────────────────────────────
+
+def test_a_session_nobody_wrote_in_is_discarded_on_exit(quiet_run_module):
+    """Starting `vaf run` and closing it again used to leave a husk in the
+    session list - one more empty row every time, forever."""
+    events = Recorder()
+    deleted, saved = [], []
+    mgr = SimpleNamespace(delete=lambda sid: deleted.append(sid),
+                          save=lambda s, **k: saved.append(s.id) or "/tmp/x.json",
+                          list=lambda **k: [])
+
+    session = FakeSession()          # no messages at all
+    bridge = AgentBridge(FakeAgent(), session, mgr, events)
+    bridge.shutdown()
+
+    assert deleted == ["sess-tui-test"]
+    assert saved == [], "an abandoned session was written to disk"
+    assert bridge.farewell == "", "nothing to come back to, so nothing to say"
+
+
+def test_a_session_with_a_real_message_is_kept(quiet_run_module):
+    events = Recorder()
+    deleted, saved = [], []
+    mgr = SimpleNamespace(delete=lambda sid: deleted.append(sid),
+                          save=lambda s, **k: saved.append(s.id) or "/tmp/x.json",
+                          list=lambda **k: [])
+
+    session = FakeSession()
+    session.messages = [SimpleNamespace(role="user", content="hello")]
+    bridge = AgentBridge(FakeAgent(), session, mgr, events)
+    bridge.shutdown()
+
+    assert saved == ["sess-tui-test"]
+    assert deleted == [], "a real conversation was thrown away"
+
+
+def test_only_a_user_message_counts_as_touched(quiet_run_module):
+    """The same criterion `SessionManager.cleanup_empty` uses - a system
+    prompt alone is still an abandoned session, and inventing a second
+    definition of "empty" is how the two would drift apart."""
+    from vaf.cli.tui_app.agent_bridge import AgentBridge as Bridge
+
+    only_system = SimpleNamespace(id="x", messages=[
+        SimpleNamespace(role="system", content="you are ...")])
+    assert Bridge.session_is_untouched(only_system) is True
+
+    with_user = SimpleNamespace(id="x", messages=[
+        SimpleNamespace(role="system", content="..."),
+        SimpleNamespace(role="user", content="hi")])
+    assert Bridge.session_is_untouched(with_user) is False
+
+
+def test_switching_away_from_an_empty_session_discards_it(quiet_run_module):
+    events = Recorder()
+    deleted = []
+    target = FakeSession()
+    target.id = "target-session"
+    target.messages = [SimpleNamespace(role="user", content="older talk")]
+    mgr = SimpleNamespace(load=lambda sid: target,
+                          delete=lambda sid: deleted.append(sid),
+                          list=lambda **k: [])
+
+    agent = FakeAgent()
+    agent.load_session_context = lambda sid: None
+    bridge = AgentBridge(agent, FakeSession(), mgr, events)
+
+    bridge.load_session("target-session")
+    assert _wait_for(lambda: bridge.session is target)
+    assert deleted == ["sess-tui-test"], "the abandoned session was left behind"
+    bridge.shutdown()
+
+
+def test_switching_away_from_a_used_session_keeps_it(quiet_run_module):
+    events = Recorder()
+    deleted = []
+    target = FakeSession()
+    target.id = "target-session"
+    mgr = SimpleNamespace(load=lambda sid: target,
+                          delete=lambda sid: deleted.append(sid),
+                          save=lambda s, **k: "/tmp/x.json", list=lambda **k: [])
+
+    current = FakeSession()
+    current.messages = [SimpleNamespace(role="user", content="real work")]
+    agent = FakeAgent()
+    agent.load_session_context = lambda sid: None
+    bridge = AgentBridge(agent, current, mgr, events)
+
+    bridge.load_session("target-session")
+    assert _wait_for(lambda: bridge.session is target)
+    assert deleted == [], "a session with real content was deleted on switch"
+    bridge.shutdown()

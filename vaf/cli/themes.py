@@ -32,21 +32,28 @@ class ThemeColors:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 THEMES: Dict[str, Dict[str, str]] = {
+    # Monochrome by design: the chrome is a black-to-white ramp so nothing
+    # competes with the content, and the agent's white eye stays the brightest
+    # thing on screen. The three SEMANTIC colours are kept - desaturated far
+    # enough to sit in the greyscale, saturated enough that a gate warning and
+    # an error are still told apart at a glance, which is the one job colour
+    # does here. Contrast against the background: text 17.6:1, muted 4.6:1,
+    # accent 9.1:1.
     "vaf": {
         "name": "VAF Default",
-        "primary": "#00d4ff",      # Cyan
-        "secondary": "#bd93f9",    # Purple
-        "accent": "#50fa7b",       # Green
-        "error": "#ff5555",        # Red
-        "warning": "#f1fa8c",      # Yellow
-        "success": "#50fa7b",      # Green
-        "info": "#8be9fd",         # Cyan light
-        "text": "#f8f8f2",         # White
-        "text_muted": "#6272a4",   # Gray
-        "background": "#0d1117",   # Dark
-        "background_panel": "#161b22",
-        "border": "#30363d",
-        "border_active": "#00d4ff",
+        "primary": "#e6e6ea",      # near-white: headings, the live border
+        "secondary": "#b8b8c0",    # light grey
+        "accent": "#d7a86e",       # the one warm note
+        "error": "#d98282",        # desaturated red - still reads as "wrong"
+        "warning": "#d8c07a",      # desaturated amber
+        "success": "#8fb894",      # desaturated green
+        "info": "#9a9aa2",         # mid grey
+        "text": "#f2f2f4",
+        "text_muted": "#7a7a82",
+        "background": "#0b0b0c",
+        "background_panel": "#141416",
+        "border": "#2a2a2e",
+        "border_active": "#6f6f76",
     },
     
     "dracula": {
@@ -219,22 +226,6 @@ THEMES: Dict[str, Dict[str, str]] = {
         "border_active": "#00ff41",
     },
     
-    "light": {
-        "name": "Light",
-        "primary": "#0969da",      # Blue
-        "secondary": "#8250df",    # Purple
-        "accent": "#1a7f37",       # Green
-        "error": "#cf222e",        # Red
-        "warning": "#9a6700",      # Yellow
-        "success": "#1a7f37",      # Green
-        "info": "#0969da",         # Blue
-        "text": "#24292f",         # Dark
-        "text_muted": "#57606a",   # Gray
-        "background": "#ffffff",   # White
-        "background_panel": "#f6f8fa",
-        "border": "#d0d7de",
-        "border_active": "#0969da",
-    },
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

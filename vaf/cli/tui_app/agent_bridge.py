@@ -436,7 +436,12 @@ class AgentBridge:
                 self.events.event_note("Session", f"cannot load {session_id}: {exc}",
                                        "error")
                 return
+            previous = self.session
             self.session = session
+            if previous is not None and str(previous.id) != str(session.id):
+                if self._discard_if_untouched(previous):
+                    self.events.system_note(
+                        "the empty session you left was discarded")
             self.agent.load_session_context(session.id)
             self._rebind_local_admin()
             self._emit("session_switched", session.id,
@@ -463,6 +468,35 @@ class AgentBridge:
                   f"    vaf run --session {session_id}",
                   f"    vaf session load {session_id}"]
         return "\n".join(lines)
+
+    @staticmethod
+    def session_is_untouched(session) -> bool:
+        """True when the user never actually said anything in this session.
+
+        The criterion is the one `SessionManager.cleanup_empty` already uses -
+        no message with role "user" - deliberately NOT a second definition of
+        "empty". A session carrying only the system prompt is a session that
+        was opened and abandoned, and keeping it just grows the list.
+        """
+        for message in getattr(session, "messages", []) or []:
+            role = getattr(message, "role", None)
+            if role is None and isinstance(message, dict):
+                role = message.get("role")
+            if role is None and isinstance(message, (tuple, list)) and message:
+                role = message[0]
+            if role == "user":
+                return False
+        return True
+
+    def _discard_if_untouched(self, session) -> bool:
+        """Drop an abandoned session instead of leaving a husk behind."""
+        if session is None or not self.session_is_untouched(session):
+            return False
+        try:
+            self.session_mgr.delete(str(session.id))
+            return True
+        except Exception:
+            return False
 
     def _rebind_local_admin(self) -> None:
         """load_session_context overwrites the identity from session metadata
@@ -640,8 +674,11 @@ class AgentBridge:
             while self._busy and time.monotonic() < deadline:
                 time.sleep(0.1)
             try:
-                path = self.session_mgr.save(self.session)
-                self.farewell = self._farewell(path)   # richer, if we got here in time
+                if self._discard_if_untouched(self.session):
+                    pass                    # nothing was said: leave no husk
+                else:
+                    path = self.session_mgr.save(self.session)
+                    self.farewell = self._farewell(path)
             except Exception:
                 pass
             try:

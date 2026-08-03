@@ -200,6 +200,10 @@ class Config:
         # Lower = faster LLM inference + less context pollution. Range: 1–100.
         "router_max_tools": 12,
 
+        # Terminal colour theme, shared by both terminal lanes. The catalog is
+        # vaf/cli/themes.py; `t` in the app and `theme <name>` write this key.
+        "theme": "vaf",
+
         # Terminal UI lane for `vaf run`: "app" opens the full-screen terminal
         # app, "modern" the prompt-toolkit lane, "classic" the plain prompt.
         # The `vaf run --classic` flag overrides this per invocation.

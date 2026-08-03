@@ -52,12 +52,48 @@ from vaf.cli.tui_app.widgets import (
     EventNote,
     PromptBox,
     RenderableNote,
+    StartBanner,
     SystemNote,
     TasksLine,
     ToolCard,
     TopBar,
     UserMessage,
 )
+
+
+def _vaf_version() -> str:
+    try:
+        from vaf.version import __version__
+        return str(__version__)
+    except Exception:
+        return ""
+
+
+def _agent_name() -> str:
+    """The Soul's name, which is what the agent actually calls itself.
+
+    Deliberately NOT hardcoded to "VAF": identity.json is where a user names
+    their agent, and the system prompt builds the persona from the same place.
+    """
+    try:
+        from vaf.auth.user_workspace import get_user_workspace
+        name = (get_user_workspace("admin").get_identity() or {}).get("name")
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    return "unnamed (set one in Settings)"
+
+
+def _local_datetime() -> str:
+    """The user's configured timezone and date format, never the raw server
+    clock - `vaf/core/user_time.py` is the single source for user-facing time."""
+    try:
+        from vaf.core.user_time import format_user_datetime
+        return format_user_datetime()
+    except Exception:
+        import time as _time
+        return _time.strftime("%Y-%m-%d %H:%M")
 
 
 class TuiEvents:
@@ -158,6 +194,11 @@ class VafApp(App):
     #sessions.visible { display: block; }
     .panel-title { margin-bottom: 1; }
     .session-row { margin-bottom: 1; }
+    /* While the start block is alone, the transcript centres it vertically -
+       an empty session should look like a beginning, not like one line of
+       output stuck to the ceiling. The class comes off the moment real
+       content mounts, so the transcript scrolls normally from then on. */
+    #transcript.only-banner { align: center middle; }
     #transcript {
         padding: 1 2 0 2;
         scrollbar-color: $vaf-border;
@@ -184,6 +225,15 @@ class VafApp(App):
         margin: 0 0 1 1; padding: 0 1; height: auto;
         border-left: thick $vaf-border; background: $surface;
     }
+    .start-banner { height: auto; width: 1fr; margin: 0 0 2 0; }
+    .banner-center { height: auto; }
+    .banner-row-wrap { width: auto; height: auto; }
+    .banner-art { width: auto; padding: 0 4 0 0; }
+    .banner-facts { width: auto; height: auto; padding: 1 0 0 0; }
+    .banner-row { height: 1; width: auto; }
+    /* `width: auto` is what makes Center able to centre it: a Static defaults
+       to filling its parent, and centring a full-width box moves nothing. */
+    .banner-hint { margin-top: 2; width: auto; }
     .system-note { margin: 1 0 0 1; }
     .event-note { margin: 0 0 0 1; }
     .renderable-note { margin: 1 0 0 1; }
@@ -295,6 +345,10 @@ class VafApp(App):
             yield ContextBar(id="contextbar")
 
     def on_mount(self) -> None:
+        # Themes are registered and selected HERE, not in the constructor.
+        # Setting `App.theme` fires `_watch_theme`, which schedules its CSS
+        # refresh with `call_next` - on an app that is not running yet those
+        # callbacks are lost, and the palette never lands. Tried and reverted.
         for key in THEME_ORDER:
             self.register_theme(make_textual_theme(key))
         self.theme = textual_theme_name(self._theme_key)
@@ -307,10 +361,8 @@ class VafApp(App):
         self.query_one("#contextbar", ContextBar).styles.width = "auto"
         self.query_one("#keyhints").styles.width = "1fr"
 
-        session = self._bridge.session
-        note = (f"session restored · {len(session.messages)} messages"
-                if getattr(session, "messages", None) else "new session")
-        self._mount_scrolled(SystemNote(note))
+        self.transcript.add_class("only-banner")
+        self._mount_scrolled(StartBanner(*self._banner_facts()))
         self._refresh_chrome()
         self._bridge.request_session_list()
 
@@ -350,6 +402,8 @@ class VafApp(App):
         if not isinstance(widget, AgentMessage) and self._live_msg is not None:
             self._live_msg.done()
             self._live_msg = None
+        if not isinstance(widget, StartBanner):
+            self.transcript.remove_class("only-banner")
         self.transcript.mount(widget)
         if isinstance(widget, AgentMessage):
             # The living dot sits beside the NEWEST reply only (web-UI rule):
@@ -360,6 +414,34 @@ class VafApp(App):
             widget.avatar.set_state(self._presence_state)
             self._avatar_host = widget
         self.transcript.scroll_end(animate=False)
+
+    def _banner_facts(self):
+        """The rows of the start banner, and the one line that tells a user how
+        to get back into an older conversation - the panel alone never said."""
+        from vaf.core.config import Config
+
+        session = self._bridge.session
+        messages = len(getattr(session, "messages", []) or [])
+        name = str(getattr(session, "name", "") or "") or str(session.id)[:12]
+        state = "resumed" if messages else "new"
+
+        provider = str(Config.get("provider", "local"))
+        model = str(Config.get(f"api_model_{provider}", "") if provider != "local"
+                    else Config.get("model", ""))
+
+        rows = [
+            ("VAF", f"Veyllo Agentic Framework {_vaf_version()}"),
+            (None, None),
+            ("agent", _agent_name()),
+            ("session", f"{name}  ({state}"
+                        + (f", {messages} messages)" if messages else ")")),
+            ("id", str(session.id)),
+            ("model", f"{provider} · {model}" if model else provider),
+            ("time", _local_datetime()),
+        ]
+        hint = ("ctrl+s lists your sessions - arrows to walk, enter to load. "
+                "F1 shows every key and command.")
+        return rows, hint
 
     def _refresh_chrome(self) -> None:
         from vaf.core.config import Config

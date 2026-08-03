@@ -116,6 +116,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **The licence note now points somewhere you can actually go.** `vaf info` and the
+  licence panel in settings told you to read `LICENSE`, `LICENSING.md` and
+  `COMMERCIAL.md`, which is fine in a checkout and useless after `pip install vaf`:
+  the licence texts live inside the package metadata there, and the commercial terms
+  were never part of the distribution at all. Both now show a link instead.
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"
   or "ueberweisung" because their keyboard has no umlaut keys, and language models have
   lately taken to writing German that way too. Everything VAF matches on - the words that

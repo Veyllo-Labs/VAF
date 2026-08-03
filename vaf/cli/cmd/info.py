@@ -131,7 +131,10 @@ def about():
     
     UI.print("[bold]License:[/bold]")
     UI.print("Dual-licensed: [bold]GNU AGPL-3.0-or-later[/bold] (open source) or a [bold]Commercial License[/bold].")
-    UI.print("See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]docs/legal/COMMERCIAL.md[/bold] for full terms.")
+    # A URL rather than a file path: an installed VAF has its licences in the
+    # package metadata (dist-info/licenses/), not in the user's working directory,
+    # and the commercial terms were never part of the distribution at all.
+    UI.print("Full terms: [bold]https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md[/bold]")
     UI.print("Commercial / OEM licensing: [bold]legal@veyllo.io[/bold]")
     UI.print()
     

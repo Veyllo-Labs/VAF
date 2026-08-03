@@ -1054,7 +1054,7 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
         "as a network service (SaaS), you must make your source available under the AGPL.\n\n"
         "[bold blue]🏢 Commercial License:[/bold blue] for closed-source products or proprietary SaaS "
         "without AGPL copyleft. Contact legal@veyllo.io.\n\n"
-        "See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]docs/legal/COMMERCIAL.md[/bold] for full terms."
+        "Full terms: [bold]https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md[/bold]"
     )
     
     from rich.panel import Panel

@@ -13,6 +13,7 @@ is exactly the early warning the port needs.
 """
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -672,3 +673,31 @@ def test_switching_away_from_a_used_session_keeps_it(quiet_run_module):
     assert _wait_for(lambda: bridge.session is target)
     assert deleted == [], "a session with real content was deleted on switch"
     bridge.shutdown()
+
+
+_RUN_PY = Path(__file__).resolve().parent.parent / "vaf" / "cli" / "cmd" / "run.py"
+
+def test_a_windows_absolute_path_is_recognised_as_one_reference():
+    """The drive colon used to end the match: "@C:\\Users\\me\\note.txt" captured only
+    "C", so on Windows an @-reference to an absolute path silently attached nothing and
+    left the rest of the path in the prompt. Pinned here rather than in the tmp_path test
+    above, because tmp_path has no drive letter on Linux and the bug is invisible there.
+
+    The same regex exists twice more in the classic lane (vaf/cli/cmd/run.py); the guard
+    below keeps the three copies from drifting apart again."""
+    import re
+
+    from vaf.cli.tui_app.agent_bridge import _ATTACH_RE
+
+    assert _ATTACH_RE.search(r"@C:\Users\me\note.txt").group(1) == r"C:\Users\me\note.txt"
+    # POSIX shapes are untouched...
+    assert _ATTACH_RE.search("@./docs/README.md").group(1) == "./docs/README.md"
+    assert _ATTACH_RE.search("@/home/user/note.txt").group(1) == "/home/user/note.txt"
+    # ...and a colon that is NOT a drive letter must not widen the match.
+    assert _ATTACH_RE.search("ping @alice:bob").group(1) == "alice"
+
+    classic = re.findall(r"re\.sub\(r'(@[^']+)'", Path(_RUN_PY).read_text(encoding="utf-8"))
+    assert classic, "the classic lane's @-inliner moved - re-anchor this guard"
+    assert set(classic) == {_ATTACH_RE.pattern}, (
+        f"the @-file regex drifted between the lanes: {set(classic)} vs {_ATTACH_RE.pattern}"
+    )

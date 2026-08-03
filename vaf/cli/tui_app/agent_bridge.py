@@ -107,7 +107,11 @@ class _DrainSurface:
 # _process_agent_message call): same regex, same wrapper text with the full
 # user-typed path, any file size, strict utf-8, and a visible error with the
 # literal token kept when the read fails.
-_ATTACH_RE = re.compile(r"@([\w\./\\-]+)")
+# The optional drive-letter group is what makes a Windows absolute path work:
+# without it "@C:\\Users\\me\\note.txt" matched only "C", because the colon is not
+# in the character class. A single letter before the colon is required, so an
+# ordinary "@name:value" still captures just "name" as it always did.
+_ATTACH_RE = re.compile(r"@((?:[A-Za-z]:)?[\w\./\\-]+)")
 
 
 def _inline_attachments(text: str, on_error=None) -> str:

@@ -166,6 +166,9 @@ def test_a_chosen_theme_survives_the_next_start(monkeypatch, tmp_path):
     """The choice is written to the config, and the resolver reads that key -
     otherwise every `vaf run` would reset the look."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: Path.home() reads HOME on POSIX but USERPROFILE on Windows,
+    # so redirecting only HOME leaves the test reading the real ~/.vaf on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     import importlib
 
     import vaf.core.config as config_mod

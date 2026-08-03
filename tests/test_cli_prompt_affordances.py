@@ -127,6 +127,9 @@ def test_the_classic_completer_delegates_to_the_shared_core():
 
 def test_history_round_trips_through_the_shared_file(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: Path.home() reads HOME on POSIX but USERPROFILE on Windows,
+    # so redirecting only HOME leaves the test reading the real ~/.vaf on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     import importlib
 
     import vaf.cli.history as hist
@@ -144,6 +147,9 @@ def test_history_is_readable_by_prompt_toolkits_own_reader(monkeypatch, tmp_path
     """The point of sharing: the classic lane opens the same file with the same
     class, so a private format here would split the history in two."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: Path.home() reads HOME on POSIX but USERPROFILE on Windows,
+    # so redirecting only HOME leaves the test reading the real ~/.vaf on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     import importlib
 
     import vaf.cli.history as hist
@@ -158,6 +164,9 @@ def test_history_is_readable_by_prompt_toolkits_own_reader(monkeypatch, tmp_path
 
 def test_blank_lines_are_not_recorded(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: Path.home() reads HOME on POSIX but USERPROFILE on Windows,
+    # so redirecting only HOME leaves the test reading the real ~/.vaf on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     import importlib
 
     import vaf.cli.history as hist

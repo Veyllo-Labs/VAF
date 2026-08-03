@@ -810,6 +810,9 @@ def test_a_submitted_line_joins_the_history(smoke_app, monkeypatch, tmp_path):
     from vaf.cli.tui_app.widgets import PromptBox
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: Path.home() reads HOME on POSIX but USERPROFILE on Windows,
+    # so redirecting only HOME leaves the test reading the real ~/.vaf on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     app, bridge = smoke_app.app, smoke_app.bridge
 
     async def _drive():

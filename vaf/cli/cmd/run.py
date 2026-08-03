@@ -2148,7 +2148,7 @@ Created: {current_session.created_at}
                         tui.error(f"Failed to attach {path}: {e}")
                         return match.group(0) 
                 
-                user_input = re.sub(r'@([\w\./\\-]+)', replace_file, user_input)
+                user_input = re.sub(r'@((?:[A-Za-z]:)?[\w\./\\-]+)', replace_file, user_input)
             
             # Add to session
             current_session.add_message("user", user_input)
@@ -2735,7 +2735,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                     UI.error(f"Failed to attach {path}: {e}")
                     return match.group(0) 
             
-            user_input = re.sub(r'@([\w\./\\-]+)', replace_file, user_input)
+            user_input = re.sub(r'@((?:[A-Za-z]:)?[\w\./\\-]+)', replace_file, user_input)
 
         agent.chat_step(user_input, stream_callback=lambda x: output_stream(x))
         

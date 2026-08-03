@@ -116,6 +116,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **On Windows, attaching a file with `@` works.** Typing `@C:\Users\me\notes.txt`
+  attached nothing and left the path sitting in your message: the reference stopped at
+  the drive letter's colon, so VAF only ever saw `@C`. Relative paths and every other
+  platform were unaffected, which is why it went unnoticed.
 - **The licence note now points somewhere you can actually go.** `vaf info` and the
   licence panel in settings told you to read `LICENSE`, `LICENSING.md` and
   `COMMERCIAL.md`, which is fine in a checkout and useless after `pip install vaf`:

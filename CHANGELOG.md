@@ -68,6 +68,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (capped at 800 characters, always a string, safe to serialize). In `vaf run` the
   tool card is no longer an empty fold: it opens onto the result.
 
+
 ### Changed
 - **The repository root is quieter.** The contributor, conduct and security documents
   moved into `.github/`, where GitHub still finds them, and the commercial terms and
@@ -105,6 +106,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - The README opens on the mark rather than on an ASCII wordmark, and shows the
   terminal and the web UI as one image above the installation steps.
   The desktop and terminal modes each show what they look like.
+
+### Removed
+- **Three launcher scripts that nothing called.** `stop_vaf.sh`, `launch_vaf.scpt` and
+  `Start VAF.command` were not referenced anywhere: not by the installers, not by the
+  Linux desktop entry or the systemd service (which stops VAF by signalling the process),
+  not by any documentation. On macOS the installers already build a proper `VAF.app` that
+  launches from wherever the project actually lives, while `launch_vaf.scpt` still assumed
+  it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
 - **VAF understands German written without umlauts.** Plenty of people type "taeglich"

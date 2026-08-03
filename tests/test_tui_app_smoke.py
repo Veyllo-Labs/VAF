@@ -601,6 +601,42 @@ def test_clear_empties_the_transcript_immediately(smoke_app):
     bridge.shutdown()
 
 
+def test_clear_lets_the_next_lines_start_at_the_top(smoke_app):
+    """A cleared transcript is shorter than its view again, and the bottom
+    anchor a long answer armed would then hold the FEW remaining lines against
+    the bottom edge, under a screen of empty space. Clearing drops the anchor,
+    so the conversation starts at the top the way a fresh one does."""
+    from vaf.cli.tui_app.widgets import SystemNote
+
+    app, bridge, agent = smoke_app.app, smoke_app.bridge, smoke_app.bridge.agent
+    bridge.clear_conversation = lambda: None
+    long_answer = "\n\n".join(f"Paragraph {i}." for i in range(40))
+    agent.script = lambda cb: (stream_all(cb, long_answer), long_answer)[1]
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app._send_user("fill the screen")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await _settle(pilot, lambda: app.transcript.max_scroll_y > 5)
+            await pilot.pause(); await pilot.pause()
+
+            app._cmd_clear(())
+            app.add_system_note("after the clear")
+            await pilot.pause(); await pilot.pause(); await pilot.pause()
+
+            transcript = app.transcript
+            note = app.query_one(SystemNote)
+            assert transcript.scroll_offset.y == 0, (
+                f"a cleared transcript scrolled to {transcript.scroll_offset.y}")
+            assert note.region.y - transcript.content_region.y <= 2, (
+                f"the first line after the clear sits at {note.region.y}, "
+                f"not at the top ({transcript.content_region.y})")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
 def test_halt_never_waits_for_the_busy_lane(smoke_app):
     """Stopping speech must work WHILE a turn runs - and the lane is exactly
     the thread that is busy."""
@@ -1268,16 +1304,26 @@ def test_a_long_help_description_wraps_under_itself(smoke_app):
     bridge.shutdown()
 
 
-def test_the_transcript_follows_a_streaming_answer(smoke_app):
+@pytest.mark.parametrize("size", [(80, 20), (200, 40)])
+def test_the_transcript_follows_a_streaming_answer(smoke_app, size):
     """Mounting scrolled; GROWING did not. A long answer streamed on below the
     fold while the view sat on its first lines - the whole reason the classic
-    lane felt live and this one did not."""
+    lane felt live and this one did not.
+
+    Several window sizes, because the defect was a RACE and the window decides
+    which side of it a run lands on. A bubble's height is set by the layout
+    pass after the mount, so a transcript that grew on its own reads as "the
+    reader scrolled away" to anything that measures the offset afterwards - and
+    at a wide window that misreading lands on the only growth event there is,
+    so nothing ever asks again. A narrow window hid it; CI on a wider terminal
+    did not.
+    """
     app, bridge, agent = smoke_app.app, smoke_app.bridge, smoke_app.bridge.agent
     long_answer = "\n\n".join(f"Paragraph {i} of the answer." for i in range(40))
     agent.script = lambda cb: (stream_all(cb, long_answer), long_answer)[1]
 
     async def _drive():
-        async with app.run_test(size=(80, 20)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
             app._send_user("tell me at length")
             assert await _settle(pilot, lambda: not bridge.busy)
@@ -1294,7 +1340,8 @@ def test_the_transcript_follows_a_streaming_answer(smoke_app):
     bridge.shutdown()
 
 
-def test_a_reader_who_scrolled_up_is_left_alone(smoke_app):
+@pytest.mark.parametrize("size", [(80, 20), (200, 40)])
+def test_a_reader_who_scrolled_up_is_left_alone(smoke_app, size):
     """The other half of the same rule, and the reason this is not just
     `scroll_end` on every chunk: a transcript that yanks itself down while the
     user is reading further up is worse than one that lags."""
@@ -1303,7 +1350,7 @@ def test_a_reader_who_scrolled_up_is_left_alone(smoke_app):
     agent.script = lambda cb: (stream_all(cb, first), first)[1]
 
     async def _drive():
-        async with app.run_test(size=(80, 20)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
             app._send_user("first")
             assert await _settle(pilot, lambda: not bridge.busy)
@@ -1319,6 +1366,56 @@ def test_a_reader_who_scrolled_up_is_left_alone(smoke_app):
             await pilot.pause(); await pilot.pause()
             assert transcript.scroll_offset.y == 0, (
                 "the transcript pulled the reader away from what they were reading")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+@pytest.mark.parametrize("size", [(80, 20), (200, 40)])
+def test_growth_nobody_announced_still_keeps_the_bottom(smoke_app, size):
+    """The measured shape of the defect, without its timing lottery.
+
+    Following used to be re-derived from geometry after each growth, and that
+    reading is only correct if it happens between two layout passes: widget
+    heights are set AFTER the mount, so a transcript that grew on its own reads
+    as "the reader scrolled away", and once it does, nothing asks again. Which
+    side of that race a run lands on depended on the terminal size.
+
+    So this grows the transcript with NO app-level event at all - straight into
+    the container, no mount helper, no stream, nothing that could ask - and
+    then requires the newest line to still be visible. That is the property the
+    product needs: a growth path must not have to remember to scroll. The
+    second half is the same growth after the reader scrolled up, which must not
+    move them.
+    """
+    from textual.widgets import Static
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+    tall = "\n".join(f"line {i}" for i in range(60))
+
+    async def _drive():
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            app._send_user("first")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await pilot.pause(); await pilot.pause()
+
+            transcript = app.transcript
+            settled = transcript.max_scroll_y
+            await transcript.mount(Static(tall))
+            await pilot.pause(); await pilot.pause(); await pilot.pause()
+            assert transcript.max_scroll_y > settled, "the transcript never grew"
+            assert transcript.max_scroll_y - transcript.scroll_offset.y <= 2, (
+                f"the view stayed at {transcript.scroll_offset.y} of "
+                f"{transcript.max_scroll_y} after content grew below it")
+
+            transcript.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            assert transcript.scroll_offset.y == 0
+            await transcript.mount(Static(tall))
+            await pilot.pause(); await pilot.pause(); await pilot.pause()
+            assert transcript.scroll_offset.y == 0, (
+                "growth pulled the reader away from what they were reading")
 
     asyncio.run(_drive())
     bridge.shutdown()

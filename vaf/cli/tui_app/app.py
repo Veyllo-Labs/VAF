@@ -19,7 +19,7 @@ import threading
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 
 from vaf.cli.commands import parse, suggest
 from vaf.cli.history import append_history, load_history
@@ -58,6 +58,7 @@ from vaf.cli.tui_app.widgets import (
     TasksLine,
     ToolCard,
     TopBar,
+    Transcript,
     UserMessage,
 )
 
@@ -333,7 +334,7 @@ class VafApp(App):
         yield TopBar(id="topbar")
         with Horizontal(id="main"):
             yield SessionsPanel(id="sessions")
-            yield VerticalScroll(id="transcript")
+            yield Transcript(id="transcript")
         yield TasksLine(id="tasksline")
         yield CompletionPopup(id="completion")
         yield PromptBox(id="promptbox")
@@ -387,26 +388,8 @@ class VafApp(App):
 
     # helpers ------------------------------------------------------------------------
     @property
-    def transcript(self) -> VerticalScroll:
-        return self.query_one("#transcript", VerticalScroll)
-
-    def _following(self) -> bool:
-        """Is the view still parked at the newest line?
-
-        A transcript that yanks itself down while the user is reading further
-        up is worse than one that lags - so growth only pulls the view along
-        when the user had not scrolled away from the bottom.
-        """
-        transcript = self.transcript
-        return transcript.max_scroll_y - transcript.scroll_offset.y <= 2
-
-    def _follow(self) -> None:
-        if self._following():
-            self.transcript.scroll_end(animate=False)
-
-    @on(AgentMessage.Grew)
-    def _answer_grew(self, event) -> None:
-        self._follow()
+    def transcript(self) -> Transcript:
+        return self.query_one("#transcript", Transcript)
 
     def _mount_scrolled(self, widget) -> None:
         # Chronology rule: anything mounted below the live agent bubble SEALS
@@ -419,9 +402,6 @@ class VafApp(App):
             self._live_msg = None
         if not isinstance(widget, StartBanner):
             self.transcript.remove_class("only-banner")
-        # Asked BEFORE the mount: afterwards the transcript is taller and every
-        # position looks like "scrolled away".
-        following = self._following()
         self.transcript.mount(widget)
         if isinstance(widget, AgentMessage):
             # The living dot sits beside the NEWEST reply only (web-UI rule):
@@ -431,8 +411,6 @@ class VafApp(App):
             widget.set_avatar_visible(True)
             widget.avatar.set_state(self._presence_state)
             self._avatar_host = widget
-        if following:
-            self.transcript.scroll_end(animate=False)
 
     def _banner_facts(self):
         """The rows of the start banner, and the one line that tells a user how
@@ -501,18 +479,12 @@ class VafApp(App):
         return self._live_msg
 
     def feed_agent(self, text: str) -> None:
-        # No scroll here. `feed` only buffers - the bubble grows on the 100 ms
-        # flush, so scrolling at chunk time scrolled to a height the answer did
-        # not have yet, and the view stayed near the top of a long reply while
-        # the text ran on below the fold. AgentMessage.Grew fires AFTER the
-        # append and is where following belongs.
+        # No scroll here, and none anywhere else in this module: the transcript
+        # anchors itself to its own bottom (see Transcript in widgets.py).
         self._ensure_live_msg().feed(text)
 
     def feed_think(self, text: str) -> None:
         self._ensure_live_msg().feed_think(text)
-        # Think text lands synchronously, but its layout has not been recomputed
-        # yet - follow on the next frame, and only if the reader is still there.
-        self.call_next(self._follow)
 
     def end_agent_message(self) -> None:
         if self._live_msg is not None:
@@ -740,8 +712,7 @@ class VafApp(App):
     def _cmd_clear(self, args) -> None:
         # The transcript goes NOW (the user asked for it); the agent-side reset
         # is queued on the lane and confirms itself when it lands.
-        for child in list(self.transcript.children):
-            child.remove()
+        self.transcript.clear()
         self._live_msg = None
         self._avatar_host = None
         self._bridge.clear_conversation()

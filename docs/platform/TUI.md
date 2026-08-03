@@ -20,7 +20,11 @@ coalesced at 100 ms rather than re-rendered per token: the parser reparses only
 the tail, so the cost stays flat as the answer grows. The view follows a
 growing answer, but only while the reader is already at the newest line -
 scroll up to read something and the transcript leaves you there until you come
-back down. The reasoning block is
+back down. Following is the transcript's own anchored state, evaluated inside
+the layout pass, not a scroll position recomputed after each growth: widget
+heights are set after the mount, so a measurement taken between the two reads a
+transcript that grew on its own as a reader who scrolled away. The reasoning
+block is
 deliberately NOT markdown; it is plain muted text, because reasoning is not
 authored as markup. The avatar is the agent's bracket body with the animated eye,
 `[ ● ]`, drawn in the head row of the NEWEST reply (`[ ● ] VAF · HH:MM`);

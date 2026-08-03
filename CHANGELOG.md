@@ -116,6 +116,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A long answer no longer streams past the bottom of the terminal app.** The
+  transcript stopped following after the first few lines and the reply ran on
+  below the fold, so you had to scroll down yourself to see the agent finish.
+  Whether it happened at all depended on your terminal size, which is why it
+  looked intermittent. Scrolling up still leaves you where you are reading, and
+  coming back down picks the answer up again.
 - **On Windows, attaching a file with `@` works.** Typing `@C:\Users\me\notes.txt`
   attached nothing and left the path sitting in your message: the reference stopped at
   the drive letter's colon, so VAF only ever saw `@C`. Relative paths and every other

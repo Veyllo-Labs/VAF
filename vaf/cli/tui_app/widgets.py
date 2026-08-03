@@ -16,7 +16,7 @@ import time
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Center, Horizontal, Vertical
+from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
@@ -31,6 +31,62 @@ def _now() -> str:
 
 
 # ── transcript ──────────────────────────────────────────────────────────────────────
+
+class Transcript(VerticalScroll):
+    """The conversation column, holding its own bottom while an answer streams.
+
+    Following the newest line is a STATE here, never a measurement. Measuring it
+    cannot work: a bubble's height is set by the layout pass AFTER the mount, so
+    a transcript that grew from 5 rows to 8 on its own reads as "the reader
+    scrolled 3 rows up" to anything that compares the offset with the maximum
+    afterwards - and since growth is not something our side gets told about, no
+    later event corrects that verdict. Which side of the race a run lands on
+    depends on the terminal size, so the same code followed on a narrow window
+    and never followed on a wide one.
+
+    Textual's anchor removes the race instead of timing it: the scroll position
+    is recomputed inside the layout pass itself, where the new height exists, so
+    growth keeps the view at the bottom for as long as the anchor holds. Only a
+    reader action releases it - wheel or key upwards, or a programmatic
+    `scroll_to`; scrolling DOWN deliberately keeps it, and arriving back at the
+    bottom takes it up again.
+
+    What is left for us is WHEN to arm it, and that is not "at startup": an
+    anchored container with less content than view gets a negative scroll
+    offset, which drops the centred start block onto the bottom edge. So the
+    anchor waits for content taller than the view. `virtual_size` is the signal
+    for that - it is assigned during the layout pass that establishes the new
+    height, which is exactly the moment our side could not observe otherwise.
+    `is_anchored` stays True once armed, including after a release, so this arms
+    at most once per transcript and never overrides a reader who scrolled up.
+    """
+
+    def watch_virtual_size(self, virtual_size) -> None:
+        # The decision runs a refresh later on purpose. `container_size` is
+        # still the PREVIOUS one while this watcher runs - `_size_updated`
+        # assigns virtual_size first - and on the opening pass that is zero
+        # rows, which would arm the anchor on the start block alone. Deferring
+        # is safe here in a way it never was for a measured verdict: every
+        # growth fires this watcher, so no single check is the only chance.
+        if not self.is_anchored and self.is_mounted:
+            self.call_after_refresh(self._arm_if_scrollable)
+
+    def _arm_if_scrollable(self) -> None:
+        if not self.is_anchored and self.max_scroll_y > 0:
+            self.anchor()
+
+    def clear(self) -> None:
+        """Empty the conversation, anchor included.
+
+        An emptied transcript is shorter than its view again, and an anchor held
+        on that is the negative-offset case above. Dropping it here puts the
+        transcript back in its pre-arming state, so the next answer that outgrows
+        the view arms it afresh.
+        """
+        for child in list(self.children):
+            child.remove()
+        self.anchor(False)
+
 
 class UserMessage(Vertical):
     """Role header (You · HH:MM) + accent-barred body - the old message_box, app-mode."""
@@ -98,10 +154,6 @@ class AgentMessage(Vertical):
         self._answer += chunk
         self._pending += chunk
 
-    class Grew(events.Message):
-        """The bubble got taller. Only the transcript can decide what to do
-        about that, because only it knows whether the user has scrolled away."""
-
     async def _flush(self) -> None:
         # `append` reads self.source eagerly, so two un-awaited calls in flight
         # would silently swallow one another. Textual awaits an async interval
@@ -112,9 +164,6 @@ class AgentMessage(Vertical):
         text, self._pending = self._pending, ""
         self._flushes += 1
         await self._body.append(text)
-        # A mount scrolls the transcript; growth did not, so a long answer
-        # streamed on below the fold while the view sat on its first lines.
-        self.post_message(self.Grew())
 
     def feed_think(self, chunk: str) -> None:
         self._think += chunk

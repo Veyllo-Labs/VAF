@@ -218,6 +218,20 @@ shape: [EMBEDDING.md](EMBEDDING.md).
   that does not know which key changed must force. Do not reassign `provider`,
   `api_backend`, `use_server` or `llm` by hand; guarded by
   `tests/test_provider_swap_single_implementation.py`.
+- **What it does NOT re-derive**, so a caller knows where the line sits. It swaps the
+  API backend and nothing else: `prompt_manager` and the model name inside the system
+  prompt are built by `init_chat()`; `context_manager` and the `n_ctx` it was sized
+  with are built once in `__init__`; and `filename` / `repo_id` / `model_path` for a
+  local GGUF are resolved at construction. So a **provider or API-model change is
+  fully served** by this method, while changing the **local model or `n_ctx` still
+  needs a new agent** - and for the local model even that is not enough on its own,
+  because `load_model()` reuses a healthy running server without checking which
+  weights it serves (see the model-loading note above). Calling `init_chat()` to
+  "finish" a reload is a trap: it resets `history` to the system message, which is
+  fine when the caller already discarded the agent and destroys the conversation when
+  it did not. VAF's terminal app takes the first half only - it reloads for provider
+  and API model, and leaves the local model and `n_ctx` to `vaf settings` plus a
+  restart.
 - `reload_all_api_backends(*, force=False) -> int` (module level in `vaf/core/agent.py`)
   is what a CONFIG CHANGE should call. It applies the above to every agent alive in the
   process and returns how many changed. **This sentence used to read "the only supported

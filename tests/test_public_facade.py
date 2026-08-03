@@ -33,7 +33,17 @@ def test_facade_exports_exactly_the_documented_surface():
     intended audience a name that does nothing for them. And the facade exposes no
     single-agent reload either, so the broadcast alone would have been a surface with no
     floor under it. The harness has proven the primitive with five call sites; embedders
-    have proven nothing yet, and that is the measurement that decides."""
+    have proven nothing yet, and that is the measurement that decides.
+
+    RE-CHECKED (2026-08-03) when the terminal app gained its provider switch, and
+    the line did NOT move. The app is a sixth first-party caller of the broadcast,
+    not the embedder report that would decide it. A new single-agent "apply the
+    current config" method was measured and rejected: the in-place hand-rolls
+    number two, and both are redundant (`agent.config = Config.load()` in front of
+    a `force=True` reload that already refreshes it), while the six rebuild sites
+    in the classic lanes replace the OBJECT to get a new model path, context
+    manager and server - which an in-place method cannot serve, so it would delete
+    none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
         "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "__version__",

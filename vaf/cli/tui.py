@@ -158,143 +158,28 @@ O))         O))       O))))))))
         """
         # Build completer with cross-platform path support
         class VAFCompleter(Completer):
+            """A thin adapter over the shared completion core.
+
+            Everything this used to do by hand - the quick-path table, the `@`
+            split, folder/file markers with sizes, the `/command` matching - now
+            lives in `vaf/cli/completion.py`, so the full-screen lane offers the
+            same candidates and the command half can only suggest words that
+            actually route.
+            """
+
             def __init__(self, tui):
-                self.tui = tui
-                self.path_completer = PathCompleter(expanduser=True)
-                # From the shared registry, so the completer can never offer a
-                # word the dispatcher does not handle (it used to offer
-                # `model`, `history` and `export`, none of which routed).
-                from vaf.cli.commands import bare_words
-                self.all_commands = sorted(bare_words())
-                # Use FuzzyCompleter for better matching (finds "settings" when typing "s")
-                from prompt_toolkit.completion import FuzzyCompleter
-                self.cmd_completer = FuzzyCompleter(
-                    WordCompleter(self.all_commands, ignore_case=True),
-                    WORD=False  # Allow partial word matching
-                )
-                
-                # Cross-platform quick paths
-                home = Path.home()
-                self.quick_paths = {
-                    "~": str(home),
-                    "~/": str(home) + os.sep,
-                    "desktop": str(home / "Desktop"),
-                    "downloads": str(home / "Downloads"),
-                    "documents": str(home / "Documents"),
-                    "pictures": str(home / "Pictures"),
-                    "videos": str(home / "Videos"),
-                    "music": str(home / "Music"),
-                    "home": str(home),
-                    ".": str(Path.cwd()),
-                    "./": str(Path.cwd()) + os.sep,
-                    "..": str(Path.cwd().parent),
-                    "../": str(Path.cwd().parent) + os.sep,
-                }
-                
-                # Platform-specific additions
-                if sys.platform == "win32":
-                    # Windows: Add drive letters
-                    for letter in "CDEFGH":
-                        drive = f"{letter}:"
-                        if Path(f"{drive}/").exists():
-                            self.quick_paths[drive.lower()] = f"{drive}\\"
-                            self.quick_paths[drive] = f"{drive}\\"
-            
+                pass
+
             def get_completions(self, document, complete_event):
-                text = document.text_before_cursor
-                
-                # File path completion (triggered by @)
-                if "@" in text:
-                    start_pos = text.rfind("@")
-                    path_text = text[start_pos+1:].strip()
-                    
-                    # Quick path shortcuts (show when @ is typed with little/no text)
-                    if len(path_text) < 3:
-                        for shortcut, full_path in self.quick_paths.items():
-                            if shortcut.startswith(path_text.lower()):
-                                # Show shortcut with description
-                                display = f"{shortcut} → {full_path}"
-                                yield Completion(
-                                    full_path,
-                                    start_position=-len(path_text),
-                                    display=display,
-                                    display_meta="Quick Path"
-                                )
-                    
-                    # Expand ~ to home directory
-                    if path_text.startswith("~"):
-                        path_text = str(Path.home()) + path_text[1:]
-                    
-                    # Handle Windows drive letters (C:, D:, etc.)
-                    if sys.platform == "win32" and len(path_text) >= 2:
-                        if path_text[1] == ":" and not path_text.endswith(os.sep):
-                            if len(path_text) == 2:
-                                path_text += os.sep
-                    
-                    # Use PathCompleter for actual path completion
-                    from prompt_toolkit.document import Document
-                    dummy_doc = Document(path_text, cursor_position=len(path_text))
-                    
-                    for c in self.path_completer.get_completions(dummy_doc, complete_event):
-                        # Enhance display with file/folder indicators
-                        try:
-                            full_path = Path(path_text) / c.text if path_text else Path(c.text)
-                            if not full_path.is_absolute():
-                                full_path = Path.cwd() / full_path
-                            
-                            if full_path.exists():
-                                if full_path.is_dir():
-                                    display = f"📁 {c.text}"
-                                    meta = "Folder"
-                                else:
-                                    # Show file size
-                                    size = full_path.stat().st_size
-                                    if size < 1024:
-                                        size_str = f"{size}B"
-                                    elif size < 1024*1024:
-                                        size_str = f"{size//1024}KB"
-                                    else:
-                                        size_str = f"{size//(1024*1024)}MB"
-                                    display = f"📄 {c.text}"
-                                    meta = size_str
-                            else:
-                                display = c.text
-                                meta = ""
-                        except:
-                            display = c.text
-                            meta = ""
-                        
-                        yield Completion(
-                            c.text,
-                            start_position=c.start_position,
-                            display=display,
-                            display_meta=meta
-                        )
-                
-                # Command completion (triggered by /)
-                elif text.startswith("/"):
-                    # Extract the command part (everything after /)
-                    cmd_text = text[1:].strip()
-                    
-                    # Create a document with just the command part (without /)
-                    from prompt_toolkit.document import Document
-                    cmd_doc = Document(cmd_text, cursor_position=len(cmd_text))
-                    
-                    # Get completions from fuzzy completer (works with partial matches like "s" -> "settings")
-                    for c in self.cmd_completer.get_completions(cmd_doc, complete_event):
-                        # Calculate start position: replace everything after / with the completion
-                        # If cmd_text is "s" and completion is "settings", we want to replace "s" with "settings"
-                        # start_position should be negative to replace from cursor backwards
-                        start_pos = c.start_position if c.start_position < 0 else -len(cmd_text)
-                        
-                        # Add the / prefix back and adjust start position
-                        yield Completion(
-                            c.text,
-                            start_position=start_pos,
-                            display=f"/{c.text}",
-                            display_meta=c.display_meta or "Command"
-                        )
-        
+                from vaf.cli.completion import complete as _complete
+                for cand in _complete(document.text_before_cursor):
+                    yield Completion(
+                        cand.insert,
+                        start_position=-cand.replace,
+                        display=cand.label,
+                        display_meta=cand.meta,
+                    )
+
         # Custom key bindings
         kb = KeyBindings()
         
@@ -1366,48 +1251,27 @@ class UI:
                     b.start_completion(select_first=False)
 
             class VAFCompleter(Completer):
+                """A thin adapter over the shared completion core.
+
+                Everything this used to do by hand - the quick-path table, the `@`
+                split, folder/file markers with sizes, the `/command` matching - now
+                lives in `vaf/cli/completion.py`, so the full-screen lane offers the
+                same candidates and the command half can only suggest words that
+                actually route.
+                """
+
                 def __init__(self):
-                    self.path_completer = PathCompleter(expanduser=True)
-                    # From the shared registry - this was a SIXTH copy of the
-                    # command list, found by the guard that keeps it at one.
-                    from vaf.cli.commands import bare_words
-                    all_commands = sorted(bare_words())
-                    # Use FuzzyCompleter for better matching
-                    from prompt_toolkit.completion import FuzzyCompleter
-                    self.cmd_completer = FuzzyCompleter(
-                        WordCompleter(all_commands, ignore_case=True),
-                        WORD=False  # Allow partial word matching
-                    )
-                    self.shortcuts = WordCompleter([
-                        "~/", "~/Desktop", "~/Documents", "~/Downloads"
-                    ])
+                    pass
 
                 def get_completions(self, document, complete_event):
-                    text = document.text_before_cursor
-                    
-                    if "@" in text:
-                        start_pos = text.rfind("@")
-                        path_text = text[start_pos+1:]
-                        dummy_doc = Document(path_text, cursor_position=len(path_text))
-                        if len(path_text) < 3:
-                            for c in self.shortcuts.get_completions(dummy_doc, complete_event):
-                                yield c
-                        for c in self.path_completer.get_completions(dummy_doc, complete_event):
-                            yield c
-                    elif text.startswith("/"):
-                        # Extract command part (without /)
-                        cmd_text = text[1:].strip()
-                        cmd_doc = Document(cmd_text, cursor_position=len(cmd_text))
-                        
-                        # Get fuzzy completions
-                        for c in self.cmd_completer.get_completions(cmd_doc, complete_event):
-                            start_pos = c.start_position if c.start_position < 0 else -len(cmd_text)
-                            yield Completion(
-                                c.text,
-                                start_position=start_pos,
-                                display=f"/{c.text}",
-                                display_meta=c.display_meta or "Command"
-                            )
+                    from vaf.cli.completion import complete as _complete
+                    for cand in _complete(document.text_before_cursor):
+                        yield Completion(
+                            cand.insert,
+                            start_position=-cand.replace,
+                            display=cand.label,
+                            display_meta=cand.meta,
+                        )
 
             style = PStyle.from_dict({"prompt": "#5f5fff bold"})
             session = PromptSession(

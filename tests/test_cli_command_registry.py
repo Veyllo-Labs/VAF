@@ -120,14 +120,22 @@ def test_the_classic_lane_catch_set_is_the_registry():
 
 def test_the_classic_completer_offers_only_words_that_route():
     """It used to offer `model`, `history` and `export` - none of which the
-    dispatcher handled. Accepting such a completion produced an error."""
+    dispatcher handled. Accepting such a completion produced an error.
+
+    The guarantee is now structural rather than a shared list: the completer
+    delegates to `vaf/cli/completion.py`, whose command half is built from
+    COMMANDS, so a phantom word has nowhere to come from."""
     import inspect
 
     import vaf.cli.tui as tui_mod
+    from vaf.cli.completion import complete
 
     src = inspect.getsource(tui_mod)
-    assert "self.all_commands = sorted(bare_words())" in src
     assert "'export'" not in src, "a phantom command came back into the completer"
+
+    offered = {c.insert for c in complete("/")}
+    assert offered == {c.word for c in COMMANDS}
+    assert "export" not in offered
 
 
 def test_the_app_palette_and_help_are_derived():

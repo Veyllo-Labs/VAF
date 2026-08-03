@@ -209,9 +209,41 @@ class SettingsScreen(ModalScreen[None]):
         "speech_tts_enabled": ("Speech Output (TTS)", ""),
         "speech_stt_enabled": ("Speech-to-Text (STT)", ""),
         "persist_server": ("Server Persistence", ""),
+        "auto_start_local_server": ("Auto-Start Local Server", ""),
     }
 
-    TITLES = {"main": "Settings", "voice": "Settings › Voice", "theme": "Settings › Theme"}
+    TITLES = {"main": "Settings", "voice": "Settings › Voice",
+              "theme": "Settings › Theme", "stt_lang": "Settings › Input Language",
+              "subagent_provider": "Settings › Sub-Agent Provider"}
+
+    # Rows that write ONE config key and are read live at their consumption
+    # site: no backend call, no agent rebuild. They were "use vaf settings"
+    # rows purely because the flows had not been ported, not because they
+    # needed anything the app cannot do.
+    #   key -> (label, [(display, value), ...])
+    CHOICES = {
+        "speech_tts_engine": ("TTS Engine", [
+            ("Piper (local)", "piper"),
+            ("System (macOS only)", "system"),
+            ("Docker (HTTP)", "docker"),
+        ]),
+        # `speech_language` is not in DEFAULTS; the runtime falls back to
+        # "en-US" (vaf/core/speech.py), so the row shows that when unset
+        # rather than inventing a value or displaying None.
+        "speech_language": ("Input Language", [
+            ("English (US)", "en-US"), ("German (DE)", "de-DE"),
+            ("Turkish (TR)", "tr-TR"), ("French (FR)", "fr-FR"),
+            ("Spanish (ES)", "es-ES"), ("Chinese (CN)", "zh-CN"),
+            ("Russian (RU)", "ru-RU"), ("Italian (IT)", "it-IT"),
+        ]),
+        "subagent_timeout_minutes": ("Timeout duration", [
+            ("30 minutes", 30), ("60 minutes", 60), ("120 minutes", 120),
+            ("240 minutes", 240), ("no limit", 0),
+        ]),
+        "ux_auto_open_max_tabs": ("Max auto-opened tabs", [
+            ("1", 1), ("4", 4), ("8", 8), ("12", 12), ("20", 20),
+        ]),
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -251,17 +283,18 @@ class SettingsScreen(ModalScreen[None]):
             provider = str(self._cfg("provider", "local"))
             api_model = str(self._cfg(f"api_model_{provider}", "not set"))
             rows = [
-                ("later", "provider", f"AI Provider: [$text]{_esc(provider.upper())}[/]"),
-                ("later", "subagent_provider",
-                 f"Sub-Agent Provider: [$text]{_esc(str(self._cfg('subagent_provider', 'inherit')).upper())}[/]"),
+                ("provider", None,
+                 f"AI Provider: [$text]{_esc(provider.upper())}[/]"),
             ]
             if provider != "local":
-                rows.append(("later", "api_model", f"API Model: [$text]{_esc(api_model)}[/]"))
+                rows.append(("api_model", provider,
+                             f"API Model: [$text]{_esc(api_model)}[/]"))
             rows += [
                 ("sep", None, ""),
                 ("later", "context", f"Context Limit [$text]({int(self._cfg('n_ctx', 32768) or 32768):,})[/]"),
                 ("later", "local_model", "Select Active Model"),
                 ("later", "search_models", "Search & Download New Models"),
+                ("toggle", "auto_start_local_server", ""),
                 ("sep", None, ""),
                 ("toggle", "web_ui_enabled", ""),
                 ("submenu", "theme", "Theme"),
@@ -269,6 +302,9 @@ class SettingsScreen(ModalScreen[None]):
                 ("toggle", "ux_auto_open_outputs", ""),
                 ("toggle", "sub_agents_in_separate_terminals", ""),
                 ("toggle", "subagent_timeout_enabled", ""),
+                ("choice", "subagent_timeout_minutes", ""),
+                ("choice", "ux_auto_open_max_tabs", ""),
+                ("submenu", "subagent_provider", "Sub-Agent Provider"),
                 ("submenu", "voice", "TTS / STT / Wake Word Settings"),
                 ("later", "automations", "Automations"),
                 ("sep", None, ""),
@@ -280,14 +316,19 @@ class SettingsScreen(ModalScreen[None]):
         if menu == "voice":
             return [
                 ("toggle", "speech_tts_enabled", ""),
-                ("later", "tts_engine",
-                 f"TTS Engine: [$text]{_esc(str(self._cfg('speech_tts_engine', 'piper')))}[/]"),
+                ("choice", "speech_tts_engine", ""),
                 ("toggle", "speech_stt_enabled", ""),
                 ("later", "mic", "Select Microphone"),
-                ("later", "stt_lang", "Select Input Language"),
+                ("submenu", "stt_lang", "Select Input Language"),
                 ("later", "wake", "Wake Word"),
                 ("back", None, "Back"),
             ]
+        if menu.startswith("choice:"):
+            return self._choice_rows(menu.split(":", 1)[1])
+        if menu == "stt_lang":
+            return self._choice_rows("speech_language")
+        if menu == "subagent_provider":
+            return self._provider_rows("subagent_provider", include_inherit=True)
         if menu == "theme":
             from vaf.cli.themes import ThemeManager
             rows = []
@@ -299,6 +340,37 @@ class SettingsScreen(ModalScreen[None]):
                              f"[{c['primary']}]●[/][{c['secondary']}]●[/][{c['accent']}]●[/]"))
             return rows + [("back", None, "Back")]
         return [("back", None, "Back")]
+
+    # What the runtime uses when a key was never written. Only for keys that
+    # are absent from Config.DEFAULTS but have a hardcoded fallback in the
+    # consuming module - showing None there would be a lie.
+    _RUNTIME_FALLBACKS = {"speech_language": "en-US"}
+
+    def _choice_rows(self, key: str) -> list:
+        label, options = self.CHOICES[key]
+        current = self._cfg(key, self._RUNTIME_FALLBACKS.get(key))
+        rows = []
+        for display, value in options:
+            marker = "▍" if value == current else " "
+            rows.append(("pick", (key, value),
+                         f"[$primary]{marker}[/][$text]{_esc(display)}[/]"))
+        return rows + [("back", None, "Back")]
+
+    def _provider_rows(self, key: str, include_inherit: bool = False) -> list:
+        from vaf.core.config import Config
+        current = str(self._cfg(key, "inherit" if include_inherit else "local"))
+        rows = []
+        if include_inherit:
+            marker = "▍" if current == "inherit" else " "
+            rows.append(("pick", (key, "inherit"),
+                         f"[$primary]{marker}[/][$text]Inherit from main agent[/]"))
+            rows.append(("sep", None, ""))
+        names = ["local"] + sorted(getattr(Config, "PROVIDER_MODELS", {}) or {})
+        for name in names:
+            marker = "▍" if name == current else " "
+            rows.append(("pick", (key, name),
+                         f"[$primary]{marker}[/][$text]{_esc(name)}[/]"))
+        return rows + [("back", None, "Back")]
 
     # rendering ----------------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -326,13 +398,23 @@ class SettingsScreen(ModalScreen[None]):
             return f"[$text-disabled]‹ {label}[/]"
         if kind == "later":
             return f"[$vaf-muted]{label}[/]  [$text-disabled](vaf settings)[/]"
+        if kind == "choice":
+            name, options = self.CHOICES[arg]
+            current = self._cfg(arg, self._RUNTIME_FALLBACKS.get(arg))
+            shown = next((d for d, v in options if v == current), str(current))
+            return f"[$vaf-muted]{name:<24}[/] [$text]{_esc(shown)}[/]"
+        if kind in ("provider", "api_model"):
+            return f"[$vaf-muted]{label}[/]  [$text-disabled]›[/]"
         return f"[$text]{label}[/]"
 
     def _rebuild(self) -> None:
         menu = self._stack[-1]
         self._rows = self._menu_rows(menu)
+        title = self.TITLES.get(menu)
+        if title is None and menu.startswith("choice:"):
+            title = f"Settings › {self.CHOICES[menu.split(':', 1)[1]][0]}"
         self.query_one("#settings-title", Static).update(
-            f"[bold $text]{self.TITLES.get(menu, 'Settings')}[/]")
+            f"[bold $text]{title or 'Settings'}[/]")
         lv = self.query_one("#settings-list", ListView)
         lv.clear()
         self._row_statics = []
@@ -382,9 +464,27 @@ class SettingsScreen(ModalScreen[None]):
             self.app.notify(f"theme: {key}", timeout=1.5)
             self._refresh_labels()
             return
+        if kind == "choice":
+            self._stack.append(f"choice:{arg}")
+            self._rebuild()
+            return
+        if kind == "pick":
+            from vaf.core.config import Config
+            key, value = arg
+            Config.set(key, value)
+            self._sync_live_agent(key, value)
+            self.app.notify(f"{key}: {value}", timeout=1.5)
+            self._stack.pop()
+            self._rebuild()
+            self.app.post_message(SettingsChanged())
+            return
+        if kind in ("provider", "api_model"):
+            self.dismiss(None)
+            self.app.action_model()
+            return
         if kind == "later":
-            self.app.notify("This flow lands in the next round - use `vaf settings` "
-                            "in a normal terminal for now.", timeout=2.5)
+            self.app.notify("This flow needs a full restart - use `vaf settings` "
+                            "in a normal terminal.", timeout=2.5)
 
     @on(ListView.Selected, "#settings-list")
     def _selected(self, event: ListView.Selected) -> None:
@@ -406,39 +506,111 @@ class SettingsChanged(events.Message):
     """Posted after a settings toggle so the app can refresh dependent chrome."""
 
 
-class ModelScreen(ModalScreen[None]):
-    """Provider · model overview (read-only in this round: a switch needs the
-    agent rebuild flow, which lands with the settings round)."""
+class ModelScreen(ModalScreen[tuple]):
+    """Pick the provider, or the model within the current provider.
 
-    BINDINGS = [Binding("escape", "close_model", "close")]
+    Dismisses with `(provider, model)`; the app hands that to the bridge, which
+    applies it to the RUNNING agent through the engine's own reload. What it
+    does NOT offer is the local GGUF: swapping that needs a real rebuild, and
+    a running llama server would keep serving the old weights - a named
+    boundary, and the row says so instead of pretending.
+    """
+
+    BINDINGS = [
+        Binding("escape", "close_model", "close"),
+        Binding("m", "show_models", "models of this provider", show=False),
+    ]
+
+    def __init__(self, provider_only: bool = False) -> None:
+        super().__init__()
+        self._provider_only = provider_only
+        self._rows: list = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-box", classes="modal-box"):
             yield Static("[bold $text]Provider · Model[/]", classes="modal-title")
             yield ListView(id="model-list")
-            yield Static("[$text-disabled]switching lands next round · esc closes[/]",
+            yield Static("[$text-disabled]enter selects · esc closes[/]",
                          classes="modal-keys")
 
     def on_mount(self) -> None:
         from vaf.core.config import Config
+
         lv = self.query_one("#model-list", ListView)
-        current_provider = str(Config.get("provider", "local"))
+        current = str(Config.get("provider", "local"))
         catalog = getattr(Config, "PROVIDER_MODELS", {}) or {}
-        for provider in catalog:
+
+        marker = "▍" if current == "local" else " "
+        active_index = 0 if current == "local" else -1
+        self._rows.append(("provider", "local"))
+        lv.append(ListItem(Static(
+            f"[$primary]{marker}[/][$vaf-muted]{'local':<12}[/] "
+            f"[$text]{_esc(str(Config.get('model', '') or 'not set'))}[/]"
+            f"  [$text-disabled](model chosen in `vaf settings`)[/]")))
+
+        for i, provider in enumerate(sorted(catalog), start=1):
+            configured = str(Config.get(f"api_model_{provider}", "") or "")
             entry = catalog.get(provider) or {}
-            default = entry.get("default", "") if isinstance(entry, dict) else ""
-            marker = "▍" if provider == current_provider else " "
+            fallback = entry.get("default", "") if isinstance(entry, dict) else ""
+            shown = configured or fallback
+            marker = "▍" if provider == current else " "
+            if provider == current:
+                active_index = i
+            self._rows.append(("provider", provider))
             lv.append(ListItem(Static(
                 f"[$primary]{marker}[/][$vaf-muted]{_esc(provider):<12}[/] "
-                f"[$text]{_esc(default)}[/]")))
-        if not catalog:
-            lv.append(ListItem(Static("[$text-disabled]no provider catalog loaded[/]")))
+                f"[$text]{_esc(shown)}[/]")))
+
+        if current != "local" and not self._provider_only:
+            models = self._models_for(current)
+            if models:
+                self._rows.append(("sep", None))
+                lv.append(ListItem(Static("[$vaf-border]─────────────────[/]")))
+                configured = str(Config.get(f"api_model_{current}", "") or "")
+                for model in models:
+                    marker = "▍" if model == configured else " "
+                    self._rows.append(("model", model))
+                    lv.append(ListItem(Static(
+                        f"[$primary]{marker}[/][$vaf-muted]{_esc(current)}:[/] "
+                        f"[$text]{_esc(model)}[/]")))
+
+        lv.index = max(active_index, 0)
         lv.focus()
+
+    @staticmethod
+    def _models_for(provider: str) -> list:
+        """The catalog's models for one provider, in the shape it really has:
+        a `default` plus a `fallback` list (verified against Config, not
+        assumed). Deduplicated, default first."""
+        from vaf.core.config import Config
+        entry = (getattr(Config, "PROVIDER_MODELS", {}) or {}).get(provider)
+        if isinstance(entry, (list, tuple)):
+            names = [str(m) for m in entry]
+        elif isinstance(entry, dict):
+            names = ([str(entry["default"])] if entry.get("default") else [])
+            names += [str(m) for m in (entry.get("fallback") or [])]
+        else:
+            return []
+        seen, out = set(), []
+        for name in names:
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
 
     @on(ListView.Selected, "#model-list")
     def _picked(self, event: ListView.Selected) -> None:
-        self.app.notify("Provider switching lands next round - use `vaf settings`.",
-                        timeout=2.5)
+        idx = event.list_view.index or 0
+        if not (0 <= idx < len(self._rows)):
+            return
+        kind, value = self._rows[idx]
+        if kind == "sep":
+            return
+        if kind == "provider":
+            self.dismiss((value, ""))
+        else:
+            from vaf.core.config import Config
+            self.dismiss((str(Config.get("provider", "local")), value))
 
     def action_close_model(self) -> None:
         self.dismiss(None)
@@ -566,24 +738,72 @@ class PaletteScreen(ModalScreen[str]):
 
 
 class SessionsPanel(Vertical):
-    """Left dock: the real session list (switching lands next round)."""
+    """Left dock: the session list, walkable and selectable.
+
+    A ListView rather than stacked Statics, because the panel has to be
+    keyboard-complete: arrows walk it, enter loads. It posts `Selected` and
+    lets the app do the loading - the panel knows nothing about the agent.
+    """
+
+    BINDINGS = [Binding("escape", "leave_panel", "back", show=False)]
+
+    class Selected(events.Message):
+        def __init__(self, session_id: str, name: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+            self.name = name
+
+    def compose(self) -> ComposeResult:
+        yield Static("[bold $text]sessions[/]", classes="panel-title")
+        yield ListView(id="session-list")
+        yield Static("[$text-disabled]enter loads · esc back[/]", classes="modal-keys")
 
     def on_mount(self) -> None:
-        self.refresh_sessions([])
+        self._entries: list = []
 
     def refresh_sessions(self, sessions, active_id: str = "") -> None:
         if not self.is_attached:
             return                      # not on the screen yet: nothing to fill
-        for child in list(self.children):
-            child.remove()
-        self.mount(Static("[bold $text]sessions[/]", classes="panel-title"))
-        for entry in sessions[:12]:
+        self._entries = [e for e in (sessions or [])][:20]
+        try:
+            lv = self.query_one("#session-list", ListView)
+        except Exception:
+            return
+        lv.clear()
+        if not self._entries:
+            lv.append(ListItem(Static("[$text-disabled]no sessions[/]")))
+            return
+        active_index = 0
+        for i, entry in enumerate(self._entries):
             sid = str(entry.get("id", ""))
             name = str(entry.get("name") or sid[:12])
             when = str(entry.get("updated_at") or "")[:16]
-            marker = "[$primary]▍[/]" if sid == active_id else "  "
-            self.mount(Static(
-                f"{marker}[$text]{_esc(name)}[/]\n  [$text-disabled]{_esc(when)}[/]",
-                classes="session-row"))
-        if not sessions:
-            self.mount(Static("[$text-disabled]no sessions[/]", classes="session-row"))
+            count = entry.get("message_count")
+            marker = "[$primary]▍[/]" if sid == active_id else " "
+            if sid == active_id:
+                active_index = i
+            meta = f"{when}" + (f" · {count} msg" if count else "")
+            lv.append(ListItem(Static(
+                f"{marker}[$text]{_esc(name)}[/]\n  [$text-disabled]{_esc(meta)}[/]")))
+        lv.index = active_index
+
+    def focus_list(self) -> None:
+        try:
+            self.query_one("#session-list", ListView).focus()
+        except Exception:
+            pass
+
+    @on(ListView.Selected, "#session-list")
+    def _picked(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index or 0
+        if 0 <= idx < len(self._entries):
+            entry = self._entries[idx]
+            self.post_message(self.Selected(str(entry.get("id", "")),
+                                            str(entry.get("name") or "")))
+
+    def action_leave_panel(self) -> None:
+        self.remove_class("visible")
+        try:
+            self.screen.query_one("#promptbox").focus()
+        except Exception:
+            pass

@@ -89,15 +89,53 @@ the lane is exactly what is busy producing the speech being stopped.
 `restart` execs only after the app has released the screen.
 
 Ctrl+P (palette), Ctrl+S (sessions), F1 (help) and Ctrl+Q (quit) reach the same
-places. `@path/to/file` inlines a file into the message, as in the classic
-lane. Every overlay walks with arrow keys, activates with enter or space, and
+places. Every overlay walks with arrow keys, activates with enter or space, and
 closes with esc.
 
-The settings overlay is the `vaf settings` main menu as a stacked arrow menu:
-boolean rows flip their real config keys immediately; rows whose flows need an
-agent rebuild or a real backend (provider and model switches, context limit,
-model download, microphone) show live values and point to `vaf settings` until
-their flows land.
+The prompt carries the affordances the classic one had, from the same code:
+
+- **History** on the arrow keys, from `~/.vaf/history` - the SAME file the
+  classic lane writes, read through the same parser, so the history does not
+  split in two depending on how VAF was started. Up and down only walk it at
+  the first and last line, so a multi-line draft still moves its cursor; the
+  half-typed draft is put back when you walk past the newest entry.
+- **An inline suggestion** from the learned corpus, accepted with Tab or Right.
+- **A completion menu** for `/commands` (from the command registry, so it can
+  only offer words that route) and `@paths` (folders first, with sizes). While
+  it is open, Enter ACCEPTS rather than sends - press it again to send. Esc
+  closes the menu and keeps the draft. A candidate that would add nothing is
+  not offered, or the menu would swallow the Enter meant to submit.
+
+`@path/to/file` still inlines a file into the message, as in the classic lane.
+
+Ctrl+S opens the sessions panel: arrows walk it, enter loads the highlighted
+session (through the complete context swap, so tool calls and images survive),
+esc closes it. Reading the list happens off the UI thread. On the way out, the
+plain terminal gets the session id and both ways back into it - the classic
+lane printed the same thing, minus its blocking "save?" question, since the
+app saves unconditionally.
+
+The settings overlay is the `vaf settings` main menu as a stacked arrow menu.
+What it can change is decided by where a key is READ, not by how it looks:
+
+- **Written straight to the config** - boolean toggles, the TTS engine, the
+  input language, the sub-agent provider, the sub-agent timeout duration, the
+  auto-open tab cap, auto-start of the local server. Every one of these is read
+  live at its consumption site, so writing it IS the whole job.
+- **Applied to the running agent** - the provider and the API model, through
+  the engine's own `reload_all_api_backends`. That is the supported way to move
+  a live agent: it re-reads the config, rebuilds the backend under a lock and
+  re-attaches the event sink. The app never calls `init_chat()` afterwards -
+  that would reset the history to the system message and wipe the conversation
+  behind the transcript. A switch is refused while a turn is running, and if
+  the running agent kept its backend anyway the app says so instead of claiming
+  success.
+- **Still pointing at `vaf settings`** - the local model, the context limit and
+  the model download. These need a genuinely new agent: `n_ctx` is a snapshot in
+  three places, and `load_model()` reuses a healthy running server without
+  checking which weights it serves. A half-working row would be worse than an
+  honest pointer. The microphone picker needs the speech backend and lands with
+  the voice round.
 
 ## Named boundaries (this round)
 
@@ -109,9 +147,10 @@ their flows land.
 - The in-process TaskQueue is not consumed yet: web-UI chat input, the
   `__CMD__` session commands and timer messages reach the modern lane only.
   A timer fired while just the app lane runs is therefore lost.
-- Voice capture, session switching, provider and model switching, and the
-  completion/history machinery of the prompt land in the next round; the
-  overlays that represent them say so instead of pretending. The classic
+- Voice capture lands in a later round; the overlay that represents it says so
+  instead of pretending. Creating, renaming and deleting sessions is likewise
+  not in the app yet - loading one is. The local model, the context limit and
+  the model download stay with `vaf settings` for the reason given above. The classic
   lane's speech preloads (TTS engine warmup, the STT microphone check, the
   langid preload) are likewise not run at boot; until the voice round, the
   first spoken reply pays the engine spin-up lazily.

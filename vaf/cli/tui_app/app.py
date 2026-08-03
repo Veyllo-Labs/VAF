@@ -23,6 +23,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Static
 
 from vaf.cli.commands import parse, suggest
+from vaf.cli.history import append_history, load_history
 from vaf.cli.tui_app.screens import (
     ConfirmScreen,
     ContextNote,
@@ -46,6 +47,7 @@ from vaf.cli.tui_app.theme_bridge import (
 )
 from vaf.cli.tui_app.widgets import (
     AgentMessage,
+    CompletionPopup,
     ContextBar,
     EventNote,
     PromptBox,
@@ -113,6 +115,8 @@ class TuiEvents:
     def context(self, used, total):         self._ui(self._app_call, "set_context", used, total)
     def context_status(self, status):       self._ui(self._app_call, "add_context_note", status)
     def session_switched(self, sid, count): self._ui(self._app_call, "session_switched", sid, count)
+    def session_list(self, sessions):       self._ui(self._app_call, "show_session_list", sessions)
+    def chrome_changed(self):               self._ui(self._app_call, "_refresh_chrome")
 
     def _app_call(self, name, *args) -> None:
         getattr(self._app, name)(*args)
@@ -193,6 +197,11 @@ class VafApp(App):
     .tool-body { padding: 0 1; background: $background; }
     .subagent-line { margin: 1 0 0 1; }
     #tasksline { height: 1; margin: 0 2; background: $background; }
+    #completion {
+        height: auto; max-height: 8; margin: 0 1;
+        background: $surface; border: round $vaf-border;
+        display: none;
+    }
     .agent-avatar {
         width: 5; height: 1;
         margin: 1 1 0 0;
@@ -254,6 +263,8 @@ class VafApp(App):
         self._gate_screen = None
         self._gate_answered = False
         self._tasks_stop = threading.Event()
+        from vaf.cli.autosuggest import create_autosuggest
+        self._suggester = create_autosuggest()
 
     # theme plumbing -----------------------------------------------------------------
     def get_css_variables(self):
@@ -268,6 +279,7 @@ class VafApp(App):
             yield SessionsPanel(id="sessions")
             yield VerticalScroll(id="transcript")
         yield TasksLine(id="tasksline")
+        yield CompletionPopup(id="completion")
         yield PromptBox(id="promptbox")
         with Horizontal(id="statusstrip"):
             yield Static(
@@ -288,7 +300,9 @@ class VafApp(App):
         self.theme = textual_theme_name(self._theme_key)
 
         box = self.query_one("#promptbox", PromptBox)
-        box.border_subtitle = "enter send · ctrl+j newline"
+        box.border_subtitle = "enter send · ctrl+j newline · tab complete · up history"
+        box.popup = self.query_one("#completion", CompletionPopup)
+        box.load_history(load_history())
         box.focus()
         self.query_one("#contextbar", ContextBar).styles.width = "auto"
         self.query_one("#keyhints").styles.width = "1fr"
@@ -298,8 +312,7 @@ class VafApp(App):
                 if getattr(session, "messages", None) else "new session")
         self._mount_scrolled(SystemNote(note))
         self._refresh_chrome()
-        self.query_one("#sessions", SessionsPanel).refresh_sessions(
-            self._bridge.list_sessions(), session.id)
+        self._bridge.request_session_list()
 
         # The classic result-notifier thread, as timers: the drain runs on the
         # bridge lane, the tasks poll on its own daemon (file IO off the UI thread).
@@ -418,9 +431,8 @@ class VafApp(App):
         self._refresh_chrome()
         self.add_system_note(
             f"switched to session {session_id[:12]} · {message_count} messages")
-        panel = self.query_one("#sessions", SessionsPanel)
-        if panel.has_class("visible"):
-            panel.refresh_sessions(self._bridge.list_sessions(), session_id)
+        if self.query_one("#sessions", SessionsPanel).has_class("visible"):
+            self._bridge.request_session_list()
 
     def tool_started(self, tool: str, preview: str) -> None:
         card = ToolCard(tool, preview)
@@ -477,7 +489,13 @@ class VafApp(App):
         self.push_screen(SettingsScreen())
 
     def action_model(self) -> None:
-        self.push_screen(ModelScreen())
+        def _chosen(choice) -> None:
+            if not choice:
+                return
+            provider, model = choice
+            self._bridge.apply_provider_change(provider, model)
+
+        self.push_screen(ModelScreen(), _chosen)
 
     def action_history(self) -> None:
         self.push_screen(HistoryScreen(self._bridge.history))
@@ -493,8 +511,18 @@ class VafApp(App):
         panel = self.query_one("#sessions", SessionsPanel)
         panel.toggle_class("visible")
         if panel.has_class("visible"):
-            panel.refresh_sessions(self._bridge.list_sessions(),
-                                   self._bridge.session.id)
+            # Listing globs and json-loads up to 20 session files; that belongs
+            # on the lane, not on the thread that has to stay responsive.
+            self._bridge.request_session_list()
+            panel.focus_list()
+        else:
+            self.query_one("#promptbox", PromptBox).focus()
+
+    def show_session_list(self, sessions) -> None:
+        panel = self.query_one("#sessions", SessionsPanel)
+        panel.refresh_sessions(sessions, str(self._bridge.session.id))
+        if panel.has_class("visible"):
+            panel.focus_list()
 
     def action_next_theme(self) -> None:
         idx = (THEME_ORDER.index(self._theme_key) + 1) % len(THEME_ORDER)
@@ -502,6 +530,33 @@ class VafApp(App):
         persist_theme(self._theme_key)
         self.theme = textual_theme_name(self._theme_key)
         self.notify(f"theme: {self._theme_key}", timeout=1.5)
+
+    @on(PromptBox.Changed)
+    def _prompt_changed(self, event) -> None:
+        """One place recomputes both affordances: the inline ghost suggestion
+        and the completion menu. Cheap enough to run per keystroke - the
+        suggester is an in-memory lookup and `complete()` only touches the
+        filesystem for an `@` token."""
+        box = self.query_one("#promptbox", PromptBox)
+        before = box._text_before_cursor()
+        try:
+            box.suggestion = self._suggester.suggest(before) or ""
+        except Exception:
+            box.suggestion = ""
+        popup = self.query_one("#completion", CompletionPopup)
+        if before.startswith("/") or "@" in before:
+            from vaf.cli.completion import complete
+            popup.open_with(complete(before))
+        elif popup.is_open:
+            popup.close()
+
+    @on(SessionsPanel.Selected)
+    def _session_picked(self, event: SessionsPanel.Selected) -> None:
+        panel = self.query_one("#sessions", SessionsPanel)
+        panel.remove_class("visible")
+        self.query_one("#promptbox", PromptBox).focus()
+        if event.session_id and event.session_id != str(self._bridge.session.id):
+            self._bridge.load_session(event.session_id)
 
     @on(SettingsChanged)
     def _settings_changed(self, _msg: SettingsChanged) -> None:
@@ -612,6 +667,13 @@ class VafApp(App):
         self._send_user(event.text)
 
     def _send_user(self, text: str) -> None:
+        # The same two stores the classic prompt writes: the shared history file
+        # and the learned corpus (whose save is debounced, so this is free).
+        try:
+            append_history(text)
+            self._suggester.add_to_history(text)
+        except Exception:
+            pass
         self._mount_scrolled(UserMessage(text))
         self._bridge.submit_turn(text)
 
@@ -665,7 +727,16 @@ def run_tui(message: str = None, theme: str = None, session_id: str = None,
     finally:
         UI.set_app_mode(False)
         UI.remove_console_sink(bridge.on_console_event)
+        try:
+            app._suggester.flush()      # the debounced save must not be lost
+        except Exception:
+            pass
         bridge.shutdown()
+        # Now that the alternate screen is gone, the plain terminal can carry
+        # the session id and the way back - the classic lane printed the same
+        # thing, just with a blocking question in front of it.
+        if getattr(bridge, "farewell", ""):
+            print(bridge.farewell)
 
     # ONLY here, with the alternate screen released and the tty restored:
     # exec'ing from inside the app would hand the new process a raw terminal.

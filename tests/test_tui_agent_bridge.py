@@ -509,3 +509,73 @@ def test_shutdown_saves_the_session_and_detaches_the_sink(quiet_run_module):
 
     assert saved == ["sess-tui-test"]
     assert agent.sink is None
+
+
+# ── sessions (round 7) ──────────────────────────────────────────────────────────────
+
+def test_loading_a_session_uses_the_complete_swap(quiet_run_module):
+    """`load_session_context` replays tool_calls and images; the classic lane's
+    hand-rolled loop drops both, and copying it was explicitly refused."""
+    events = Recorder()
+    agent = FakeAgent()
+    swapped = []
+    agent.load_session_context = lambda sid: swapped.append(sid)
+
+    target = FakeSession()
+    target.id = "target-session"
+    target.messages = [("user", "a"), ("assistant", "b")]
+    mgr = SimpleNamespace(load=lambda sid: target, list=lambda **k: [])
+
+    bridge = AgentBridge(agent, FakeSession(), mgr, events)
+    bridge.load_session("target-session")
+    assert _wait_for(lambda: swapped == ["target-session"])
+    assert bridge.session is target
+    bridge.shutdown()
+
+
+def test_a_missing_session_reports_instead_of_dying(quiet_run_module):
+    events = Recorder()
+    mgr = SimpleNamespace(load=_raise_not_found, list=lambda **k: [])
+    bridge = AgentBridge(FakeAgent(), FakeSession(), mgr, events)
+
+    bridge.load_session("no-such-session")
+    assert _wait_for(lambda: any(
+        n == "event_note" and a[0] == "Session" for n, a in events.calls))
+    assert bridge.session.id == "sess-tui-test", "the live session was replaced"
+    bridge.shutdown()
+
+
+def _raise_not_found(session_id):
+    raise FileNotFoundError(session_id)
+
+
+def test_the_farewell_survives_quitting_mid_turn(quiet_run_module):
+    """The finalizer may run on a daemon thread when a turn is in flight, so
+    the text has to be composed before it - or the user quits with no id."""
+    import threading
+
+    events = Recorder()
+    release = threading.Event()
+    agent = FakeAgent(lambda cb: release.wait(timeout=5))
+    session = FakeSession()
+    session.messages = [("user", "hi")]
+    mgr = SimpleNamespace(save=lambda s, **k: "/tmp/session.json", list=lambda **k: [])
+
+    bridge = AgentBridge(agent, session, mgr, events)
+    bridge.submit_turn("blocking")
+    assert _wait_for(lambda: bridge.busy)
+
+    bridge.shutdown()
+    assert "sess-tui-test" in bridge.farewell
+    assert "vaf run --session" in bridge.farewell
+    release.set()
+
+
+def test_an_empty_session_says_nothing_on_the_way_out(quiet_run_module):
+    """Nothing was said, nothing to come back to - the classic lane printed
+    "No messages to save." and stopped there."""
+    events = Recorder()
+    mgr = SimpleNamespace(save=lambda s, **k: "/tmp/x.json", list=lambda **k: [])
+    bridge = AgentBridge(FakeAgent(), FakeSession(), mgr, events)
+    bridge.shutdown()
+    assert bridge.farewell == ""

@@ -169,6 +169,7 @@ class AgentBridge:
         self._tools_ran = False
         self._streaming = False
         self._ended_in_success = False
+        self.farewell = ""            # printed by run_tui after the screen is free
         self.history: list = []       # (HH:MM, user text) for the history screen
 
     @staticmethod
@@ -443,6 +444,26 @@ class AgentBridge:
             self._refresh_context()
         self._submit(_run)
 
+    def _farewell(self, path) -> str:
+        """What the classic lane printed on the way out, minus its blocking
+        question: the id and the two ways back in.
+
+        Not a `print` from here - the screen may still belong to the app when
+        this runs, so `run_tui` shows it after the teardown.
+        """
+        session_id = str(getattr(self.session, "id", ""))
+        count = len(getattr(self.session, "messages", []) or [])
+        if not count:
+            return ""
+        lines = [f"Session saved ({count} messages)",
+                 f"  id:   {session_id}"]
+        if path:
+            lines.append(f"  file: {path}")   # only when the save already landed
+        lines += ["", "  To come back to it:",
+                  f"    vaf run --session {session_id}",
+                  f"    vaf session load {session_id}"]
+        return "\n".join(lines)
+
     def _rebind_local_admin(self) -> None:
         """load_session_context overwrites the identity from session metadata
         as a STRING; the memory tools expect the UUID (same re-bind as boot)."""
@@ -456,6 +477,46 @@ class AgentBridge:
                 self.agent._current_username = get_local_admin_username()
         except Exception:
             pass
+
+    def apply_provider_change(self, provider: str = "", model: str = "") -> None:
+        """Move the RUNNING agent onto a different provider or API model.
+
+        Uses the engine's own `reload_all_api_backends`, which is the whole
+        job and already does the parts a hand-rolled version gets wrong: it
+        re-reads the config from disk, rebuilds the backend under a lock, and
+        RE-ATTACHES the event sink to the new backend. The classic lanes threw
+        the agent away instead and silently lost the sink, the web
+        registration and the real session id.
+
+        Never `init_chat()` here: that resets the history to the system message
+        and would wipe the conversation behind the transcript. The classic
+        lanes may call it only because they discarded the object first.
+        """
+        def _run():
+            from vaf.core.agent import reload_all_api_backends
+            from vaf.core.config import Config
+            if provider:
+                Config.set("provider", provider)
+            if model and provider:
+                Config.set(f"api_model_{provider}", model)
+            # force=True: a key or model may have moved while the provider
+            # name stayed the same, and the no-op guard would swallow that.
+            changed = reload_all_api_backends(force=True)
+            label = model or provider or "configuration"
+            if changed:
+                self.events.system_note(f"switched to {label}")
+            else:
+                self.events.event_note(
+                    "Provider", f"{label} stored; the running agent kept its "
+                                f"backend (restart VAF to apply)", "warning")
+            self._emit("chrome_changed")
+            self._refresh_context()
+
+        if self._busy:
+            self.events.event_note("Provider", "not while a turn is running",
+                                   "warning")
+            return
+        self._submit(_run)
 
     def stop_speech(self) -> None:
         """`halt`/`stop`: silence the agent WHILE it is speaking.
@@ -524,6 +585,17 @@ class AgentBridge:
         except Exception:
             return []
 
+    def request_session_list(self) -> None:
+        """Read the session list on the lane and hand it back as an event.
+
+        Listing touches the filesystem for every session file; doing that on
+        the UI thread is the kind of jank that only shows up once a user has a
+        few hundred sessions.
+        """
+        def _run():
+            self._emit("session_list", self.list_sessions())
+        self._submit(_run)
+
     # ── misc ────────────────────────────────────────────────────────────────────────
     def _barge_in_stop(self) -> None:
         """Typing interrupts speech - the classic loop's barge-in, verbatim
@@ -557,6 +629,10 @@ class AgentBridge:
             self._get_web().resolve_gate(session_id, "cancel")
         except Exception:
             pass
+        # Composed BEFORE the finalizer, which may run on a daemon thread when
+        # a turn is still in flight - the caller prints this as soon as
+        # shutdown() returns, so it cannot wait for the save to finish.
+        self.farewell = self._farewell(None)
         self._queue.put(None)
 
         def _finalize():
@@ -564,7 +640,8 @@ class AgentBridge:
             while self._busy and time.monotonic() < deadline:
                 time.sleep(0.1)
             try:
-                self.session_mgr.save(self.session)
+                path = self.session_mgr.save(self.session)
+                self.farewell = self._farewell(path)   # richer, if we got here in time
             except Exception:
                 pass
             try:

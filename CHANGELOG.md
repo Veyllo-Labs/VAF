@@ -12,6 +12,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Most settings are editable inside the terminal app now.** Rows that used to say
+  "use `vaf settings`" work where they can: the AI provider and its model take effect
+  on the running agent without a restart, and the speech engine, input language,
+  sub-agent provider, sub-agent timeout, auto-open tab limit and local-server
+  auto-start are simply set. The three that genuinely need a fresh start - the local
+  model, the context limit and downloading a model - still point at `vaf settings`,
+  and now say why rather than just deferring.
+- **You can switch sessions from inside the terminal app.** The sessions panel was
+  a list you could look at but not use; the only way back into an earlier
+  conversation was quitting and passing its id on the command line. Ctrl+S now
+  opens it, the arrow keys walk it and enter loads the one you picked. And when
+  you leave, VAF prints the session id and both commands that bring you back,
+  instead of letting it disappear.
+- **The prompt remembers, suggests and completes again.** The full-screen `vaf run`
+  had a plain text box: no history on the arrow keys, no inline suggestion, no
+  completion for commands or file paths. All three are back, and they share the
+  older interface's history file, so your past messages are the same list whichever
+  way you start VAF. Typing `/` or `@` opens a menu you can walk with the arrow
+  keys; while it is open Enter picks an entry, and the next Enter sends.
 - **The terminal commands are back, and all of them work in both interfaces.** Typing
   `clear`, `tools`, `undo`, `restore`, `context`, `halt` or `restart` in the new
   full-screen `vaf run` used to send the word to the model as a chat message. They
@@ -39,6 +58,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tool card is no longer an empty fold: it opens onto the result.
 
 ### Fixed
+- **Sending a message no longer stalls while VAF saves what it learned.** Every
+  submitted line rewrote the entire learned-phrases file before anything else could
+  happen - on a well-used install that is a 2.5 MB write and about a seventh of a
+  second, paid in the terminal and in the web app alike. The learning is kept in
+  memory immediately and written out a few seconds later, in the background, and
+  the file is replaced atomically so an interrupted save cannot corrupt it.
 - **A sub-agent no longer draws over the terminal app.** When the coding agent, the
   librarian or the research agent ran without their own window, each painted a live
   progress panel straight onto the terminal - which shredded the display of the new

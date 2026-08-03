@@ -675,3 +675,282 @@ def test_restart_execs_only_after_the_screen_is_released(smoke_app, monkeypatch)
     asyncio.run(_drive())
     assert app._restart_requested is True
     bridge.shutdown()
+
+
+# ── prompt affordances (round 6) ────────────────────────────────────────────────────
+
+def test_the_completion_menu_opens_below_the_prompt_and_narrows_as_you_type(smoke_app):
+    from vaf.cli.tui_app.widgets import CompletionPopup, PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            popup = app.query_one("#completion", CompletionPopup)
+            box = app.query_one("#promptbox", PromptBox)
+            assert not popup.is_open, "the menu must start closed"
+
+            await pilot.press("slash", "s")
+            assert await _settle(pilot, lambda: popup.is_open)
+            wide = [c.insert for c in popup._candidates]
+
+            await pilot.press("e", "s", "s")
+            assert await _settle(pilot,
+                                 lambda: [c.insert for c in popup._candidates] != wide)
+            narrow = [c.insert for c in popup._candidates]
+            assert set(narrow) <= set(wide) and len(narrow) < len(wide)
+            assert popup.region.y < box.region.y, "the menu must sit above the prompt"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_enter_accepts_the_completion_and_only_then_sends(smoke_app):
+    """The one real collision in this round. Accepting used to re-open the menu
+    on the resulting text change, so `/settings` could never be submitted."""
+    from vaf.cli.tui_app.widgets import CompletionPopup, PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+    routed = []
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app.run_command = lambda parsed: routed.append(parsed.command.word)
+            popup = app.query_one("#completion", CompletionPopup)
+            box = app.query_one("#promptbox", PromptBox)
+
+            await pilot.press("slash", "s", "e")
+            assert await _settle(pilot, lambda: popup.is_open)
+
+            await pilot.press("enter")                       # accept
+            assert await _settle(pilot, lambda: not popup.is_open)
+            assert box.text == "/settings"
+            assert routed == [], "the accepting Enter also sent"
+
+            await pilot.press("enter")                       # send
+            assert await _settle(pilot, lambda: routed == ["settings"])
+            assert box.text == ""
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_escape_closes_the_menu_without_touching_the_draft(smoke_app):
+    from vaf.cli.tui_app.widgets import CompletionPopup, PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            popup = app.query_one("#completion", CompletionPopup)
+            box = app.query_one("#promptbox", PromptBox)
+            await pilot.press("slash", "s", "e")
+            assert await _settle(pilot, lambda: popup.is_open)
+
+            await pilot.press("escape")
+            assert await _settle(pilot, lambda: not popup.is_open)
+            assert box.text == "/se", "the draft was thrown away with the menu"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_up_arrow_walks_the_history(smoke_app):
+    from vaf.cli.tui_app.widgets import PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            box = app.query_one("#promptbox", PromptBox)
+            box.load_history(["newest", "older", "oldest"])
+
+            await pilot.press("up")
+            assert await _settle(pilot, lambda: box.text == "newest")
+            await pilot.press("up")
+            assert await _settle(pilot, lambda: box.text == "older")
+            await pilot.press("down")
+            assert await _settle(pilot, lambda: box.text == "newest")
+            await pilot.press("down")
+            assert await _settle(pilot, lambda: box.text == ""), (
+                "walking back past the newest entry must restore the draft")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_draft_survives_a_trip_through_the_history(smoke_app):
+    from vaf.cli.tui_app.widgets import PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            box = app.query_one("#promptbox", PromptBox)
+            box.load_history(["an older message"])
+
+            await pilot.press("h", "a", "l", "b")
+            assert await _settle(pilot, lambda: box.text == "halb")
+            await pilot.press("up")
+            assert await _settle(pilot, lambda: box.text == "an older message")
+            await pilot.press("down")
+            assert await _settle(pilot, lambda: box.text == "halb"), (
+                "the half-typed message was lost")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_a_submitted_line_joins_the_history(smoke_app, monkeypatch, tmp_path):
+    from vaf.cli.tui_app.widgets import PromptBox
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            box = app.query_one("#promptbox", PromptBox)
+            app._send_user("a message worth recalling")
+            box.remember("a message worth recalling")
+            await pilot.press("up")
+            assert await _settle(
+                pilot, lambda: box.text == "a message worth recalling")
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_tab_accepts_the_inline_suggestion_before_opening_a_menu(smoke_app):
+    from vaf.cli.tui_app.widgets import CompletionPopup, PromptBox
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            box = app.query_one("#promptbox", PromptBox)
+            popup = app.query_one("#completion", CompletionPopup)
+            # Through the REAL wiring: the app recomputes the suggestion on
+            # every change, so a hand-set value would be overwritten anyway.
+            app._suggester = SimpleNamespace(
+                suggest=lambda text: " welt" if text == "hallo" else None,
+                add_to_history=lambda text: None, flush=lambda: None)
+
+            await pilot.press("h", "a", "l", "l", "o")
+            assert await _settle(pilot, lambda: box.suggestion == " welt")
+
+            await pilot.press("tab")
+            assert await _settle(pilot, lambda: box.text == "hallo welt")
+            assert not popup.is_open, "the menu opened instead of accepting"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+# ── sessions (round 7) ──────────────────────────────────────────────────────────────
+
+def _sessions(bridge, rows):
+    bridge.list_sessions = lambda: rows
+
+
+def test_the_sessions_panel_walks_and_loads_with_the_keyboard(smoke_app):
+    """It was a static list: visible but not usable, and the only way into an
+    old session was quitting and passing --session."""
+    from textual.widgets import ListView
+
+    from vaf.cli.tui_app.screens import SessionsPanel
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+    loaded = []
+    bridge.load_session = lambda sid: loaded.append(sid)
+    _sessions(bridge, [
+        {"id": "aaa111", "name": "older talk", "updated_at": "2026-08-01 10:00",
+         "message_count": 4},
+        {"id": "bbb222", "name": "newer talk", "updated_at": "2026-08-02 11:00",
+         "message_count": 9},
+    ])
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app.action_toggle_sessions()
+            panel = app.query_one("#sessions", SessionsPanel)
+            lv = panel.query_one("#session-list", ListView)
+            assert await _settle(pilot, lambda: lv.option_count if hasattr(
+                lv, "option_count") else len(lv.children) >= 2)
+
+            lv.index = 0
+            await pilot.press("enter")
+            assert await _settle(pilot, lambda: loaded == ["aaa111"])
+            assert not panel.has_class("visible"), "the panel stayed open"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_picking_the_active_session_does_not_reload_it(smoke_app):
+    from vaf.cli.tui_app.screens import SessionsPanel
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+    loaded = []
+    bridge.load_session = lambda sid: loaded.append(sid)
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app._session_picked(SessionsPanel.Selected(str(bridge.session.id), "self"))
+            await pilot.pause()
+            assert loaded == [], "reloading the current session discards its context"
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_the_session_list_is_read_off_the_ui_thread(smoke_app):
+    """Listing globs and json-loads every session file - on the UI thread that
+    is a freeze that grows with the number of sessions."""
+    import threading
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+    seen_threads = []
+
+    def _listing():
+        seen_threads.append(threading.get_ident())
+        return []
+
+    bridge.list_sessions = _listing
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            ui_thread = threading.get_ident()
+            seen_threads.clear()
+            bridge.request_session_list()
+            assert await _settle(pilot, lambda: bool(seen_threads))
+            assert seen_threads[0] != ui_thread
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_switching_reports_the_new_session_in_the_transcript(smoke_app):
+    from vaf.cli.tui_app.widgets import SystemNote
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app.session_switched("ccc333dddd44", 7)
+            await pilot.pause()
+            notes = " ".join(str(n.render()) for n in app.query(SystemNote))
+            assert "ccc333dddd44" in notes and "7" in notes
+
+    asyncio.run(_drive())
+    bridge.shutdown()

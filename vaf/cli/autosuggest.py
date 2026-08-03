@@ -7,6 +7,7 @@ Cross-Platform: Windows, macOS, Linux
 """
 import os
 import json
+import threading
 import re
 from pathlib import Path
 from typing import Optional, List, Dict, Set
@@ -88,6 +89,8 @@ class SmartAutoSuggest(AutoSuggest):
         """
         self.learned_phrases: Dict[str, Counter] = {}
         self.history_file = history_file or (Path.home() / ".vaf" / "autosuggest.json")
+        self._save_lock = threading.RLock()
+        self._save_timer = None
         self._load_learned()
     
     def _load_learned(self):
@@ -102,13 +105,43 @@ class SmartAutoSuggest(AutoSuggest):
         except Exception:
             self.learned_phrases = {}
     
+    # The learned corpus grows without bound (measured on a real install:
+    # 2.5 MB / 48k prefixes), and writing it costs ~140 ms. `learn()` used to
+    # do that SYNCHRONOUSLY on every submitted line - in the classic prompt,
+    # in the web server, and it would have frozen the full-screen app for that
+    # long on every Enter. The write is debounced onto one daemon thread; the
+    # in-memory corpus is updated immediately either way, so a suggestion is
+    # never stale, only the file lags by a couple of seconds.
+    SAVE_DEBOUNCE_SECONDS = 3.0
+
     def _save_learned(self):
-        """Save learned phrases to file."""
+        """Persist the learned corpus - debounced, never on the caller's thread."""
+        with self._save_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+            timer = threading.Timer(self.SAVE_DEBOUNCE_SECONDS, self._write_learned)
+            timer.daemon = True
+            self._save_timer = timer
+            timer.start()
+
+    def flush(self):
+        """Write pending learning out NOW (call on a clean shutdown)."""
+        with self._save_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                self._save_timer = None
+        self._write_learned()
+
+    def _write_learned(self):
         try:
-            self.history_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.history_file, 'w', encoding='utf-8') as f:
+            with self._save_lock:
                 data = {k: dict(v) for k, v in self.learned_phrases.items()}
+                self._save_timer = None
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.history_file.with_suffix(".tmp")
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
+            tmp.replace(self.history_file)          # never a half-written corpus
         except Exception:
             pass
     
@@ -141,25 +174,21 @@ class SmartAutoSuggest(AutoSuggest):
         
         self._save_learned()
     
-    def get_suggestion(self, buffer: Buffer, document: Document) -> Optional[Suggestion]:
+    def suggest(self, text: str) -> Optional[str]:
+        """The suggestion for `text`, as a plain string.
+
+        The lane-agnostic entry point: prompt_toolkit wants a `Suggestion`
+        object, the full-screen app wants a `str` for its own ghost text.
+        Without this, one of them would have to reach into a private method.
         """
-        Get inline suggestion for current input.
-        
-        Returns:
-            Suggestion object with the completion text, or None
-        """
-        text = document.text_before_cursor
-        
         if not text or len(text) < 2:
             return None
-        
-        # Get suggestion
-        suggestion = self._get_best_suggestion(text)
-        
-        if suggestion:
-            return Suggestion(suggestion)
-        
-        return None
+        return self._get_best_suggestion(text)
+
+    def get_suggestion(self, buffer: Buffer, document: Document) -> Optional[Suggestion]:
+        """prompt_toolkit's shape, delegating to `suggest`."""
+        found = self.suggest(document.text_before_cursor)
+        return Suggestion(found) if found else None
     
     def _get_best_suggestion(self, text: str) -> Optional[str]:
         """Find the best suggestion for the given text."""
@@ -266,26 +295,26 @@ class CombinedAutoSuggest(AutoSuggest):
             # Also learn
             self.smart.learn(text)
     
-    def get_suggestion(self, buffer: Buffer, document: Document) -> Optional[Suggestion]:
-        """Get suggestion from smart suggester or history."""
-        text = document.text_before_cursor
-        
+    def suggest(self, text: str) -> Optional[str]:
+        """Learned corpus first, then this run's own history."""
         if not text:
             return None
-        
-        # 1. Try smart suggestion first
-        smart_suggestion = self.smart.get_suggestion(buffer, document)
-        if smart_suggestion:
-            return smart_suggestion
-        
-        # 2. Fall back to history matching
-        text_lower = text.lower()
-        for hist_entry in self.history_suggestions:
-            if hist_entry.lower().startswith(text_lower) and hist_entry != text:
-                # Return the rest of the history entry
-                return Suggestion(hist_entry[len(text):])
-        
+        found = self.smart.suggest(text)
+        if found:
+            return found
+        lowered = text.lower()
+        for entry in self.history_suggestions:
+            if entry.lower().startswith(lowered) and entry != text:
+                return entry[len(text):]
         return None
+
+    def flush(self):
+        self.smart.flush()
+
+    def get_suggestion(self, buffer: Buffer, document: Document) -> Optional[Suggestion]:
+        """prompt_toolkit's shape, delegating to `suggest`."""
+        found = self.suggest(document.text_before_cursor)
+        return Suggestion(found) if found else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -18,7 +18,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Markdown, Static, TextArea
+from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from vaf.cli.tui_app.theme_bridge import WHITE
 
@@ -467,8 +467,65 @@ class ContextBar(Static):
         )
 
 
+class CompletionPopup(OptionList):
+    """The completion menu, in normal flow just above the prompt.
+
+    NOT a modal screen: a modal would take focus, and the prompt has to keep
+    receiving keystrokes so the list narrows as the user types. It never gets
+    focus at all - `PromptBox` drives it by calling these methods, which also
+    means the list's own bindings can never fight the prompt's.
+    """
+
+    def on_mount(self) -> None:
+        self.display = False
+        self._candidates: list = []
+
+    @property
+    def is_open(self) -> bool:
+        return bool(self.display and self._candidates)
+
+    def open_with(self, candidates) -> None:
+        self._candidates = list(candidates)
+        self.clear_options()
+        if not self._candidates:
+            self.display = False
+            return
+        self.add_options([
+            f"{c.label}" + (f"  [$vaf-muted]{c.meta}[/]" if c.meta else "")
+            for c in self._candidates])
+        self.display = True
+        self.highlighted = 0
+
+    def close(self) -> None:
+        self._candidates = []
+        self.clear_options()
+        self.display = False
+
+    def move(self, delta: int) -> None:
+        if not self._candidates:
+            return
+        count = len(self._candidates)
+        current = self.highlighted if self.highlighted is not None else 0
+        self.highlighted = (current + delta) % count
+
+    def current(self):
+        if not self._candidates:
+            return None
+        idx = self.highlighted if self.highlighted is not None else 0
+        return self._candidates[idx] if 0 <= idx < len(self._candidates) else None
+
+
 class PromptBox(TextArea):
-    """Multiline input: Enter sends, Ctrl+J inserts a newline."""
+    """Multiline input with the affordances the classic prompt had.
+
+    Enter sends, Ctrl+J inserts a newline - and around that: persistent history
+    on the arrow keys, the learned inline suggestion accepted with Tab or
+    Right, and a completion menu for `/commands` and `@paths`.
+
+    The one collision to respect is Enter: while the menu is open it ACCEPTS,
+    it does not send. Everything consumed here calls both `stop()` and
+    `prevent_default()`, or TextArea's own bindings would still run.
+    """
 
     BINDINGS = [Binding("ctrl+j", "newline", "newline", show=False)]
 
@@ -477,16 +534,104 @@ class PromptBox(TextArea):
             super().__init__()
             self.text = text
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.popup = None            # set by the app once both are mounted
+        self._history: list = []     # newest first, as the store returns it
+        self._hist_index = -1        # -1 = not browsing
+        self._draft = ""
+
+    # history ------------------------------------------------------------------------
+    def load_history(self, entries) -> None:
+        self._history = [e for e in entries if e and e.strip()]
+
+    def remember(self, text: str) -> None:
+        if text and text.strip():
+            self._history.insert(0, text)
+        self._hist_index = -1
+        self._draft = ""
+
+    def _recall(self, delta: int) -> bool:
+        """Walk the history. Returns True when it consumed the key."""
+        if not self._history:
+            return False
+        if self._hist_index == -1:
+            if delta < 0:
+                return False                 # nothing newer than the draft
+            self._draft = self.text
+        new_index = self._hist_index + delta
+        if new_index < -1:
+            new_index = -1
+        if new_index >= len(self._history):
+            new_index = len(self._history) - 1
+        self._hist_index = new_index
+        self.text = self._draft if new_index == -1 else self._history[new_index]
+        self.move_cursor(self.document.end)
+        return True
+
+    # keys ---------------------------------------------------------------------------
+    def _accept_completion(self) -> bool:
+        cand = self.popup.current() if (self.popup and self.popup.is_open) else None
+        if cand is None:
+            return False
+        for _ in range(cand.replace):
+            self.action_delete_left()
+        self.insert(cand.insert)
+        self.popup.close()
+        return True
+
     async def _on_key(self, event: events.Key) -> None:
+        popup_open = bool(self.popup and self.popup.is_open)
+
+        if event.key in ("up", "down") and popup_open:
+            event.stop(); event.prevent_default()
+            self.popup.move(1 if event.key == "down" else -1)
+            return
+
+        if event.key in ("tab", "enter") and popup_open:
+            event.stop(); event.prevent_default()
+            self._accept_completion()
+            return
+
+        if event.key == "escape" and popup_open:
+            event.stop(); event.prevent_default()
+            self.popup.close()
+            return
+
         if event.key == "enter":
-            event.stop()
-            event.prevent_default()
+            event.stop(); event.prevent_default()
             text = self.text.strip()
             if text:
+                self.remember(text)
                 self.post_message(self.Submitted(text))
                 self.clear()
             return
+
+        if event.key == "tab":
+            event.stop(); event.prevent_default()
+            if self.suggestion:
+                self.insert(self.suggestion)     # the classic accept-then-complete
+            elif self.popup is not None:
+                from vaf.cli.completion import complete
+                self.popup.open_with(complete(self._text_before_cursor()))
+            return
+
+        if event.key == "up" and self.cursor_at_first_line:
+            if self._recall(+1):
+                event.stop(); event.prevent_default()
+                return
+
+        if event.key == "down" and self.cursor_at_last_line:
+            if self._recall(-1):
+                event.stop(); event.prevent_default()
+                return
+
         await super()._on_key(event)
+
+    def _text_before_cursor(self) -> str:
+        row, col = self.cursor_location
+        line = self.document.get_line(row)
+        return str(line)[:col]
 
     def action_newline(self) -> None:
         self.insert("\n")

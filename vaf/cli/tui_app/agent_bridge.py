@@ -125,6 +125,27 @@ def _inline_attachments(text: str, on_error=None) -> str:
     return _ATTACH_RE.sub(_read, text) if "@" in text else text
 
 
+def _write_crash_log():
+    """Append the current traceback to the dated crash log; return its path.
+
+    The classic loop did this for every unexpected turn error (the same
+    `get_dated_log_path("crash", "log")` file). In app mode a printed traceback
+    is worse than useless - it lands under the alternate screen - so the file
+    IS the artifact, and only its path goes into the transcript.
+    """
+    import traceback
+    try:
+        from vaf.core.log_helper import get_dated_log_path
+        path = get_dated_log_path("crash", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"\n--- {time.strftime('%Y-%m-%dT%H:%M:%S')} (vaf run, app lane) ---\n")
+            fh.write(traceback.format_exc())
+        return path
+    except Exception:
+        return None
+
+
 class AgentBridge:
     """Owns the agent lane; translates engine callbacks into UI events."""
 
@@ -170,7 +191,11 @@ class AgentBridge:
             try:
                 fn()
             except Exception as exc:               # a broken turn must not kill the app
-                self.events.event_note("Error", f"turn failed: {exc}", "error")
+                where = _write_crash_log()
+                detail = f"turn failed: {exc}"
+                self.events.event_note("Error", detail, "error")
+                if where:
+                    self.events.event_note("Error", f"traceback saved to {where}", "error")
             finally:
                 self._busy = False
                 if self._ended_in_success:
@@ -305,7 +330,8 @@ class AgentBridge:
                 ms = evt.get("duration_ms")
                 duration = f"{ms / 1000:.1f}s" if isinstance(ms, (int, float)) else ""
                 self.events.tool_end(str(evt.get("tool", "")),
-                                     bool(evt.get("ok", True)), duration)
+                                     bool(evt.get("ok", True)), duration,
+                                     str(evt.get("result", "") or ""))
                 self.events.presence("thinking", "")
             elif etype == "gate_required":
                 self.events.presence("waiting", "needs your permission")
@@ -316,6 +342,16 @@ class AgentBridge:
             # llm_start/llm_end: enrichment only (local providers emit none) - ignored.
         except Exception:
             pass                                     # an observer must not fail a run
+
+    def _emit(self, name: str, *args) -> None:
+        """Optional event: a lane whose events object predates it stays quiet
+        rather than raising into a command."""
+        fn = getattr(self.events, name, None)
+        if callable(fn):
+            try:
+                fn(*args)
+            except Exception:
+                pass
 
     def on_console_event(self, type_name: str, message: str, style: str) -> None:
         """Wired via UI.add_console_sink; the Router/Context/Memory narration."""
@@ -347,6 +383,95 @@ class AgentBridge:
                 time.sleep(0.05)
 
         threading.Thread(target=_resolve, daemon=True, name="vaf-tui-gate").start()
+
+    # ── commands that touch the agent ───────────────────────────────────────────────
+    def clear_conversation(self) -> None:
+        """`clear`: reset the agent's history to the system message.
+
+        On the lane, because `init_chat()` rebuilds the prompt manager and
+        re-reads the project context. The app has already emptied the
+        transcript; this confirms when the agent side actually landed.
+        """
+        def _run():
+            self.agent.init_chat()
+            self.events.system_note("conversation cleared")
+        self._submit(_run)
+
+    def undo_last_change(self) -> None:
+        """`undo`: roll back the last snapshot. On the lane - constructing a
+        Snapshot touches disk and shells out to git."""
+        def _run():
+            from vaf.core.snapshot import Snapshot
+            if Snapshot().undo():
+                self.events.system_note("rolled back to the last snapshot")
+            else:
+                self.events.event_note("Undo", "no snapshot available", "warning")
+        self._submit(_run)
+
+    def restore_context(self) -> None:
+        """`restore`: bring the archived context back after a compression."""
+        def _run():
+            if self.agent.restore_context():
+                self.events.system_note("full context restored from the archive")
+                self._refresh_context()
+            else:
+                self.events.event_note("Restore", "no archive to restore", "warning")
+        self._submit(_run)
+
+    def show_context(self) -> None:
+        """`context`: the tracked-state read-out, not just the token bar."""
+        def _run():
+            status = self.agent.get_context_status()
+            self._emit("context_status", dict(status or {}))
+        self._submit(_run)
+
+    def load_session(self, session_id: str) -> None:
+        """`session <id>`: the COMPLETE swap via load_session_context - never
+        the classic hand-rolled replay, which drops tool_calls and images."""
+        def _run():
+            try:
+                session = self.session_mgr.load(session_id)
+            except Exception as exc:
+                self.events.event_note("Session", f"cannot load {session_id}: {exc}",
+                                       "error")
+                return
+            self.session = session
+            self.agent.load_session_context(session.id)
+            self._rebind_local_admin()
+            self._emit("session_switched", session.id,
+                       len(getattr(session, "messages", []) or []))
+            self._refresh_context()
+        self._submit(_run)
+
+    def _rebind_local_admin(self) -> None:
+        """load_session_context overwrites the identity from session metadata
+        as a STRING; the memory tools expect the UUID (same re-bind as boot)."""
+        try:
+            from uuid import UUID
+
+            from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+            scope = get_local_admin_scope_id()
+            if scope:
+                self.agent._current_user_scope_id = UUID(str(scope))
+                self.agent._current_username = get_local_admin_username()
+        except Exception:
+            pass
+
+    def stop_speech(self) -> None:
+        """`halt`/`stop`: silence the agent WHILE it is speaking.
+
+        Its own short thread, not the lane: the lane is exactly the thread that
+        is busy running the turn whose speech the user wants stopped.
+        """
+        def _run():
+            try:
+                from vaf.core.speech import get_speech_manager
+                get_speech_manager().stop()
+            except Exception:
+                pass
+            self.events.system_note("speech stopped")
+
+        threading.Thread(target=_run, daemon=True, name="vaf-tui-halt").start()
 
     # ── chrome data ─────────────────────────────────────────────────────────────────
     def _refresh_context(self) -> None:
@@ -470,23 +595,48 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
     (llama.cpp) that would corrupt an app-mode screen - boot order is the
     mitigation, not suppression.
 
+    Two things the classic lane does here are NOT optional and are started
+    below, because dropping them is invisible until it hurts: the heartbeat
+    (the only signal the tray has that a CLI session is alive - without it the
+    tray unloads the local model out from under the session) and the git
+    preflight (git-dependent tools would otherwise fail deep inside a turn,
+    and an install prompt only works while the terminal is still plain).
+
     Deliberately NOT started here, each a named boundary: the web server +
-    frontend (`vaf run --web` remains that lane), the heartbeat thread (server
-    business), the git auto-install prompt, the classic result-notifier thread
-    (the drain timer replaces it - results mount into the transcript instead of
-    breaking a prompt), the web-input TaskQueue watcher (coexistence is the
-    next round's decision), and the classic lane's speech preloads - TTS
+    frontend (`vaf run --web` remains that lane), the classic result-notifier
+    thread (the drain timer replaces it - results mount into the transcript
+    instead of breaking a prompt), the web-input TaskQueue watcher (coexistence
+    is the next round's decision), and the classic lane's speech preloads - TTS
     engine warmup, the STT microphone check, and the langid preload - which
     land with the voice round; until then the first spoken reply pays the
     engine spin-up lazily.
+
+    Raises SystemExit when the git preflight fails, exactly like the classic
+    lane - the caller has not taken the screen yet, so the message is visible.
     """
-    from vaf.cli.cmd.run import _make_cli_agent, _quiet_cli_http_logs, _warmup_model
+    import threading
+
+    from vaf.cli.cmd.run import (
+        _check_and_install_git,
+        _heartbeat_loop,
+        _make_cli_agent,
+        _quiet_cli_http_logs,
+        _warmup_model,
+    )
     from vaf.cli.tui import TUI
     from vaf.core.session import SessionManager
     from vaf.core.subagent_ipc import cleanup_other_sessions, set_current_session_id
 
     _quiet_cli_http_logs()
     boot_tui = TUI(theme_key)
+
+    # The tray's liveness signal. Daemon so it never holds the process open.
+    threading.Thread(target=_heartbeat_loop, daemon=True,
+                     name="vaf-tui-heartbeat").start()
+
+    if not _check_and_install_git(boot_tui):
+        boot_tui.error("Git is required. Install it and run `vaf run` again.")
+        raise SystemExit(1)
 
     session_mgr = SessionManager()
     session = None

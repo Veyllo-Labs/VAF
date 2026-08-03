@@ -9,7 +9,12 @@ settings, model, history, sessions and help.
 The transcript is strictly chronological - newest at the bottom, always: a
 reply streamed after a tool call appears below that tool card (anything
 mounted below the live reply seals it; the next chunk opens a new one at the
-bottom). The avatar is the agent's bracket body with the animated eye,
+bottom). Answers render as markdown - headings, lists, emphasis and fenced
+code with syntax highlighting - not as raw `**stars**`. Streaming chunks are
+coalesced at 100 ms rather than re-rendered per token: the parser reparses only
+the tail, so the cost stays flat as the answer grows. The reasoning block is
+deliberately NOT markdown; it is plain muted text, because reasoning is not
+authored as markup. The avatar is the agent's bracket body with the animated eye,
 `[ ● ]`, drawn in the head row of the NEWEST reply (`[ ● ] VAF · HH:MM`);
 older replies drop it, and there is no fixed avatar chrome anywhere else. The
 eye animates with the agent's state (blink when idle, pulse when thinking,
@@ -63,11 +68,27 @@ second turn implementation:
 
 ## Keys and commands
 
-Enter sends, Ctrl+J inserts a newline. The classic run-loop words still work
-typed alone into the prompt: `s` settings, `c` model, `t` theme, `h` history,
-`l` voice, `?` help, `exit` quits. Slash commands (`/settings`, `/model`,
-`/theme`, `/history`, `/sessions`, `/voice`, `/help`, `/exit`) and Ctrl+P
-(palette), Ctrl+S (sessions), F1 (help), Ctrl+Q (quit) route to the same
+Enter sends, Ctrl+J inserts a newline. Commands come from one shared registry
+(`vaf/cli/commands.py`) that every terminal lane reads, so the completer, the
+palette, the help screen and the dispatcher can no longer disagree: `help`,
+`settings`, `model`, `theme <name>`, `history`, `sessions`, `session <id>`,
+`tools`, `context`, `clear`, `undo`, `restore`, `listen`, `halt`, `restart`,
+`exit` - each with its classic aliases (`s`, `c`, `t`, `h`, `l`, `?`, `q`,
+`stop`/`quiet`/`stfu`, `reload`/`r`). They work typed alone or with a slash,
+and arguments keep their case, so `session AbC123` and `theme dark` do what
+they say.
+
+A word from that list is never sent to the model, and an unknown `/command` is
+reported inline with the closest match rather than becoming a message. A
+sentence that merely starts with a command word (`clear the table for dinner`)
+stays a message: only commands that declare arguments match with any.
+
+Destructive commands (`clear`, `undo`, `restart`) ask first, in a modal that
+does not block. `halt` runs on its own thread rather than the agent lane -
+the lane is exactly what is busy producing the speech being stopped.
+`restart` execs only after the app has released the screen.
+
+Ctrl+P (palette), Ctrl+S (sessions), F1 (help) and Ctrl+Q (quit) reach the same
 places. `@path/to/file` inlines a file into the message, as in the classic
 lane. Every overlay walks with arrow keys, activates with enter or space, and
 closes with esc.
@@ -81,8 +102,13 @@ their flows land.
 ## Named boundaries (this round)
 
 - The app lane does not start the web dashboard; `vaf run --web` therefore
-  keeps the modern lane, which owns the server startup wiring (heartbeat,
-  web-input watcher, result notifier).
+  keeps the modern lane, which owns the web-input watcher and the result
+  notifier. (The heartbeat is NOT part of that wiring and runs on every
+  interactive lane: it is the only signal the tray has that a CLI session is
+  alive, and without it the tray unloads the local model mid-session.)
+- The in-process TaskQueue is not consumed yet: web-UI chat input, the
+  `__CMD__` session commands and timer messages reach the modern lane only.
+  A timer fired while just the app lane runs is therefore lost.
 - Voice capture, session switching, provider and model switching, and the
   completion/history machinery of the prompt land in the next round; the
   overlays that represent them say so instead of pretending. The classic
@@ -91,3 +117,9 @@ their flows land.
   first spoken reply pays the engine spin-up lazily.
 - Boot (model load, warmup) runs in the plain terminal BEFORE the app takes
   the screen: llama.cpp writes C-level stderr that would corrupt app mode.
+  The git preflight runs there too, for the same reason - an install prompt
+  only works while the terminal is still plain.
+- A turn that fails writes its traceback to the dated crash log
+  (`crash_YYYY-MM-DD.log`, see [DEBUGGING.md](../DEBUGGING.md)); only the path
+  appears in the transcript, because a printed traceback would land under the
+  alternate screen.

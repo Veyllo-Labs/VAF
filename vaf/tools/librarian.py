@@ -16,7 +16,6 @@ import subprocess
 import platform
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from rich.live import Live
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI, AnimatedHeader
@@ -375,7 +374,7 @@ You have access to this filesystem map for fast navigation:
             # Fast path succeeded - show brief static header
             from vaf.cli.tui import _StaticHeader
             header = _StaticHeader("Collaboration Mode Active", "Main Agt", "Librarian")
-            live = Live(header, refresh_per_second=12, console=UI.console)
+            live = UI.live(header, refresh_per_second=12, console=UI.console)
             live.start()
             try:
                 time.sleep(0.5)  # Brief display
@@ -2361,7 +2360,7 @@ Remove duplicates and ensure smooth flow.
         header = _StaticHeader("Collaboration Mode Active", "Main Agt", "Librarian")
         
         # Use Live to show the header, but with minimal updates
-        live = Live(header, refresh_per_second=12, console=UI.console)
+        live = UI.live(header, refresh_per_second=12, console=UI.console)
         live.start()
         
         time.sleep(1.0)

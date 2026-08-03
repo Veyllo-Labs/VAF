@@ -17,7 +17,7 @@ import time
 from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
 
@@ -96,6 +96,100 @@ class VoiceScreen(ModalScreen[str]):
         self.dismiss("")
 
 
+class ConfirmScreen(ModalScreen[bool]):
+    """A yes/no question that does not block.
+
+    The classic lane asked with `input()`, which owns the terminal - unusable
+    here. Same shape as GateScreen: push it with a callback, answer with a key.
+    """
+
+    BINDINGS = [
+        Binding("y", "answer(True)", "yes"),
+        Binding("enter", "answer(True)", "yes", show=False),
+        Binding("n", "answer(False)", "no"),
+        Binding("escape", "answer(False)", "cancel"),
+    ]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self._question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box", classes="modal-box"):
+            yield Static("[bold $warning]Confirm[/]", classes="modal-title")
+            yield Static(f"[$text]{_esc(self._question)}[/]", classes="modal-body")
+            yield Static(
+                "[$text][bold]y[/bold][/] [$vaf-muted]yes[/]   "
+                "[$text][bold]n[/bold] / [bold]esc[/bold][/] [$vaf-muted]no[/]",
+                classes="modal-keys")
+
+    def action_answer(self, yes: bool) -> None:
+        self.dismiss(bool(yes))
+
+
+class ToolsScreen(ModalScreen[None]):
+    """Every loaded tool with its description and audience.
+
+    An overlay rather than a transcript dump: 25+ rows is a reference list, not
+    a conversation event. The hidden/coder policy comes from the shared
+    catalog, never a second copy.
+    """
+
+    BINDINGS = [Binding("escape", "close_tools", "close")]
+
+    def __init__(self, rows) -> None:
+        super().__init__()
+        self._rows = list(rows)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="tools-box", classes="modal-box"):
+            yield Static(f"[bold $text]Tools[/] [$vaf-muted]({len(self._rows)})[/]",
+                         classes="modal-title")
+            yield ListView(id="tools-list")
+            yield Static("[$text-disabled]esc closes[/]", classes="modal-keys")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#tools-list", ListView)
+        if not self._rows:
+            lv.append(ListItem(Static("[$text-disabled]no tools loaded[/]")))
+        for row in self._rows:
+            audience = (f"  [$vaf-muted]{_esc(row.audience)}[/]"
+                        if row.audience else "")
+            lv.append(ListItem(Static(
+                f"[$text]{_esc(row.name):<26}[/] "
+                f"[$vaf-muted]{_esc(row.description)}[/]{audience}")))
+        lv.focus()
+
+    def action_close_tools(self) -> None:
+        self.dismiss(None)
+
+
+class ContextNote(Static):
+    """The classic `/context` panel, inline in the transcript.
+
+    Built from the dict `agent.get_context_status()` returns; the classic lane
+    formatted the same fields into a Rich panel.
+    """
+
+    def __init__(self, status: dict) -> None:
+        pct = float(status.get("usage_percent") or 0.0) * 100
+        tokens = int(status.get("tokens") or 0)
+        total = int(status.get("max_tokens") or 0)
+        lines = [
+            f"[$vaf-muted]context[/]  [bold $text]{tokens:,}/{total:,}[/] "
+            f"[$vaf-muted]tokens ({pct:.0f}%)[/]",
+            f"[$vaf-muted]messages[/] {int(status.get('messages') or 0)}"
+            f"   [$vaf-muted]files touched[/] {int(status.get('files_touched') or 0)}"
+            f"   [$vaf-muted]errors[/] {int(status.get('errors') or 0)}"
+            f"   [$vaf-muted]archives[/] {int(status.get('archives_available') or 0)}",
+        ]
+        goal = status.get("intent_goal")
+        if goal:
+            lines.append(f"[$vaf-muted]goal[/] [$text]{_esc(goal)}[/]")
+        super().__init__("\n".join(lines))
+        self.add_class("context-note")
+
+
 class SettingsScreen(ModalScreen[None]):
     """The `vaf settings` main menu as ONE arrow-driven stacked menu."""
 
@@ -129,6 +223,28 @@ class SettingsScreen(ModalScreen[None]):
     def _cfg(self, key, default=None):
         from vaf.core.config import Config
         return Config.get(key, default)
+
+    # Keys the runtime reads as `primary or legacy` - the row must ask the same
+    # question the runtime does, or it can show "off" while the feature is on.
+    _LEGACY_ALIASES = {"speech_stt_enabled": "stt_enabled"}
+
+    # Keys the running agent holds as a snapshot rather than reading live: a
+    # Config.set alone would not reach the object that acts on them.
+    _AGENT_SNAPSHOT_KEYS = ("persist_server",)
+
+    def _toggle_state(self, key) -> bool:
+        if bool(self._cfg(key, False)):
+            return True
+        legacy = self._LEGACY_ALIASES.get(key)
+        return bool(self._cfg(legacy, False)) if legacy else False
+
+    def _sync_live_agent(self, key, value) -> None:
+        if key not in self._AGENT_SNAPSHOT_KEYS:
+            return
+        try:
+            self.app._bridge.agent.config[key] = value
+        except Exception:
+            pass
 
     def _menu_rows(self, menu: str) -> list:
         if menu == "main":
@@ -200,7 +316,7 @@ class SettingsScreen(ModalScreen[None]):
             return "[$vaf-border]─────────────────[/]"
         if kind == "toggle":
             name, note = self.TOGGLES[arg]
-            on_now = bool(self._cfg(arg, False))
+            on_now = self._toggle_state(arg)
             state = "[$success]on[/]" if on_now else "[$text-disabled]off[/]"
             hint = f"  [$text-disabled]({note})[/]" if note else ""
             return f"[$vaf-muted]{name:<24}[/] {state}{hint}"
@@ -244,8 +360,9 @@ class SettingsScreen(ModalScreen[None]):
             return
         if kind == "toggle":
             from vaf.core.config import Config
-            new_val = not bool(self._cfg(arg, False))
+            new_val = not self._toggle_state(arg)
             Config.set(arg, new_val)
+            self._sync_live_agent(arg, new_val)
             self.app.notify(f"{self.TOGGLES[arg][0]}: {'on' if new_val else 'off'}",
                             timeout=1.5)
             self._refresh_labels()
@@ -258,6 +375,9 @@ class SettingsScreen(ModalScreen[None]):
         if kind == "theme":
             key = THEME_ORDER[arg]
             persist_theme(key)
+            # The app's key, not only Textual's: get_css_variables() resolves the
+            # vaf-* variables from it, and the `t` cycle counts from it.
+            self.app._theme_key = key
             self.app.theme = f"vaf-{key}"
             self.app.notify(f"theme: {key}", timeout=1.5)
             self._refresh_labels()
@@ -358,26 +478,39 @@ class HelpScreen(ModalScreen[None]):
 
     BINDINGS = [Binding("escape", "close_help", "close")]
 
-    ROWS = [
+    # Keys are the app's own; the command half is DERIVED, so the help can
+    # never list a word the dispatcher does not have (or omit one it does).
+    KEY_ROWS = [
         ("enter / ctrl+j", "send / newline"),
         ("ctrl+p", "command palette"),
-        ("s  (/settings)", "settings"),
-        ("c  (/model)", "provider and model"),
-        ("l  (/voice)", "voice input (next round)"),
-        ("t  (/theme)", "next theme"),
-        ("h  (/history)", "history"),
-        ("ctrl+s  (/sessions)", "sessions panel"),
-        ("/exit · ctrl+q", "quit"),
+        ("ctrl+s", "sessions panel"),
+        ("ctrl+q", "quit"),
         ("@file", "inline a file into the message"),
         ("vaf run --classic", "the classic terminal lane"),
     ]
 
+    @staticmethod
+    def command_rows():
+        from vaf.cli.commands import COMMANDS
+        rows = []
+        for cmd in COMMANDS:
+            keys = cmd.label
+            if cmd.aliases:
+                keys += "  (" + ", ".join(cmd.aliases) + ")"
+            rows.append((keys, cmd.help))
+        return rows
+
     def compose(self) -> ComposeResult:
         with Vertical(id="help-box", classes="modal-box"):
-            yield Static("[bold $text]Keys & Commands[/]", classes="modal-title")
-            for key, desc in self.ROWS:
-                yield Static(f"[$text]{key:<24}[/] [$vaf-muted]{desc}[/]",
+            yield Static("[bold $text]Keys[/]", classes="modal-title")
+            for key, desc in self.KEY_ROWS:
+                yield Static(f"[$text]{key:<26}[/] [$vaf-muted]{desc}[/]",
                              classes="settings-row")
+            yield Static("[bold $text]Commands[/]", classes="modal-title")
+            with VerticalScroll(id="help-commands"):
+                for key, desc in self.command_rows():
+                    yield Static(f"[$text]{key:<26}[/] [$vaf-muted]{desc}[/]",
+                                 classes="settings-row")
             yield Static("[$text-disabled]esc closes[/]", classes="modal-keys")
 
     def action_close_help(self) -> None:
@@ -387,16 +520,14 @@ class HelpScreen(ModalScreen[None]):
 class PaletteScreen(ModalScreen[str]):
     BINDINGS = [Binding("escape", "dismiss_palette", "close")]
 
-    COMMANDS = [
-        ("/settings", "Settings (s)"),
-        ("/model", "Provider and model (c)"),
-        ("/theme", "Next theme (t)"),
-        ("/history", "History (h)"),
-        ("/sessions", "Sessions panel (Ctrl+S)"),
-        ("/voice", "Voice input (next round)"),
-        ("/help", "All keys and commands (?)"),
-        ("/exit", "Quit"),
-    ]
+    @staticmethod
+    def entries():
+        """Derived from the registry - a palette entry that does not route is
+        exactly the drift this round removed."""
+        from vaf.cli.commands import COMMANDS
+        return [(f"/{c.word}", c.help + (f"  ({', '.join(c.aliases)})"
+                                         if c.aliases else ""))
+                for c in COMMANDS if c.palette]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="palette-box"):
@@ -411,7 +542,7 @@ class PaletteScreen(ModalScreen[str]):
     def _fill(self, needle: str) -> None:
         lv = self.query_one("#palette-list", ListView)
         lv.clear()
-        self._visible = [c for c in self.COMMANDS if needle.lower() in c[0]]
+        self._visible = [c for c in self.entries() if needle.lower() in c[0]]
         for cmd, desc in self._visible:
             lv.append(ListItem(Static(f"[bold $text]{cmd}[/]  [$vaf-muted]{desc}[/]")))
 
@@ -441,6 +572,8 @@ class SessionsPanel(Vertical):
         self.refresh_sessions([])
 
     def refresh_sessions(self, sessions, active_id: str = "") -> None:
+        if not self.is_attached:
+            return                      # not on the screen yet: nothing to fill
         for child in list(self.children):
             child.remove()
         self.mount(Static("[bold $text]sessions[/]", classes="panel-title"))

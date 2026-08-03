@@ -161,12 +161,11 @@ O))         O))       O))))))))
             def __init__(self, tui):
                 self.tui = tui
                 self.path_completer = PathCompleter(expanduser=True)
-                # Complete list of all available commands (without / prefix for completer)
-                self.all_commands = [
-                    'exit', 'quit', 'q', 'clear', 'settings', 'model', 'help',
-                    'session', 'theme', 'undo', 'history', 'export', 'tools',
-                    'restore', 'context', 'listen', 'l'  # Voice input
-                ]
+                # From the shared registry, so the completer can never offer a
+                # word the dispatcher does not handle (it used to offer
+                # `model`, `history` and `export`, none of which routed).
+                from vaf.cli.commands import bare_words
+                self.all_commands = sorted(bare_words())
                 # Use FuzzyCompleter for better matching (finds "settings" when typing "s")
                 from prompt_toolkit.completion import FuzzyCompleter
                 self.cmd_completer = FuzzyCompleter(
@@ -1149,6 +1148,22 @@ class _StaticHeader:
         )
 
 
+class _NoopLive:
+    """A drop-in stand-in for Rich's `Live` that paints nothing.
+
+    Lives here rather than beside any one tool: it is what `UI.live` hands back
+    when a full-screen app owns the terminal, and every animating tool needs
+    the same answer. Call sites keep calling update/stop unguarded.
+    """
+
+    def start(self, *args, **kwargs): pass
+    def stop(self, *args, **kwargs): pass
+    def update(self, *args, **kwargs): pass
+    def refresh(self, *args, **kwargs): pass
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATIC UI CLASS (Backward Compatibility)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1225,6 +1240,35 @@ class UI:
     @staticmethod
     def set_app_mode(active: bool) -> None:
         UI._app_mode = bool(active)
+
+    @staticmethod
+    def app_mode_active() -> bool:
+        """True while a full-screen app owns the terminal.
+
+        The reader half of `set_app_mode`. Anything that would paint directly
+        onto the terminal - a Rich `Live`, a progress bar, a raw print - has to
+        ask this first, because in app mode the screen is not free.
+        """
+        return bool(UI._app_mode)
+
+    @staticmethod
+    def live(renderable=None, **kwargs):
+        """A Rich `Live`, or a no-op stand-in when the screen is not ours.
+
+        Every long-running tool that animates its own panel used to decide this
+        for itself, and each got it wrong in a different way: the coder read an
+        env var that also silenced this very narration channel, the librarian
+        never asked at all, and the researcher tested `isatty()` - which is
+        True under a full-screen app, so the check passed and the screen was
+        overwritten anyway. One factory, one answer.
+
+        The returned object supports start/stop/update/refresh and the context
+        manager protocol either way, so no call site needs a guard.
+        """
+        if UI.app_mode_active():
+            return _NoopLive()
+        from rich.live import Live
+        return Live(renderable, **kwargs) if renderable is not None else Live(**kwargs)
 
     @staticmethod
     def event(type_name: str, title: str, style: str = "info", end: str = "\n"):
@@ -1324,12 +1368,10 @@ class UI:
             class VAFCompleter(Completer):
                 def __init__(self):
                     self.path_completer = PathCompleter(expanduser=True)
-                    # Complete list of commands (without / prefix for completer)
-                    all_commands = [
-                        'exit', 'quit', 'q', 'clear', 'settings', 'model', 'help',
-                        'session', 'theme', 'undo', 'history', 'export', 'tools',
-                        'restore', 'context'
-                    ]
+                    # From the shared registry - this was a SIXTH copy of the
+                    # command list, found by the guard that keeps it at one.
+                    from vaf.cli.commands import bare_words
+                    all_commands = sorted(bare_words())
                     # Use FuzzyCompleter for better matching
                     from prompt_toolkit.completion import FuzzyCompleter
                     self.cmd_completer = FuzzyCompleter(

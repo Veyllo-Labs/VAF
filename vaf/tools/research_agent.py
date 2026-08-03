@@ -80,6 +80,29 @@ class _StaticHeader:
         )
 
 
+def live_panel_is_appropriate(*, live_available: bool, noninteractive: bool,
+                              is_tty: bool, is_fragment_mode: bool,
+                              console=None) -> bool:
+    """May this run animate a progress panel on the terminal?
+
+    Named rather than inlined because the answer decides more than looks: when
+    it is True, `_emit_progress` stays SILENT (the panel is supposed to be the
+    progress display). So getting it wrong under a full-screen app produces
+    total silence - the panel renders into a no-op and the fallback never runs.
+
+    The two terminal probes cannot answer it alone: `is_tty` and
+    `console.is_terminal` are both True while a full-screen app owns the
+    screen, which is exactly the case that must say no.
+
+    `console` defaults to the shared `UI.console`; it is a parameter so the
+    decision can be exercised without a real terminal.
+    """
+    console = UI.console if console is None else console
+    return (live_available and not noninteractive and is_tty
+            and not is_fragment_mode and console.is_terminal
+            and not console.is_jupyter and not UI.app_mode_active())
+
+
 def _extract_urls(web_search_output: str) -> List[str]:
     # Matches lines like: "- Source: https://..."
     urls = re.findall(r"(?im)^\s*-\s*Source:\s*(https?://\S+)\s*$", web_search_output or "")
@@ -700,8 +723,9 @@ class ResearchAgentTool(BaseTool):
         # to prevent multiple Live instances from spamming the console when repair_report fixes multiple sections.
         # Note: We do NOT disable Live for in_workflow (like coding_agent), because Live works fine in workflows.
         is_fragment_mode = (out_format == "html_fragment")
-        # Strict check for Live support to avoid "spam" in dumb terminals (Colab, CI, etc.)
-        use_live = (Live is not None) and (not noninteractive) and is_tty and (not is_fragment_mode) and UI.console.is_terminal and not UI.console.is_jupyter
+        use_live = live_panel_is_appropriate(
+            live_available=Live is not None, noninteractive=noninteractive,
+            is_tty=is_tty, is_fragment_mode=is_fragment_mode)
         
         # Disable animation by default to prevent flickering/spam in many terminals
         animate_tui = False 
@@ -1518,7 +1542,7 @@ class ResearchAgentTool(BaseTool):
         initial_render = tui.render()
         
         # Live rendering (match coding_agent): use the shared UI.console.
-        live = Live(
+        live = UI.live(
             initial_render,
             console=UI.console,
             refresh_per_second=15,

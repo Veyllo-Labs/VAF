@@ -18,7 +18,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Static, TextArea
+from textual.widgets import Markdown, Static, TextArea
 
 from vaf.cli.tui_app.theme_bridge import WHITE
 
@@ -62,7 +62,15 @@ class AgentMessage(Vertical):
         self._think = ""
         self.avatar = AgentAvatar(classes="msg-avatar")
         self.avatar.display = False
-        self._body = Static("", classes="agent-msg", markup=False)
+        # A real Markdown widget, not a Static: answers arrive as markdown and
+        # showed as raw `**stars**` and raw ``` fences before. open_links=False
+        # is deliberate - the default would open the system browser on a click,
+        # bypassing the ux_auto_open_links setting that governs that decision.
+        self._body = Markdown(open_links=False)
+        self._body.add_class("agent-msg")
+        self._pending = ""
+        self._flushes = 0
+        self._timer = None
         self._think_body = Static("", classes="agent-think")
         self._think_body.display = False
 
@@ -74,12 +82,32 @@ class AgentMessage(Vertical):
         yield self._think_body
         yield self._body
 
+    def on_mount(self) -> None:
+        # Chunks arrive 20-100 times a second on the agent lane. Appending per
+        # chunk costs ~14% of the UI loop; re-rendering the whole document per
+        # chunk is O(n^2). Coalescing at 100 ms keeps it flat (~3.5 ms a flush
+        # regardless of length) because Markdown.append reparses only the tail.
+        self._timer = self.set_interval(0.1, self._flush)
+
     def set_avatar_visible(self, visible: bool) -> None:
         self.avatar.display = visible
 
     def feed(self, chunk: str) -> None:
+        # Stays synchronous and trivial: the agent lane must never wait on the
+        # UI. The timer below does the expensive half.
         self._answer += chunk
-        self._body.update(self._answer)
+        self._pending += chunk
+
+    async def _flush(self) -> None:
+        # `append` reads self.source eagerly, so two un-awaited calls in flight
+        # would silently swallow one another. Textual awaits an async interval
+        # callback, which serializes them for us.
+        app = self.app if self.is_mounted else None
+        if app is None or app._exit or not self._pending:
+            return
+        text, self._pending = self._pending, ""
+        self._flushes += 1
+        await self._body.append(text)
 
     def feed_think(self, chunk: str) -> None:
         self._think += chunk
@@ -94,21 +122,27 @@ class AgentMessage(Vertical):
             f"[italic $vaf-muted]{_escape(self._think.strip())}[/]")
 
     def done(self) -> None:
-        self._body.update(self._answer)
+        """Seal the bubble: stop the ticker and flush whatever is left.
+
+        The timer is stopped from HERE and never from inside its own callback -
+        doing that cancels the task currently executing it, which is one of the
+        two shapes that hung app teardown in testing.
+        """
+        if self._timer is not None:
+            try:
+                self._timer.stop()
+            except Exception:
+                pass
+            self._timer = None
+        if self._pending and self.is_mounted:
+            try:
+                self.call_next(self._flush)
+            except Exception:
+                pass
 
 
 def _escape(text: str) -> str:
     return text.replace("[", r"\[")
-
-
-class CodeBlock(Static):
-    """The old code_block: syntax-highlighted, titled."""
-
-    def __init__(self, code: str, language: str = "python", title: str = "") -> None:
-        from rich.syntax import Syntax
-        super().__init__(Syntax(code, language, theme="ansi_dark", line_numbers=False))
-        self.add_class("code-block")
-        self.border_title = title or language
 
 
 class EventNote(Static):
@@ -182,11 +216,13 @@ class ToolCard(Vertical):
         else:
             icon = "[$error]⏺[/]"
             tail = "[$error]error[/]"
-        fold = "▸" if self._collapsed else "▾"
+        # The fold marker only appears once there is something to unfold - a
+        # promise of hidden content that opens onto nothing is worse than none.
+        fold = ("  [$text-disabled]" + ("▸" if self._collapsed else "▾") + "[/]"
+                if self._output else "")
         self._head_left.update(
             f"{icon} [bold $text]{_escape(self._tool)}[/]"
-            f"[$vaf-muted]({_escape(self._args)})[/]"
-            f"  [$text-disabled]{fold}[/]"
+            f"[$vaf-muted]({_escape(self._args)})[/]{fold}"
         )
         self._head_right.update(tail)
 
@@ -194,6 +230,13 @@ class ToolCard(Vertical):
         self._output = text
         preview = text if len(text) < 400 else text[:400] + " …"
         self._body.update(f"[$vaf-muted]{_escape(preview)}[/]")
+        self._render_header()
+
+    def on_unmount(self) -> None:
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
 
     def finish(self, ok: bool = True, duration: str = "") -> None:
         self._status = "ok" if ok else "error"

@@ -49,7 +49,8 @@ class Recorder:
     def system_note(self, text):             self._rec("system_note", text)
     def renderable(self, obj):               self._rec("renderable", obj)
     def tool_start(self, tool, preview):     self._rec("tool_start", tool, preview)
-    def tool_end(self, tool, ok, duration):  self._rec("tool_end", tool, ok, duration)
+    def tool_end(self, tool, ok, duration, output=""):
+        self._rec("tool_end", tool, ok, duration, output)
     def gate_required(self, tool, reason):   self._rec("gate_required", tool, reason)
     def gate_decision(self, decision):       self._rec("gate_decision", decision)
     def presence(self, state, detail=""):    self._rec("presence", state)
@@ -361,7 +362,8 @@ def test_sink_events_dispatch_to_ui_events(quiet_run_module):
     bridge.on_sink_event({"type": "tool_start", "tool": "web_search",
                           "args": {"query": "x" * 50}})
     bridge.on_sink_event({"type": "tool_end", "tool": "web_search",
-                          "ok": True, "duration_ms": 1500})
+                          "ok": True, "duration_ms": 1500,
+                          "result": "17 results found"})
     bridge.on_sink_event({"type": "gate_required", "tool": "run_command",
                           "reason": "shell access"})
     bridge.on_sink_event({"type": "gate_decision", "decision": "allow_once"})
@@ -369,7 +371,7 @@ def test_sink_events_dispatch_to_ui_events(quiet_run_module):
     bridge.on_sink_event({"type": "no_such_event", "x": object()})  # never raises
 
     assert ("tool_start", ("web_search", "query=" + "x" * 24)) in events.calls
-    assert ("tool_end", ("web_search", True, "1.5s")) in events.calls
+    assert ("tool_end", ("web_search", True, "1.5s", "17 results found")) in events.calls
     assert ("gate_required", ("run_command", "shell access")) in events.calls
     assert ("gate_decision", ("allow_once",)) in events.calls
     assert bridge._tools_ran is True

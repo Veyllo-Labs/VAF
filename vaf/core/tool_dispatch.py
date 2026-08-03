@@ -190,6 +190,39 @@ def emit_event(sink, evt: dict) -> None:
             pass
 
 
+# The cap for the copy of a tool result that rides on `tool_end`. Borrowed from
+# the Web UI's tool bubble rather than invented, so the two surfaces show the
+# same amount and no third number enters the codebase.
+EVENT_RESULT_CHARS = 800
+
+
+def event_result(result) -> str:
+    """The capped, transport-safe copy of a tool result for a `tool_end` event.
+
+    Three clauses, each load-bearing:
+
+    * **Always a string.** A tool may return anything; `_truncate` passes short
+      non-strings through unchanged, so a sink cannot assume `str` upstream.
+    * **Surrogates replaced.** Not cosmetic, and the mechanism matters: the
+      three places that serialize sink events all pass `ensure_ascii=False`
+      (`vaf/main.py` and `vaf/cli/cmd/run.py` for `--output-format stream-json`,
+      `vaf/core/subagent_debug.py` for the `events.jsonl` mirror, which every
+      event reaches). With that flag a lone surrogate survives into the byte
+      encoding and raises `UnicodeEncodeError`; since `emit_event` swallows
+      sink failures, the whole `tool_end` line would vanish silently. (With the
+      default `ensure_ascii=True` it would merely be escaped - which is why the
+      test asserts against the serialization the lanes actually use.)
+    * **Capped independently of `max_result_chars`.** That knob is the MODEL's
+      context budget and may legitimately be `None` (no cut); observation must
+      never inherit an unbounded blob.
+    """
+    text = "" if result is None else str(result)
+    if len(text) > EVENT_RESULT_CHARS:
+        text = (text[:EVENT_RESULT_CHARS]
+                + f"\n[…+{len(text) - EVENT_RESULT_CHARS} chars]")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
 def with_subagent_debug_mirror(sink):
     """Wrap a sink so its events are ALSO written to the sub-agent debug log.
 
@@ -744,6 +777,7 @@ class ToolCaller:
             "duration_ms": int((time.monotonic() - started) * 1000),
             "ok": not (isinstance(result, str) and (
                 result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))),
+            "result": event_result(result),
         })
         if callable(self.hooks.after_emit):
             self.hooks.after_emit(name, result)

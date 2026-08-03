@@ -33,6 +33,7 @@ from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
     ToolCaller as _ToolCaller,
     assign_declared_identity as _assign_declared_identity,
+    event_result,
     is_channel_session as _is_channel_session,
     make_json_serializable,
     normalize_tool_name,
@@ -3523,8 +3524,8 @@ class Agent:
                 "content": (
                     f"⏰ **Sub-Agent Task TIMEOUT / TERMINATED** [Task: {task.task_id}]\n"
                     f"Agent: {task.agent_type}\n"
-                    f"Der Sub-Agent hat nicht rechtzeitig geantwortet.\n\n"
-                    f"Bitte informiere den User über dieses Problem."
+                    f"The sub-agent did not respond in time.\n\n"
+                    f"Please inform the user about this problem."
                 )
             })
         
@@ -4417,12 +4418,12 @@ class Agent:
         user_lang_name = language_names.get(user_lang, user_lang.upper())
         response_lang_name = language_names.get(response_lang, response_lang.upper())
         
-        # Sofortige, direkte Warnung in der Nutzersprache
+        # Immediate, direct warning (instruction to the model, always English)
         if user_lang == "de":
             warning = (
-                f"[!] **Sprach-Mismatch erkannt**: Du hast auf {response_lang_name} geantwortet, "
-                f"aber der Nutzer spricht {user_lang_name}. "
-                f"Bitte übersetze deine Antwort sofort ins {user_lang_name}."
+                f"[!] **Language mismatch detected**: You responded in {response_lang_name}, "
+                f"but the user is speaking {user_lang_name}. "
+                f"Please translate your response immediately into {user_lang_name}."
             )
         elif user_lang in language_names:
             # Try to generate a warning in the user's language (simple approach)
@@ -4569,7 +4570,7 @@ class Agent:
         }
 
         if lang == "de":
-            hint = "LANGUAGE_HINT: de (Antworte auf Deutsch. Stelle Rückfragen ebenfalls auf Deutsch.)"
+            hint = "LANGUAGE_HINT: de (Answer in German. Ask clarifying questions in German as well.)"
         elif lang == "en":
             hint = "LANGUAGE_HINT: en (Answer in English. Ask clarifying questions in English.)"
         elif lang and lang != "auto":
@@ -9794,12 +9795,12 @@ class Agent:
                                 if _c and not _c.startswith("[System"):
                                     _hl_intent = _c[:400]
                                     break
-                    _intent_line = f'\n\nDas originale Ziel war: "{_hl_intent}"' if _hl_intent else ""
+                    _intent_line = f'\n\nThe original goal was: "{_hl_intent}"' if _hl_intent else ""
                     _hard_stop_injection = (
-                        f"[System: HARD STOP — du hast {MAX_TOOL_TURNS_PER_STEP} Tool-Aufrufe verbraucht ohne die Aufgabe abzuschließen.{_intent_line}\n\n"
-                        f"Du darfst KEINE weiteren Tools mehr aufrufen. "
-                        f"Informiere den User auf Deutsch direkt und freundlich: Erkläre kurz was du bisher erreicht hast und wo du stehst. "
-                        f"Frage dann ob er möchte, dass du in einer neuen Antwort weitermachst.]"
+                        f"[System: HARD STOP - you have used up {MAX_TOOL_TURNS_PER_STEP} tool calls without completing the task.{_intent_line}\n\n"
+                        f"You must NOT call any further tools. "
+                        f"Inform the user in German, directly and in a friendly way: briefly explain what you have achieved so far and where you stand. "
+                        f"Then ask whether they want you to continue in a new reply.]"
                     )
                     UI.event("Emergency", f"Hard stop at {MAX_TOOL_TURNS_PER_STEP} tool turns — asking agent to inform user.", style="bold red")
                     append_domain_log("backend", f"hard_stop_injection at turn {MAX_TOOL_TURNS_PER_STEP}")
@@ -9821,12 +9822,12 @@ class Agent:
                                 if _c and not _c.startswith("[System"):
                                     _original_intent = _c[:400]
                                     break
-                    _intent_hint = f'\n\nDas originale Ziel des Users war: "{_original_intent}"' if _original_intent else ""
+                    _intent_hint = f'\n\nThe original goal of the user was: "{_original_intent}"' if _original_intent else ""
                     _reminder = (
-                        f"[System: Du hast bereits {SOFT_LIMIT_TOOL_TURNS} Tool-Aufrufe gemacht und hast die Aufgabe noch nicht abgeschlossen.{_intent_hint}\n\n"
-                        f"Überdenke deine Strategie: Bist du noch auf dem richtigen Weg? "
-                        f"Fokussiere dich auf das Wesentliche und schließe die Aufgabe so direkt wie möglich ab. "
-                        f"Du hast noch {MAX_TOOL_TURNS_PER_STEP - SOFT_LIMIT_TOOL_TURNS} weitere Tool-Aufrufe bevor ein Hard-Stop ausgelöst wird.]"
+                        f"[System: You have already made {SOFT_LIMIT_TOOL_TURNS} tool calls and have not completed the task yet.{_intent_hint}\n\n"
+                        f"Rethink your strategy: are you still on the right track? "
+                        f"Focus on what is essential and complete the task as directly as possible. "
+                        f"You have {MAX_TOOL_TURNS_PER_STEP - SOFT_LIMIT_TOOL_TURNS} more tool calls left before a hard stop is triggered.]"
                     )
                     UI.event("Warning", f"Soft limit reached ({SOFT_LIMIT_TOOL_TURNS} tool turns) — injecting goal reminder...", style="yellow")
                     append_domain_log("backend", f"soft_limit_reminder injected at turn {SOFT_LIMIT_TOOL_TURNS}")
@@ -10851,6 +10852,7 @@ class Agent:
                         "type": "tool_end", "tool": "python_exec",
                         "duration_ms": int((time.monotonic() - _pe_t0) * 1000),
                         "ok": not str(unsafe_result).startswith("Tool Error:"),
+                        "result": event_result(unsafe_result),
                     })
                     self._record_tool_used("python_exec")
                     result = unsafe_result
@@ -10921,6 +10923,7 @@ class Agent:
             "type": "tool_end", "tool": "multi_tool_use.parallel",
             "duration_ms": int((time.monotonic() - _mt_t0) * 1000),
             "ok": True,  # the wrapper itself; each inner tool reports its own ok
+            "result": event_result(result),
         })
         return result
 

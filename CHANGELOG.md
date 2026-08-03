@@ -12,6 +12,51 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The terminal commands are back, and all of them work in both interfaces.** Typing
+  `clear`, `tools`, `undo`, `restore`, `context`, `halt` or `restart` in the new
+  full-screen `vaf run` used to send the word to the model as a chat message. They
+  are commands again, alongside the ones that already worked, and a mistyped
+  `/command` now says so (with the closest match) instead of costing a turn.
+  Arguments work too: `theme dark` picks that theme instead of cycling, and
+  `session <id>` loads that session. The ones that cannot be undone - clearing the
+  conversation, rolling back files, restarting - ask first. Behind this, the command
+  list lived in six places that had already drifted apart: the older interface
+  offered completions for words it could not run, and ran a word it did not offer.
+  There is one list now, and both interfaces read it.
+- **Answers in the terminal are formatted again.** The full-screen `vaf run` showed
+  the model's markdown verbatim: literal asterisks around bold text, raw list
+  markers, and code fences as three backticks and unhighlighted text. Headings,
+  lists and emphasis now render, and code blocks are syntax-highlighted and follow
+  the active theme. Long answers stream just as smoothly as before, because the
+  text is redrawn on a fixed rhythm instead of on every word.
+- **Tool cards in the terminal now show what the tool actually returned.** The
+  observation events an application can subscribe to reported that a tool finished,
+  how long it took and whether it failed, but never what came back - so anyone
+  building on VAF had to correlate results out of debug log files, and three places
+  inside VAF carried their own private copy of the result for the same reason, each
+  cut to a different length. The `tool_end` event now carries a `result` field
+  (capped at 800 characters, always a string, safe to serialize). In `vaf run` the
+  tool card is no longer an empty fold: it opens onto the result.
+
+### Fixed
+- **A sub-agent no longer draws over the terminal app.** When the coding agent, the
+  librarian or the research agent ran without their own window, each painted a live
+  progress panel straight onto the terminal - which shredded the display of the new
+  full-screen `vaf run`. All three now ask one shared question first, and while an
+  application owns the screen they report their progress into the transcript instead
+  of over it.
+- **The terminal app no longer loses its model, its settings or its crash reports.**
+  Five things went wrong quietly in the new full-screen `vaf run`: the desktop tray
+  could unload the local model in the middle of a session, because the app never
+  told it that a session was alive; a failing turn left no traceback anywhere; a
+  theme picked in Settings only changed half the colors; the model name in the top
+  bar always read "local"; the speech-input row could show "off" while the
+  microphone was actually live; and switching server persistence did not reach the
+  running agent. `vaf run` now also checks for Git before it starts, instead of
+  letting tools fail deep inside an answer, and falls back to the previous
+  interface if the full-screen one cannot start at all.
+
+### Added
 - **`vaf run` opens a full-screen terminal app.** The terminal chat is no longer a
   scrolling prompt: it is a full-screen app with a live transcript (strictly
   chronological, streamed answers with the model's reasoning as a separate muted

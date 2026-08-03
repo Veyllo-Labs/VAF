@@ -25,13 +25,16 @@ Standard libraries (`os`, `json`, `re`, `threading`) and `rich` components are i
 ### History Management: Tool-Call Content Stripping
 After a successful `write_file` call, the agent walks backwards through `history` to find the corresponding `assistant` message. The `content` field inside the tool-call's JSON arguments is replaced with `[content omitted — N bytes written to disk]`. The rest of the tool-call (path, id) is preserved. This keeps the history size bounded regardless of file size.
 
-### `_NoopLive` Class
-A drop-in replacement for `rich.Live`. All methods (`start`, `stop`, `update`, `refresh`) are no-ops. Used as the `live` object when `CoderTUI` runs in `simple_mode`, so all call sites that reference `live.update()` / `live.stop()` need no per-call guards.
+### Who owns the screen (`UI.live`)
+The coder never builds a `rich.Live` itself. It asks `vaf.cli.tui.UI.live(...)`, which returns a real `Live` when the terminal is free and a silent `_NoopLive` (all methods no-ops, so call sites need no per-call guards) when a full-screen app owns it. The same factory serves the librarian and the research agent - each of the three used to decide this alone and each got it wrong differently, the researcher's `isatty()` check most instructively: it is True under a full-screen app, so the guard passed and the screen was overwritten anyway. Guarded by `tests/test_live_display_ownership.py`, which greps for direct `Live(` construction because `research_agent` imports it function-locally.
+
+### Narration in simple mode (`CoderTUI._say`)
+Simple mode replaces the panel with plain lines. `_say` is the only way they leave: with the screen free it prints `[Coder] ...` to stdout; with a full-screen app up it goes through `UI.event`, which the app already subscribes to, so the line lands in the transcript rather than on top of the app's rendering.
 
 ### `CoderTUI` Class (The Interface)
 Implements a "Mini-IDE" using `rich.live`.
 *   **`__init__(simple_mode=False)`**: Initializes state (`files`, `current_action`), locks (`RLock` for thread safety), and the `AnimatedHeader`.
-    *   **`simple_mode=True`**: The Rich Live display is not started. `append_stream()` prints `[Coder] text` directly to stdout. `update_file(..., status="done")` prints `[Coder] ✅ Written: filename (N bytes)`. All other methods are silent no-ops. Active when `VAF_IN_WORKFLOW_TERMINAL=1`.
+    *   **`simple_mode=True`**: No panel. `append_stream()` and `update_file(..., status="done")` narrate through `_say()` (stdout, or the app's event channel - see above). All other methods are silent no-ops. Active when `VAF_IN_WORKFLOW_TERMINAL=1` or while a full-screen app owns the terminal.
 *   **`render()`**: The main draw loop. Constructs a `Layout` with:
     *   **Header:** Agent status.
     *   **Left Panel:** File tree (Icons show status: 📝 Writing, ✅ Done, ❌ Error).
@@ -150,7 +153,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     *   Proceeds to execute the logic below.
 
 ### B. Initialization (Lines ~1700-2200)
-*   **TUI Start:** Checks `VAF_IN_WORKFLOW_TERMINAL`. If set, `CoderTUI` is created with `simple_mode=True` and `live = _NoopLive()`. Otherwise, a full `rich.Live` context is started at 12 FPS.
+*   **TUI Start:** Two independent questions. `simple_mode` (plain lines instead of a panel) is on when `VAF_IN_WORKFLOW_TERMINAL` is set OR a full-screen app owns the terminal. Whether a real `rich.Live` runs at all is decided by `UI.live()`, not here - it yields a no-op stand-in while the screen belongs to someone else, and a 12 FPS `Live` otherwise.
 *   **API Mode Detection (`_is_api_mode`):**
     *   The coder talks plain OpenAI wire format over raw HTTP, so it resolves its endpoint from `coder_api_providers()` (module level), which is built from the central provider registry (`vaf/core/provider_registry.py`) and therefore covers every API provider by construction - OpenAI, Anthropic (OpenAI-compat URL), DeepSeek, OpenRouter, Google (OpenAI-compat URL), Veyllo (base URL from config `veyllo_base_url`, resolved at call time).
     *   **Sync guard:** the map MUST cover every provider in `config.PROVIDER_MODELS` — enforced by `tests/test_coder_provider_map.py`. An API provider missing from the map returns a clear "coder configuration error" instead of falling through to the local branch, which would otherwise route an API provider's work to a local model.

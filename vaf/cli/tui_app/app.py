@@ -22,7 +22,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Static
 
+from vaf.cli.commands import parse, suggest
 from vaf.cli.tui_app.screens import (
+    ConfirmScreen,
+    ContextNote,
     GateScreen,
     HelpScreen,
     HistoryScreen,
@@ -31,6 +34,7 @@ from vaf.cli.tui_app.screens import (
     SessionsPanel,
     SettingsChanged,
     SettingsScreen,
+    ToolsScreen,
 )
 from vaf.cli.tui_app.theme_bridge import (
     THEME_ORDER,
@@ -73,13 +77,24 @@ class TuiEvents:
         app = self._app
         if app is None:
             return
+        # Decide by state rather than by exception: call_from_thread builds its
+        # coroutine BEFORE it can fail, so catching the failure leaves an
+        # un-awaited coroutine behind. Two states matter.
         try:
-            app.call_from_thread(fn, *args)
+            loop = app._loop
+            on_app_thread = app._thread_id == threading.get_ident()
         except Exception:
-            try:
-                fn(*args)
-            except Exception:
-                pass
+            loop, on_app_thread = None, True
+
+        if loop is None or loop.is_closed():
+            # The app is gone (or going): a late event from the lane, the tasks
+            # poll or the gate thread has nowhere to render. Drop it - touching
+            # widgets from here would be worse than losing the line.
+            return
+        try:
+            fn(*args) if on_app_thread else app.call_from_thread(fn, *args)
+        except Exception:
+            pass
 
     def turn_started(self, text):           pass  # the app mounted the user message itself
     def agent_message_start(self):          self._ui(self._app_call, "begin_agent_message")
@@ -91,11 +106,13 @@ class TuiEvents:
     def system_note(self, text):            self._ui(self._app_call, "add_system_note", text)
     def renderable(self, obj):              self._ui(self._app_call, "add_renderable", obj)
     def tool_start(self, tool, preview):    self._ui(self._app_call, "tool_started", tool, preview)
-    def tool_end(self, tool, ok, duration): self._ui(self._app_call, "tool_ended", tool, ok, duration)
+    def tool_end(self, tool, ok, duration, output=""): self._ui(self._app_call, "tool_ended", tool, ok, duration, output)
     def gate_required(self, tool, reason):  self._ui(self._app_call, "show_gate", tool, reason)
     def gate_decision(self, decision):      self._ui(self._app_call, "gate_decided", decision)
     def presence(self, state, detail=""):   self._ui(self._app_call, "set_presence", state, detail)
     def context(self, used, total):         self._ui(self._app_call, "set_context", used, total)
+    def context_status(self, status):       self._ui(self._app_call, "add_context_note", status)
+    def session_switched(self, sid, count): self._ui(self._app_call, "session_switched", sid, count)
 
     def _app_call(self, name, *args) -> None:
         getattr(self._app, name)(*args)
@@ -149,7 +166,16 @@ class VafApp(App):
     .user-msg {
         padding: 0 1; border-left: thick $accent; background: $surface;
     }
-    .agent-msg { margin-left: 1; }
+    /* The Markdown body ships its own padding; strip it so the answer lines
+       up with the head row, then style the blocks it mounts. */
+    .agent-msg { margin-left: 1; padding: 0; height: auto; }
+    .agent-msg MarkdownFence {
+        margin: 1 0; padding: 0 1;
+        background: $surface; border-left: thick $vaf-border;
+    }
+    .agent-msg MarkdownH1, .agent-msg MarkdownH2, .agent-msg MarkdownH3 {
+        color: $primary; margin: 1 0 0 0;
+    }
     .agent-think {
         margin: 0 0 1 1; padding: 0 1; height: auto;
         border-left: thick $vaf-border; background: $surface;
@@ -157,11 +183,6 @@ class VafApp(App):
     .system-note { margin: 1 0 0 1; }
     .event-note { margin: 0 0 0 1; }
     .renderable-note { margin: 1 0 0 1; }
-    .code-block {
-        margin: 1 0 0 1; padding: 0 1;
-        border: round $vaf-border; background: $surface;
-        border-title-color: $vaf-muted;
-    }
     .tool-card {
         margin: 1 0 0 1; padding: 0 1; height: auto;
         border: round $vaf-border; background: $surface;
@@ -226,6 +247,7 @@ class VafApp(App):
         self._bridge = bridge
         self._initial_message = initial_message
         self._live_msg = None
+        self._restart_requested = False
         self._avatar_host = None          # the newest AgentMessage; carries the dot
         self._presence_state = "idle"
         self._open_cards: dict = {}
@@ -332,10 +354,13 @@ class VafApp(App):
         session = self._bridge.session
         top.session_name = (getattr(session, "name", "") or str(session.id)[:12])
         provider = str(Config.get("provider", "local"))
-        model = (str(Config.get(f"api_model_{provider}", "")) if provider != "local"
-                 else str(Config.get("model_name", "local")))
+        # The local model lives under `model`; there is no `model_name` key.
+        model = str(Config.get(f"api_model_{provider}", "") if provider != "local"
+                    else Config.get("model", ""))
         top.model_chip = f"{provider} · {model}" if model else provider
-        top.mic_on = bool(Config.get("speech_stt_enabled", False))
+        # The same OR the runtime asks (vaf/core/speech.py is_stt_enabled).
+        top.mic_on = bool(Config.get("speech_stt_enabled", False)
+                          or Config.get("stt_enabled", False))
 
     def set_presence(self, state: str, detail: str = "") -> None:
         self._presence_state = state
@@ -386,15 +411,29 @@ class VafApp(App):
     def add_renderable(self, obj) -> None:
         self._mount_scrolled(RenderableNote(obj))
 
+    def add_context_note(self, status: dict) -> None:
+        self._mount_scrolled(ContextNote(status))
+
+    def session_switched(self, session_id: str, message_count: int) -> None:
+        self._refresh_chrome()
+        self.add_system_note(
+            f"switched to session {session_id[:12]} · {message_count} messages")
+        panel = self.query_one("#sessions", SessionsPanel)
+        if panel.has_class("visible"):
+            panel.refresh_sessions(self._bridge.list_sessions(), session_id)
+
     def tool_started(self, tool: str, preview: str) -> None:
         card = ToolCard(tool, preview)
         self._open_cards.setdefault(tool, []).append(card)
         self._mount_scrolled(card)
 
-    def tool_ended(self, tool: str, ok: bool, duration: str) -> None:
+    def tool_ended(self, tool: str, ok: bool, duration: str, output: str = "") -> None:
         cards = self._open_cards.get(tool) or []
         if cards:
-            cards.pop(0).finish(ok=ok, duration=duration)
+            card = cards.pop(0)
+            if output:
+                card.set_output(output)
+            card.finish(ok=ok, duration=duration)
 
     def show_gate(self, tool: str, reason: str) -> None:
         if self._gate_screen is not None:
@@ -432,7 +471,7 @@ class VafApp(App):
 
     # actions ------------------------------------------------------------------------
     def action_palette(self) -> None:
-        self.push_screen(PaletteScreen(), self._route_command)
+        self.push_screen(PaletteScreen(), self._run_palette_choice)
 
     def action_settings(self) -> None:
         self.push_screen(SettingsScreen())
@@ -468,48 +507,142 @@ class VafApp(App):
     def _settings_changed(self, _msg: SettingsChanged) -> None:
         self._refresh_chrome()
 
-    def _route_command(self, cmd) -> None:
-        if not cmd:
-            return
-        routes = {
-            "/settings": self.action_settings, "/model": self.action_model,
-            "/voice": self.action_voice, "/theme": self.action_next_theme,
-            "/history": self.action_history, "/sessions": self.action_toggle_sessions,
-            "/help": self.action_help, "/exit": self.exit, "/quit": self.exit,
+    # commands -----------------------------------------------------------------------
+    def _handlers(self) -> dict:
+        """word -> callable(args). The registry decides WHICH words exist and
+        where they run; this maps them to what the app actually does."""
+        return {
+            "help": lambda a: self.action_help(),
+            "settings": lambda a: self.action_settings(),
+            "model": lambda a: self.action_model(),
+            "theme": self._cmd_theme,
+            "history": lambda a: self.action_history(),
+            "sessions": lambda a: self.action_toggle_sessions(),
+            "session": self._cmd_session,
+            "tools": lambda a: self.action_tools(),
+            "context": lambda a: self._bridge.show_context(),
+            "clear": self._cmd_clear,
+            "undo": lambda a: self._bridge.undo_last_change(),
+            "restore": lambda a: self._bridge.restore_context(),
+            "listen": lambda a: self.action_voice(),
+            "halt": lambda a: self._bridge.stop_speech(),
+            "restart": lambda a: self._request_restart(),
+            "exit": lambda a: self.exit(),
         }
-        handler = routes.get(cmd)
-        if handler:
-            handler()
+
+    def _run_palette_choice(self, choice) -> None:
+        """The palette hands back a `/word`; route it the same way a typed one
+        goes, so there is no second dispatch path to keep in step."""
+        if not choice:
+            return
+        parsed = parse(str(choice))
+        if parsed.command is not None:
+            self.run_command(parsed)
+
+    def run_command(self, parsed) -> None:
+        """Execute one parsed command, asking first when it says to."""
+        cmd = parsed.command
+        handler = self._handlers().get(cmd.word)
+        if handler is None:                       # registry grew a word we forgot
+            self.add_event_note("Command", f"/{cmd.word} is not wired here", "warning")
+            return
+        if cmd.lane == "agent" and self._bridge.busy:
+            self.add_system_note(f"/{cmd.word}: queued, runs after the current turn")
+        if cmd.confirm:
+            self.push_screen(ConfirmScreen(cmd.confirm),
+                             lambda yes: handler(parsed.args) if yes else None)
         else:
-            self.notify(f"{cmd}: not a command here - F1 lists everything", timeout=2.0)
+            handler(parsed.args)
+
+    def _cmd_theme(self, args) -> None:
+        if not args:
+            self.action_next_theme()
+            return
+        name = args[0].lower()
+        if name not in THEME_ORDER:
+            self.add_event_note(
+                "Theme", f"unknown theme {name!r} - have: "
+                         + ", ".join(THEME_ORDER), "warning")
+            return
+        self._theme_key = name
+        persist_theme(name)
+        self.theme = textual_theme_name(name)
+        self.notify(f"theme: {name}", timeout=1.5)
+
+    def _cmd_session(self, args) -> None:
+        if not args:
+            self.action_toggle_sessions()
+            return
+        self._bridge.load_session(args[0])
+
+    def _cmd_clear(self, args) -> None:
+        # The transcript goes NOW (the user asked for it); the agent-side reset
+        # is queued on the lane and confirms itself when it lands.
+        for child in list(self.transcript.children):
+            child.remove()
+        self._live_msg = None
+        self._avatar_host = None
+        self._bridge.clear_conversation()
+
+    def action_tools(self) -> None:
+        from vaf.cli.tool_catalog import describe_tools
+        self.push_screen(ToolsScreen(describe_tools(self._bridge.agent)))
+
+    def _request_restart(self) -> None:
+        """Exec only AFTER the screen is released - see run_tui's finally."""
+        self._restart_requested = True
+        self.exit()
 
     # input --------------------------------------------------------------------------
-    # The classic run loop's words keep working typed alone into the prompt.
-    WORD_ROUTES = {
-        "s": "/settings", "settings": "/settings",
-        "c": "/model", "model": "/model",
-        "t": "/theme", "theme": "/theme",
-        "h": "/history", "history": "/history",
-        "l": "/voice", "listen": "/voice",
-        "?": "/help", "help": "/help",
-        "exit": "/exit", "quit": "/exit", "bye": "/exit",
-    }
-
     @on(PromptBox.Submitted)
     def _submitted(self, event: PromptBox.Submitted) -> None:
-        text = event.text
-        lowered = text.lower()
-        if lowered.startswith("/"):
-            self._route_command(lowered.split()[0])
+        parsed = parse(event.text)
+        if parsed.command is not None:
+            self.run_command(parsed)
             return
-        if lowered in self.WORD_ROUTES:
-            self._route_command(self.WORD_ROUTES[lowered])
+        if parsed.unknown_word:
+            # A /slash form NEVER reaches the model. Inline rather than a toast:
+            # a command that did not run belongs in the conversation record.
+            hint = suggest(parsed.unknown_word)
+            extra = f" - did you mean /{hint[0]}?" if hint else ""
+            self.add_event_note(
+                "Command", f"unknown: /{parsed.unknown_word}{extra} "
+                           f"(F1 lists everything)", "warning")
             return
-        self._send_user(text)
+        self._send_user(event.text)
 
     def _send_user(self, text: str) -> None:
         self._mount_scrolled(UserMessage(text))
         self._bridge.submit_turn(text)
+
+
+def _exec_restart() -> None:
+    """Replace this process with a fresh `vaf run`.
+
+    The exec branches are ported verbatim from the classic lane - the `.exe`
+    and `-m vaf` cases are load-bearing on Windows. What is NOT ported is its
+    npm teardown: `npm_process` is initialised to None there and never
+    assigned, so that block has always been dead. The frontend, if this
+    process owns one at all, is torn down through its manager.
+    """
+    import os
+    import sys
+
+    from vaf.cli.ui import UI as _UI
+    try:
+        from vaf.core.frontend_manager import FrontendManager
+        FrontendManager().stop_frontend(wait_for_exit=True)
+    except Exception:
+        pass
+    try:
+        if sys.argv[0].endswith(".exe"):
+            os.execl(sys.argv[0], sys.argv[0], *sys.argv[1:])
+        elif sys.argv[0].endswith("__main__.py"):
+            os.execl(sys.executable, sys.executable, "-m", "vaf", *sys.argv[1:])
+        else:
+            os.execl(sys.executable, sys.executable, *sys.argv)
+    except Exception as exc:
+        _UI.error(f"Restart failed: {exc}")
 
 
 def run_tui(message: str = None, theme: str = None, session_id: str = None,
@@ -533,3 +666,8 @@ def run_tui(message: str = None, theme: str = None, session_id: str = None,
         UI.set_app_mode(False)
         UI.remove_console_sink(bridge.on_console_event)
         bridge.shutdown()
+
+    # ONLY here, with the alternate screen released and the tty restored:
+    # exec'ing from inside the app would hand the new process a raw terminal.
+    if getattr(app, "_restart_requested", False):
+        _exec_restart()

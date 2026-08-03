@@ -427,34 +427,15 @@ def show_tools_menu(agent):
     table.add_column("Use this to...", style="white")
     table.add_column("Available To", style="dim")
     
-    # 1. Main Agent tools (exclude update_intent and other internal tools from list)
-    TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
-    if agent and hasattr(agent, "tools"):
-        for name, tool in agent.tools.items():
-            if name in TOOLS_HIDDEN_FROM_CLI:
-                continue
-            t_type = "Main Agent"
-            if "CodingAgent" in str(type(tool)) or "Librarian" in str(type(tool)): 
-                t_type = "Sub-Agent Delegator"
-            if "WebSearch" in str(type(tool)): 
-                t_type = "Main Agent (Research)"
-            if "WebFetch" in str(type(tool)):
-                t_type = "Main Agent (Research)"
-            
-            desc = tool.description[:55] + "..." if len(tool.description) > 55 else tool.description
-            table.add_row(name, desc, t_type)
-    
-    # 2. Coder Sub-Agent only tools (not given to Main Agent; shown for reference)
-    # write_file/read_file/list_files are NOT in this list: they are registered to
-    # the main agent too (write_file since the tool-friction audit fix).
-    CODER_SUBAGENT_TOOLS = [
-        ("read_file", "Read a file's contents", "Coder Sub-Agent"),
-        ("list_files", "List files in directory", "Coder Sub-Agent"),
-        ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),
-        ("codesearch", "Search for code patterns/symbols", "Coder Sub-Agent"),
-    ]
-    for name, desc, available_to in CODER_SUBAGENT_TOOLS:
-        table.add_row(f"[dim]{name}[/dim]", f"[dim]{desc}[/dim]", f"[yellow]{available_to}[/yellow]")
+    # Contents come from the shared catalog: which tools are hidden and which
+    # are coder-only is POLICY, and a second lane needs the same answer.
+    from vaf.cli.tool_catalog import describe_tools
+    for row in describe_tools(agent):
+        if row.coder_only:
+            table.add_row(f"[dim]{row.name}[/dim]", f"[dim]{row.description}[/dim]",
+                          f"[yellow]{row.audience}[/yellow]")
+        else:
+            table.add_row(row.name, row.description, row.audience)
     
     UI.console.print(table)
     UI.print("\n[dim]Note: Dim tools are only available to Sub-Agents[/dim]")

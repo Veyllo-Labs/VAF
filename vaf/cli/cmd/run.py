@@ -754,7 +754,7 @@ def run(
 
     if web and not classic and ui_mode != "modern":
         # Named boundary: only the modern lane owns the web-server startup
-        # wiring (heartbeat, web-input watcher, result notifier) - an explicit
+        # wiring (the web-input watcher and the result notifier) - an explicit
         # --web therefore routes there, whatever tui_mode says. The --classic
         # FLAG keeps its long-standing behavior: plain prompt, web flag unused.
         ui_mode = "modern"
@@ -763,9 +763,19 @@ def run(
     if ui_mode == "app":
         # Lazy on purpose: textual loads only on this lane, so the slim import
         # graph of every other command stays flat.
-        from vaf.cli.tui_app.app import run_tui
-        run_tui(message=message, theme=theme, session_id=session, verbose=verbose)
-    elif ui_mode == "modern":
+        try:
+            from vaf.cli.tui_app.app import run_tui
+        except ImportError as e:
+            # Same degradation the modern lane grants itself: a missing or
+            # broken UI dependency must not cost the user their chat.
+            UI.warning(f"Full-screen app unavailable ({e}).")
+            UI.info("Falling back to the previous interface...")
+            ui_mode = "modern"
+        else:
+            run_tui(message=message, theme=theme, session_id=session, verbose=verbose)
+            return
+
+    if ui_mode == "modern":
         _run_modern(message, verbose, theme, session, web_enabled=web)
     else:
         _run_classic(message, verbose, session)
@@ -1824,9 +1834,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             # SLASH COMMANDS (also works without / if typed alone)
             # ═══════════════════════════════════════════════════════════════
             
-            # Known commands that work with or without /
-            KNOWN_COMMANDS = {"exit", "quit", "q", "clear", "help", "settings", 
-                             "theme", "tools", "undo", "restore", "context", "session", "listen", "l", "halt", "stop", "quiet", "stfu"}
+            # The catch set comes from the shared registry, never a local copy:
+            # this list and the dispatch chain below had already drifted apart
+            # (`restart` was dispatched but not recognised as a bare word).
+            from vaf.cli.commands import bare_words
+            KNOWN_COMMANDS = bare_words()
             
             # Check if input is a command (with / or standalone single word)
             is_command = False
@@ -1852,7 +1864,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             
             if is_command:
                 
-                if cmd in ("exit", "quit", "q"):
+                if cmd in ("exit", "quit", "q", "bye"):
                     _handle_exit(tui, session_mgr, current_session)
                     break
                 
@@ -1863,7 +1875,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     tui.success("Conversation cleared.")
                     continue
                 
-                elif cmd == "help":
+                elif cmd in ("help", "?"):
                     tui.panel("""
 **Commands (/ optional when typed alone):**
 
@@ -1965,7 +1977,7 @@ Messages: {status['messages']}
 """, title="📊 Context Manager", style="info")
                     continue
                 
-                elif cmd == "session":
+                elif cmd in ("session", "sessions"):
                     # Session management
                     if not args:
                         # List all sessions

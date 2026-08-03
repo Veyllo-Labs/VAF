@@ -26,7 +26,6 @@ from typing import Optional, List, Dict, Any
 from dataclasses import asdict
 
 from rich.console import Console, Group
-from rich.live import Live
 from rich.table import Table
 from rich.panel import Panel
 from rich.layout import Layout
@@ -924,18 +923,6 @@ except ImportError:
 # TUI Display - Mini-IDE Style
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class _NoopLive:
-    """Drop-in replacement for Rich's Live when running in workflow/simple mode.
-    All method calls are silently ignored so code that calls live.update() /
-    live.stop() doesn't need to be guarded with 'if live is not None'."""
-    def start(self): pass
-    def stop(self): pass
-    def update(self, *args, **kwargs): pass
-    def refresh(self, *args, **kwargs): pass
-    def __enter__(self): return self
-    def __exit__(self, *args): pass
-
-
 class CoderTUI:
     """
     Terminal UI for the Coder Agent.
@@ -1037,11 +1024,30 @@ class CoderTUI:
                 "preview": ""
             }
     
+    def _say(self, text: str) -> None:
+        """The one narration channel of simple mode.
+
+        Two destinations, one decision: with the screen free this prints the
+        plain `[Coder] ...` line a workflow terminal expects; with a full-screen
+        app owning the terminal it goes through `UI.event`, which the app is
+        already subscribed to (its console sink fans out BEFORE the coder-active
+        suppression), so the line lands in the transcript instead of on top of
+        the app's own rendering.
+        """
+        text = str(text).strip()
+        if not text:
+            return
+        from vaf.cli.tui import UI as _UI
+        if _UI.app_mode_active():
+            _UI.event("Coder", text, style="dim")
+        else:
+            print(f"[Coder] {text}", flush=True)
+
     def update_file(self, filename: str, status: str = None, size: int = None, preview: str = None):
         """Update file info."""
         if self.simple_mode and status == "done":
             size_str = f" ({size:,} bytes)" if size else ""
-            print(f"[Coder] ✅ Written: {filename}{size_str}", flush=True)
+            self._say(f"Written: {filename}{size_str}")
             return
         with self._lock:
             self._touch()
@@ -1087,8 +1093,7 @@ class CoderTUI:
         if self.simple_mode:
             chunk = re.sub(r'</?redacted_reasoning>', '', chunk, flags=re.IGNORECASE)
             chunk = re.sub(r'</?think>', '', chunk, flags=re.IGNORECASE)
-            if chunk.strip():
-                print(f"[Coder] {chunk.strip()}", flush=True)
+            self._say(chunk)
             return
         with self._lock:
             # Filter out redacted reasoning tags
@@ -2593,6 +2598,26 @@ class CodingAgentTool(BaseTool):
     # Class-level lock to prevent multiple instances running simultaneously
     _instance_lock = threading.Lock()
     _active_instance = None  # Track active CoderTUI instance
+
+    @staticmethod
+    def quiet_output_mode() -> bool:
+        """Plain narration lines instead of a panel.
+
+        Two different situations want the same thing for different reasons, and
+        conflating them is what broke: a WORKFLOW terminal wants lines because a
+        panel would replace the workflow's own output, while a full-screen APP
+        requires them because the panel would be buffered into a display nobody
+        can see - leaving the user with no sign the coder is working at all.
+
+        Note this is NOT the same question as "may I start a Rich Live" - that
+        one is `UI.live`'s, and it is asked even when a panel would be fine.
+        """
+        import os as _os
+
+        from vaf.cli.tui import UI as _UI
+        in_workflow = _os.environ.get(
+            "VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+        return in_workflow or _UI.app_mode_active()
     
     description = """Autonomous code generation Sub-Agent. 
     **PRIMARY TOOL for:**
@@ -3186,32 +3211,21 @@ Thumbs.db
         # Create a fresh console for the Coder to avoid conflicts
         local_console = Console(force_terminal=True)
 
-        # When running inside a workflow terminal, use simple_mode (no full-screen TUI).
-        # This prevents the Rich Live display from replacing the workflow's output.
-        _in_workflow_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+        from vaf.cli.tui import UI as _UI
 
         # Disable animation to prevent terminal spam/flicker
-        tui = CoderTUI(local_console, task, task_mgr, animate=False, simple_mode=_in_workflow_terminal)
+        tui = CoderTUI(local_console, task, task_mgr, animate=False,
+                       simple_mode=CodingAgentTool.quiet_output_mode())
 
         # Mark this as the active instance
         with CodingAgentTool._instance_lock:
             CodingAgentTool._active_instance = tui
 
-        # In simple_mode, skip Rich Live entirely — just print progress lines
-        if _in_workflow_terminal:
-            live = _NoopLive()
-            print(f"[Coder] Starting coding agent for: {task[:80]}...", flush=True)
-        else:
-            # Use Rich's Live with auto-refresh for animation (12 FPS)
-            live = Live(
-                tui,
-                console=local_console,
-                refresh_per_second=12,
-                transient=False,
-            )
-            # Store Live in TUI so it can be stopped from outside
-            tui._live = live
-            live.start()
+        live = _UI.live(tui, console=local_console, refresh_per_second=12,
+                        transient=False)
+        tui._live = live          # so it can be stopped from outside
+        live.start()
+        tui._say(f"Starting coding agent for: {task[:80]}...")
 
         # CRITICAL: Start animation thread IMMEDIATELY after live.start()
         # This ensures animation continues even during blocking operations (like template selection)

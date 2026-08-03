@@ -452,7 +452,19 @@ What to expect:
 - **Inline execution works.** In a headless library there is no terminal to
   spawn and no web server to stream to, so a sub-agent call runs INLINE, in the
   same process, and returns its result to your `run()` turn. This is the
-  supported library path and needs nothing extra.
+  supported library path and needs nothing extra - as long as nothing else is
+  drawing on the terminal.
+- **If YOUR application owns the terminal, an inline sub-agent will draw over
+  it.** The heavy sub-agents animate a progress panel on stdout while they
+  work: the coder builds its own console with `force_terminal=True`, so the
+  output arrives even when stdout is not a tty. In a headless service that is
+  invisible and harmless. In a full-screen terminal application it shreds the
+  display. VAF's own terminal app solves this with an internal switch
+  (`vaf.cli.tui.UI.set_app_mode`) that makes those panels no-ops; it is not
+  public because VAF's app is its only caller so far, and a name whose shape is
+  still open is worse than none. If you hit this - if you are building a
+  terminal front end on VAF and need sub-agents to render quietly - that is the
+  report that would move the line.
 - **The product's async/windowed modes do not apply.** In the desktop/server
   product a sub-agent can open its own terminal window or a child process that
   streams back to the web server; those paths need that infrastructure (a
@@ -660,7 +672,10 @@ the confirmation gate, emit `tool_start`, validate and repair the arguments
 against the tool's schema, assign the declared identity, run the tool under a
 timeout with stop polling, emit `tool_end`, and truncate. Same order, same
 rules, same event schema as a chat turn - the ordering is pinned by a
-measurement, not by convention.
+measurement, not by convention. Note the two cuts are independent: `tool_end`
+carries its own 800-character copy of the result for observers, while
+`max_result_chars` below governs what the caller gets back - setting the latter
+to `None` does not put an unbounded blob on your event sink.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
 back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`

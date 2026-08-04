@@ -1370,8 +1370,16 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     
                     if tq.get_queue_size() > 0:
                         task = tq.get()
+                        # The size check above and the get() below are two separate
+                        # lock acquisitions, so the task can be gone by now - taken by
+                        # another consumer, or parked because its session is in flight.
+                        # Dereferencing the None cost the whole prompt: the AttributeError
+                        # lands in the broad handler below, which sets console_broken and
+                        # never clears it.
+                        if task is None:
+                            continue
                         agent.load_session_context(task.session_id)
-                        
+
                         # Sync current_session with task session
                         try:
                             current_session = session_mgr.load(task.session_id)
@@ -1518,8 +1526,16 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         if user_input == "__WAKE_WORD_TRIGGERED__":
                             if tq.get_queue_size() > 0:
                                 task = tq.get()
+                                # Same TOCTOU as the pre-prompt poll above. Here the wake
+                                # came from web_input_watcher, which fires purely on queue
+                                # depth - so an empty get() is a spurious wake, not speech.
+                                # Clear the flag like every other exit of this block and
+                                # take the next prompt cycle rather than opening the mic.
+                                if task is None:
+                                    wake_word_detected_flag.clear()
+                                    continue
                                 agent.load_session_context(task.session_id)
-                                
+
                                 # Sync current_session with task session
                                 try:
                                     current_session = session_mgr.load(task.session_id)

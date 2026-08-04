@@ -182,6 +182,22 @@ class TaskQueue:
         worker_key = worker_id or str(threading.get_ident())
         deadline = time.time() + max(0.0, float(timeout))
         with self._cv:
+            # A worker holds at most one task: asking for the next one means the
+            # previous is over, whether or not task_done() was reached. That is a
+            # CONTRACT on worker_key - one consumer per key, never two threads
+            # sharing an explicit worker_id, or this frees a session the other one
+            # is still turning. Releasing here is what
+            # _cleanup_stale_inflight_locked() below cannot do -
+            # that reaper only handles NUMERIC keys of DEAD threads, so a named
+            # worker_id, or a long-lived thread like the CLI's main loop, never
+            # self-heals. Without this, one missed task_done() parks every later
+            # task for that session forever (_pop_next_task_locked skips in-flight
+            # sessions), and the caller then dereferences the None it gets back.
+            previous = self._inflight_by_worker.get(worker_key)
+            if previous is not None:
+                self._session_inflight.discard(previous.session_id)
+                if self.active_task is previous:
+                    self.active_task = None
             self._cleanup_stale_inflight_locked()
             while True:
                 task = self._pop_next_task_locked()

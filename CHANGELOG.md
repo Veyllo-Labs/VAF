@@ -116,6 +116,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **The classic CLI no longer loses its prompt for good after a second message
+  from the web UI.** Once two messages had been queued for the same conversation,
+  the terminal dropped to a plain `Message:` line with no completion, no history
+  and no voice, and stayed there until you restarted it. Behind it, a finished
+  task was never marked finished, so the conversation looked permanently busy and
+  every later message for it was held back with nothing to release it. Both the
+  hold and the crash it caused are gone, and any lane that consumes queued work -
+  including ones written later - is covered by the same fix rather than having to
+  remember the release itself.
 - **A long answer no longer streams past the bottom of the terminal app.** The
   transcript stopped following after the first few lines and the reply ran on
   below the fold, so you had to scroll down yourself to see the agent finish.

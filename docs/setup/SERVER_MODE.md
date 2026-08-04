@@ -153,6 +153,11 @@ is keyed on the session id alone (`vaf/core/task_queue.py`), so one person's web
 order. `weighted_fair` additionally schedules the interactive / automation / background task classes fairly.
 The per-session guarantee holds under the `legacy` policy too — `weighted_fair` only adds lane fairness.
 
+A session leaves the in-flight set when the worker calls `task_done()`, and also when that same worker asks
+for its next task: one worker holds one task, so the request itself says the previous one is finished. That
+second release is what keeps a consumer which never calls `task_done()` from parking its session forever —
+the stale-reservation sweep cannot cover it, because it only reclaims threads that have actually died.
+
 **Rate limits.** With several workers hitting one provider, transient `429`s are expected. VAF retries them
 for every provider, honoring a `Retry-After` header capped by `api_retry_after_max` — see
 [API_INTEGRATION.md](../llm/API_INTEGRATION.md).

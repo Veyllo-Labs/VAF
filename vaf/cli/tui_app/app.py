@@ -247,7 +247,6 @@ class VafApp(App):
     .tool-head-left { width: 1fr; }
     .tool-head-right { width: auto; }
     .tool-body { padding: 0 1; background: $background; }
-    .subagent-line { margin: 1 0 0 1; }
     #tasksline { height: 1; margin: 0 2; background: $background; }
     #completion {
         height: auto; max-height: 8; margin: 0 1;

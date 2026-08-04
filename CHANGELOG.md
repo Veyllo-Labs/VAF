@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The terminal now shows how far a sub-agent has got.** The task line above the
+  prompt showed only that something was running and for how long. It now also shows
+  the count, like `2/5`, for the two sub-agents that plan their work upfront: the
+  coder and the document agent. It is a count and never a percentage, because a
+  coding run legitimately finishes below its total when a task fails, and a bar that
+  has to reach 100% would have to lie about that. The three sub-agents that do not
+  plan upfront show nothing rather than a made-up number.
 - **A session now opens by telling you where you are.** Instead of a bare "new
   session" line, `vaf run` greets you with the Veyllo mark and the facts beside it,
   centred on screen: version, your agent's name, the session name and id, the
@@ -119,6 +126,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **An update can no longer make sub-agent results stop arriving.** If a newer VAF
+  wrote one entry into the shared sub-agent file and an older one read it, the older
+  one gave up on the entire file rather than on that one entry - so every finished
+  sub-agent result was silently dropped, with nothing in any log. This only needed
+  one mixed-version moment to trigger and did not repair itself.
 - **A coding run without an open Web UI no longer does the work of drawing one.**
   Every loop iteration and every written file gathered a full project snapshot -
   several `git` calls and a walk of the project tree - before checking whether

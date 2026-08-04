@@ -451,7 +451,42 @@ task = ipc.consume_result(task_id)
 # Check status
 has_results = ipc.has_pending_results()  # bool
 status = ipc.get_task_status(task_id)    # "pending", "running", "completed", etc.
+
+# Liveness, and optionally how far along the run is
+ipc.update_heartbeat(task_id)                    # pulse only
+ipc.update_heartbeat(task_id, progress=(2, 5))   # pulse + counts
 ```
+
+### Progress counts on the record
+
+`SubAgentTask` carries `progress_done` / `progress_total`, both `Optional[int]`. They ride
+the heartbeat write and never get one of their own: the record is rewritten every 3 seconds
+per child either way, so two more integers cost nothing measurable, while a second writer at
+a producer's loop speed would multiply the mutation rate on a file whose guard degrades to an
+unlocked read-modify-write under contention.
+
+A child parks its counts with `vaf.core.progress.set_run_progress(done, total)` - an
+in-memory assignment, armed only inside a sub-agent child - and the heartbeat thread picks
+them up on its next pulse. This is the only up-channel a child has: it is constructed with
+no agent object, so it has no event sink, and a callable does not cross a process boundary.
+
+Three rules that are contract rather than commentary:
+
+- **Counts, never a percentage.** `total == 0` or `None` means *no plan yet*, which a
+  percentage can only express as a lie.
+- **`done == total` is not completion.** The coder counts only `completed`, while its
+  terminal set also holds `failed` and `skipped`, so a run can legitimately end at 4/5.
+  Completion is the record LEAVING `active_tasks.json`, never the counts meeting.
+- **Integers only, never a phase string.** This file is global to every user, and the
+  runner's sub-agent loop reads it unfiltered and attributes a session-less record to
+  whichever session the current worker serves. The natural phase values are the coder's
+  task title and the browser's next goal - model text derived from a user's prompt - so a
+  text field here would be a cross-user leak with a long fuse.
+
+Two of the five sub-agents populate the counts (the coder and the document agent). The
+research agent plans as it goes, the librarian has no work unit and the browser agent's
+`max_steps` is a ceiling rather than a plan, so all three report nothing instead of
+inventing a denominator.
 
 ### Sub-Agent Methods
 

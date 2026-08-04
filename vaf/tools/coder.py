@@ -34,7 +34,7 @@ from rich.syntax import Syntax
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.align import Align
 
-from vaf.core.progress import StatePublisher, resolve_ui_session_id
+from vaf.core.progress import StatePublisher, resolve_ui_session_id, set_run_progress
 from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
@@ -1840,6 +1840,9 @@ class TaskManager:
         self.state.tasks = new_tasks
         self.state.current_task_idx = 0
         self.pm.save_state(self.state)
+        # The total just came into existence. Parked, not written: the child's heartbeat
+        # stamps it onto the IPC record on its next pulse, so this costs an assignment.
+        set_run_progress(*self.progress_counts())
     
     def get_current_task(self) -> Optional[str]:
         """Get the current task to work on."""
@@ -1860,6 +1863,7 @@ class TaskManager:
             self.state.current_task_idx += 1
             self._advance_to_next_actionable()
             self.pm.save_state(self.state)
+            set_run_progress(*self.progress_counts())
 
     def fail_current_task(self, reason: str):
         """Mark current task as failed (honest terminal state) and move to next.
@@ -1916,12 +1920,23 @@ class TaskManager:
         """All tasks in status 'failed' (legacy dict format, like .todos)."""
         return [t for t in self.todos if t["status"] == "failed"]
     
+    def progress_counts(self) -> tuple:
+        """(done, total) for this run's plan.
+
+        `(0, 0)` means there is no plan yet and must never be rendered as 0%.
+        `done` counts only `completed`, while the terminal set also holds `failed` and
+        `skipped`, so a run may legitimately end below its total - `done == total` is not
+        a completion signal.
+        """
+        if not self.state or not self.state.tasks:
+            return (0, 0)
+        return (len([t for t in self.state.tasks if t.status == "completed"]),
+                len(self.state.tasks))
+
     def get_progress(self) -> str:
         """Get progress string for display."""
-        if not self.state or not self.state.tasks:
-            return "Planning..."
-        done = len([t for t in self.state.tasks if t.status == "completed"])
-        return f"Task {done}/{len(self.state.tasks)}"
+        done, total = self.progress_counts()
+        return f"Task {done}/{total}" if total else "Planning..."
     
     def get_todos_for_prompt(self) -> str:
         """Get formatted TODO list for prompt injection."""

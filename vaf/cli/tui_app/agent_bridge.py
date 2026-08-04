@@ -601,8 +601,13 @@ class AgentBridge:
             self._submit(self._refresh_context)
 
     def tasks_snapshot(self) -> list:
-        """(marker, label, id8, elapsed) rows for the TasksLine - session-scoped
-        accessors only (Rule 4.4), unlike the classic toolbar's global paused read."""
+        """(marker, label, id8, elapsed, progress) rows for the TasksLine - session-scoped
+        accessors only (Rule 4.4), unlike the classic toolbar's global paused read.
+
+        `progress` is "done/total" or "" - never a percentage, and never "0/0". A child
+        that reports no counts, and one that has not planned yet, both render as nothing:
+        an empty column is honest, a 0% bar that never moves is not.
+        """
         entries = []
         try:
             from datetime import datetime
@@ -612,15 +617,17 @@ class AgentBridge:
             for task in ipc.get_active_tasks_for_current_session():
                 elapsed = self._elapsed(datetime.fromisoformat(task.created_at))
                 agent_type = task.agent_type
+                done, total = task.progress_done, task.progress_total
+                progress = f"{done}/{total}" if total else ""
                 if agent_type.startswith("workflow:"):
                     entries.append(("[>>]", agent_type.split(":", 1)[1],
-                                    task.task_id[:8], elapsed))
+                                    task.task_id[:8], elapsed, progress))
                 else:
-                    entries.append(("[>]", agent_type, task.task_id[:8], elapsed))
+                    entries.append(("[>]", agent_type, task.task_id[:8], elapsed, progress))
             for wf in ipc.get_paused_workflows_for_session(get_current_session_id()):
                 elapsed = self._elapsed(datetime.fromisoformat(wf.created_at))
                 entries.append(("[||]", wf.workflow_name,
-                                wf.waiting_for_task_id[:8], elapsed))
+                                wf.waiting_for_task_id[:8], elapsed, ""))
         except Exception:
             pass
         return entries

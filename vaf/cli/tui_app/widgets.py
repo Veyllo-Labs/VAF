@@ -370,23 +370,11 @@ class ToolCard(Vertical):
         self._render_header()
 
 
-class SubagentLine(Static):
-    """The coder/researcher progress line inside the transcript."""
-
-    def __init__(self, name: str) -> None:
-        super().__init__("")
-        self.add_class("subagent-line")
-        self._name = name
-        self.set_progress(0, "starting")
-
-    def set_progress(self, pct: int, phase: str) -> None:
-        cells = 24
-        filled = round(pct / 100 * cells)
-        bar = f"[$primary]{'━' * filled}[/][$vaf-border]{'━' * (cells - filled)}[/]"
-        self.update(
-            f"[$vaf-info]◍[/] [bold]{_escape(self._name)}[/]  {bar}  "
-            f"[$vaf-muted]{pct:3d}%[/]  [$text-disabled]{_escape(phase)}[/]"
-        )
+# A second progress renderer lived here and was never mounted: one repo-wide hit, its
+# own class statement. It took a percentage, which no sub-agent can honestly report - a
+# coder run ends below its total whenever a task fails - and a phase string, which is
+# model text derived from the user's prompt and therefore may not travel on the shared
+# task record. Sub-agent progress is rendered by TasksLine above, as counts.
 
 
 # ── the agent (avatar + presence) ───────────────────────────────────────────────────
@@ -542,17 +530,24 @@ class TasksLine(Static):
         self.display = False
 
     def set_tasks(self, entries) -> None:
-        """entries: iterable of (marker, label, id8, elapsed_str)."""
+        """entries: iterable of (marker, label, id8, elapsed_str, progress_str).
+
+        `progress_str` is "done/total" or empty. It is rendered as counts and never as a
+        percentage: a coder run legitimately ends below its total (a failed task is
+        terminal but not completed), so a bar that must reach 100% would have to lie.
+        An empty string means the agent reports no counts, and it takes no space.
+        """
         self._entries = list(entries)
         self.display = bool(self._entries)
         if not self._entries:
             return
         parts = []
-        for marker, label, id8, tstr in self._entries[:3]:
+        for marker, label, id8, tstr, progress in self._entries[:3]:
             color = "$warning" if marker == "[||]" else "$vaf-info"
+            counts = f" [$vaf-info]{_escape(progress)}[/]" if progress else ""
             parts.append(
                 f"[{color}]{marker}[/] [$vaf-muted]{_escape(label)} "
-                f"\\[{_escape(id8)}] {tstr}[/]")
+                f"\\[{_escape(id8)}] {tstr}[/]{counts}")
         if len(self._entries) > 3:
             parts.append(f"[$vaf-muted]+{len(self._entries) - 3} more[/]")
         self.update(" [$text-disabled]|[/] ".join(parts))

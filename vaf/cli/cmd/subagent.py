@@ -93,9 +93,17 @@ def run_subagent(
         import threading
         
         def heartbeat_worker():
+            # The pulse also carries this run's progress counts. They ride the write the
+            # heartbeat already performs rather than getting one of their own: the record
+            # is rewritten either way, and a second writer at a producer's loop speed
+            # would multiply the mutation rate on a shared file. read_run_progress()
+            # returns None until a producer parks something, and None leaves the record's
+            # fields untouched.
+            from vaf.core.progress import read_run_progress
+
             while True:
                 try:
-                    ipc.update_heartbeat(task_id)
+                    ipc.update_heartbeat(task_id, progress=read_run_progress())
                 except:
                     pass
                 time.sleep(3) # Pulse every 3 seconds

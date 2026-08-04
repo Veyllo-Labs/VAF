@@ -414,12 +414,16 @@ def test_tasks_snapshot_builds_the_three_marker_kinds(quiet_run_module, monkeypa
     import vaf.core.subagent_ipc as ipc_mod
 
     t0 = (datetime.now() - timedelta(seconds=90)).isoformat()
+    # The stand-ins carry the progress fields because the real record always does.
+    # Leaving them off is not a lenient fixture, it is a different shape: the reader
+    # builds its rows inside one broad except, so a single missing attribute does not
+    # drop one row - it empties the whole task line, silently.
     fake_ipc = SimpleNamespace(
         get_active_tasks_for_current_session=lambda: [
             SimpleNamespace(task_id="aaaabbbbcccc", agent_type="librarian_agent",
-                            created_at=t0),
+                            created_at=t0, progress_done=None, progress_total=None),
             SimpleNamespace(task_id="ddddeeeeffff", agent_type="workflow:deep_research",
-                            created_at=t0),
+                            created_at=t0, progress_done=2, progress_total=5),
         ],
         get_paused_workflows_for_session=lambda sid: [
             SimpleNamespace(waiting_for_task_id="11112222333344",
@@ -432,9 +436,10 @@ def test_tasks_snapshot_builds_the_three_marker_kinds(quiet_run_module, monkeypa
     bridge = _make_bridge(FakeAgent(), Recorder())
     rows = bridge.tasks_snapshot()
 
-    assert ("[>]", "librarian_agent", "aaaabbbb", "1m 30s") in rows
-    assert ("[>>]", "deep_research", "ddddeeee", "1m 30s") in rows
-    assert ("[||]", "deep_research", "11112222", "1m 30s") in rows
+    # An agent that reports no counts renders an empty column, never "0/0" or "0%".
+    assert ("[>]", "librarian_agent", "aaaabbbb", "1m 30s", "") in rows
+    assert ("[>>]", "deep_research", "ddddeeee", "1m 30s", "2/5") in rows
+    assert ("[||]", "deep_research", "11112222", "1m 30s", "") in rows
 
 
 def test_quitting_mid_turn_never_blocks_process_exit():

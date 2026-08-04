@@ -69,6 +69,27 @@ the shipped Web UI has no handler for a type it does not know, so exporting the 
 alone would hand out half a contract and no way to complete it. The export is one lazy
 ``__getattr__`` branch on the day an embedder ships a view consumer of their own.
 
+THE SECOND HALF OF THIS MODULE ANSWERS A DIFFERENT QUESTION AND TAKES A DIFFERENT ROAD.
+``set_run_progress`` / ``read_run_progress`` carry "how far along is this run" - two
+integers, for a terminal task line rather than a web window. They do NOT ride the view
+transport above, and they do not ride the agent's event sink either, because in the shipped
+default a sub-agent is a CHILD PROCESS: it is constructed bare, with no agent object and
+therefore no sink, and a callable does not cross a process boundary. The one up-channel
+that does is the IPC task record, which the parent already polls per session. So progress
+is parked in memory here and stamped onto that record by the heartbeat write that already
+happens every 3 seconds - measured added cost: none, because the record is rewritten
+either way.
+
+WHY THERE IS NO PROGRESS EVENT AND NO PROCESS-WIDE SINK, since both were planned. No
+producer has a sink to emit on; the terminal consumer already polls the record every tick,
+so an event buys it nothing; and ``docs/OBSERVABILITY.md`` publishes both a closed event
+set and a strict per-call ordering that an unpaired event fired from another thread would
+break. A process-wide PUSH sink is also the wrong shape here: the two process-wide hooks
+this repo has accepted are PULL resolvers that take an identity as an argument, while a
+push sink carries none and cannot be filtered by whoever registered it - in a process
+serving N tenants as N threads, that is a leak by construction. The event becomes earned
+the day a consumer exists that cannot poll.
+
 Nothing here imports ``fastapi``. ``vaf/core/web_interface.py`` does, at module scope, and
 ``fastapi`` is an optional extra - so the hop to it is a LATE import inside ``publish``.
 """
@@ -79,7 +100,13 @@ import os
 import time
 from typing import Optional
 
-__all__ = ["VAF_LIVE_VIEW_TYPES", "resolve_ui_session_id", "StatePublisher"]
+__all__ = [
+    "VAF_LIVE_VIEW_TYPES",
+    "resolve_ui_session_id",
+    "StatePublisher",
+    "set_run_progress",
+    "read_run_progress",
+]
 
 
 # The wire types VAF's own live views ride on. Declared here so a CI guard can pin them
@@ -117,6 +144,17 @@ def resolve_ui_session_id() -> str:
       the IPC fallback would switch its emits ON in in-process runs, sourced from a
       process-global id. Turning a stream on is a behaviour change with its own test, not a
       side effect of an extraction.
+
+    KNOWN GAP, recorded here because this is where the next reader looks, and NOT closed by
+    this function: the environment variable it reads first is process-global, and
+    ``agent.py``'s tool dispatch REWRITES it on every call from the current turn's session.
+    In a headless server with ``parallel_main_workers > 1`` the workers are threads in one
+    process, so while an INLINE sub-agent run is publishing, another worker's dispatch can
+    move the id out from under it and a frame lands in the wrong tenant's browser. Both
+    conditions are non-default (parallel workers AND in-process sub-agents), which is why
+    it has not surfaced. This order was inherited unchanged from the three publishers that
+    each hand-rolled it; closing the gap means giving a run its own session handle instead
+    of reading a global, which is a routing change with its own tests and its own entry.
     """
     sid = os.environ.get("VAF_SESSION_ID", "").strip()
     if sid:
@@ -204,3 +242,64 @@ class StatePublisher:
 
         get_web_interface().emit_agent_state(self.msg_type, state, session_id=session_id)
         return True
+
+
+# ── sub-agent run progress: two integers, carried by a write that already happens ──
+
+_run_progress: Optional[tuple] = None
+
+
+def set_run_progress(done: int, total: int) -> None:
+    """This run is at ``done`` of ``total`` planned units. In memory, no I/O, no clock.
+
+    A sub-agent child cannot hand a callable back to its parent, so its progress travels
+    the only up-channel that survives a process boundary: the IPC task record. This
+    function does not write it. It parks two integers where the heartbeat thread - which
+    already rewrites that record every 3 seconds - picks them up on its next pulse.
+
+    Contract, each choice against its failure mode:
+
+    - ARMED ONLY INSIDE A SUB-AGENT CHILD, and the key is ``VAF_IN_SUBAGENT_TERMINAL``.
+      A module-level cell is per-RUN only where the process IS the run, which holds for
+      the child and fails for the parent: with ``parallel_main_workers > 1`` the headless
+      runner serves N tenants as N THREADS in ONE process, and two concurrent in-process
+      sub-agent runs would take turns overwriting one cell under two different users.
+      Outside a child this is a no-op, so no parent lane can arm it by accident.
+      ``VAF_TASK_ID`` would be the wrong key: the workflow engine sets it process-globally
+      in the PARENT, which would arm the cell in exactly the multi-tenant process this
+      guard exists to exclude.
+    - No throttle, no dedup, no lock, no file. The transport's own 3-second cadence IS the
+      throttle, which is why a producer may call this on every count change without a
+      budget: this is a tuple assignment, against a mutation of a shared JSON file whose
+      guard degrades to an unlocked read-modify-write under contention.
+    - Two integers and nothing else. No phase, no title, no stage string. The record they
+      land on is read UNFILTERED by the runner's sub-agent loop and attributed to the
+      current worker's session when the record carries none, so anything on it derived
+      from a user's prompt is a cross-user leak with a longer fuse.
+    - Coerces to ``int`` and floors at 0. The value crosses a JSON boundary into a file
+      several readers parse; a float, a numpy int or a ``None`` out of a producer's
+      arithmetic would either widen the record's type surface or raise inside a swallow.
+    - Never raises. Producers call this from inside their own loops, and a progress helper
+      must not become the reason a coding run dies.
+    """
+    global _run_progress
+    if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    try:
+        _run_progress = (max(0, int(done)), max(0, int(total)))
+    except Exception:
+        return
+
+
+def read_run_progress() -> Optional[tuple]:
+    """The counts this run last parked, or ``None`` if it never parked any.
+
+    Reading does NOT consume. The heartbeat pulses every 3 seconds and the producer may
+    go minutes without a count change; take-semantics would blank the record between
+    changes and the display would flicker back to nothing.
+
+    ``None`` is a real answer and must reach the writer as ``None``: it means "this agent
+    does not report progress", which three of the five sub-agents legitimately are, and
+    the writer leaves the record's fields untouched for it.
+    """
+    return _run_progress

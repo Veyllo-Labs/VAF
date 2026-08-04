@@ -23,7 +23,7 @@ from datetime import datetime
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI
-from vaf.core.progress import StatePublisher, resolve_ui_session_id
+from vaf.core.progress import StatePublisher, resolve_ui_session_id, set_run_progress
 from vaf.core.document_formatting import (
     DocumentModel,
     DocumentSection,
@@ -202,6 +202,9 @@ Handles documents of any size using section-by-section generation (no context ov
             self._doc_state["stage"] = f"Writing {i}/{total}"
             self._doc_state["sections"][i - 1]["status"] = "writing"
             self._emit_doc_state(force=True)
+            # i - 1, not i: the loop is 1-based and names the section BEING written,
+            # which is not one that is done.
+            set_run_progress(i - 1, total)
 
             content = self._generate_section(
                 document_type=plan['document_type'],

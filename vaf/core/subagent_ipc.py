@@ -155,19 +155,30 @@ class SubAgentTask:
     result: Optional[str] = None
     error: Optional[str] = None
     last_heartbeat: Optional[str] = None # ISO timestamp of last liveness check
-    
+    # How far along the run is, stamped by the child's own heartbeat pulse.
+    # COUNTS ONLY, and that is a containment decision rather than a shape preference:
+    # this file is global to every user, and the runner's sub-agent loop reads it
+    # UNFILTERED and attributes a session-less record to whichever session the current
+    # worker is serving. Two integers carry no user content, so the record does not
+    # become a leak surface. `None` means "this agent does not report progress", which is
+    # a different answer from "0 of 0" and the only one a renderer can act on.
+    progress_done: Optional[int] = None
+    progress_total: Optional[int] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SubAgentTask':
-        # Handle missing session_id for backwards compatibility
-        if 'session_id' not in data:
-            data['session_id'] = None
-        # Handle missing last_heartbeat for backwards compatibility
-        if 'last_heartbeat' not in data:
-            data['last_heartbeat'] = None
-        return cls(**data)
+        # Drop unknown keys instead of raising. A record written by a NEWER build, or a
+        # hand-edited file, must not break the drain of an older one: every reader here
+        # builds its list in a COMPREHENSION inside a caller that swallows broadly, so one
+        # unexpected key does not skip one record - it empties the whole queue, and results
+        # are then never delivered, with no log line anywhere. Missing keys need no
+        # handling: the dataclass defaults already cover a record written before a field
+        # existed. Boundary coercion, the same rule PausedWorkflow.from_dict states below.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (data or {}).items() if k in known})
 
 
 @dataclass
@@ -870,14 +881,30 @@ class SubAgentIPC:
         if task_data:
             _push_result_ready(task_id, task_data.get('session_id'))
 
-    def update_heartbeat(self, task_id: str):
-        """Update the last_heartbeat timestamp for a running task."""
+    def update_heartbeat(self, task_id: str, progress: Optional[tuple] = None):
+        """Update the last_heartbeat timestamp for a running task, and its counts.
+
+        The progress counts ride this write and never get one of their own. That is the
+        whole reason they are affordable: the record is already rewritten every 3 seconds
+        per child, so stamping two more integers into the same dict costs nothing
+        measurable, while a second writer at a producer's loop speed would multiply the
+        mutation rate on a file whose guard degrades to an UNLOCKED read-modify-write
+        under contention - the lost update that once erased active-task entries.
+
+        `progress` is `(done, total)` or `None`, and `None` leaves both fields exactly as
+        they are. A parent-side heartbeat must not blank a child's counts, and "this agent
+        does not report progress" must stay distinguishable from "0 of 0".
+        """
         with self._mutation_guard():
             active = self._read_json(self.active_file)
             updated = False
             for task in active:
                 if task.get('task_id') == task_id:
                     task['last_heartbeat'] = datetime.now().isoformat()
+                    if progress is not None:
+                        # Both or neither: a record carrying one field from this pulse and
+                        # one from the last would render a ratio that never existed.
+                        task['progress_done'], task['progress_total'] = progress
                     updated = True
                     break
             if updated:

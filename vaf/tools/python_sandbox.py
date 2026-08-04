@@ -593,13 +593,12 @@ class PythonSandboxTool(BaseTool):
             export_notes = []
             _export_files = kwargs.get("export_files") or []
             if _export_files and exit_code == 0:
-                _sid = kwargs.get("_session_id") or os.environ.get("VAF_SESSION_ID")
-                if not _sid:
-                    try:
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        _sid = get_current_session_id()
-                    except Exception:
-                        _sid = None
+                # One resolver: context first, process boundary second.
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    _sid = kwargs.get("_session_id") or get_current_session_id()
+                except Exception:
+                    _sid = kwargs.get("_session_id")
                 export_notes = self._export_artifacts(
                     _export_files, workdir, use_persistent, _sid
                 )

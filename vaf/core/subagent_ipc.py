@@ -1162,16 +1162,23 @@ _ipc_instance: Optional[SubAgentIPC] = None
 
 # Current session ID - set when a new session starts.
 #
-# Stored two ways so multiple worker threads (parallel_main_workers > 1) don't clobber each
-# other while the single-worker default stays byte-for-byte unchanged:
-#   • _session_ctx (ContextVar): per-thread/context override — each worker thread sets and reads
-#     its OWN session id, so concurrent sessions never overwrite one another.
-#   • _current_session_id (module global): process-wide fallback used only when the ContextVar is
-#     unset (e.g. a background helper thread that reads it without one). At one worker the two are
-#     always in sync, so behaviour is identical to before.
-_current_session_id: Optional[str] = None
-_session_ctx: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
-    "vaf_current_session_id", default=None
+# Which session the CURRENT run serves. Per context, never per process.
+#
+# There used to be a module-global fallback beside this, "used only when the ContextVar is
+# unset", and that fallback was the leak. Three tool-dispatching lanes are unconditional
+# daemon threads in the web-server process - the chat worker, thinking (enabled by default)
+# and the automation scheduler - and a fresh thread starts with an EMPTY context. The
+# automation lane never declares a session at all, so on a multi-account instance every
+# scheduled run resolved whichever session a chat turn had left behind, and wrote its
+# deliverable into that tenant's workspace, notified that tenant's browser and persisted
+# the path into that tenant's session record. Not a race: on that lane it was every run.
+#
+# The sentinel matters. `None` is a real answer - "this run belongs to no web session" -
+# and must be distinguishable from "nobody has said". A default of None collapses the two
+# and re-opens the borrowing through the environment fallback below.
+_UNSET: object = object()
+_session_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "vaf_current_session_id", default=_UNSET
 )
 
 
@@ -1183,28 +1190,52 @@ def get_ipc() -> SubAgentIPC:
     return _ipc_instance
 
 
-def set_current_session_id(session_id: str):
+def set_current_session_id(session_id: Optional[str]):
+    """Declare which session THIS context serves. `None` is a declaration, not a clear.
+
+    Contract, each choice against its failure mode:
+
+    - Per CONTEXT, never per process. One agent process serves several tenants on several
+      threads; a module global here is a tenant selector where the last writer wins.
+    - `None` means "this run belongs to no web session" and is REMEMBERED as such. A
+      scheduled automation must answer nobody rather than fall through to a value a chat
+      turn left behind - that fall-through is how a background run's file landed in a live
+      user's workspace.
+    - Sets, never restores. The next run on this thread opens with its own declaration, and
+      restoring would put a finished turn's session back under a helper thread that
+      outlives it.
     """
-    Set the current session ID for sub-agent tracking.
-    Should be called when a new session starts (per worker thread).
-    """
-    global _current_session_id
-    _current_session_id = session_id   # process-wide fallback (single-worker / legacy readers)
     try:
-        _session_ctx.set(session_id)   # per-thread override (multi-worker safety)
+        _session_ctx.set(session_id)
     except Exception:
         pass
 
 
 def get_current_session_id() -> Optional[str]:
-    """Get the current session ID — the per-thread value if set, else the process-wide fallback."""
+    """The session this run serves, or `None`. Context first, process boundary second.
+
+    Contract, each choice against its failure mode:
+
+    - A context that was TOLD wins, including when it was told `None`. Reversing this
+      re-opens the borrowing, because the automation and thinking lanes are bare threads
+      and anything they would fall back to is process-global.
+    - A context that was never told reads `VAF_SESSION_ID`. That is the CHILD case and only
+      the child case: no parent lane writes that variable any more, so in the parent a
+      never-told answer is `None` - a helper thread nobody told which run it belongs to has
+      no business addressing a browser.
+    - `.strip()` before the truth test, and `""` becomes `None`. A blank string reaching
+      `broadcast_to_session` takes the unscoped global-broadcast branch, so empty is not
+      automatically the safe direction.
+    - Never raises. Every caller sits inside a best-effort emit.
+    """
     try:
         v = _session_ctx.get()
-        if v is not None:
-            return v
     except Exception:
-        pass
-    return _current_session_id
+        v = _UNSET
+    if v is not _UNSET:
+        return v
+    sid = (os.environ.get("VAF_SESSION_ID") or "").strip()
+    return sid or None
 
 
 def cleanup_other_sessions():

@@ -192,23 +192,30 @@ def test_an_unserialisable_value_does_not_break_the_duplicate_check(interface) -
 
 # ── the shared session lookup ────────────────────────────────────────────────
 
-def test_the_environment_wins_over_the_ipc_context(monkeypatch) -> None:
-    """The env is the only channel that survives a process boundary: a sub-agent
-    child is spawned with it and has no IPC context of its own."""
+def test_the_context_wins_over_the_environment(monkeypatch) -> None:
+    """Inverted deliberately, and this test used to pin the opposite.
+
+    The environment is process-global and three tool-dispatching lanes are threads
+    in one process, so "environment first" let a run that belongs to no web session
+    address whichever session a chat turn had left behind. The environment is now
+    the PROCESS BOUNDARY channel only: a child is spawned with it and declares it
+    into its own context at bootstrap. In the parent, a context that was told wins.
+    """
     monkeypatch.setenv("VAF_SESSION_ID", "from-env")
     import vaf.core.subagent_ipc as ipc
 
     monkeypatch.setattr(ipc, "get_current_session_id", lambda: "from-ipc")
-    assert resolve_ui_session_id() == "from-env"
+    assert resolve_ui_session_id() == "from-ipc"
 
 
-def test_a_whitespace_environment_value_counts_as_absent(monkeypatch) -> None:
-    """A blank string reaching the transport takes the unscoped broadcast branch."""
-    monkeypatch.setenv("VAF_SESSION_ID", "   ")
+def test_a_run_that_belongs_to_nobody_addresses_nobody(monkeypatch) -> None:
+    """The automation lane's case: it declares None, and a stale environment value
+    must not resurrect a foreign session behind that declaration."""
+    monkeypatch.setenv("VAF_SESSION_ID", "someone-elses-session")
     import vaf.core.subagent_ipc as ipc
 
-    monkeypatch.setattr(ipc, "get_current_session_id", lambda: "from-ipc")
-    assert resolve_ui_session_id() == "from-ipc"
+    monkeypatch.setattr(ipc, "get_current_session_id", lambda: None)
+    assert resolve_ui_session_id() == ""
 
 
 def test_a_raising_ipc_lookup_yields_no_session_rather_than_an_error(monkeypatch) -> None:

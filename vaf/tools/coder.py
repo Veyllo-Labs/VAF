@@ -4936,10 +4936,11 @@ Task {task_idx + 1}: {current_task}
         # its state on) and check it each iteration; a stop breaks the loop cleanly so the exit
         # path (DOCUMENT + final_commit) still runs — no half-edited file, no abandoned thread.
         try:
-            _stop_sid = os.environ.get("VAF_SESSION_ID", "").strip()
-            if not _stop_sid:
-                from vaf.core.subagent_ipc import get_current_session_id as _gsid_stop
-                _stop_sid = _gsid_stop() or ""
+            # One resolver: context first, process boundary second. Reading the
+            # environment first meant a foreign session's Stop button could abort this
+            # run, while its own owner's Stop did nothing.
+            from vaf.core.subagent_ipc import get_current_session_id as _gsid_stop
+            _stop_sid = (_gsid_stop() or "").strip()
         except Exception:
             _stop_sid = ""
 
@@ -9452,10 +9453,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
                                 # Notify Web UI so it shows a blue download chip.
                                 try:
-                                    _fc_sid = os.environ.get("VAF_SESSION_ID")
-                                    if not _fc_sid:
-                                        from vaf.core.subagent_ipc import get_current_session_id
-                                        _fc_sid = get_current_session_id()
+                                    from vaf.core.subagent_ipc import get_current_session_id
+                                    _fc_sid = get_current_session_id()
                                     if _fc_sid:
                                         from vaf.core.web_interface import notify_file_created
                                         notify_file_created(_fc_sid, path, title=os.path.basename(path))

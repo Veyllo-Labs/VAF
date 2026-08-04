@@ -255,13 +255,12 @@ Handles documents of any size using section-by-section generation (no context ov
         # Notify Web UI so the Document Editor opens with the created document (same process or subprocess)
         try:
             from vaf.core.web_interface import notify_document_created
-            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
-            if not session_id:
-                try:
-                    from vaf.core.subagent_ipc import get_current_session_id
-                    session_id = get_current_session_id() or ""
-                except Exception:
-                    pass
+            # One resolver: context first, process boundary second.
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                session_id = (get_current_session_id() or "").strip()
+            except Exception:
+                session_id = ""
             if session_id:
                 notify_document_created(session_id, file_path, title=plan.get("title"))
         except Exception as e:

@@ -25,6 +25,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from vaf.core.identity_binding import bind_identity, resolve_scope_identity
 from vaf.core.log_helper import append_domain_log, append_domain_log_always
+from vaf.core.subagent_ipc import get_current_session_id, set_current_session_id
 
 # Cross-platform scheduler
 try:
@@ -623,6 +624,15 @@ class AutomationManager:
         )
 
         def _execute():
+            # Say out loud that this run belongs to NOBODY's web session, before any tool
+            # is dispatched. A scheduled run has no browser tab behind it; without this
+            # declaration the thread starts with an empty context and every session lookup
+            # answers with whatever a live chat turn last set - which is how one tenant's
+            # automation wrote its deliverable into another tenant's workspace and pushed
+            # the path into their browser. "Nobody" is the honest answer, and the cost of
+            # it is only that this run has no live view and no Stop button, which is
+            # correct for something nobody is watching.
+            set_current_session_id(None)
             try:
                 result = self.run_task(task, new_terminal=False)
                 preview = (result or "").replace("\n", " ")[:200]
@@ -1263,7 +1273,16 @@ vaf automation delete <id>   # Delete task
             # Release lock before spawning new terminal, because the NEW process will acquire its own lock!
             LockManager.release(lock_id)
             
-            if Platform.open_new_terminal(vaf_cmd, title=title):
+            # The child's session comes from an EXPLICIT env entry, like every other spawn
+            # site. Inheritance is not a fallback here: the parent's environment is shared
+            # by every lane in this process, so an inherited value is whichever session
+            # happened to be set last, and this was the one caller still relying on it.
+            _auto_env = {"VAF_AGENT_TYPE": "automation"}
+            _auto_sid = get_current_session_id()
+            if _auto_sid:
+                _auto_env["VAF_SESSION_ID"] = _auto_sid
+
+            if Platform.open_new_terminal(vaf_cmd, title=title, extra_env=_auto_env):
                 # Silent - don't show notification in main terminal
                 return f"Automation '{task.name}' started in new terminal window"
             else:

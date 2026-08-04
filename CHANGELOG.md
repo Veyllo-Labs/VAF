@@ -126,6 +126,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A scheduled automation can no longer put its output in someone else's place.**
+  On an installation with more than one account, a background task had no session
+  of its own and quietly adopted whichever conversation was last active in the
+  program. Its document was then created inside that person's workspace folder,
+  announced in that person's browser, and their conversation was permanently
+  re-pointed at the folder. In the same run their Stop button would cancel the
+  background task, while the task's real owner could not stop it at all. A run now
+  states which conversation it belongs to - a scheduled task says "none" - and
+  nothing falls back to a program-wide value. Single-user installations were never
+  exposed to the cross-account part of this.
 - **An update can no longer make sub-agent results stop arriving.** If a newer VAF
   wrote one entry into the shared sub-agent file and an older one read it, the older
   one gave up on the entire file rather than on that one entry - so every finished

@@ -153,15 +153,20 @@ task (cosmetic — live status comes from `manager.latest_state`, and Stop is pe
 
 ### Concurrency and session isolation
 
-`parallel_main_workers` defaults to 1, so by default exactly one turn runs at a time and there is no
-shared-state concern. When set higher (with `queue_policy: weighted_fair`), different sessions run
-on different workers at once, and the session context must not leak between them. It does not,
+`parallel_main_workers` defaults to 1, but that does NOT mean one turn at a time. Three
+tool-dispatching lanes are unconditional daemon threads in the web-server process: the chat worker,
+thinking (enabled by default) and the automation scheduler. Different sessions therefore dispatch
+concurrently on a stock install, and the session context must not leak between them. It does not,
 because:
 
 - **User context is per worker.** Each worker has its own `Agent` instance; the per-task user scope,
   username, and role live on that instance, not in shared globals.
-- **Session id is per context.** `subagent_ipc` keeps the current session id in a `ContextVar`, so
-  each worker thread reads and writes its own value. `run_bounded` runs each in-process tool inside a
+- **Session id is per context, with no process-wide fallback.** `subagent_ipc` keeps it in a
+  `ContextVar` whose default is a sentinel, so "nobody has said" is distinguishable from "this run
+  belongs to no session". A module-global fallback used to sit beside it for helper threads that
+  read without a context; it was a tenant selector where the last writer won, and it is gone. A lane
+  that owns no session says so - the automation scheduler declares `None` before it dispatches
+  anything - and a lane that was never told resolves nothing rather than borrowing. `run_bounded` runs each in-process tool inside a
   copy of the caller's context, so the session id propagates into the tool's worker thread — and an
   *abandoned* (timed-out/stopped) thread keeps its own session, so its late writes are tagged
   correctly rather than with whatever a later turn is doing.
@@ -170,10 +175,18 @@ because:
   instead of mutating the parent's process-global `os.environ`, so concurrent spawns cannot clobber
   one another. A child is registered and killed under the session it was actually spawned for.
 
-The remaining process-global readers of `VAF_SESSION_ID` are a few best-effort UI notifications
-(e.g. "file created"); they read the current process environment and are therefore the only spot
-that can mis-tag under heavy multi-session concurrency. They do not affect routing, kill, or result
-delivery.
+`VAF_SESSION_ID` is the PROCESS BOUNDARY channel and nothing else: a spawn writes it into the
+child's environment, the child declares it into its own context at bootstrap, and no lane in the
+parent writes it at all. `get_current_session_id()` consults it only when a context was never told,
+which in the parent means a helper thread nobody assigned to a run - and such a thread has no
+business addressing a browser.
+
+That ordering used to be the other way round at about a dozen readers, and it was not merely a
+mis-tagged notification. `get_session_workspace_dir` resolves a WRITE DESTINATION through it, the
+coder's self-supervised loop resolves its STOP check through it, and `record_created_file` persists
+the resolved path into the addressed session's record. The document tools write with a raw `open()`
+and call `is_safe_path` zero times, so the per-user file jail never sees those writes - it is
+reached only from inside `is_safe_path`.
 
 ## Timeouts and configuration
 

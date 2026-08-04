@@ -1030,10 +1030,9 @@ class WriteFileTool(BaseTool):
                         # per-process anyway. On a multi-user server the global fallback could
                         # attribute the file to another user's session.
                         try:
-                            _sid = kwargs.get('_session_id') or os.environ.get("VAF_SESSION_ID")
-                            if not _sid:
-                                from vaf.core.subagent_ipc import get_current_session_id
-                                _sid = get_current_session_id()
+                            # One resolver: context first, process boundary second.
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            _sid = kwargs.get('_session_id') or get_current_session_id()
                             if _sid:
                                 from vaf.core.web_interface import notify_file_created
                                 notify_file_created(_sid, res, title=os.path.basename(res))
@@ -1044,10 +1043,8 @@ class WriteFileTool(BaseTool):
                         _doc_extensions = (".md", ".txt", ".docx")
                         if res.lower().endswith(_doc_extensions):
                             try:
-                                _sid2 = kwargs.get('_session_id') or os.environ.get("VAF_SESSION_ID")
-                                if not _sid2:
-                                    from vaf.core.subagent_ipc import get_current_session_id
-                                    _sid2 = get_current_session_id()
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _sid2 = kwargs.get('_session_id') or get_current_session_id()
                                 if _sid2:
                                     from vaf.core.web_interface import notify_document_created
                                     notify_document_created(

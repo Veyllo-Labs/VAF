@@ -181,6 +181,25 @@ Chat sessions in the Web UI are isolated by `user_scope_id`:
 - **Session-command ownership:** A single shared ownership gate runs before the first side effect of every Web UI session command — chat (before subscribing to the session stream), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or the local-admin scope). A session with no recorded `user_scope_id` is treated as admin-only for these commands. On denial the server logs and replies with `{"type":"error","message":"Access denied"}` and keeps the connection open.
 - **Owner re-stamp (defense-in-depth):** When a queued chat is processed, the runner stamps `user_scope_id` onto the session only if the session has none yet; it never relabels an already-owned session, so a queued chat cannot take over another user's session behind the gate.
 - **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a shared global ID.
+
+**Which session is a run for.** Three answers, and they are deliberately different:
+
+- **A named session.** A chat turn or a channel turn declares it (`set_current_session_id`) before
+  it dispatches anything, and everything it touches resolves to that one.
+- **Nobody.** A scheduled automation has no browser tab behind it and says so, by declaring `None`.
+  That is a real answer, not a missing one: it means the run addresses no session, so it has no live
+  view and no Stop button - correct for something nobody is watching. Before this was explicit, such
+  a run inherited whatever a live chat turn had left in the process and wrote its deliverable into
+  that tenant's workspace, notified their browser and persisted the path into their session record.
+- **Not yet told.** Only a spawned child is in this state, and only until it bootstraps: it reads
+  `VAF_SESSION_ID` from the environment its parent built for it and declares it into its own
+  context. In the parent, "not told" resolves to nothing.
+
+**The per-user file jail is not a backstop for a misplaced write.** It is consulted only from inside
+`is_safe_path`, and `document_writer`, `document_agent`, `research_agent` and `python_sandbox` call
+that zero times - they write with a raw `open()` or a container copy into a directory they resolved
+themselves. `filesystem.py` calls it fourteen times, which is why `write_file` IS covered. So a
+wrong session id upstream is not caught downstream: the directory decision is the boundary.
 - **Broadcasting:** Updates are sent only to connections subscribed to that session (`broadcast_to_session`); session list refreshes are sent only to that user's connections (`broadcast_to_user`). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md).
 - **Agent context store:** Each chat's working memory — intent, plan, tasks, notes, and team state — is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](../memory/CONTEXT_GLUE.md).
 
@@ -311,7 +330,7 @@ Each chat session has a **stable workspace root** stored in `Session.project_pat
 
 - `session.project_path` is only set for paths inside `VAF_Projects/` (temp dirs and one-off outputs are excluded).
 - **The anchor is written by ONE shared setter** (`record_created_file`, `vaf/core/session.py`), called from BOTH notification paths: the `/api/workflow/update` HTTP endpoint (subprocess sub-agents) and `notify_file_created`'s in-process branch (main-agent `write_file`, workflow engine). Historically only the HTTP path anchored, so chats whose files were written in-process never got the `[SESSION WORKSPACE]` note; the headless runner additionally derives the workspace deterministically (`get_session_workspace_dir(task.session_id)`) when the anchor is missing but the folder exists.
-- **Session-derived prompt content must key on the session id, never the process-global pointer**: with `parallel_main_workers > 1` the global belongs to whichever chat touched it last. `build_prompt(session_id=...)` carries the chat's own id for the "this chat's workspace" line, and `document_writer` receives `_session_id` from the tool dispatcher for its output-dir resolution (a fresh chat's prompt once advertised ANOTHER chat's folder and the model saved the deliverable there).
+- **Session-derived prompt content must key on the session id, never a process-global pointer**: a process-global belongs to whichever lane touched it last, and that needs no non-default configuration - the chat worker, thinking and the automation scheduler are all unconditional threads in one process. There is no such pointer any more (`get_current_session_id()` answers per context; `VAF_SESSION_ID` is the process-boundary channel for spawned children only), but the rule stands for anything that would reintroduce one. `build_prompt(session_id=...)` carries the chat's own id for the "this chat's workspace" line, and `document_writer` receives `_session_id` from the tool dispatcher for its output-dir resolution (a fresh chat's prompt once advertised ANOTHER chat's folder and the model saved the deliverable there).
 - `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session. Unsafe directories (home dir, `~/.vaf`, ...) are never recorded — and never re-injected into prompts — so sessions that stored such a path before the guard existed self-heal (`is_unsafe_project_dir` checks in `web_server.py` and `headless_runner.py`).
 - The agent receives both values as `[SESSION WORKSPACE]` and `[ACTIVE PROJECT]` context lines at the start of each turn (injected by `vaf/core/headless_runner.py`).
 

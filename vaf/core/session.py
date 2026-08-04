@@ -900,16 +900,20 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     returned (browser use); with create=True the preferred candidate is
     created (agent output use).
     """
-    import os as _os
     import re as _re
 
-    sid = (session_id or _os.environ.get("VAF_SESSION_ID", "")).strip()
-    if not sid:
+    # One resolver, and it answers per CONTEXT before it looks at the process boundary.
+    # Reading the environment first was the pivot of a cross-tenant defect: a scheduled
+    # automation, which declares that it belongs to no web session, would still find a live
+    # chat turn's id here and build its output directory inside that tenant's workspace -
+    # with a raw open(), so the per-user file jail never saw it.
+    if not (session_id or "").strip():
         try:
             from vaf.core.subagent_ipc import get_current_session_id
-            sid = get_current_session_id() or ""
+            session_id = get_current_session_id() or ""
         except Exception:
-            sid = ""
+            session_id = ""
+    sid = (session_id or "").strip()
     if not sid:
         return None
     folder = _re.sub(r'[^a-zA-Z0-9_-]', '', sid)[:32]

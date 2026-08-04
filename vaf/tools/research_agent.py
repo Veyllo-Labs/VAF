@@ -34,6 +34,7 @@ from vaf.cli.themes import ThemeManager
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.core.progress import StatePublisher
+from vaf.core.subagent_ipc import get_current_session_id
 from vaf.core.trust_map import filter_results_by_quality, find_optimal_threshold, rate_url_quality
 from vaf.tools.base import BaseTool
 from vaf.tools.search import WebSearchTool
@@ -757,7 +758,7 @@ class ResearchAgentTool(BaseTool):
             """Emit progress in a way that is visible in WebUI sub-agent stream."""
             if use_live:
                 return
-            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            session_id = (get_current_session_id() or "").strip()
             task_id = os.environ.get("VAF_TASK_ID", "").strip()
 
             if session_id:
@@ -819,11 +820,11 @@ class ResearchAgentTool(BaseTool):
 
         def _emit_research_state(force: bool = False) -> None:
             try:
-                # Env-only, deliberately: this site must NOT fall back to the IPC context
-                # the way the coder and document agents do. That id is a process global,
-                # and adopting it here would start emitting one user's topic and sources
-                # into whichever session dispatched last.
-                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                # One resolver: context first, process boundary second. This site used to
+                # read the environment only, deliberately, to avoid adopting a process
+                # global. That objection is now void from the other side: nothing writes
+                # that variable process-wide any more, and the resolver answers per run.
+                session_id = (get_current_session_id() or "").strip()
                 if not session_id:
                     return
                 html_ref = _rs_state.get("sectionsHtml_ref")
@@ -1365,7 +1366,7 @@ class ResearchAgentTool(BaseTool):
                         f.write(self._assemble_markdown(topic, rendered_sections, all_sources))
 
                 webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
-                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                session_id = (get_current_session_id() or "").strip()
                 if webui_mode and session_id:
                     try:
                         from vaf.core.web_interface import notify_document_created
@@ -1442,7 +1443,7 @@ class ResearchAgentTool(BaseTool):
                 # Only open browser when running locally (not in WebUI/network mode
                 # where the browser would open on the server, not on the client).
                 webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
-                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                session_id = (get_current_session_id() or "").strip()
                 open_result = {"done": False, "ok": False}
 
                 # In WebUI mode, push the report directly into the Document Viewer panel.

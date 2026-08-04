@@ -10529,10 +10529,16 @@ class Agent:
         if str(name).startswith("thinking_workspace_") and not is_thinking_turn:
             return "Error: thinking_workspace tools are only available in background thinking mode."
 
-        # So tools (e.g. document_writer) can notify Web UI; needed when run directly or via workflow in same process
+        # Which session this dispatch serves. Read here, published NOWHERE: this used to
+        # also write os.environ["VAF_SESSION_ID"], process-wide, on every tool call, and
+        # nothing ever restored it. Three tool-dispatching lanes are unconditional threads
+        # in this process (the chat worker, thinking, the automation scheduler), so on a
+        # multi-account instance a scheduled run resolved whichever session a chat turn had
+        # left behind - and then wrote its deliverable into that tenant's workspace,
+        # notified that tenant's browser and persisted the path into their session record.
+        # Tools that need the session get it injected below; anything outside the funnel
+        # asks subagent_ipc.get_current_session_id(), which answers per context.
         sid = self._dispatch_session_id()
-        if sid:
-            os.environ["VAF_SESSION_ID"] = str(sid)
 
         # Everything below is CHAT-TURN machinery; the pipeline itself is shared.
         current_source = str(getattr(self, "_current_chat_source", "") or "").strip().lower()

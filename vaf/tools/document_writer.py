@@ -155,10 +155,11 @@ For large/complex documents, use document_agent instead."""
             # Open the saved document in the Web UI Document Editor
             if not result.startswith(("Tool Error:", "[ERROR]")):
                 try:
-                    session_id = _sid or os.environ.get("VAF_SESSION_ID")
-                    if not session_id:
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        session_id = get_current_session_id()
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    # One resolver: context first, process boundary second. Reading the
+                    # environment first let a run that belongs to no web session address
+                    # whichever session a chat turn had left behind.
+                    session_id = _sid or get_current_session_id()
                     if session_id:
                         from vaf.core.web_interface import notify_document_created
                         notify_document_created(

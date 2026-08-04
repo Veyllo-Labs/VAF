@@ -202,7 +202,11 @@ def get_subagent_logger_from_env(
     """
     env_task_id = (os.environ.get("VAF_TASK_ID") or "").strip()
     env_agent_type = (os.environ.get("VAF_AGENT_TYPE") or "").strip()
-    session_id = (os.environ.get("VAF_SESSION_ID") or "").strip()
+    try:
+        from vaf.core.subagent_ipc import get_current_session_id
+        session_id = (get_current_session_id() or "").strip()
+    except Exception:
+        session_id = ""
 
     if not create_fallback:
         in_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes")

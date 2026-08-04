@@ -126,39 +126,25 @@ VAF_LIVE_VIEW_TYPES = frozenset({
 
 
 def resolve_ui_session_id() -> str:
-    """Which Web UI session this run feeds, or "" for none. Environment first, IPC second.
+    """Which Web UI session this run feeds, or "" for none.
+
+    A thin adapter over ``subagent_ipc.get_current_session_id()``, which answers per
+    CONTEXT and falls back to ``VAF_SESSION_ID`` only when a context was never told - the
+    child-process case. This function exists for the return TYPE: publishers read
+    ``if not sid: return``, and an empty string keeps that idiom honest where ``None``
+    would have to be special-cased at every call site.
 
     Contract, each choice against its failure mode:
 
-    - The ENVIRONMENT wins because it is the only channel that survives a process
-      boundary: a sub-agent child is spawned with ``VAF_SESSION_ID`` in its env and has no
-      IPC context of its own. Reversing the order changes WHO RECEIVES the stream whenever
-      the thread-local context and the process-global env disagree, which is a routing
-      change wearing a refactor's clothes.
-    - ``.strip()`` before the truth test: a whitespace-only value is an absent one, and a
-      blank string that reaches the transport takes the unscoped global-broadcast branch.
-    - The IPC fallback carries its own ``except``. ``subagent_ipc`` is imported late and a
-      missing session must never turn a best-effort publisher into a raising one.
-    - Returns ``""`` and never ``None``, so every call site reads ``if not sid: return``.
-    - NOT used by the research agent, deliberately. That site is env-only today, and adding
-      the IPC fallback would switch its emits ON in in-process runs, sourced from a
-      process-global id. Turning a stream on is a behaviour change with its own test, not a
-      side effect of an extraction.
-
-    KNOWN GAP, recorded here because this is where the next reader looks, and NOT closed by
-    this function: the environment variable it reads first is process-global, and
-    ``agent.py``'s tool dispatch REWRITES it on every call from the current turn's session.
-    In a headless server with ``parallel_main_workers > 1`` the workers are threads in one
-    process, so while an INLINE sub-agent run is publishing, another worker's dispatch can
-    move the id out from under it and a frame lands in the wrong tenant's browser. Both
-    conditions are non-default (parallel workers AND in-process sub-agents), which is why
-    it has not surfaced. This order was inherited unchanged from the three publishers that
-    each hand-rolled it; closing the gap means giving a run its own session handle instead
-    of reading a global, which is a routing change with its own tests and its own entry.
+    - It does NOT read the environment itself, and used to. Reading it first was the pivot
+      of a cross-tenant defect: three tool-dispatching lanes are threads in one process,
+      the parent wrote that variable on every dispatch and never restored it, and a
+      scheduled run - which belongs to no web session at all - would find a live chat
+      turn's id here and publish one tenant's content into another tenant's browser.
+    - ``""`` and never ``None``, and a whitespace-only answer is also ``""``. A blank
+      string that reaches the transport takes the unscoped global-broadcast branch, so
+      empty is not automatically the safe direction; the publishers refuse it explicitly.
     """
-    sid = os.environ.get("VAF_SESSION_ID", "").strip()
-    if sid:
-        return sid
     try:
         from vaf.core.subagent_ipc import get_current_session_id
 

@@ -668,12 +668,12 @@ class AgentWorkflowBuilderTool(BaseTool):
                 candidates = set()
                 if _stop_sid:
                     candidates.add(str(_stop_sid))
+                # The resolver already answers "context first, process boundary second", so
+                # a separate environment candidate would only ever ADD a foreign session to
+                # a set that decides whether to abort this run.
                 _cur = get_current_session_id()
                 if _cur:
                     candidates.add(str(_cur))
-                _env_sid = os.environ.get("VAF_SESSION_ID")
-                if _env_sid:
-                    candidates.add(str(_env_sid))
                 return any(tq.should_stop(s) for s in candidates)
             except Exception:
                 return False

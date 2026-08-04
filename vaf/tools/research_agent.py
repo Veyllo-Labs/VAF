@@ -33,6 +33,7 @@ from vaf.cli.ui import UI, AnimatedHeader
 from vaf.cli.themes import ThemeManager
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.core.progress import StatePublisher
 from vaf.core.trust_map import filter_results_by_quality, find_optimal_threshold, rate_url_quality
 from vaf.tools.base import BaseTool
 from vaf.tools.search import WebSearchTool
@@ -803,8 +804,8 @@ class ResearchAgentTool(BaseTool):
                 pass
 
         # ── WebUI research window state (paper viewer / outline / sources) ──
-        # Mirrors the coder's coder_state pattern: one event type, hash+time
-        # throttled, silently inactive without a session id.
+        # Published through the shared gate: 0.4s clock plus a duplicate check, silently
+        # inactive without a session id.
         _rs_state: Dict[str, Any] = {
             "topic": "",
             "stage": "Initializing",
@@ -814,15 +815,16 @@ class ResearchAgentTool(BaseTool):
             "wordsTarget": 0,
             "loop": 0,
         }
-        _rs_last = {"hash": None, "at": 0.0}
+        _rs_pub = StatePublisher("research_state", min_interval=0.4, dedupe=True)
 
         def _emit_research_state(force: bool = False) -> None:
             try:
+                # Env-only, deliberately: this site must NOT fall back to the IPC context
+                # the way the coder and document agents do. That id is a process global,
+                # and adopting it here would start emitting one user's topic and sources
+                # into whichever session dispatched last.
                 session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                 if not session_id:
-                    return
-                now = time.time()
-                if not force and now - _rs_last["at"] < 0.4:
                     return
                 html_ref = _rs_state.get("sectionsHtml_ref")
                 payload = {
@@ -834,14 +836,7 @@ class ResearchAgentTool(BaseTool):
                     "wordsTarget": _rs_state["wordsTarget"],
                     "loop": _rs_state["loop"],
                 }
-                payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
-                if payload_hash == _rs_last["hash"]:
-                    return
-                _rs_last["hash"] = payload_hash
-                _rs_last["at"] = now
-                from vaf.core.web_interface import get_web_interface
-                get_web_interface().emit_research_state(payload, session_id=session_id)
-                if _debug_lg:
+                if _rs_pub.publish(payload, session_id=session_id, force=force) and _debug_lg:
                     _debug_lg.event(
                         "research_state_emitted",
                         stage=payload["stage"],

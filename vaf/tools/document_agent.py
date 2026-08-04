@@ -23,6 +23,7 @@ from datetime import datetime
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI
+from vaf.core.progress import StatePublisher, resolve_ui_session_id
 from vaf.core.document_formatting import (
     DocumentModel,
     DocumentSection,
@@ -157,7 +158,9 @@ Handles documents of any size using section-by-section generation (no context ov
             "sections": [], "sectionsHtml": [], "placeholders": [],
             "wordsTarget": 0, "savePath": "", "loop": 0,
         }
-        self._doc_emit_last = {"hash": None, "at": 0.0}
+        # Per run, not per tool instance: a dedup cell that outlived the run would
+        # suppress the next run's first frame, and that frame opens the window.
+        self._doc_pub = StatePublisher("document_state", min_interval=0.4, dedupe=True)
         self._doc_cur_idx = -1
         self._emit_doc_state(force=True)
 
@@ -279,33 +282,19 @@ Handles documents of any size using section-by-section generation (no context ov
     _PH_SCAN_RE = re.compile(r"\{\{([A-ZÄÖÜ0-9_]+)\}\}")
 
     def _emit_doc_state(self, force: bool = False) -> None:
-        """Emit the live document state to the WebUI (throttled, hash-guarded).
-        Silently inactive without a session id. Mirrors research's _emit_research_state."""
+        """Emit the live document state to the WebUI. Silently inactive without a session.
+
+        `force` now bypasses the 0.4s clock only, not the duplicate check - it used to
+        bypass both. Behaviour-identical here: every forced call site mutates the stage or
+        a section's status first, so no forced payload is ever a duplicate within a run,
+        and the publisher is per run.
+        """
         try:
-            import time as _time
             state = getattr(self, "_doc_state", None)
-            if not state:
+            pub = getattr(self, "_doc_pub", None)
+            if not state or pub is None:
                 return
-            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
-            if not session_id:
-                try:
-                    from vaf.core.subagent_ipc import get_current_session_id
-                    session_id = get_current_session_id() or ""
-                except Exception:
-                    session_id = ""
-            if not session_id:
-                return
-            now = _time.time()
-            last = getattr(self, "_doc_emit_last", {"hash": None, "at": 0.0})
-            if not force and now - last["at"] < 0.4:
-                return
-            payload = dict(state)
-            payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
-            if not force and payload_hash == last["hash"]:
-                return
-            self._doc_emit_last = {"hash": payload_hash, "at": now}
-            from vaf.core.web_interface import get_web_interface
-            get_web_interface().emit_document_state(payload, session_id=session_id)
+            pub.publish(dict(state), session_id=resolve_ui_session_id(), force=force)
         except Exception:
             pass
 

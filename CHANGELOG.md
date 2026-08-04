@@ -119,6 +119,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A coding run without an open Web UI no longer does the work of drawing one.**
+  Every loop iteration and every written file gathered a full project snapshot -
+  several `git` calls and a walk of the project tree - before checking whether
+  anyone was watching. On the terminal, where nobody is, that work was thrown away.
+  The librarian did the same with a filesystem scan that also wrote a cache file.
 - **A skill you shared with one person is visible to that person again.** On the
   lanes that stored the account key as a parsed object rather than as text, the
   visibility check compared two different kinds of value and never matched, so

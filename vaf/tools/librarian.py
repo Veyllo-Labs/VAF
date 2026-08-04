@@ -12,6 +12,7 @@ import json
 import time
 import requests
 
+from vaf.core.progress import StatePublisher, resolve_ui_session_id
 from vaf.core.text_match import compile_de
 import sys
 import subprocess
@@ -168,6 +169,12 @@ class LibrarianTool(BaseTool):
         self.fs_map = CachedFilesystemMap()
         self.map_cache = None
         self.last_scan = None
+        # No clock, no dedup - and on this instance, not per run, precisely BECAUSE dedup
+        # is off. The tool is built once per Agent and kept, while the frontend resets the
+        # librarian view at every task start; a dedup cell here would suppress a re-run's
+        # first frame (the fs map is cached, so its payload repeats byte for byte) and the
+        # window would never leave its starting banner.
+        self._state_pub = StatePublisher("librarian_state")
     
     def get_system_prompt_addition(self) -> str:
         """Adds the filesystem map to the system prompt."""
@@ -633,19 +640,14 @@ You have access to this filesystem map for fast navigation:
         resolves the session id like the document agent, never raises, and never changes
         the librarian's return value."""
         try:
-            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            session_id = resolve_ui_session_id()
             if not session_id:
-                try:
-                    from vaf.core.subagent_ipc import get_current_session_id
-                    session_id = get_current_session_id() or ""
-                except Exception:
-                    session_id = ""
-            if not session_id:
+                # No viewer -> skip the scan entirely. _build_librarian_state walks the
+                # filesystem and WRITES a cache file; that must not run for nobody.
                 return
             state = self._build_librarian_state(task, result=result)
             state["stage"] = stage
-            from vaf.core.web_interface import get_web_interface
-            get_web_interface().emit_librarian_state(state, session_id=session_id)
+            self._state_pub.publish(state, session_id=session_id)
         except Exception:
             pass
 

@@ -392,64 +392,90 @@ class WebInterfaceManager:
             "timestamp": __import__("datetime").datetime.now().isoformat()
         })
 
+    def emit_agent_state(self, msg_type: str, state: dict, session_id: str = None):
+        """Emit one live agent-view state object under its own wire type.
+
+        The primitive behind the per-agent emitters below, and the one an embedder's own
+        agent uses to feed a view of its own: VAF's five views are five call sites, not
+        five mechanisms.
+
+        Contract, each choice against its failure mode:
+
+        - `msg_type` is the LITERAL type the frontend switches on, used UNDECORATED.
+          Deriving it (`f"{kind}_state"`) would rename `subagent_update`, the type the
+          coder's live editor feed rides on, to one no branch in `web/app/page.tsx`
+          handles - and that chain has no default branch, so the pane goes dark with
+          nothing logged anywhere.
+        - The state is splatted at the TOP level because the frontend rebuilds every
+          payload field by field; nesting it under one key drops the whole view at once.
+        - `type` is written first, so a state key of the same name overrides it. Preserved
+          from the five methods this replaces: no agent sends one, and a loud rename is
+          easier to find than a silent ignore.
+        - Nothing is added here. See `StatePublisher` in `vaf/core/progress.py` for why one
+          injected field can erase a whole run's stream in the bridge lane.
+        """
+        self._bridge_or_push({"type": msg_type, **(state or {})}, session_id)
+
+    def _bridge_or_push(self, payload: dict, session_id: str = None):
+        """The one transport fork: HTTP bridge out of a sub-agent subprocess, WS otherwise.
+
+        Contract, each choice against its failure mode:
+
+        - `_in_subagent_subprocess()` is re-read on EVERY call and never cached:
+          `VAF_IN_SUBAGENT_TERMINAL` is set and cleared INSIDE a live process by the
+          workflow CLI and by the headless runner's leak guard, so the transport is a
+          property of the moment, not of the object.
+        - The two branches attach `sessionId` differently on purpose. The bridge stamps it
+          here, only when truthy; the local branch leaves it to `_push_session_update`,
+          which mutates the caller's dict in place. Both end with the key on the wire,
+          which is what every frontend handler's cross-session filter tests. Unify them and
+          one path loses either the key or the mutation the callers were tuned against.
+        - Fire-and-forget on the shared two-worker `_BRIDGE_POOL`. Callers run inside a
+          browser-use asyncio loop and inside an SSE parse loop, so a synchronous POST
+          stalls the agent and not merely the view - and a daemon thread of its own would
+          drop the terminal frame.
+        - A falsy `session_id` still SENDS: unscoped `push_update` locally, an unstamped
+          POST over the bridge, both of which reach every connected client. Preserved
+          verbatim. It is reachable only from the browser agent, the one site that does not
+          gate on a session id, and closing it is a behaviour change with its own test, not
+          a line inside a refactor.
+        """
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_browser_frame(self, frame_b64: str, url: str = "", session_id: str = None):
         """Emit a live browser screenshot frame for browser_agent live view in WebUI."""
-        payload = {
+        self._bridge_or_push({
             "type": "browser_frame_update",
             "frame": frame_b64,
             "url": url,
             "timestamp": _dt.now().isoformat(),
-        }
-        # browser_agent runs in its own subprocess (no local WS clients) and emits frames from
-        # inside the browser-use asyncio loop — bridge to the main process off-thread so the
-        # loop never blocks on the HTTP post.
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        }, session_id)
 
     def emit_browser_step(self, line: str, session_id: str = None):
         """Emit a single browser-use agent log line to the WebUI SubAgent console."""
-        payload = {
-            "type": "browser_step_update",
-            "line": line,
-        }
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self._bridge_or_push({"type": "browser_step_update", "line": line}, session_id)
 
     def emit_browser_state(self, state: dict, session_id: str = None):
         """Emit the browser agent's structured live state (task, step, action plan,
         visited URLs, vision) for the browser window dock in the WebUI. The screenshot
-        itself stays on the separate browser_frame_update stream. Like the frame emit,
-        this runs inside the browser-use asyncio loop in a subprocess, so bridge it
-        off-thread to the main process."""
-        payload = {"type": "browser_state", **(state or {})}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        itself stays on the separate browser_frame_update stream."""
+        self.emit_agent_state("browser_state", state, session_id=session_id)
 
     def emit_coder_code(self, file: str, code: str, session_id: str = None):
         """Emit the code currently being written (live editor feed).
 
         Sent as a minimal `subagent_update` — the frontend already maps
-        file/code from that type and keeps all other fields unchanged.
+        file/code from that type and keeps all other fields unchanged. Any further
+        field here would be read by that same handler: `status`, `presence`, `steps`
+        and `agentName` all mean something on it.
         """
-        payload = {"type": "subagent_update", "file": file, "code": code}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self._bridge_or_push({"type": "subagent_update", "file": file, "code": code},
+                             session_id)
 
     def emit_research_state(self, state: dict, session_id: str = None):
         """Emit the research agent's live state (outline, sources, section html).
@@ -458,13 +484,7 @@ class WebInterfaceManager:
         viewer with the report growing section by section, outline progress,
         source citations and the status bar.
         """
-        payload = {"type": "research_state", **(state or {})}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self.emit_agent_state("research_state", state, session_id=session_id)
 
     def emit_document_state(self, state: dict, session_id: str = None):
         """Emit the document agent's live state (sections, placeholders, section html).
@@ -474,13 +494,7 @@ class WebInterfaceManager:
         (resolved from memory / chat) and the status bar. Sent by the document agent
         on meaningful changes (plan ready, section writing/done, placeholders resolved).
         """
-        payload = {"type": "document_state", **(state or {})}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self.emit_agent_state("document_state", state, session_id=session_id)
 
     def emit_librarian_state(self, state: dict, session_id: str = None):
         """Emit the librarian agent's live state (filesystem map, storage, search).
@@ -490,13 +504,7 @@ class WebInterfaceManager:
         the biggest-folders list and an activity feed. Sent by the librarian agent when
         it starts a task and when it finishes. The librarian only reads, never writes.
         """
-        payload = {"type": "librarian_state", **(state or {})}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self.emit_agent_state("librarian_state", state, session_id=session_id)
 
     def emit_coder_state(self, state: dict, session_id: str = None):
         """Emit the coder's project state (file tree, git, progress) to the WebUI.
@@ -506,13 +514,7 @@ class WebInterfaceManager:
         coding agent on meaningful changes (init, file written, task done,
         final commit).
         """
-        payload = {"type": "coder_state", **(state or {})}
-        if _in_subagent_subprocess():
-            if session_id:
-                payload["sessionId"] = session_id
-            _BRIDGE_POOL.submit(_post_to_parent, payload)
-            return
-        self._push_session_update(session_id, payload)
+        self.emit_agent_state("coder_state", state, session_id=session_id)
 
     def emit_stats(self, stats: dict, session_id: str = None):
         """Emit context/token statistics."""

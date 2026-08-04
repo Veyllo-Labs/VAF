@@ -323,7 +323,10 @@ The browser agent runs as its own **child process** (in workflows, and via `suba
 process has no local WebSocket clients, so `web_interface.emit_browser_frame()` / `emit_browser_step()`
 **bridge each frame over HTTP** (off-thread, non-blocking) to the main process's
 `POST /api/subagent/stream` whenever `VAF_IN_SUBAGENT_TERMINAL=1`. The generic endpoint then
-broadcasts a `browser_frame_update` to the session's WebSocket, which the WebUI already handles. So
+broadcasts a `browser_frame_update` to the session's WebSocket, which the WebUI already handles. Both
+methods reach that decision through the single `_bridge_or_push()` fork shared by every live-view
+emitter; the lane is re-read from `VAF_IN_SUBAGENT_TERMINAL` on **every** event and never cached,
+because the workflow CLI sets and the headless runner clears that variable inside a live process. So
 the path is: child screenshot loop → HTTP → main process → WebSocket → `subAgentState.browserFrame`.
 
 ### Inside a workflow: tiled live view

@@ -34,6 +34,7 @@ from rich.syntax import Syntax
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.align import Align
 
+from vaf.core.progress import StatePublisher, resolve_ui_session_id
 from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
@@ -5030,18 +5031,21 @@ Task {task_idx + 1}: {current_task}
                 })
             return True
 
-        # WebUI live state: file tree, git, progress for the VS-Code-style
-        # SubAgent window. Hash-throttled so unchanged payloads are not resent.
-        _last_coder_state_hash = [None]
+        # WebUI live state: file tree, git, progress for the VS-Code-style SubAgent
+        # window. Dedup-only, no clock: the payload IS the change signal, and "activity"
+        # is what keeps it moving in phases with no file or diff change. A time window
+        # would swallow the terminal emit after the final commit.
+        # Per run(), never per process: a cell that outlives the run suppresses the next
+        # run's first frame, and that frame is the one that opens the window.
+        _coder_pub = StatePublisher("coder_state", dedupe=True)
 
         def _emit_coder_state(current_file: str = ""):
             try:
-                _sid = os.environ.get("VAF_SESSION_ID", "").strip()
+                _sid = resolve_ui_session_id()
                 if not _sid:
-                    from vaf.core.subagent_ipc import get_current_session_id as _gsid
-                    _sid = _gsid() or ""
-                if not _sid:
-                    return  # no WebUI session -> nothing to feed
+                    # No viewer -> build nothing. The payload below shells out to git
+                    # six or more times per call; that cost must not be paid for nobody.
+                    return
                 # Real task list for the window's Tasks section: the generic
                 # heartbeat steps only know "Sub-Agent running"; this is the
                 # actual plan with live per-task status.
@@ -5071,13 +5075,7 @@ Task {task_idx + 1}: {current_task}
                     # verify) -- otherwise the frozen editor reads as "stuck".
                     "activity": (getattr(tui, "current_action", "") or "")[:80],
                 }
-                payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
-                if payload_hash == _last_coder_state_hash[0]:
-                    return
-                _last_coder_state_hash[0] = payload_hash
-                from vaf.core.web_interface import get_web_interface
-                get_web_interface().emit_coder_state(payload, session_id=_sid)
-                if lg:
+                if _coder_pub.publish(payload, session_id=_sid) and lg:
                     lg.event(
                         "coder_state_emitted",
                         files=len(payload["fileTree"]),
@@ -5088,31 +5086,26 @@ Task {task_idx + 1}: {current_task}
             except Exception:
                 pass
 
-        # Live editor feed: the code currently streaming out of the model.
-        # Time-throttled; content is tail-capped so huge files stay cheap.
-        _last_code_emit_at = [0.0]
+        # Live editor feed: the code currently streaming out of the model. Time-throttled
+        # only; identical consecutive content IS resent, because three of the four call
+        # sites force and a re-sent frame is a no-op for the merging frontend.
+        _code_pub = StatePublisher("subagent_update", min_interval=0.35)
 
         def _emit_live_code(filename: str, content: str, force: bool = False):
             try:
-                now = time.time()
-                if not force and now - _last_code_emit_at[0] < 0.35:
-                    return
-                _last_code_emit_at[0] = now
-                _sid = os.environ.get("VAF_SESSION_ID", "").strip()
-                if not _sid:
-                    from vaf.core.subagent_ipc import get_current_session_id as _gsid2
-                    _sid = _gsid2() or ""
+                _sid = resolve_ui_session_id()
                 if not _sid:
                     return
+                # Tail cap stays here: it is this view's wire contract, and a transform
+                # hook in the publisher would be an adapter.
                 tail = content or ""
                 if len(tail) > 6000:
                     tail = tail[-6000:]
                     cut = tail.find('\n')
                     if 0 <= cut < 200:
                         tail = tail[cut + 1:]
-                from vaf.core.web_interface import get_web_interface
-                get_web_interface().emit_coder_code(filename or "", tail, session_id=_sid)
-                if lg:
+                if _code_pub.publish({"file": filename or "", "code": tail},
+                                     session_id=_sid, force=force) and lg:
                     lg.event("live_code_emitted", file=filename, chars=len(tail))
             except Exception:
                 pass

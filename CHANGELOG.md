@@ -70,6 +70,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 
 ### Changed
+- **An embedded agent created with the machine owner's account key now reads the
+  owner's profile** instead of an empty per-key workspace. Keys belonging to anyone
+  else are unaffected and still never resolve to the owner.
 - **The repository root is quieter.** The contributor, conduct and security documents
   moved into `.github/`, where GitHub still finds them, and the commercial terms and
   third-party inventory moved to `docs/legal/`. The separate `ruff.toml` is gone; its one
@@ -116,6 +119,29 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A skill you shared with one person is visible to that person again.** On the
+  lanes that stored the account key as a parsed object rather than as text, the
+  visibility check compared two different kinds of value and never matched, so
+  `use_skill` and `read_skill` answered "not available to you" to the very person
+  the skill had been shared with.
+- **The machine owner is no longer locked out of their own files.** If the owner
+  key was ever stored in a different spelling than the one VAF generates, the
+  terminal app rewrote it on startup and then compared the rewritten value against
+  the stored one. It never matched, so the owner was treated as a guest: jailed out
+  of their own project folder and refused on their own files.
+- **A timer or automation can no longer leave a conversation without an owner.**
+  Stamping the owner onto a fresh conversation could fail silently on the
+  background lanes, and a conversation with no owner loses the channel it came
+  from, so a later sub-agent result had nowhere to go back to.
+- **A background "thinking" run no longer borrows the machine owner's profile.**
+  After loading a person's chat history, the run took its identity from that
+  conversation; if the conversation had no name stored, three fallbacks quietly
+  substituted the owner's, and the owner's personal profile went into a different
+  person's prompt and into the message sent to them.
+- **An elevated permission no longer survives from one queued message into the
+  next.** The role was only ever cleared on two of the paths that start a turn.
+- **A damaged owner key in a restored or hand-edited automation file no longer
+  resolves to the machine owner.** It gets its own isolated bucket instead.
 - **The classic CLI no longer loses its prompt for good after a second message
   from the web UI.** Once two messages had been queued for the same conversation,
   the terminal dropped to a plain `Message:` line with no completion, no history

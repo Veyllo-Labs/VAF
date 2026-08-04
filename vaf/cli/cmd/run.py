@@ -88,13 +88,13 @@ def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
     # machine's speakers; run_prompt (-p) passes False (machine/script lane).
     a = Agent(verbose=verbose, run_kind="chat", host_audio=host_audio)
     try:
-        from uuid import UUID
-        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-        # Mirror gateway.run_agent_step's local-admin fallback: store the scope as a UUID
-        # (memory tools expect a UUID). If the configured value is not a valid UUID, leave
-        # the scope unset rather than guessing — identical to the gateway's behaviour.
-        a._current_user_scope_id = UUID(str(get_local_admin_scope_id()))
-        a._current_username = get_local_admin_username()
+        from vaf.core.identity_binding import bind_identity, resolve_owner_identity
+
+        # The scope is bound as configured, not parsed into a UUID: is_admin_identity
+        # compares it against that same config value as a plain string, so parsing one
+        # side only would demote the owner wherever the value is stored in a different
+        # spelling. Memory search normalises and fails closed on its own.
+        bind_identity(a, resolve_owner_identity())
     except Exception:
         # Identity binding must never block the CLI from starting; fall back to defaults.
         pass

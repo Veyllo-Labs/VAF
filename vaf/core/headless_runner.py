@@ -18,6 +18,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 
 import requests
 from vaf.core.agent import Agent
+from vaf.core.identity_binding import bind_identity, identity_from_metadata, reassert_identity
 from vaf.core.task_queue import TaskQueue
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import SessionManager, Session, turn_context_messages_since_last_user
@@ -660,9 +661,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         continue
                 except Exception:
                     pass
-                agent._current_user_scope_id = meta.get("user_scope_id")
-                agent._current_username = meta.get("username")
-                agent._current_user_role = meta.get("role")
+                identity = identity_from_metadata(meta)
+                bind_identity(agent, identity)
                 # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                 append_domain_log("rag", f"[Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}")
 
@@ -717,12 +717,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Re-apply task user context after session load:
                     # load_session_context() may hydrate stale session metadata (e.g. legacy admin scope),
                     # but for queued channel tasks the TaskQueue metadata is authoritative for routing/isolation.
-                    if meta.get("user_scope_id") is not None:
-                        agent._current_user_scope_id = meta.get("user_scope_id")
-                    if meta.get("username") is not None:
-                        agent._current_username = meta.get("username")
-                    if meta.get("role") is not None:
-                        agent._current_user_role = meta.get("role")
+                    # Inside the try on purpose: a failed load must leave the identity
+                    # it left standing, which a finally would overwrite.
+                    reassert_identity(agent, identity)
                     # Sync internal session ID
                     if hasattr(agent, '_session_id') and agent._session_id != task.session_id:
                         agent._unregister_session()

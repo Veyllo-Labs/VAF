@@ -193,6 +193,25 @@ def run_agent_step(agent: Agent, text: str, context: dict, server_user_scope_id:
 
     # User context: set username and scope on agent for tool execution
     # (email, whatsapp, contacts, user_identity, etc. all read _current_username)
+    #
+    # NAMED BOUNDARY - deliberately NOT converted to vaf/core/identity_binding.py.
+    # This is the only binder with bind-if-unset semantics ("elif not getattr(...)"),
+    # which an unconditional bind_identity would delete. Those semantics exist for a
+    # path that is not wired: nothing populates the server_* arguments today (this
+    # module has no authentication middleware and no importer supplies them), so both
+    # elif branches are the live ones. Converting would mean adding an if_unset flag
+    # to the primitive to serve exactly one caller, and that flag would be a security
+    # parameter with two values and no name.
+    #
+    # Two real defects live here and are each a separate, tested change, not a
+    # cleanup to smuggle into an extraction:
+    #   1. The username is decided on server_username while the scope is decided on
+    #      server_user_scope_id, so a scope-without-name caller binds the OWNER's name
+    #      onto a TENANT's scope - which is why the prompt and the tools can disagree
+    #      about who is calling.
+    #   2. The scope is parsed into a UUID here while is_admin_identity compares it
+    #      against the configured value as plain text. Every other lane now binds it
+    #      verbatim; this one still does not.
     if server_username:
         agent._current_username = server_username
     elif not getattr(agent, "_current_username", None):

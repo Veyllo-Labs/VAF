@@ -88,7 +88,7 @@ This ensures that your Email, Calendar, and WhatsApp connections remain active e
                  ▼    ▼                               ▼
           ┌─────────────────────────────────────────────────┐
           │              Agent Instance                     │
-          │  _current_user_scope_id : UUID  ← data scoping  │
+          │  _current_user_scope_id : as given ← data scope │
           │  _current_username      : str   ← display/paths │
           └──────────────────┬──────────────────────────────┘
                              │ Tool execution
@@ -173,8 +173,8 @@ task_queue.add(session_id=sid, input_text=text, metadata=metadata)
 
 ```python
 # headless_runner.py — Before agent.chat_step()
-agent._current_user_scope_id = meta.get("user_scope_id")
-agent._current_username = meta.get("username")
+identity = identity_from_metadata(meta)
+bind_identity(agent, identity)
 ```
 
 **Rules:**
@@ -182,6 +182,21 @@ agent._current_username = meta.get("username")
 - The agent's `_current_user_scope_id` drives all data operations (memory, RAG, cache).
 - The agent's `_current_username` drives filesystem paths and display.
 - `user_scope_id` in client-sent WebSocket payloads is ALWAYS stripped (security).
+- The three identity attributes are written through `vaf/core/identity_binding.py`, never
+  by hand. `bind_identity` writes all three unconditionally, so a field the new turn does
+  not carry CLEARS the previous one; `reassert_identity` writes only fields that carry a
+  value, and is what a lane calls after `load_session_context` overwrote the identity with
+  the session's own. A CI guard (`tests/test_identity_binding.py`) fails on a new direct
+  assignment outside the three named exemptions.
+
+**The scope is stored AS SUPPLIED, not coerced to `uuid.UUID`.** It is simultaneously a
+directory name, a filename component, a JSON value (`SessionManager.save` is `json.dumps`
+with no `default=`, so a UUID object raises), a raw membership test against a list of
+strings (`skills_registry`, where a UUID object never matches) and one half of a
+plain-text comparison in `is_admin_identity` (where canonicalising one side only demotes
+an owner whose configured value is stored in another spelling). Consumers that need the
+object form normalise it themselves and fail closed on an unparseable value, which is what
+`run_memory_search_sync` does.
 
 ### Layer 4: Agent Tool Execution
 

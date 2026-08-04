@@ -3993,7 +3993,14 @@ class Agent:
             # RESET the in-memory identity, otherwise the previous session's user_scope_id/username
             # bleeds into the new session and that user's mail/memory/contacts could be exposed.
             # None is safe downstream (tool dispatch falls back to local admin, admin checks treat
-            # None as non-admin). Headless re-applies the authoritative task identity after this load.
+            # None as non-admin).
+            #
+            # NAMED BOUNDARY - deliberately NOT routed through vaf/core/identity_binding.py.
+            # This is not a binder, it is the CLOBBERER the re-assert half of that module
+            # exists for: it answers "who owns this session", which is a different question
+            # from "who is calling". Every lane whose caller identity is authoritative calls
+            # reassert_identity() right after this returns (the facade, the thinking lane,
+            # the headless runner, the TUI's owner rebind).
             meta = getattr(session, "metadata", None) or {}
             self._current_user_scope_id = meta.get("user_scope_id")
             self._current_username = meta.get("username")

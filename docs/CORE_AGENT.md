@@ -272,5 +272,12 @@ changelog):
 | `_current_chat_source` | e.g. `"telegram"` - activates channel restrictions |
 | `_background_run` | marks automation runs (suppresses UI pushes) |
 
+The first three are written through `vaf/core/identity_binding.py`, never by hand:
+`bind_identity(agent, identity)` writes all three unconditionally, so a field the new
+turn does not carry clears the previous one, and `reassert_identity(agent, identity)`
+writes only fields that carry a value, for the lanes whose caller identity outranks the
+session's after `load_session_context`. The scope is stored as supplied and never coerced
+to `uuid.UUID` - see [platform/UUID.md](platform/UUID.md) for why.
+
 For multi-user servers, every scoped datum must key on the user scope - read
 [USER_ISOLATION.md](security/USER_ISOLATION.md) before building on these.

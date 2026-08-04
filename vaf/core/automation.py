@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from vaf.core.identity_binding import bind_identity, resolve_scope_identity
 from vaf.core.log_helper import append_domain_log, append_domain_log_always
 
 # Cross-platform scheduler
@@ -1307,7 +1308,6 @@ vaf automation delete <id>   # Delete task
             if task.workflow_steps and len(task.workflow_steps) > 0:
                 from vaf.workflows.engine import WorkflowEngine, WorkflowStep
                 from vaf.core.agent import Agent
-                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 
                 # Initialize agent to get tools
                 agent = Agent(verbose=False, run_kind="automation")
@@ -1317,19 +1317,8 @@ vaf automation delete <id>   # Delete task
                 # into a live user's chat (a scheduled automation has no own web session, so the global
                 # session fallback would otherwise route its tool bubbles to whoever is the active web user).
                 agent._background_run = True
-                # User isolation: workflow runs with task owner's scope (tools + memory)
-                agent._current_user_scope_id = task.user_scope_id
-                if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
-                    agent._current_username = get_local_admin_username()
-                else:
-                    # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
-                    # username, never the literal "admin" — the username keys UserWorkspace
-                    # (~/.vaf/users/<username>), which feeds the system-prompt <user_context> and the
-                    # username-keyed calendar/contacts/mail tools. Reuse the thinking-mode resolver so a
-                    # non-admin automation can never inject the admin's identity/profile.
-                    from vaf.core.thinking_mode import _resolve_username_for_scope
-                    _resolved = _resolve_username_for_scope(task.user_scope_id)
-                    agent._current_username = _resolved or ("scope_" + str(task.user_scope_id).replace("-", "")[:8])
+                # User isolation: the run adopts the task owner's scope and account name.
+                bind_identity(agent, resolve_scope_identity(task.user_scope_id))
 
                 # Get all available tools
                 all_tools = {**agent.tools}
@@ -1523,19 +1512,7 @@ vaf automation delete <id>   # Delete task
                 # active web user; observed as an automation leaking into a LAN client's chat).
                 agent._background_run = True
                 # So calendar and create_automation tools use the correct user (same scope as this task).
-                from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-                agent._current_user_scope_id = task.user_scope_id
-                if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
-                    agent._current_username = get_local_admin_username()
-                else:
-                    # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
-                    # username, never the literal "admin" — the username keys UserWorkspace
-                    # (~/.vaf/users/<username>), which feeds the system-prompt <user_context> and the
-                    # username-keyed calendar/contacts/mail tools. Reuse the thinking-mode resolver so a
-                    # non-admin automation can never inject the admin's identity/profile.
-                    from vaf.core.thinking_mode import _resolve_username_for_scope
-                    _resolved = _resolve_username_for_scope(task.user_scope_id)
-                    agent._current_username = _resolved or ("scope_" + str(task.user_scope_id).replace("-", "")[:8])
+                bind_identity(agent, resolve_scope_identity(task.user_scope_id))
 
                 # Tell the agent it is the same agent, just running an automation in the background.
                 if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):

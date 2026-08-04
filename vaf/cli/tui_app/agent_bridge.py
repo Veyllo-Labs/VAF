@@ -33,6 +33,8 @@ import threading
 import time
 from typing import Optional
 
+from vaf.core.identity_binding import bind_identity, resolve_owner_identity
+
 
 class _StreamSurface:
     """The 5-attribute duck `_process_agent_message` renders through.
@@ -148,6 +150,28 @@ def _write_crash_log():
         return path
     except Exception:
         return None
+
+
+def _bind_owner(agent) -> None:
+    """Bind the machine owner onto the agent. Two callers: boot, and every session load.
+
+    `load_session_context` assigns the identity stored in the session's own
+    metadata, so both places that load a session have to put the owner back.
+    This lane is single-user by construction - there is no tenant to distinguish
+    and no token to consult, so the configured local admin IS the caller.
+
+    Fail-closed on an unconfigured scope: bind NOTHING rather than a guess, and
+    keep the username COUPLED to the scope. Three stores decide account
+    ownership on the name alone, so the owner's name over a foreign scope would
+    reach the owner's credentials.
+    """
+    try:
+        identity = resolve_owner_identity()
+        if identity.scope is None:
+            return
+        bind_identity(agent, identity)
+    except Exception:
+        pass
 
 
 class AgentBridge:
@@ -503,18 +527,8 @@ class AgentBridge:
             return False
 
     def _rebind_local_admin(self) -> None:
-        """load_session_context overwrites the identity from session metadata
-        as a STRING; the memory tools expect the UUID (same re-bind as boot)."""
-        try:
-            from uuid import UUID
-
-            from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-            scope = get_local_admin_scope_id()
-            if scope:
-                self.agent._current_user_scope_id = UUID(str(scope))
-                self.agent._current_username = get_local_admin_username()
-        except Exception:
-            pass
+        """Put the machine owner back after a session load overwrote the identity."""
+        _bind_owner(self.agent)
 
     def apply_provider_change(self, provider: str = "", model: str = "") -> None:
         """Move the RUNNING agent onto a different provider or API model.
@@ -821,19 +835,9 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
     # classic lane still carries (those drop tool_calls, images and identity).
     agent.load_session_context(session.id)
 
-    # Re-bind the local admin AFTER the swap: load_session_context overwrites the
-    # identity from session metadata as a STRING, while the memory tools expect
-    # the UUID `_make_cli_agent` bound (its local-admin binding at the end).
-    try:
-        from uuid import UUID
-
-        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-        scope = get_local_admin_scope_id()
-        if scope:
-            agent._current_user_scope_id = UUID(str(scope))
-            agent._current_username = get_local_admin_username()
-    except Exception:
-        pass
+    # Re-bind the machine owner AFTER the swap: load_session_context overwrites
+    # the identity from the session's own metadata.
+    _bind_owner(agent)
 
     bridge = AgentBridge(agent, session, session_mgr, events)
     agent.set_event_sink(bridge.on_sink_event)

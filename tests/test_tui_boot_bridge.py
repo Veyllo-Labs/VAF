@@ -144,10 +144,17 @@ def test_boot_wires_every_seam_in_the_classic_order(boot_env):
     assert "load_model" in agent.calls and "init_chat" in agent.calls
     assert "warmup" not in boot_env.ipc
 
-    # The COMPLETE session swap, then the local-admin UUID re-bind AFTER it.
+    # The COMPLETE session swap, then the owner re-bind AFTER it.
     assert ("load_ctx", "new-sess-1") in agent.calls
     assert agent.calls.index(("load_ctx", "new-sess-1")) > agent.calls.index("init_chat")
-    assert agent._current_user_scope_id == UUID(SCOPE)
+    # VERBATIM, not uuid.UUID(...). is_admin_identity compares this value against
+    # the same config entry as plain text, so parsing it on this side only would
+    # demote the machine owner wherever the entry is stored in another spelling.
+    # Memory search normalises and fails closed on its own, so nothing needs the
+    # object form. Asserting the type as well: `UUID(SCOPE) == SCOPE` is False,
+    # but a future coercion elsewhere could still round-trip past a value check.
+    assert agent._current_user_scope_id == SCOPE
+    assert not isinstance(agent._current_user_scope_id, UUID)
     assert agent._current_username == "admin-test"
 
     # The sink is the bridge's dispatcher.

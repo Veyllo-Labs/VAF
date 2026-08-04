@@ -45,6 +45,11 @@ from typing import Any, Callable, Optional
 # only imported on first `vaf.Agent` access (see vaf/__init__.py), so importing
 # the core here is already deferred far enough.
 from vaf.core.agent import Agent as CoreAgent
+from vaf.core.identity_binding import (
+    bind_identity,
+    reassert_identity,
+    resolve_scope_identity,
+)
 
 __all__ = ["Agent", "CoreAgent"]
 
@@ -99,7 +104,8 @@ class Agent:
         # must fail HERE, loudly, never fall back to the machine owner's data.
         # Parsed BEFORE the session check below, which needs it for ownership.
         self._user_scope = None
-        self._scope_username: Optional[str] = None
+        # Resolved once (see _bind_identity); run() re-applies it every turn.
+        self._identity = None
         if user_scope is not None:
             import uuid as _uuid
 
@@ -130,27 +136,24 @@ class Agent:
         os.environ.setdefault("VAF_NONINTERACTIVE", "1")
 
     def _bind_identity(self, agent: "CoreAgent") -> None:
-        """Bind scope AND username together onto the engine.
+        """Bind the embedder's asserted identity onto the engine, resolved once.
 
-        Username resolution goes through the same helper the background lanes
-        use: the real account name when the scope maps to a local user, else
-        a synthetic per-scope name - NEVER the literal "admin", which the
-        engine's injection sites would otherwise fall back to (that fallback
-        stamps the admin's identity into a foreign tenant's artifacts).
+        The scope is bound as TEXT, not as the parsed UUID object. The strict
+        parse above stays where it is - it is the boundary validation an
+        embedder is promised - but its result is a canonical string here,
+        because the same value is later a directory name, a JSON value and one
+        half of a plain-string admin comparison.
+
+        Resolution costs a database round trip (and, inside a running event
+        loop, a thread with a ten-second join), and run() re-applies the
+        identity on EVERY turn, so the answer is cached for the life of this
+        Agent. Resolving per turn would spend a fresh asyncio.run against a
+        pooled engine bound to an already-closed loop, and silently degrade a
+        real account name into the synthetic bucket around turn two.
         """
-        if self._scope_username is None:
-            username = None
-            try:
-                from vaf.core.thinking_mode import _resolve_username_for_scope
-
-                username = _resolve_username_for_scope(self._user_scope)
-            except Exception:
-                username = None
-            self._scope_username = (
-                username or f"scope_{str(self._user_scope).replace('-', '')[:8]}"
-            )
-        agent._current_user_scope_id = self._user_scope
-        agent._current_username = self._scope_username
+        if self._identity is None:
+            self._identity = resolve_scope_identity(str(self._user_scope))
+        bind_identity(agent, self._identity)
 
     def add_tool(self, tool) -> None:
         """Register a BaseTool instance for THIS Agent instance only.
@@ -228,7 +231,10 @@ class Agent:
                         f"session '{self._session_id}' not found"
                     ) from None
                 if self._user_scope is not None:
-                    self._bind_identity(agent)
+                    # Forward-only: the session may legitimately carry a name we
+                    # do not, and blanking it would hand the turn to the
+                    # local-admin fallback.
+                    reassert_identity(agent, self._identity)
             else:
                 agent.init_chat()
             if self._event_cb is not None:

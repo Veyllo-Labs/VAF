@@ -16,6 +16,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 
+from vaf.core.identity_binding import (
+    bind_identity,
+    reassert_identity,
+    resolve_scope_identity,
+)
 from vaf.core.platform import Platform
 
 logger = logging.getLogger(__name__)
@@ -2437,19 +2442,8 @@ def _run_thinking_for_user(
         agent = Agent(verbose=False, run_kind="thinking")
         agent.load_model()
         # Set user context BEFORE init_chat() so system prompt (User Identity, RAG scope) and tools get the right user
-        agent._current_user_scope_id = user_scope_id
-        if not user_scope_id or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
-            agent._current_username = get_local_admin_username()
-        else:
-            # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
-            # username, never the literal "admin". The username keys UserWorkspace
-            # (~/.vaf/users/<username>/user_identity.json) which feeds the system-prompt
-            # <user_context> block and the RAG query seed below — giving a non-admin the string
-            # "admin" injected the local admin's personal identity/profile into their thinking
-            # context. Resolve the real username from local_users; on unknown scope fall back to
-            # a synthetic per-scope username (never "admin"), so the workspace stays isolated.
-            _resolved = _resolve_username_for_scope(user_scope_id)
-            agent._current_username = _resolved or ("scope_" + str(user_scope_id).replace("-", "")[:8])
+        identity = resolve_scope_identity(user_scope_id)
+        bind_identity(agent, identity)
         agent.init_chat()
 
         # Load the user's main chat session so the thinking agent sees the full conversation history.
@@ -2481,6 +2475,12 @@ def _run_thinking_for_user(
             if chat_session_id:
                 try:
                     agent.load_session_context(chat_session_id)
+                    # load_session_context assigns the session's stored identity
+                    # unconditionally, including None. A session with no username
+                    # stored would null ours, and the `or admin-name` fallbacks
+                    # below then read the OWNER's workspace into this tenant's
+                    # prompt. The run's own identity is authoritative.
+                    reassert_identity(agent, identity)
                     _loaded_session = True
                     logger.info("Thinking agent loaded chat session: %s", chat_session_id)
                 except Exception as e:

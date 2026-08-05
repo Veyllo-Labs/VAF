@@ -43,6 +43,12 @@ RAW_NO_WORKFLOW = "suche bitte das wetter und erstelle ein HTML damit"
 
 def _agent_ns(analyze_returns=None):
     ns = types.SimpleNamespace()
+    # A chat-lane stand-in. It declares its run kind and carries the REAL predicate
+    # rather than a re-implementation: the code under test asks the agent whether IT
+    # is a background pass, and that answer must no longer come from the process
+    # environment, which a concurrent background run shares.
+    ns._run_kind = "chat"
+    ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
     ns._seen = {}
 
     def _cfg_get(key, default=None):

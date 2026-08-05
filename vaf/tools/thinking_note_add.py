@@ -12,8 +12,6 @@ Notes are stored in a per-user SQLite DB (Platform.data_dir()/thinking_notes.db)
 and are injected into the system prompt at the start of every subsequent thinking run.
 They auto-expire after 30 days.
 """
-import os
-
 from vaf.tools.base import BaseTool
 
 
@@ -23,6 +21,15 @@ class ThinkingNoteAddTool(BaseTool):
     name = "thinking_note_add"
     permission_level = "system"
     side_effect_class = "reversible"
+    # The schema below has always told the model this field is "injected by the
+    # framework". It was not: without this declaration the dispatcher injects nothing
+    # ("declaring nothing gets nothing"), and the tool fell back to a process-global
+    # environment variable that a background thinking run sets for its whole duration.
+    # This tool is registered on EVERY agent, so a tenant's chat turn wrote its note
+    # into whichever scope that run was serving - and the note is read back into the
+    # OTHER tenant's next thinking prompt, under a header telling the model to follow
+    # it carefully. A cross-tenant write that becomes a cross-tenant instruction.
+    identity_kwargs = ("user_scope_id",)
     description = (
         "Save a persistent note for your next thinking run. "
         "Use this to remember context, user decisions, or things to avoid asking again. "
@@ -55,8 +62,10 @@ class ThinkingNoteAddTool(BaseTool):
         if not note:
             return "Error: note must not be empty."
 
-        # Resolve scope_key the same way thinking_mode.py does
-        user_scope_id = kwargs.get("user_scope_id") or os.environ.get("VAF_THINKING_SCOPE_ID") or None
+        # The caller's own scope, injected by the dispatcher. No environment fallback:
+        # that variable is process-global and belongs to whichever background run is
+        # currently in flight, not to the agent making this call.
+        user_scope_id = kwargs.get("user_scope_id") or None
         try:
             from vaf.core.thinking_mode import _key
             scope_key = _key(user_scope_id)

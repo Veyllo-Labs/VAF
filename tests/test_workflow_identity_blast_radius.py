@@ -151,6 +151,13 @@ NEWLY_IDENTIFIED = {
     "replace_editor_selection": ('user_scope_id',),
     "restore_automation": ('user_role', 'user_scope_id'),
     "telegram_inbox": ('user_scope_id', 'username'),
+    # Added 2026-08-04. Its schema always told the model this field was "injected by the
+    # framework"; it was not, because the tool declared no identity_kwargs, so the tool fell
+    # back to a PROCESS-GLOBAL environment variable that a background thinking run sets for
+    # its whole duration. Registered on every agent, so a tenant's chat turn wrote its note
+    # into whichever scope that run was serving - and the note is read back into the OTHER
+    # tenant's next thinking prompt, under a header telling the model to follow it carefully.
+    "thinking_note_add": ('user_scope_id',),
     "thinking_workspace_handoff": ('user_scope_id',),
     "thinking_workspace_read": ('user_scope_id',),
     "thinking_workspace_write": ('user_scope_id',),

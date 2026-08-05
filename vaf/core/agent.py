@@ -53,7 +53,16 @@ import signal
 def _emit_to_web_ui() -> bool:
     """False when running a background pass (thinking mode or a scheduled automation) – do not push
     tool/log/status updates into any live chat session. Automations deliver only their final result
-    (via _push_result_to_web_ui); the live progress noise must stay out of whoever is the active user."""
+    (via _push_result_to_web_ui); the live progress noise must stay out of whoever is the active user.
+
+    NAMED BOUNDARY - this one still reads the process environment, and it is the last
+    thinking-mode gate that does. It is a module function with no agent to ask, and its
+    eleven call sites would each have to be handed one. The hazard is already written down
+    at the call site that refused to use it (see the tool_update emit below): a concurrent
+    background run makes this return False for a live chat turn, suppressing that user's
+    updates. The fix is to give it the agent, and it is a change of its own - every other
+    gate in this file now reads the instance truth, so this is the only one left to move.
+    """
     if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
         return False
     if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
@@ -826,6 +835,7 @@ class Agent:
                 run_kind = "automation"
         self._run_kind = run_kind
         # Positive opt-in for host-speaker audio (TTS, fillers, answer chime).
+        # (see _is_thinking_run below for why every thinking gate reads this instance)
         # Only the interactive CLI passes True; every other construction site
         # (headless web/channel queue, automations, thinking runs, gateway,
         # vaf run -p, embedders) stays fail-closed and must never play sound
@@ -1065,6 +1075,23 @@ class Agent:
         # above this, the agent is never registered, which is the correct outcome.
         _register_live_agent(self)
 
+    def _is_thinking_run(self) -> bool:
+        """Is THIS agent a background thinking pass? The instance, never the process.
+
+        The rule is already written twice in this file, with a live incident behind it:
+        run kind is instance truth, because the environment is shared across threads and a
+        concurrent background run makes every other agent in the process look like one.
+        It was stated and then not applied to the thinking gates, which were the ones read
+        LIVE on a human's in-flight turn: while a background pass ran, a waiting user's
+        turn silently got a fraction of its tool budget, a read cap, no empty-response
+        retry (whose own comment records that omitting it hangs the Web UI on a loading
+        block) and a refusal from its own intent tool.
+
+        Reads the attribute defensively: agents built before the kwarg existed, and the
+        duck-typed stand-ins in tests, may not carry it.
+        """
+        return getattr(self, "_run_kind", None) == "thinking"
+
     @staticmethod
     def _is_placeholder_plan(plan) -> bool:
         """True when the working-memory plan is an obvious PLACEHOLDER, not a real approach -- a weak
@@ -1153,7 +1180,7 @@ class Agent:
             from vaf.core.config import Config
             if not Config.get("anti_spin_enabled", True):
                 return (None, False)
-            if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+            if self._is_thinking_run():
                 return (None, False)
             if not _is_nonprogress_tool(function_name):
                 self._nonprogress_streak = 0
@@ -1191,10 +1218,12 @@ class Agent:
         """Thinking-mode-only per-tool-NAME read cap. Counts calls to a read/gather tool within the
         current step; at the Nth (thinking_read_cap_per_tool, default 3) it returns a block string telling
         the model to act on what it has, instead of executing the call again. Returns the block string or
-        None. Gated by VAF_THINKING_MODE so the main chat loop is never affected. The per-step counter
+        None. Gated by this agent's own run kind, never the process environment - that variable is
+        shared across threads, so a background pass used to impose this cap on a concurrent
+        human's turn, which is exactly what this sentence used to claim was impossible. The per-step counter
         (self._thinking_read_counts) is reset at the start of each chat_step."""
         try:
-            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+            if not self._is_thinking_run():
                 return None
             if function_name not in _READ_TOOLS_THINKING:
                 return None
@@ -5919,7 +5948,7 @@ class Agent:
             # 🔒 INTENT LOCK (Workflow): Save the fresh user intent to persistence
             # CRITICAL: Skip intent update if running in thinking mode (background).
             if hasattr(self, 'main_persistence') and self.main_persistence:
-                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _is_thinking_mode = self._is_thinking_run()
                 if not _is_thinking_mode:
                     try:
                         # Store the RAW request as the intent: the enriched text
@@ -7826,7 +7855,7 @@ class Agent:
         MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
         # A BACKGROUND thinking run must not churn the way the main chat may — it is a short
         # gather/decide/act pass, so cap it far tighter (default 15) to stop tool-spin loops.
-        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+        if self._is_thinking_run():
             MAX_TOOL_TURNS_PER_STEP = max(2, int(Config.get("thinking_max_tool_turns", 15) or 15))
             SOFT_LIMIT_TOOL_TURNS = max(1, MAX_TOOL_TURNS_PER_STEP - 3)
         _hard_stop_injected = False   # True after hard-stop user message was injected once
@@ -9915,7 +9944,7 @@ class Agent:
             # closes and the Web UI hangs forever on a loading thinking block (observed). So: ON in the
             # foreground (any provider), OFF only in thinking mode (config flag can still force it on).
             # The API delayed-retry path further below is independent of this gate.
-            _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+            _is_thinking_mode = self._is_thinking_run()
             _empty_retry_on = (not _is_thinking_mode) or Config.get("empty_response_retry_enabled", False)
             if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False) and _empty_retry_on:
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
@@ -10023,7 +10052,7 @@ class Agent:
                 # PROACTIVE CONTEXT CLEARING (aggressive clear a few attempts before hard limit)
                 # In thinking mode (background pass), limit retries aggressively — no user is waiting
                 # ═══════════════════════════════════════════════════════════════
-                _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _is_thinking_mode = self._is_thinking_run()
                 _proactive_clear_at = 2 if _is_thinking_mode else 8
                 if empty_retry_count == _proactive_clear_at:
                     # Calculate tokens before
@@ -10271,7 +10300,7 @@ class Agent:
             # or _reply_needs_user classifier), background thinking pass, and a config kill-switch.
             try:
                 _ac_on = Config.get("autocontinue_pending_tasks_enabled", True)
-                _ac_thinking = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _ac_thinking = self._is_thinking_run()
                 _ac_budget_left = tool_turn_count < MAX_TOOL_TURNS_PER_STEP
                 # Brake = "the agent needs the user before it can continue". Same principle as the
                 # thinking-pass: prefer an EXPLICIT signal over guessing from the text. The thinking-

@@ -126,6 +126,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A note the agent saves for itself now belongs to the person it was talking to.**
+  On an installation with more than one account, a note written while a background
+  pass happened to be running was filed under that pass's account instead - and notes
+  are read back into that account's next background pass as instructions to follow.
+- **Background thinking no longer changes what a waiting person's turn is allowed to
+  do.** While it ran, anyone chatting at the same time silently got a fraction of the
+  tool budget, a cap after three lookups, no retry when the model returned nothing -
+  which is what leaves the web page stuck on a loading block - and a refusal from
+  their own "update what I'm working on" action. Each of those limits is meant for
+  the background pass alone.
+- **The program keeps asking you for confirmation after an automation has run.**
+  The first automation switched the whole program into a mode that never prompts and
+  never switched it back, so from then on confirmations a person should have seen were
+  answered without them.
 - **A scheduled automation can no longer put its output in someone else's place.**
   On an installation with more than one account, a background task had no session
   of its own and quietly adopted whichever conversation was last active in the

@@ -1318,8 +1318,15 @@ vaf automation delete <id>   # Delete task
             # ... (Rest of the method logic) ...
 
             # Set environment variables for non-interactive automation mode
-            # This prevents user prompts during automation execution
+            # This prevents user prompts during automation execution.
+            # Both are process-global, so the PRIOR value is remembered and put back in the
+            # cleanup below. Without that, VAF_NONINTERACTIVE stayed set for the life of the
+            # process after the first automation, and a live chat turn - which reads it at
+            # agent.py:6330 and :6464, not only at construction - stopped asking the human
+            # it was waiting for. The comment there already said "keep it if it was set
+            # before"; nothing recorded what "before" was.
             import os
+            _prior_noninteractive = os.environ.get("VAF_NONINTERACTIVE")
             os.environ["VAF_NONINTERACTIVE"] = "1"
             os.environ["VAF_IN_AUTOMATION"] = "1"
             
@@ -1848,10 +1855,18 @@ vaf automation delete <id>   # Delete task
                 except Exception:
                     pass
 
-            # Clean up environment variables
+            # Clean up environment variables: put back exactly what was there.
+            # NAMED BOUNDARY on the shape: two automations running at once still share these
+            # two process-global names, so a save/restore pair can interleave. Closing that
+            # means carrying the flags per run the way the session id now is, which is a
+            # change of its own; this one stops the permanent leak, which is the part that
+            # outlives every run and silently disarms a human's confirmation prompt.
             import os
             os.environ.pop("VAF_IN_AUTOMATION", None)
-            # Keep VAF_NONINTERACTIVE if it was set before
+            if _prior_noninteractive is None:
+                os.environ.pop("VAF_NONINTERACTIVE", None)
+            else:
+                os.environ["VAF_NONINTERACTIVE"] = _prior_noninteractive
         
         # Deliver result to user via Web UI chat + messenger.
         # Only one delivery path — no duplicate notification + chat message.

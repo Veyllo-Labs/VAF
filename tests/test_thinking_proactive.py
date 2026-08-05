@@ -48,20 +48,27 @@ def test_proactive_decide_nudge_replaces_housekeeping_block(monkeypatch):
     """In the proactive grounding step there is NO open item — a blocked tool must return the DECISION
     nudge (ask_user / thinking_done), not the housekeeping 'resolve the open item / delete_automation_note'
     message that misleads the weak model into searching again."""
+    import types
     from types import SimpleNamespace
     from vaf.core.agent import Agent
-    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+
+    def _fake(**kw):
+        """A thinking-run stand-in: declares its run kind and carries the REAL predicate,
+        so it cannot pass while the agent's own answer differs."""
+        ns = SimpleNamespace(_run_kind="thinking", _thinking_read_counts={}, **kw)
+        ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
+        return ns
     # proactive step, a non-search tool is reached for -> decision nudge (no delete_automation_note)
-    fake = SimpleNamespace(_thinking_force_progress=True, _thinking_allow_search=True, _thinking_read_counts={})
+    fake = _fake(_thinking_force_progress=True, _thinking_allow_search=True)
     msg = Agent._thinking_read_cap_step(fake, "web_search")
     assert msg and "ask_user" in msg and "thinking_done" in msg
     assert "delete_automation_note" not in msg and "web_search" in msg
     # memory_search IS allowed in the proactive step, but capped at 2 -> 1st ok, 2nd nudges to decide
-    fake2 = SimpleNamespace(_thinking_force_progress=True, _thinking_allow_search=True, _thinking_read_counts={})
+    fake2 = _fake(_thinking_force_progress=True, _thinking_allow_search=True)
     assert Agent._thinking_read_cap_step(fake2, "memory_search") is None
     assert "ask_user" in (Agent._thinking_read_cap_step(fake2, "memory_search") or "")
     # housekeeping forced node (NOT proactive) keeps the original resolve-the-item message
-    fake3 = SimpleNamespace(_thinking_force_progress=True, _thinking_allow_search=False, _thinking_read_counts={})
+    fake3 = _fake(_thinking_force_progress=True, _thinking_allow_search=False)
     hk = Agent._thinking_read_cap_step(fake3, "memory_search")
     assert hk and "resolve the open item" in hk and "delete_automation_note" in hk
 

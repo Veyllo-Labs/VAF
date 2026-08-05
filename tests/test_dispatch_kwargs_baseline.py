@@ -177,7 +177,11 @@ KWARGS_BASELINE = {
     "set_timer":                 ("chat", ["_agent"]),
     "telegram_inbox":            ("chat", ["user_scope_id", "username"]),
     "thinking_done":             ("thinking", []),
-    "thinking_note_add":         ("chat", []),
+    # Re-measured 2026-08-04: the tool now declares identity_kwargs. Its schema always
+    # said this field was "injected by the framework" while nothing injected it, so it
+    # fell back to a process-global env var belonging to whichever background thinking
+    # run was in flight - and it is registered on every agent.
+    "thinking_note_add":         ("chat", ["user_scope_id"]),
     "thinking_workspace_handoff":("thinking", ["user_scope_id"]),
     "thinking_workspace_read":   ("thinking", ["user_scope_id"]),
     "thinking_workspace_write":  ("thinking", ["user_scope_id"]),

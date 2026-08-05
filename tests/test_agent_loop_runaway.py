@@ -16,6 +16,8 @@ from vaf.tools.automation import AutomationTool
 
 def _bare() -> Agent:
     a = Agent.__new__(Agent)
+    # __new__ skips __init__, so the run kind the guard reads is not set.
+    a._run_kind = None
     a._nonprogress_streak = 0
     return a
 
@@ -65,9 +67,12 @@ def test_nonprogress_guard_resets_on_progress_tool():
     assert msg is None and force is False and a._nonprogress_streak == 1
 
 
-def test_nonprogress_guard_off_in_thinking_mode(monkeypatch):
-    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+def test_nonprogress_guard_off_in_thinking_mode():
+    # Instance truth, not the shared environment. This guard is disabled for a
+    # background pass on purpose, and the environment used to carry that decision
+    # to every OTHER agent in the process - including a waiting human's turn.
     a = _bare()
+    a._run_kind = "thinking"
     for _ in range(12):
         msg, force = a._nonprogress_step("list_automations")
         assert msg is None and force is False

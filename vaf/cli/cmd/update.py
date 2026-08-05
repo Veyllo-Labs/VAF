@@ -83,25 +83,41 @@ def _eligible_prereleases(include_prereleases: "bool | None" = None) -> bool:
 
 
 def _resolve_latest_release(include_prereleases: "bool | None" = None):
-    """Fetch the newest ELIGIBLE published VAF release from GitHub (offline-safe -> None).
+    """Fetch the newest ELIGIBLE published VAF release from GitHub (offline-safe).
 
     Uses the releases LIST endpoint (newest first) instead of /releases/latest, because the latter
     excludes prereleases — during the alpha that hides every release. Stable releases are always
-    eligible; prereleases only when `_eligible_prereleases()` allows. Returns the highest-version
-    eligible release as {tag, version (tag without leading 'v'), html_url, body, prerelease}.
+    eligible; prereleases only when `_eligible_prereleases()` allows.
+
+    Returns `(release, why)`: the highest-version eligible release as {tag, version (tag without
+    leading 'v'), html_url, body, prerelease} with why=None, or `(None, reason)` naming WHY there
+    is no answer. The reason exists because three different situations used to collapse into one
+    sentence ("offline, or none published yet") whose two halves suggest opposite reactions - and
+    the live case that exposed it was neither: GitHub's ANONYMOUS API limit is 60 requests/hour
+    per IP, shared by every process on the network, so a burst from any tool on the same
+    connection makes the updater claim there is no release while one is sitting published.
+    Reasons: "rate_limited:<epoch>", "http:<code>", "offline", "malformed", "none".
     """
     incl = _eligible_prereleases(include_prereleases)
     try:
         from packaging.version import parse as _parse
         # per_page=100 (the max) instead of GitHub's default 30, so eligibility is computed over the
         # full release set, not just the 30 most-recently-created tags.
-        resp = requests.get(_RELEASES_URL, timeout=5, params={"per_page": 100},
-                            headers={"Accept": "application/vnd.github+json"})
+        try:
+            resp = requests.get(_RELEASES_URL, timeout=5, params={"per_page": 100},
+                                headers={"Accept": "application/vnd.github+json"})
+        except requests.RequestException:
+            return None, "offline"
         if resp.status_code != 200:
-            return None
+            # 403 is how GitHub says "rate limited" (429 is the documented spare);
+            # the remaining-header check keeps a real permission 403 honest.
+            if (resp.status_code in (403, 429)
+                    and resp.headers.get("X-RateLimit-Remaining") == "0"):
+                return None, f"rate_limited:{resp.headers.get('X-RateLimit-Reset', '')}"
+            return None, f"http:{resp.status_code}"
         data = resp.json()
         if not isinstance(data, list):
-            return None
+            return None, "malformed"
         best = None
         best_v = None
         for r in data:
@@ -125,10 +141,29 @@ def _resolve_latest_release(include_prereleases: "bool | None" = None):
                     "body": r.get("body", ""),
                     "prerelease": bool(r.get("prerelease", False)),
                 }
-        return best
+        return best, (None if best is not None else "none")
     except Exception:
         pass
-    return None
+    return None, "malformed"
+
+
+def _resolve_failure_message(why: "str | None") -> str:
+    """One honest sentence per reason - each names the reaction it calls for."""
+    why = why or ""
+    if why.startswith("rate_limited"):
+        suffix = ""
+        try:
+            reset = int(why.split(":", 1)[1])
+            suffix = f" - try again after {datetime.fromtimestamp(reset).strftime('%H:%M')}"
+        except Exception:
+            pass
+        return ("GitHub's API rate limit for this network is used up"
+                f"{suffix}. This says nothing about whether a release exists.")
+    if why == "offline":
+        return "Could not reach GitHub (offline, or a proxy in the way?)."
+    if why == "none":
+        return "No published release found yet."
+    return f"GitHub answered unexpectedly ({why or 'unknown error'})."
 
 
 def _compare_versions(current: str, latest: str) -> int:
@@ -162,7 +197,7 @@ def _cached_or_fetch_latest():
             return {"version": cached.get("latest_version"), "relevant": bool(cached.get("relevant"))}
     except Exception:
         pass
-    rel = _resolve_latest_release()
+    rel, _why = _resolve_latest_release()   # background check: silent either way
     if not rel or not rel.get("version"):
         return None
     version = rel["version"]
@@ -503,9 +538,9 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         if _compare_versions(__version__, target_version) > 0:
             UI.warning(f"--tag {target} is OLDER than the installed {__version__} — this is a DOWNGRADE.")
     else:
-        rel = _resolve_latest_release(include_prereleases)
+        rel, why = _resolve_latest_release(include_prereleases)
         if not rel or not rel.get("tag"):
-            UI.error("Could not determine the latest release (offline, or none published yet).")
+            UI.error(f"Could not determine the latest release: {_resolve_failure_message(why)}")
             raise typer.Exit(1)
         target, target_version, notes_url = rel["tag"], rel["version"], rel.get("html_url", "")
         if _compare_versions(__version__, target_version) >= 0:
@@ -714,9 +749,9 @@ def check(
     UI.event("Update", f"Installed version: {__version__}")
     if _breadcrumb_path().exists():
         UI.warning("A previous update did not finish. Run `vaf update --recover`.")
-    rel = _resolve_latest_release(pre)
+    rel, why = _resolve_latest_release(pre)
     if rel is None:
-        UI.event("Update", "Could not reach GitHub to check for updates (offline?).", style="warning")
+        UI.event("Update", _resolve_failure_message(why), style="warning")
         raise typer.Exit(0)
     latest = rel["version"]
     if not latest:

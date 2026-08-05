@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **`vaf update` now tells you why it could not answer.** Three different situations
+  used to collapse into one sentence, "offline, or none published yet", whose two
+  halves call for opposite reactions. The real case that exposed it was neither:
+  GitHub allows unsigned-in requests only 60 per hour for a whole network address,
+  so any busy tool on the same connection could make the updater claim there was no
+  release minutes after one went live. It now says which it is - rate limit (with
+  the time to try again), unreachable, or genuinely no release - and a plain
+  permission error is not dressed up as a rate limit.
+
 ## [0.1.0a20] - 2026-08-05
 
 ### Added

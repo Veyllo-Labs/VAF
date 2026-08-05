@@ -68,9 +68,9 @@ def patched(monkeypatch, tmp_path):
 
     bc = tmp_path / "last_update.json"
     monkeypatch.setattr(upd, "_breadcrumb_path", lambda: bc)
-    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: {
+    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: ({
         "tag": "v9.9.9", "version": "9.9.9", "html_url": "u", "body": "", "prerelease": False
-    })
+    }, None))
     return types.SimpleNamespace(git=fg, events=events, state=state, breadcrumb=bc)
 
 

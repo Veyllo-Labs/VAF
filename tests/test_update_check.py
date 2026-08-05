@@ -34,40 +34,44 @@ def _mock_list(monkeypatch, releases):
 
 def test_resolve_picks_newest_stable_when_excluding_pre(monkeypatch):
     _mock_list(monkeypatch, [_rel("v9.9.8"), _rel("v9.9.9"), _rel("v10.0.0a1", prerelease=True)])
-    rel = upd._resolve_latest_release(include_prereleases=False)
+    rel, why = upd._resolve_latest_release(include_prereleases=False)
+    assert why is None
     assert rel["version"] == "9.9.9" and rel["prerelease"] is False    # newest stable, ignores the a1
 
 
 def test_resolve_includes_prerelease_when_eligible(monkeypatch):
     _mock_list(monkeypatch, [_rel("v9.9.9"), _rel("v10.0.0a1", prerelease=True)])
-    rel = upd._resolve_latest_release(include_prereleases=True)
+    rel, why = upd._resolve_latest_release(include_prereleases=True)
+    assert why is None
     assert rel["version"] == "10.0.0a1" and rel["prerelease"] is True   # the prerelease is newer + eligible
 
 
 def test_resolve_orders_prereleases_correctly(monkeypatch):
     _mock_list(monkeypatch, [_rel("v2.6.0a0", prerelease=True), _rel("v2.6.0a2", prerelease=True),
                              _rel("v2.6.0a1", prerelease=True)])
-    rel = upd._resolve_latest_release(include_prereleases=True)
+    rel, why = upd._resolve_latest_release(include_prereleases=True)
     assert rel["version"] == "2.6.0a2"                                  # a0 < a1 < a2
 
 
 def test_resolve_skips_drafts(monkeypatch):
     _mock_list(monkeypatch, [_rel("v9.9.9", draft=True), _rel("v9.9.8")])
-    rel = upd._resolve_latest_release(include_prereleases=False)
+    rel, why = upd._resolve_latest_release(include_prereleases=False)
     assert rel["version"] == "9.9.8"
 
 
 def test_resolve_non_200_returns_none(monkeypatch):
     monkeypatch.setattr(upd.requests, "get",
                         lambda url, timeout=5, params=None, headers=None: _Resp(404, []))
-    assert upd._resolve_latest_release(False) is None
+    assert upd._resolve_latest_release(False) == (None, "http:404")
 
 
 def test_resolve_offline_returns_none(monkeypatch):
+    # A real network failure raises a RequestException subclass - the old
+    # RuntimeError stand-in exercised a path requests never takes.
     def boom(*a, **k):
-        raise RuntimeError("no network")
+        raise upd.requests.ConnectionError("no network")
     monkeypatch.setattr(upd.requests, "get", boom)
-    assert upd._resolve_latest_release(False) is None
+    assert upd._resolve_latest_release(False) == (None, "offline")
 
 
 # --- prerelease eligibility -----------------------------------------------------------------------
@@ -105,15 +109,15 @@ def test_compare_versions():
 
 def test_check_command_update_available(monkeypatch):
     from typer.testing import CliRunner
-    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: {
+    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: ({
         "version": "999.0.0", "tag": "v999.0.0", "html_url": "https://x/rel", "body": "", "prerelease": False
-    })
+    }, None))
     result = CliRunner().invoke(upd.app, ["check"])
     assert result.exit_code == 0
 
 
 def test_check_command_offline_is_graceful(monkeypatch):
     from typer.testing import CliRunner
-    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: None)
+    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: (None, "offline"))
     result = CliRunner().invoke(upd.app, ["check"])
     assert result.exit_code == 0

@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a20] - 2026-08-05
+
 ### Added
 - **The terminal now shows how far a sub-agent has got.** The task line above the
   prompt showed only that something was running and for how long. It now also shows
@@ -24,7 +26,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   centred on screen: version, your agent's name, the session name and id, the
   active model, the local date and time - and the one line that was missing
   entirely, how to get back into an earlier conversation.
-
 - **Most settings are editable inside the terminal app now.** Rows that used to say
   "use `vaf settings`" work where they can: the AI provider and its model take effect
   on the running agent without a restart, and the speech engine, input language,
@@ -74,7 +75,72 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cut to a different length. The `tool_end` event now carries a `result` field
   (capped at 800 characters, always a string, safe to serialize). In `vaf run` the
   tool card is no longer an empty fold: it opens onto the result.
-
+- **`vaf run` opens a full-screen terminal app.** The terminal chat is no longer a
+  scrolling prompt: it is a full-screen app with a live transcript (strictly
+  chronological, streamed answers with the model's reasoning as a separate muted
+  think block), tool cards, event narration, the sub-agent status line, the
+  context-usage bar, the agent's animated avatar beside the newest reply, and
+  keyboard-complete overlays for settings, model, history, sessions and help. The
+  classic run-loop letters (`s`, `c`, `t`, `h`, `l`, `?`) still work typed into the
+  prompt, as do slash commands and `@file` attachments. Tool confirmations finally
+  work in the terminal: previously they silently waited on the web dashboard and
+  timed out after five minutes if no browser was open; the app shows the question
+  and answers it in place. The previous interfaces stay available - `vaf run
+  --classic` for the plain prompt, and the new `tui_mode` config key to pick the
+  default lane (`vaf run --web` keeps the previous lane, which owns the web-server
+  startup). Voice capture and provider switching inside the app land next.
+- **You can now ask for one completion without a conversation.** Building something on
+  VAF that just needs one answer - a classification, a summary, a commit message -
+  meant either running a full chat turn (history, tools, memory, routers) or
+  hand-rolling the backend call, and about twenty places inside VAF had done exactly
+  that, each slightly differently wrong. `agent.complete(prompt)` is one call with the
+  agent's configured backend: it never enters the conversation, runs no tools, writes
+  no memory, strips model reasoning from the result, and returns text or None - never
+  an exception and never an error message dressed as an answer. The same primitive now
+  powers the tools' own utility completions and the CLI features below.
+- **An application built on VAF now decides which tools each account may use - with one
+  registered resolver instead of VAF's own user database.** The per-account tool allowlist
+  used to be wired straight to the product's auth DB inside the dispatch pipeline, so an
+  application embedding VAF got a check it could neither feed nor replace.
+  `set_account_allowlist_resolver` is now part of the public interface: register one
+  function that answers "which tools for this account" from your own storage, and it is
+  enforced everywhere the pipeline runs - before the per-call authorizer, so an `allow()`
+  cannot lift an account-level ban, and inside the coding agent, where the answer crosses
+  into the child process as data. VAF's own product registers its resolver through the
+  same primitive, and the pipeline no longer imports the product's auth layer at all (a
+  test now keeps it that way). A registered resolver that crashes refuses rather than
+  quietly enforcing nothing; registering nothing means unrestricted, as before.
+- **A tool can now say that it touches files, and the per-user boundary is installed for
+  it.** Building something on VAF that reads or writes a user's files meant declaring who is
+  calling and then writing the confinement yourself, inside every tool, exactly right, every
+  time. Eleven built-in tools did precisely that, across five files, and five of the
+  twenty-two that needed it had simply forgotten. A tool now declares `file_access = "read"`
+  or `"write"` next to its identity, and the boundary is applied around it on every path -
+  including when something calls the tool directly, with no dispatcher involved. Declaring a
+  mode without the matching identity is refused when the class is defined, rather than
+  quietly doing nothing later: a tool that receives no identity would otherwise run
+  completely unconfined while looking confined. A boundary inside another can only narrow
+  what it inherited, never widen it.
+- **A new example runs without needing a model at all.**
+  `examples/07_tool_caller_and_authorizer.py` shows the two pieces below in one runnable
+  script: running a tool with VAF's rules but no conversation, and deciding about each call.
+  It needs no API key, no provider and no network, which makes it the quickest way to check
+  a fresh install actually works.
+- **An application built on VAF can now decide about each tool call itself.** Until now the
+  only way to keep a tool away from someone was to leave it out entirely - a choice made once
+  at startup, for everybody. `set_tool_authorizer` is asked before every call and can refuse
+  it, insist on a confirmation question, or let one through without the question. It sees who
+  is calling and what the call would do, so decisions like "this customer's plan has no shell
+  access" or "not that file, it belongs to someone else" are finally expressible. Refusing is
+  the safe direction throughout: an authorizer that answers nothing changes nothing, and one
+  that crashes refuses rather than waving the call through.
+- **You can now run a single tool without starting a conversation.** Building something on
+  VAF that just needs a tool done - a scheduled job, a queue worker, your own agent loop -
+  meant either wrapping a whole chat agent around it or rebuilding the safety checks by
+  hand, and rebuilt checks drift apart from the real ones. `ToolCaller` is now part of the
+  public interface, and it is the exact same one the agent itself uses: the same permission
+  rules, the same confirmation question, the same identity handling, the same time limits.
+  Documented in the embedding guide.
 
 ### Changed
 - **An embedded agent created with the machine owner's account key now reads the
@@ -95,7 +161,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   on it and stuck, and on a white background the agent's white mark and every
   white accent simply disappeared. Anyone who had it selected comes up on the
   default instead.
-
 - The terminal app's bottom row no longer cuts itself in half. The key hints and
   the context usage share one line and do not fit together below roughly 120
   columns, and the overflow used to be resolved by clipping - mid-label, so
@@ -116,6 +181,35 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - The README opens on the mark rather than on an ASCII wordmark, and shows the
   terminal and the web UI as one image above the installation steps.
   The desktop and terminal modes each show what they look like.
+- **Workflow steps now pass the same security checks as chat.** A step used to run its
+  tool directly, skipping every rule a chat turn answers: admin-only tools, channel
+  policy, the per-user tool selection, and the veto an application embedding VAF can
+  attach. Steps now run through the shared dispatch pipeline, so all of those hold
+  inside workflows too. Three deliberate differences remain: the confirmation question
+  stays off for workflows (they run unattended - taking that away is its own decision),
+  the heavy sub-agent steps of a temporary workflow still run as child processes outside
+  the step pipeline (their internal tools remain constrained separately), and a step
+  whose tool crashes now fails that step and lets the workflow branch, instead of
+  aborting the whole run. Malformed step arguments are now refused cleanly before the
+  tool runs. The existing rollback switch restores the entire previous behaviour if
+  needed.
+- **A workflow now runs as the person who started it, by default.** Until this release a
+  saved workflow always acted as the machine owner, whoever ran it: its files went to the
+  owner's folders, its GitHub calls used the owner's account, and anything it created was
+  filed under the owner. That was switchable before and is now the default. What changes in
+  practice is that 47 further tools finally learn who is running the workflow - files,
+  GitHub, automations, skills and reading messages among them - and none of them lose an
+  identity they already had. If a workflow of yours relied on reaching the owner's files by
+  an absolute path or a folder name like `Desktop/...`, that step will now be refused for
+  anyone who is not an administrator; the setting `workflow_identity_injection` set to
+  `legacy` restores the previous behaviour.
+- **Workflows carrying an identity now pass it to far more tools.** The setting introduced
+  in 0.1.0a19 only reached a fixed list of tools; set to `declared` it now asks each tool
+  what it needs, the same way a normal chat message already did. In practice that means
+  files, GitHub, the browser, skills and automations finally know who is running the
+  workflow, and mail learns the person's role rather than only their name. Nothing loses
+  access - every tool that had an identity before keeps exactly the one it had. Still off
+  by default (`legacy`).
 
 ### Removed
 - **Three launcher scripts that nothing called.** `stop_vaf.sh`, `launch_vaf.scpt` and
@@ -276,76 +370,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   running agent. `vaf run` now also checks for Git before it starts, instead of
   letting tools fail deep inside an answer, and falls back to the previous
   interface if the full-screen one cannot start at all.
-
-### Added
-- **`vaf run` opens a full-screen terminal app.** The terminal chat is no longer a
-  scrolling prompt: it is a full-screen app with a live transcript (strictly
-  chronological, streamed answers with the model's reasoning as a separate muted
-  think block), tool cards, event narration, the sub-agent status line, the
-  context-usage bar, the agent's animated avatar beside the newest reply, and
-  keyboard-complete overlays for settings, model, history, sessions and help. The
-  classic run-loop letters (`s`, `c`, `t`, `h`, `l`, `?`) still work typed into the
-  prompt, as do slash commands and `@file` attachments. Tool confirmations finally
-  work in the terminal: previously they silently waited on the web dashboard and
-  timed out after five minutes if no browser was open; the app shows the question
-  and answers it in place. The previous interfaces stay available - `vaf run
-  --classic` for the plain prompt, and the new `tui_mode` config key to pick the
-  default lane (`vaf run --web` keeps the previous lane, which owns the web-server
-  startup). Voice capture and provider switching inside the app land next.
-- **You can now ask for one completion without a conversation.** Building something on
-  VAF that just needs one answer - a classification, a summary, a commit message -
-  meant either running a full chat turn (history, tools, memory, routers) or
-  hand-rolling the backend call, and about twenty places inside VAF had done exactly
-  that, each slightly differently wrong. `agent.complete(prompt)` is one call with the
-  agent's configured backend: it never enters the conversation, runs no tools, writes
-  no memory, strips model reasoning from the result, and returns text or None - never
-  an exception and never an error message dressed as an answer. The same primitive now
-  powers the tools' own utility completions and the CLI features below.
-- **An application built on VAF now decides which tools each account may use - with one
-  registered resolver instead of VAF's own user database.** The per-account tool allowlist
-  used to be wired straight to the product's auth DB inside the dispatch pipeline, so an
-  application embedding VAF got a check it could neither feed nor replace.
-  `set_account_allowlist_resolver` is now part of the public interface: register one
-  function that answers "which tools for this account" from your own storage, and it is
-  enforced everywhere the pipeline runs - before the per-call authorizer, so an `allow()`
-  cannot lift an account-level ban, and inside the coding agent, where the answer crosses
-  into the child process as data. VAF's own product registers its resolver through the
-  same primitive, and the pipeline no longer imports the product's auth layer at all (a
-  test now keeps it that way). A registered resolver that crashes refuses rather than
-  quietly enforcing nothing; registering nothing means unrestricted, as before.
-- **A tool can now say that it touches files, and the per-user boundary is installed for
-  it.** Building something on VAF that reads or writes a user's files meant declaring who is
-  calling and then writing the confinement yourself, inside every tool, exactly right, every
-  time. Eleven built-in tools did precisely that, across five files, and five of the
-  twenty-two that needed it had simply forgotten. A tool now declares `file_access = "read"`
-  or `"write"` next to its identity, and the boundary is applied around it on every path -
-  including when something calls the tool directly, with no dispatcher involved. Declaring a
-  mode without the matching identity is refused when the class is defined, rather than
-  quietly doing nothing later: a tool that receives no identity would otherwise run
-  completely unconfined while looking confined. A boundary inside another can only narrow
-  what it inherited, never widen it.
-- **A new example runs without needing a model at all.**
-  `examples/07_tool_caller_and_authorizer.py` shows the two pieces below in one runnable
-  script: running a tool with VAF's rules but no conversation, and deciding about each call.
-  It needs no API key, no provider and no network, which makes it the quickest way to check
-  a fresh install actually works.
-- **An application built on VAF can now decide about each tool call itself.** Until now the
-  only way to keep a tool away from someone was to leave it out entirely - a choice made once
-  at startup, for everybody. `set_tool_authorizer` is asked before every call and can refuse
-  it, insist on a confirmation question, or let one through without the question. It sees who
-  is calling and what the call would do, so decisions like "this customer's plan has no shell
-  access" or "not that file, it belongs to someone else" are finally expressible. Refusing is
-  the safe direction throughout: an authorizer that answers nothing changes nothing, and one
-  that crashes refuses rather than waving the call through.
-- **You can now run a single tool without starting a conversation.** Building something on
-  VAF that just needs a tool done - a scheduled job, a queue worker, your own agent loop -
-  meant either wrapping a whole chat agent around it or rebuilding the safety checks by
-  hand, and rebuilt checks drift apart from the real ones. `ToolCaller` is now part of the
-  public interface, and it is the exact same one the agent itself uses: the same permission
-  rules, the same confirmation question, the same identity handling, the same time limits.
-  Documented in the embedding guide.
-
-### Fixed
 - **Files sent through the messengers are confined to your own data on shared
   machines.** Attaching a file to an outgoing Telegram, WhatsApp or Discord message
   (or to the main-messenger delivery) accepted any path the general safety checks
@@ -634,37 +658,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   from another person's memories. The tool is now told who is asking, the same way every
   other per-user tool already was. Single-user installations were never affected, and a
   request with no user attached was already refused rather than answered broadly.
-
-### Changed
-- **Workflow steps now pass the same security checks as chat.** A step used to run its
-  tool directly, skipping every rule a chat turn answers: admin-only tools, channel
-  policy, the per-user tool selection, and the veto an application embedding VAF can
-  attach. Steps now run through the shared dispatch pipeline, so all of those hold
-  inside workflows too. Three deliberate differences remain: the confirmation question
-  stays off for workflows (they run unattended - taking that away is its own decision),
-  the heavy sub-agent steps of a temporary workflow still run as child processes outside
-  the step pipeline (their internal tools remain constrained separately), and a step
-  whose tool crashes now fails that step and lets the workflow branch, instead of
-  aborting the whole run. Malformed step arguments are now refused cleanly before the
-  tool runs. The existing rollback switch restores the entire previous behaviour if
-  needed.
-- **A workflow now runs as the person who started it, by default.** Until this release a
-  saved workflow always acted as the machine owner, whoever ran it: its files went to the
-  owner's folders, its GitHub calls used the owner's account, and anything it created was
-  filed under the owner. That was switchable before and is now the default. What changes in
-  practice is that 47 further tools finally learn who is running the workflow - files,
-  GitHub, automations, skills and reading messages among them - and none of them lose an
-  identity they already had. If a workflow of yours relied on reaching the owner's files by
-  an absolute path or a folder name like `Desktop/...`, that step will now be refused for
-  anyone who is not an administrator; the setting `workflow_identity_injection` set to
-  `legacy` restores the previous behaviour.
-- **Workflows carrying an identity now pass it to far more tools.** The setting introduced
-  in 0.1.0a19 only reached a fixed list of tools; set to `declared` it now asks each tool
-  what it needs, the same way a normal chat message already did. In practice that means
-  files, GitHub, the browser, skills and automations finally know who is running the
-  workflow, and mail learns the person's role rather than only their name. Nothing loses
-  access - every tool that had an identity before keeps exactly the one it had. Still off
-  by default (`legacy`).
 
 ## [0.1.0a19] - 2026-07-27
 

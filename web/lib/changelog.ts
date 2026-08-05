@@ -31,6 +31,40 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a20',
+    date: '2026-08-05',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'vaf run opens a full-screen terminal app. Streaming answers with a separate reasoning view, tool cards you can unfold, sessions, settings, models and themes as overlays, file attachments with @, and tool confirmations you answer right there instead of waiting on a timeout. The previous interfaces stay available via --classic and the tui_mode setting.',
+          'The terminal shows how far a sub-agent has got - a count like 2/5 while the coder or document agent works through its plan.',
+          'VAF understands German written without umlauts, so "schoen" and "schön" find the same things.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Your API keys moved out of the plain configuration file into the encrypted store. Settings shows which keys are stored, a new or changed key is checked against the provider when you save, deleting one actually deletes it, and a changed key takes effect without restarting VAF.',
+          'The per-user tool and workflow selection is now actually enforced - in chat, in workflows and inside the coding agent. Withdrawing a permission takes effect within seconds, not at the next login.',
+          'Workflow steps pass the same security checks as chat, and a workflow now runs as the person who started it by default.',
+          'Switching provider or model in the terminal app applies to the running conversation, and picking a provider you have no API key for opens a key prompt instead of storing something that cannot work.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'A timer set in the terminal now actually arrives: the app wakes with a card saying what woke it, followed by the answer.',
+          'Choosing a provider for sub-agents now actually moves them - the choice was stored but silently ignored, while the menu reported success.',
+          'Sending a file over Telegram, Discord, WhatsApp or mail now stays inside your own files, and each user’s cloud accounts are their own.',
+          'The theme you saved is the theme you see: the settings marker no longer names one theme while the screen shows another.',
+          'On a shared machine, one person could reach into another’s chat session, and a failed web search could answer with someone else’s memories. Both closed.',
+          'A note the agent saves for itself now belongs to the person it was talking to, not to whoever’s background task happened to be running.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a19',
     date: '2026-07-27',
     sections: [

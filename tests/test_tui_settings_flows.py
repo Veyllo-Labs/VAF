@@ -147,6 +147,10 @@ def test_applying_a_provider_uses_the_engines_reload_not_a_rebuild(monkeypatch):
                         lambda **kw: calls.append(kw) or 1)
     monkeypatch.setattr(config_mod.Config, "set",
                         classmethod(lambda cls, k, v: written.__setitem__(k, v)))
+    # A key must exist, or the gate refuses before this reaches the reload it
+    # pins. The gate itself is pinned in tests/test_tui_api_key_gate.py.
+    monkeypatch.setattr(config_mod.Config, "get_api_key",
+                        classmethod(lambda cls, p: "sk-test-key-value"))
 
     from vaf.cli.tui_app.agent_bridge import AgentBridge
 
@@ -217,6 +221,10 @@ def test_an_unchanged_backend_says_so_instead_of_claiming_success(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "reload_all_api_backends", lambda **kw: 0)
     monkeypatch.setattr(config_mod.Config, "set", classmethod(lambda cls, k, v: None))
+    # Same reason as above: the key gate runs first and this test is about what
+    # happens AFTER it.
+    monkeypatch.setattr(config_mod.Config, "get_api_key",
+                        classmethod(lambda cls, p: "sk-test-key-value"))
 
     from vaf.cli.tui_app.agent_bridge import AgentBridge
 

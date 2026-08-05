@@ -126,6 +126,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **The terminal app asks for an API key instead of storing a provider that cannot
+  work.** Switching to a provider you had no key for wrote it to the config anyway
+  and told you to restart, which was the one thing that could not help: the next
+  start came up on a provider with no way to reach it. Now a provider with no key
+  opens a masked key field, `k` on a provider row opens it for a key you want to
+  replace, and the key is checked with one real request before anything moves. A
+  key that does not verify is kept but the provider stays where it was, because
+  that request can fail on the network as easily as on the key. The key itself is
+  never shown, never written into the conversation, and the check runs in the
+  background so the app keeps responding while the provider answers.
 - **Choosing a provider for sub-agents in the terminal app now actually moves them.**
   The row wrote the provider's name but not the switch that turns the choice on, so
   it reported success, moved its marker onto your choice, and every sub-agent went

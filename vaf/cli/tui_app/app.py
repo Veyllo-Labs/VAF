@@ -25,6 +25,7 @@ from vaf.cli.commands import parse, suggest
 from vaf.cli.history import append_history, load_history
 from vaf.cli.themes import ThemeManager
 from vaf.cli.tui_app.screens import (
+    ApiKeyScreen,
     ConfirmScreen,
     ContextNote,
     GateScreen,
@@ -592,7 +593,20 @@ class VafApp(App):
         def _chosen(choice) -> None:
             if not choice:
                 return
-            provider, model = choice
+            from vaf.core.config import Config
+            provider, model, want_key = choice
+            stored = Config.get_api_key(provider) if provider else ""
+            # Ask when the user asked (`k`), and when the provider cannot work
+            # without it. The bridge refuses a keyless switch either way; this
+            # is the difference between being refused and being helped.
+            if provider and provider != "local" and (want_key or not stored):
+                def _keyed(key) -> None:
+                    if key is None:          # cancelled: change nothing at all
+                        return
+                    self._bridge.apply_provider_change(provider, model, new_key=key)
+
+                self.push_screen(ApiKeyScreen(provider, stored), _keyed)
+                return
             self._bridge.apply_provider_change(provider, model)
 
         self.push_screen(ModelScreen(), _chosen)

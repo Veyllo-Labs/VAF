@@ -173,7 +173,19 @@ What it can change is decided by where a key is READ, not by how it looks:
   that would reset the history to the system message and wipe the conversation
   behind the transcript. A switch is refused while a turn is running, and if
   the running agent kept its backend anyway the app says so instead of claiming
-  success.
+  success. It is also refused when the target provider has no API key, and the
+  refusal lives on the bridge rather than in the overlay because three routes
+  reach the same method (the model overlay, the settings row that dismisses
+  into it, and `/model`). The overlay asks for the key instead of only
+  refusing: picking a provider with no key opens a masked field, and `k` on a
+  provider row opens it for one that already has a key, which is the only way a
+  wrong or expired key can be replaced. The field's three answers are distinct
+  on purpose - a typed key, empty for "keep the stored one", escape for "change
+  nothing". A typed key is stored and then verified with one real request
+  before the provider moves; a key that fails to verify is kept (the request
+  can fail on the network as easily as on the key) while the provider stays
+  put. The verification runs on the agent lane, never on the UI thread, and the
+  key value never reaches a note, an event or the transcript.
 - **Still pointing at `vaf settings`** - the local model, the context limit and
   the model download. These need a genuinely new agent: `n_ctx` is a snapshot in
   three places, and `load_model()` reuses a healthy running server without

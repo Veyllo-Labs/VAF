@@ -7,9 +7,11 @@ only one.
 
 The settings screen is the `vaf settings` main menu (cli/cmd/settings.py) as a
 stacked arrow menu. Boolean rows write their real config keys immediately - the
-same single `Config.set` the inquirer menu performs. Rows whose flows need an
-agent rebuild or a real backend (provider/model switches, context limit, model
-download, microphone) display live values but route to `vaf settings` for now;
+same single `Config.set` the inquirer menu performs. The provider and API model
+open the model overlay, which applies them to the RUNNING agent and asks for an
+API key when one is missing. Rows that still need a genuinely new agent or a
+backend this lane has not built yet (the local GGUF, the context limit, the
+model download, the microphone) display live values but route to `vaf settings`;
 each says so instead of pretending.
 """
 from textual import events, on
@@ -527,11 +529,83 @@ class SettingsChanged(events.Message):
     """Posted after a settings toggle so the app can refresh dependent chrome."""
 
 
+class ApiKeyScreen(ModalScreen[str]):
+    """Enter or replace one provider's API key, without it ever being seen.
+
+    Dismisses with the typed key, with "" for "keep whatever is stored", or with
+    None when cancelled - three answers, because "empty" and "cancelled" mean
+    opposite things to the caller and one of them must not switch the provider.
+
+    The value NEVER leaves this screen except through that dismiss. No notify,
+    no event note, no transcript line: the classic lane deliberately reported
+    only a character count, and an overlay that echoed the key into the
+    transcript would write it into the session file as well.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+    ]
+
+    # The classic lane's floor. Every provider key in the catalog is far longer
+    # than this; the point is to catch a stray paste, not to validate a format
+    # that differs per provider and changes without notice.
+    MIN_LEN = 10
+
+    def __init__(self, provider: str, current: str = "") -> None:
+        super().__init__()
+        self._provider = str(provider or "")
+        self._current = str(current or "")
+
+    def compose(self) -> ComposeResult:
+        from vaf.core.config import Config
+
+        with Vertical(id="apikey-box", classes="modal-box"):
+            yield Static(f"[bold $text]API key · {_esc(self._provider)}[/]",
+                         classes="modal-title")
+            if self._current:
+                masked = Config.mask_api_key(self._current)
+                yield Static(f"[$vaf-muted]stored:[/] [$text]{_esc(masked)}[/]",
+                             classes="modal-body")
+                hint = "enter an new key, or leave empty to keep the stored one"
+            else:
+                yield Static("[$vaf-muted]no key stored for this provider[/]",
+                             classes="modal-body")
+                hint = "the provider cannot be used until one is set"
+            yield Input(password=True, id="apikey-input",
+                        placeholder="paste the key, then press enter")
+            yield Static(f"[$text-disabled]{hint} · esc cancels[/]",
+                         id="apikey-hint", classes="modal-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#apikey-input", Input).focus()
+
+    @on(Input.Submitted, "#apikey-input")
+    def _submitted(self, event: Input.Submitted) -> None:
+        value = str(event.value or "").strip()
+        if not value:
+            # Empty is an answer, not a mistake: keep what is stored. The caller
+            # decides whether that is enough to switch.
+            self.dismiss("")
+            return
+        if len(value) < self.MIN_LEN:
+            self.query_one("#apikey-hint", Static).update(
+                f"[$error]that is only {len(value)} characters - "
+                f"check the paste[/]")
+            return
+        self.dismiss(value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ModelScreen(ModalScreen[tuple]):
     """Pick the provider, or the model within the current provider.
 
-    Dismisses with `(provider, model)`; the app hands that to the bridge, which
-    applies it to the RUNNING agent through the engine's own reload. What it
+    Dismisses with `(provider, model, want_key)`; the app hands that to the
+    bridge, which applies it to the RUNNING agent through the engine's own
+    reload. `want_key` is how a user REPLACES a key that is stored but wrong or
+    expired - without it the only route to a key is picking a provider that has
+    none, which a user with a bad key can never reach. What it
     does NOT offer is the local GGUF: swapping that needs a real rebuild, and
     a running llama server would keep serving the old weights - a named
     boundary, and the row says so instead of pretending.
@@ -540,6 +614,7 @@ class ModelScreen(ModalScreen[tuple]):
     BINDINGS = [
         Binding("escape", "close_model", "close"),
         Binding("m", "show_models", "models of this provider", show=False),
+        Binding("k", "set_key", "set this provider's API key", show=False),
     ]
 
     def __init__(self, provider_only: bool = False) -> None:
@@ -628,10 +703,25 @@ class ModelScreen(ModalScreen[tuple]):
         if kind == "sep":
             return
         if kind == "provider":
-            self.dismiss((value, ""))
+            self.dismiss((value, "", False))
         else:
             from vaf.core.config import Config
-            self.dismiss((str(Config.get("provider", "local")), value))
+            self.dismiss((str(Config.get("provider", "local")), value, False))
+
+    def action_set_key(self) -> None:
+        """`k` on a provider row: go and set that provider's key.
+
+        Only on a provider row, and never on `local` - it has nothing to key,
+        and offering the field there would suggest otherwise.
+        """
+        lv = self.query_one("#model-list", ListView)
+        idx = lv.index or 0
+        if not (0 <= idx < len(self._rows)):
+            return
+        kind, value = self._rows[idx]
+        if kind != "provider" or value == "local":
+            return
+        self.dismiss((value, "", True))
 
     def action_close_model(self) -> None:
         self.dismiss(None)

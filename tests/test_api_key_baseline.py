@@ -199,6 +199,13 @@ CALLERS = {
     # and never reads the value, so it adds a place that must keep working and
     # no place a key can escape from.
     "vaf/cli/tui_app/screens.py": 1,
+    # The same refusal for the MAIN provider, on the bridge because three routes
+    # reach it. Also asks rather than reads.
+    "vaf/cli/tui_app/agent_bridge.py": 1,
+    # The one of the three that does read the VALUE: it hands the stored key to
+    # the key field, which shows it through `Config.mask_api_key` and nothing
+    # else. Same as the inquirer menu's "Current API Key:" line.
+    "vaf/cli/tui_app/app.py": 1,
     "vaf/core/api_backend.py": 1,
     "vaf/core/headless_runner.py": 1,
     "vaf/core/speech_api.py": 1,
@@ -208,7 +215,7 @@ CALLERS = {
     "vaf/whare_wananga/teacher.py": 1,
 }
 
-# The three places a key can ENTER storage. Frozen because the first version of this change
+# Every place a key can ENTER storage. Frozen because the first version of this change
 # made the write side "set_api_key" and missed the two that matter most - a boundary as wide
 # as the surface somebody had enumerated. The two web paths carried keys RAW into
 # config.json, so with only the read side moved a Settings save would have kept writing to a
@@ -218,6 +225,7 @@ WRITE_SITES = {
     "vaf/cli/cmd/settings.py",       # Config.set_api_key -> the store
     "vaf/api/config_routes.py",      # HTTP config update -> absorb_config_keys
     "vaf/core/web_server.py",        # WebSocket config update -> absorb_config_keys
+    "vaf/cli/tui_app/agent_bridge.py",  # the terminal app's key field -> set_api_key
 }
 
 
@@ -237,8 +245,8 @@ def test_the_set_of_consumers_is_what_was_measured():
 def test_every_write_site_routes_into_the_store():
     """The write side, asserted as places rather than as a sentence.
 
-    Each of the three either calls `set_api_key` (which stores) or `absorb_config_keys`
-    (which lifts every `api_key_*` out of a payload before it is saved). A fourth site
+    Each one either calls `set_api_key` (which stores) or `absorb_config_keys`
+    (which lifts every `api_key_*` out of a payload before it is saved). A site
     appearing that writes `api_key_*` straight into the config is the regression this pins.
     """
     import pathlib as _pl

@@ -30,10 +30,13 @@ Choose your provider and enter API key when prompted.
 
 **Best Practices Implemented:**
 
-- API keys are **Base64 encoded** for basic obfuscation (not encryption)
-- Keys are stored in `~/.vaf/config.json`
+- API keys live in the **encrypted store** (`vaf/core/api_keys.py`), not in
+  `~/.vaf/config.json`. They used to be base64 in that file, which is obfuscation
+  and not encryption; the encoding and the claim are both gone. A key written by
+  an older version is still READ from there, so nobody loses one on upgrade.
 - Keys are **masked** when displayed (e.g., `sk-proj1...ab2c`)
-- **Connection testing** before saving to verify validity
+- **Connection testing** before the provider is switched, in `vaf settings` and in
+  the terminal app. A key that fails the test is kept; the provider is not moved.
 
 **Manual Configuration:**
 
@@ -52,10 +55,10 @@ Edit `~/.vaf/config.json`:
 import base64
 from vaf.core.config import Config
 
-# Set API key (automatically encodes)
+# Set API key (goes into the encrypted store)
 Config.set_api_key("anthropic", "sk-ant-your-actual-key-here")
 
-# Get API key (automatically decodes)
+# Get API key (reads the store, falling back to a legacy config.json entry)
 key = Config.get_api_key("anthropic")
 ```
 

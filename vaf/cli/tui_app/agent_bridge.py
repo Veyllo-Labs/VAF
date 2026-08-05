@@ -652,7 +652,8 @@ class AgentBridge:
         """Put the machine owner back after a session load overwrote the identity."""
         _bind_owner(self.agent)
 
-    def apply_provider_change(self, provider: str = "", model: str = "") -> None:
+    def apply_provider_change(self, provider: str = "", model: str = "",
+                              *, new_key: str = "") -> None:
         """Move the RUNNING agent onto a different provider or API model.
 
         Uses the engine's own `reload_all_api_backends`, which is the whole
@@ -665,10 +666,40 @@ class AgentBridge:
         Never `init_chat()` here: that resets the history to the system message
         and would wipe the conversation behind the transcript. The classic
         lanes may call it only because they discarded the object first.
+
+        THE KEY GATE, and it lives here rather than in the overlay because this
+        is where every route converges: the model overlay, the settings row and
+        the `/model` command. Without a key the switch is REFUSED and nothing is
+        written - storing the provider would have poisoned the next start, which
+        boots straight into a provider that cannot build a backend, while the
+        only message the user got was "restart VAF to apply".
+
+        `new_key` is verified with a real request before the provider moves,
+        exactly as `vaf settings` does, and only when a key was actually typed:
+        an empty answer means "keep the stored one", and re-testing a key that
+        already works would spend a request on every switch. A key that fails to
+        verify is still STORED - the request can fail on the network as easily
+        as on the key - but the provider stays where it was.
+
+        The key value never reaches an event, a note or the transcript.
         """
         def _run():
             from vaf.core.agent import reload_all_api_backends
             from vaf.core.config import Config
+            target = provider or str(Config.get("provider", "local") or "local")
+            if target != "local":
+                if new_key:
+                    Config.set_api_key(target, new_key)
+                if not Config.get_api_key(target):
+                    self.events.event_note(
+                        "Provider", f"no API key for {target} - not switched",
+                        "warning")
+                    return
+                if new_key and not self._api_key_verifies(target):
+                    self.events.event_note(
+                        "Provider", f"{target}: the key was saved but did not "
+                                    f"verify - provider unchanged", "warning")
+                    return
             if provider:
                 Config.set("provider", provider)
             if model and provider:
@@ -691,6 +722,22 @@ class AgentBridge:
                                    "warning")
             return
         self._submit(_run)
+
+    @staticmethod
+    def _api_key_verifies(provider: str) -> bool:
+        """One real request against the provider, on the lane thread.
+
+        Its own method so a test can drive the refusal without going near the
+        network - and so the reason it must not run on the UI thread has one
+        place to be written down: `test_connection` performs an actual chat
+        completion, so on the UI thread it freezes the whole app for as long as
+        the provider takes to answer.
+        """
+        try:
+            from vaf.core.api_backend import APIBackendManager
+            return bool(APIBackendManager.test_connection(provider))
+        except Exception:
+            return False
 
     def stop_speech(self) -> None:
         """`halt`/`stop`: silence the agent WHILE it is speaking.

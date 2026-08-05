@@ -282,11 +282,19 @@ def test_unmount_stops_the_queue_lane_while_the_loop_is_still_alive() -> None:
 
 def test_the_dead_timer_marker_is_gone_from_the_tree() -> None:
     """It was documented as the delivery path and produced by nobody; two
-    consumers still stripped its prefix."""
+    consumers still stripped its prefix.
+
+    The needle is ASSEMBLED, and that is not style. `git grep` searches TRACKED
+    files, so while this file was still untracked the guard could not see
+    itself and passed; the moment it was committed it reported its own search
+    argument and went red. Spelling the name out here again would either break
+    the guard or force a pathspec exclusion that blinds it to this very file.
+    """
     import subprocess
     from pathlib import Path
 
+    needle = "TIMER_MSG" + "_PREFIX"
     root = Path(__file__).resolve().parents[1]
-    out = subprocess.run(["git", "grep", "-l", "TIMER_MSG_PREFIX"], cwd=str(root),
+    out = subprocess.run(["git", "grep", "-l", needle], cwd=str(root),
                          capture_output=True, text=True)
     assert out.stdout.strip() == "", f"still present in: {out.stdout}"

@@ -757,6 +757,15 @@ def run(
         # wiring (the web-input watcher and the result notifier) - an explicit
         # --web therefore routes there, whatever tui_mode says. The --classic
         # FLAG keeps its long-standing behavior: plain prompt, web flag unused.
+        #
+        # SAID OUT LOUD, because the switch is otherwise invisible. A user who
+        # knows the full-screen app types a flag they have used for months and
+        # gets a different interface with no reason given, which reads as the
+        # app being broken rather than as a boundary. `--help` says "(modern
+        # lane)"; nobody reads help for a flag they already know.
+        UI.info("--web runs in the previous prompt interface: the web server, "
+                "its input watcher and the result notifier are wired there, "
+                "not in the full-screen app.")
         ui_mode = "modern"
 
     # Run appropriate interface

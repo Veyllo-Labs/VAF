@@ -197,9 +197,16 @@ What it can change is decided by where a key is READ, not by how it looks:
 
 - The app lane does not start the web dashboard; `vaf run --web` therefore
   keeps the modern lane, which owns the web-input watcher and the result
-  notifier. (The heartbeat is NOT part of that wiring and runs on every
-  interactive lane: it is the only signal the tray has that a CLI session is
-  alive, and without it the tray unloads the local model mid-session.)
+  notifier. The boundary is now SAID at startup rather than only in `--help`:
+  the switch changes the whole interface, and a user who did not ask for that
+  cannot otherwise tell a boundary from a broken app. The line appears only
+  when the lane actually changes, so `tui_mode: modern` stays quiet. (The
+  heartbeat is NOT part of that wiring and runs on every interactive lane: it
+  is the only signal the tray has that a CLI session is alive, and without it
+  the tray unloads the local model mid-session.)
+  Closing the boundary properly is blocked behind the transcript replay named
+  under the queue below: the web UI's `LOAD_SESSION` and `NEW_SESSION` would
+  otherwise leave the previous conversation on screen under a new session id.
 - The in-process TaskQueue IS consumed now, once a second, and a fired timer
   arrives as an amber wake card followed by a real turn. There is exactly one
   producer in this process: the timer scheduler. The `__CMD__` session commands

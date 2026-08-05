@@ -37,13 +37,19 @@ def dispatch(monkeypatch):
         config_mod.Config, "get",
         classmethod(lambda cls, key, default=None: config.get(key, default)))
 
+    # What the user is TOLD on the way to a lane. A dispatch that reroutes in
+    # silence is the half of this table nobody can see.
+    said = []
+    monkeypatch.setattr(run_mod.UI, "info", staticmethod(lambda m, *a, **k: said.append(m)))
+    monkeypatch.setattr(run_mod.UI, "warning", staticmethod(lambda m, *a, **k: said.append(m)))
+
     def _invoke(classic=False, web=False, message=None, theme=None, session=None):
         run_mod.run(SimpleNamespace(invoked_subcommand=None), message=message,
                     verbose=False, classic=classic, theme=theme,
                     session=session, web=web)
         return calls
 
-    return SimpleNamespace(invoke=_invoke, config=config, calls=calls)
+    return SimpleNamespace(invoke=_invoke, config=config, calls=calls, said=said)
 
 
 def test_default_is_the_fullscreen_app(dispatch):
@@ -85,6 +91,27 @@ def test_web_flag_wins_over_config_classic(dispatch, monkeypatch):
     dispatch.config["tui_mode"] = "classic"
     calls = dispatch.invoke(web=True)
     assert [c[0] for c in calls] == ["modern"]
+
+
+def test_the_web_flag_says_why_the_interface_changed(dispatch, monkeypatch):
+    """The reroute above is correct and INVISIBLE, which is the part that hurt.
+    A user who knows the full-screen app types a flag they have used for months,
+    gets the prompt lane instead, and has no way to tell a boundary from a
+    broken app. `--help` carries "(modern lane)"; nobody reads help for a flag
+    they already know."""
+    monkeypatch.setattr(run_mod, "_require_server_extra", lambda: None)
+    dispatch.invoke(web=True)
+    assert any("--web" in m and "full-screen" in m for m in dispatch.said), \
+        dispatch.said
+
+
+def test_nothing_is_said_when_the_lane_did_not_change(dispatch, monkeypatch):
+    """`tui_mode: modern` already put the user there. Announcing a switch that
+    did not happen trains people to ignore the line that matters."""
+    monkeypatch.setattr(run_mod, "_require_server_extra", lambda: None)
+    dispatch.config["tui_mode"] = "modern"
+    dispatch.invoke(web=True)
+    assert not [m for m in dispatch.said if "--web" in m], dispatch.said
 
 
 def test_classic_flag_still_ignores_web(dispatch, monkeypatch):

@@ -126,6 +126,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **`vaf run --web` now says that it changes the interface.** The flag has always
+  routed to the previous prompt interface, because that is where the web server and
+  its watchers are wired, but it did so without a word: you typed a flag you had used
+  for months and got a different-looking VAF with no reason given. It now says so at
+  startup, and only when the interface actually changes.
 - **The terminal app asks for an API key instead of storing a provider that cannot
   work.** Switching to a provider you had no key for wrote it to the config anyway
   and told you to restart, which was the one thing that could not help: the next

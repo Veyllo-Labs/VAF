@@ -751,36 +751,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     tq.task_done()
                     continue
 
-                # Timer fired (message-only): deliver a proactive assistant message — no LLM turn.
-                from vaf.core.timers import TIMER_MSG_PREFIX
-                if str(input_text).startswith(TIMER_MSG_PREFIX):
-                    timer_msg = str(input_text)[len(TIMER_MSG_PREFIX):]
-                    try:
-                        # Proactive standalone message: APPEND it as its own new bubble. The streaming
-                        # emit_agent_message would merge into / overwrite the last assistant bubble the
-                        # agent had already shown before the timer fired (observed: the timer text
-                        # replaced the "Timer is set" reply instead of appearing below it).
-                        get_web_interface().emit_agent_message_append(
-                            content=timer_msg, session_id=task.session_id, role="assistant"
-                        )
-                    except Exception:
-                        pass
-                    try:
-                        session = session_mgr.load(task.session_id)
-                        session.add_message("assistant", timer_msg)
-                        session_mgr.save(session)
-                    except Exception:
-                        pass
-                    try:
-                        if is_debug_logging_enabled():
-                            from datetime import datetime as _dt
-                            with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
-                                f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (timer)\n")
-                    except Exception:
-                        pass
-                    tq.task_done()
-                    continue
-
                 # Speaker-confirmation reply (messenger lane): if a voice
                 # confirmation is pending for THIS OWNER's scope and the
                 # message parses as an answer (yes / no / "no, that's Peter"),

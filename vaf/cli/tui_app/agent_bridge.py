@@ -197,6 +197,10 @@ class AgentBridge:
         self._tools_ran = False
         self._streaming = False
         self._ended_in_success = False
+        # Set while the app is tearing down, so no further queue work is claimed.
+        # See begin_stopping(): the lane is FIFO, so a drain closure queued just
+        # before the app exited still runs during teardown.
+        self._stopping = threading.Event()
         self.farewell = ""            # printed by run_tui after the screen is free
         self.history: list = []       # (HH:MM, user text) for the history screen
 
@@ -248,7 +252,15 @@ class AgentBridge:
         self.events.turn_started(text)
         self._submit(lambda: self._run_turn(text))
 
-    def _run_turn(self, text: str) -> None:
+    def _run_turn(self, text: str, *, inline_attachments: bool = True) -> None:
+        """One turn. `inline_attachments` is False for text nobody typed.
+
+        The `@path` inliner is a PROMPT affordance: it reads arbitrary files off
+        disk into the prompt, which is a fair bargain for text a human put in the
+        prompt box. A timer's text is authored by the model's own `set_timer` call
+        and arrives through the queue, so running the inliner on it would turn an
+        agent-authored string into a file read nobody asked for.
+        """
         self._tools_ran = False
         self._streaming = False
         self.events.presence("thinking", "")
@@ -258,8 +270,11 @@ class AgentBridge:
         # arrived while the user typed are summarized BEFORE the new turn.
         self._drain_once()
 
-        expanded = _inline_attachments(
-            text, on_error=lambda msg: self.events.event_note("Error", msg, "error"))
+        expanded = (
+            _inline_attachments(
+                text, on_error=lambda msg: self.events.event_note("Error", msg, "error"))
+            if inline_attachments else text
+        )
         # Caller-side contract, exactly like the classic loop: the USER message
         # is added here; _process_agent_message adds the assistant half.
         self.session.add_message("user", expanded)
@@ -294,6 +309,113 @@ class AgentBridge:
         if found:
             self._summarize_results(found, surface)
         return found
+
+    # ── this process's task queue (its only producer is a fired timer) ──────────────
+    def queue_tick(self) -> None:
+        """Hand the process TaskQueue to the lane. Touches the queue not at all here.
+
+        Contract, each choice against its failure mode:
+
+        - NOTHING queue-related happens on this thread. `TaskQueue.get()` keys its
+          claim on `threading.get_ident()`, and the stale-claim reaper reclaims only
+          NUMERIC keys of DEAD threads. Textual's loop thread lives to interpreter
+          exit, so a claim taken here would sit in the in-flight map for the life of
+          the process. Release-on-next-get cannot heal it either: that fires when the
+          same worker key asks again, and this key never would.
+        - Its own 1.0 s interval, deliberately not folded into the 2.5 s sub-agent
+          drain beside it. They answer different questions - "did a child finish"
+          polls a shared file, "did something wake me" pops an in-memory heap - and a
+          timer the user set for 60 seconds must not inherit the file poll's cadence.
+        - Gated on `_busy`, which keeps the claim's lifetime and the tick in step.
+          That only holds because the turn runs INLINE below; see there.
+        """
+        if self._stopping.is_set() or self._busy:
+            return
+        self._submit(self._drain_queue_once)
+
+    def _drain_queue_once(self) -> None:
+        """Take at most one task for THIS session and turn it, here, on this thread.
+
+        Contract, each choice against its failure mode:
+
+        - The turn runs INLINE, never through `self._submit`. `_wrapped` clears
+          `_busy` in its finally the moment this returns, so a re-submitted turn
+          would leave `_busy` False while the claim is still held - and the next
+          tick's `get()` releases this worker's previous claim at the top and can
+          then pop a second task for the same session. That release is a repair for
+          consumers that forget `task_done()`; leaning on it here would turn it into
+          a way to run two turns at once.
+        - `task_done()` in a `finally`, never left to that self-heal. After the lane
+          takes its stop sentinel there is no next `get()` for this key, so the final
+          drain's claim would be the one nobody ever releases.
+        - `_stopping` first, and again after `get()`. The lane is FIFO and returns
+          only on the sentinel, so a closure queued just before the app exited still
+          runs during teardown; past the first check it would otherwise start a full
+          model turn against a released terminal, with every event dropped.
+        - "My session" is `self.session.id`, NEVER `get_current_session_id()`. This
+          thread was never told: the session context defaults to a sentinel, a fresh
+          thread inherits an empty context, and no lane writes the environment
+          variable any more - so that call answers None here and would drop every
+          timer. And never `task.source`: a timer set from this very app carries
+          "web", because the timer tool falls back to it and nothing under `vaf/cli`
+          sets the chat source.
+        - A dropped task is GONE, and the note says so rather than implying a retry.
+          The scheduler removed the timer from its store before firing, and that
+          store does not survive the process.
+        - `timeout=0` is one non-blocking attempt, not a poll: the deadline is
+          computed first and the pop is attempted before the expiry check, so the
+          condition variable is never waited on and the lane is never held.
+
+        NAMED BOUNDARY: no `__CMD__` handling. All four producers of those tasks live
+        in the web server, and an explicit `--web` routes to the modern lane, so no
+        such task can reach this process. The branch lands when a producer does.
+        """
+        if self._stopping.is_set():
+            return
+        from vaf.core.task_queue import TaskQueue
+
+        tq = TaskQueue()
+        task = tq.get(timeout=0)
+        if task is None:
+            return
+        try:
+            if self._stopping.is_set():
+                self.events.event_note(
+                    "Timer", "a timer fired while VAF was quitting - it is gone "
+                             "(timers live in memory and do not survive a restart)",
+                    "warning")
+                return
+            mine = str(getattr(self.session, "id", "") or "")
+            if str(task.session_id or "") != mine:
+                self.events.event_note(
+                    "Timer",
+                    f"a timer for another session ({str(task.session_id or '')[:12]}) "
+                    f"fired here and was dropped - it is gone, not deferred",
+                    "warning")
+                return
+            text = str(task.input_text or "")
+            if not text.strip():
+                return
+            if (task.metadata or {}).get("timer"):
+                # Same concept and same trigger the web lane already ships: it emits
+                # the wake text as its own card before the turn, gated on this very
+                # metadata flag. One vocabulary, two lanes. `_emit`, never a direct
+                # call - an events object that predates this callback stays quiet
+                # instead of raising into the turn.
+                self._emit("wake_message", text, "timer")
+            self._run_turn(text, inline_attachments=False)
+        finally:
+            tq.task_done(task=task)
+
+    def begin_stopping(self) -> None:
+        """No new queue work from here on. Called from the UI thread, app still alive.
+
+        `shutdown()` is too late for this and always was: it runs from `run_tui`'s
+        finally, AFTER `app.run()` returned, so no interval callback could fire past
+        it anyway. What has to be stopped is the drain closure already sitting in the
+        lane's FIFO ahead of the stop sentinel.
+        """
+        self._stopping.set()
 
     def _summarize_results(self, found_results, surface) -> None:
         """The classic summary turn, ported byte-faithfully. Source of truth:
@@ -682,7 +804,13 @@ class AgentBridge:
         `_process_agent_message`. When a turn is still running the finalizer
         moves to a daemon thread with a short grace period, so quitting
         mid-turn never freezes the closed terminal.
+
+        `_stopping` is set FIRST, so a direct shutdown() with no app behind it is
+        covered too. On the normal path the app already set it from on_unmount,
+        while its event loop was still alive - which is the only moment that can
+        stop a queue tick, because this method runs after that loop is gone.
         """
+        self._stopping.set()
         try:
             session_id = getattr(self.agent, "current_session_id", None)
             self._get_web().resolve_gate(session_id, "cancel")
@@ -744,11 +872,16 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
     Deliberately NOT started here, each a named boundary: the web server +
     frontend (`vaf run --web` remains that lane), the classic result-notifier
     thread (the drain timer replaces it - results mount into the transcript
-    instead of breaking a prompt), the web-input TaskQueue watcher (coexistence
-    is the next round's decision), and the classic lane's speech preloads - TTS
+    instead of breaking a prompt), and the classic lane's speech preloads - TTS
     engine warmup, the STT microphone check, and the langid preload - which
     land with the voice round; until then the first spoken reply pays the
     engine spin-up lazily.
+
+    The app lane DOES consume this process's TaskQueue now (see queue_tick), and
+    there is exactly one producer in that process: a fired timer. The web UI's
+    session commands are deliberately not handled - all four of their producers
+    live in the web server, and an explicit --web routes to the modern lane, so
+    no such task can reach here. That branch lands when a producer for it does.
 
     Raises SystemExit when the git preflight fails, exactly like the classic
     lane - the caller has not taken the screen yet, so the message is visible.

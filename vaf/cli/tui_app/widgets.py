@@ -101,6 +101,30 @@ class UserMessage(Vertical):
         yield Static(self._text, classes="user-msg", markup=False)
 
 
+class WakeMessage(Vertical):
+    """A turn nobody typed: what woke the agent, and where it came from.
+
+    Not a UserMessage and not a SystemNote. `turn_started` is a no-op in this lane
+    and the app mounts the user bubble itself, so a queue-driven turn would
+    otherwise stream an answer into an empty transcript with no visible origin at
+    all. The web UI answers the same question with its own wake card on the same
+    trigger; this is that card in the terminal.
+    """
+
+    LABELS = {"timer": ("(!)", "Timer")}
+
+    def __init__(self, text: str, kind: str = "timer") -> None:
+        super().__init__()
+        self.add_class("wake-msg-wrap")
+        self._text = text
+        self._mark, self._label = self.LABELS.get(kind, ("*", str(kind or "wake")))
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"[$warning]{self._mark} {_escape(self._label)}[/] "
+                     f"[$text-disabled]· {_now()}[/]", classes="msg-head")
+        yield Static(self._text, classes="wake-msg", markup=False)
+
+
 class AgentMessage(Vertical):
     """Role-headed streaming content with a separate think channel; the avatar
     lives IN the head row (`[ ● ] VAF · HH:MM`), so think and answer below run

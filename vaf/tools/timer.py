@@ -6,7 +6,7 @@ Short self-timers for the agent: set_timer / list_timers / cancel_timer.
 
 These schedule a precise, short, one-shot delay that fires proactively in the SAME live
 chat (CLI + WebUI). On fire the agent either delivers a fixed message or runs a task prompt.
-See vaf/core/timers.py for the store/scheduler and the __TIMER__ delivery marker.
+See vaf/core/timers.py for the store and the scheduler.
 
 Use these for short in-chat timers (seconds to a few minutes). For longer or persistent /
 recurring reminders use create_automation (frequency='once'), which survives restarts.

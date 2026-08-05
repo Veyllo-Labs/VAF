@@ -175,9 +175,26 @@ What it can change is decided by where a key is READ, not by how it looks:
   notifier. (The heartbeat is NOT part of that wiring and runs on every
   interactive lane: it is the only signal the tray has that a CLI session is
   alive, and without it the tray unloads the local model mid-session.)
-- The in-process TaskQueue is not consumed yet: web-UI chat input, the
-  `__CMD__` session commands and timer messages reach the modern lane only.
-  A timer fired while just the app lane runs is therefore lost.
+- The in-process TaskQueue IS consumed now, once a second, and a fired timer
+  arrives as an amber wake card followed by a real turn. There is exactly one
+  producer in this process: the timer scheduler. The `__CMD__` session commands
+  are deliberately not handled - all four of their producers live in the web
+  server, and an explicit `vaf run --web` routes to the modern lane, so no such
+  task can reach this process. That branch lands when a producer for it does.
+  A task belonging to a DIFFERENT session is dropped with a note rather than
+  swapping the transcript underneath the reader, and it is gone rather than
+  deferred: the scheduler removed it from its in-memory store before firing.
+- Two things a timer turn can do that the app cannot yet answer, both
+  pre-existing and both worth knowing: a gated tool pushes the confirmation
+  screen over whatever you are doing, and this lane has no way to stop a turn
+  in flight. Quitting while an unattended turn runs gives the finalizer a five
+  second budget to save the session, which was previously only reachable right
+  after you had submitted something yourself.
+- Typing while a timer turn is running is allowed and your draft survives; the
+  message is queued and a note says so. Pressing enter mid-turn seals the live
+  reply and the remainder opens a new bubble below your message - the split is
+  explained by that note rather than removed, because removing it would mean
+  buffering a live stream around every user mount in this lane.
 - Voice capture lands in a later round; the overlay that represents it says so
   instead of pretending. Creating, renaming and deleting sessions is likewise
   not in the app yet - loading one is. The local model, the context limit and

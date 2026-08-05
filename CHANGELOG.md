@@ -126,6 +126,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **A timer set in the terminal app now actually arrives.** Asking for a reminder
+  in `vaf run` set the timer, said so, and then nothing happened when it elapsed -
+  the terminal app never looked at the queue the timer fires into, so it expired
+  in silence. It now shows an amber card with what woke the agent, followed by the
+  agent's answer. A timer belonging to a different conversation is dropped with a
+  note saying so, rather than swapping the conversation you are reading.
 - **A note the agent saves for itself now belongs to the person it was talking to.**
   On an installation with more than one account, a note written while a background
   pass happened to be running was filed under that pass's account instead - and notes

@@ -60,6 +60,7 @@ from vaf.cli.tui_app.widgets import (
     TopBar,
     Transcript,
     UserMessage,
+    WakeMessage,
 )
 
 
@@ -155,6 +156,7 @@ class TuiEvents:
     def session_switched(self, sid, count): self._ui(self._app_call, "session_switched", sid, count)
     def session_list(self, sessions):       self._ui(self._app_call, "show_session_list", sessions)
     def chrome_changed(self):               self._ui(self._app_call, "_refresh_chrome")
+    def wake_message(self, text, kind):      self._ui(self._app_call, "add_wake_message", text, kind)
 
     def _app_call(self, name, *args) -> None:
         getattr(self._app, name)(*args)
@@ -210,8 +212,14 @@ class VafApp(App):
     .msg-head { margin: 1 0 0 0; }
     .user-msg-wrap { height: auto; }
     .agent-msg-wrap { height: auto; }
+    .wake-msg-wrap { height: auto; }
     .user-msg {
         padding: 0 1; border-left: thick $accent; background: $surface;
+    }
+    /* $warning, not $accent: the bar colour IS the answer to "who said this".
+       Nobody typed it - something woke the agent. */
+    .wake-msg {
+        padding: 0 1; border-left: thick $warning; background: $surface;
     }
     /* The Markdown body ships its own padding; strip it so the answer lines
        up with the head row, then style the blocks it mounts. */
@@ -366,6 +374,11 @@ class VafApp(App):
         # The classic result-notifier thread, as timers: the drain runs on the
         # bridge lane, the tasks poll on its own daemon (file IO off the UI thread).
         self.set_interval(2.5, self._bridge.drain_tick)
+        # A SECOND, independent interval - deliberately not folded into the one
+        # above. That one polls a shared file for finished children; this one pops
+        # an in-memory heap for "something woke me". A 60-second timer must not
+        # inherit the file poll's cadence, and a slow drain must not delay a wake.
+        self.set_interval(1.0, self._bridge.queue_tick)
         threading.Thread(target=self._tasks_loop, daemon=True,
                          name="vaf-tui-tasks").start()
         self._bridge.refresh_context()
@@ -375,6 +388,10 @@ class VafApp(App):
 
     def on_unmount(self) -> None:
         self._tasks_stop.set()
+        # While this thread is alive and the loop is still open. bridge.shutdown()
+        # runs only after app.run() returned, which is too late to stop a drain
+        # closure already sitting in the lane's queue.
+        self._bridge.begin_stopping()
 
     def _tasks_loop(self) -> None:
         while not self._tasks_stop.wait(1.5):
@@ -498,6 +515,10 @@ class VafApp(App):
 
     def add_system_note(self, text: str) -> None:
         self._mount_scrolled(SystemNote(text))
+
+    def add_wake_message(self, text: str, kind: str = "timer") -> None:
+        """What woke the agent, on its own card, before the turn it caused."""
+        self._mount_scrolled(WakeMessage(text, kind))
 
     def add_renderable(self, obj) -> None:
         self._mount_scrolled(RenderableNote(obj))
@@ -752,6 +773,11 @@ class VafApp(App):
         except Exception:
             pass
         self._mount_scrolled(UserMessage(text))
+        # A turn nobody started can be running (a fired timer). Without this the
+        # message gets a sealed bubble, a reply that is not its own, and no
+        # explanation. Same sentence the slash-command path already prints.
+        if self._bridge.busy:
+            self.add_system_note("queued, runs after the current turn")
         self._bridge.submit_turn(text)
 
 

@@ -9,11 +9,11 @@ The agent uses the ``set_timer`` tool to schedule a precise short delay ("in 60s
 process's ``TaskQueue``; the existing consumers (the CLI input loop and the headless worker)
 then deliver it into the live session:
 
-- message-only timer -> a proactive assistant message (no LLM turn). The task carries the
-  ``__TIMER__:`` marker (see :data:`TIMER_MSG_PREFIX`) which both consumers recognise next to
-  their ``__CMD__`` handling (``vaf/cli/cmd/run.py``, ``vaf/core/headless_runner.py``).
-- task timer -> a normal turn (``input_text`` is the task prompt), so the agent acts and
-  replies in-session.
+Every fire is a WAKE TURN: the note or the task is fed in as normal input, so the agent
+reads it, may think and call tools, and answers in the session. The task carries
+``metadata["timer"]``, which is what a consumer gates its wake card on - there is no text
+marker and no passive delivery path. Three consumers exist: the headless worker, the
+modern CLI's queue watcher, and the full-screen app's lane.
 
 Design notes:
 - The store and scheduler are a process-wide singleton. ``set_timer`` always runs in the same
@@ -30,11 +30,6 @@ import time
 import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
-# Marker prefix that flags a message-only timer fire in the task queue. Recognised by the CLI
-# input loop and the headless worker (alongside their existing ``__CMD__`` handling).
-TIMER_MSG_PREFIX = "__TIMER__:"
-
 
 @dataclass
 class Timer:
@@ -147,8 +142,8 @@ def _fire(timer: Timer) -> None:
     from vaf.core.task_queue import TaskQueue
 
     if timer.message is not None:
-        # A message timer WAKES the agent: the note is fed in as a normal turn (not a passive
-        # __TIMER__ delivery), so the agent becomes active -- it reads the note, can think / call
+        # A message timer WAKES the agent: the note is fed in as a normal turn,
+        # so the agent becomes active -- it reads the note, can think / call
         # tools, and responds. This text is ALSO shown in the chat as the user-side "trigger" bubble
         # (see the headless timer handling), so it is kept short and readable.
         input_text = (

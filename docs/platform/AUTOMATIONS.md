@@ -44,13 +44,15 @@ For a **short, one-off delay that should fire proactively in the current convers
 
 **On fire, the agent is WOKEN UP** and runs a real turn (it reads the note/task, can think and call tools, and replies) — a self-wakeup, not a passive text post. A `message` timer feeds the note in as the turn input; a `task` timer feeds the instruction.
 
-**Delivery mechanism:** on fire, the timer enqueues an `AgentTask` (with `metadata.timer`) into the same process's `TaskQueue` — the queue the CLI input loop and the headless worker already consume. Two details make it work in the Web UI:
+**Delivery mechanism:** on fire, the timer enqueues an `AgentTask` (with `metadata.timer`) into the same process's `TaskQueue` — the queue the headless worker, the modern CLI's input loop and the full-screen terminal app all consume. Two details make it work in the Web UI:
 - **Session:** the timer attaches to the live chat session (`current_session_id`, resolved by `_resolve_session`), NOT the agent instance's random per-process `_session_id` (a `uuid4` from `_register_session`) — that earlier delivered the fire into a session the Web UI never listened on, so nothing showed.
-- **Own bubble:** a timer turn has no preceding user message, so before the turn the headless emits the trigger as a **wake message** (`kind="timer"`) that the Web UI renders in its own left-side area (see [WEB_UI.md](../web-ui/WEB_UI.md) → "Wake / system-activity messages"). That both shows the trigger and creates a bubble boundary, so the agent's reply lands in its own new bubble with a correct timestamp.
+- **Own bubble:** a timer turn has no preceding user message, so before the turn the lane emits the trigger as a **wake message** (`kind="timer"`) — the Web UI renders it in its own left-side area (see [WEB_UI.md](../web-ui/WEB_UI.md) → "Wake / system-activity messages"), the terminal app renders it as an amber-barred card above the reply. Both show the trigger and create a bubble boundary, so the agent's reply lands in its own new bubble with a correct timestamp. Both gate on `metadata["timer"]`, never on the text.
 
-The older passive `__TIMER__:` proactive-delivery path still exists (it now appends rather than overwrites) but is currently unused. `set_timer` is blocked on messaging channels (Telegram/WhatsApp/Discord) — use `create_automation` there.
+There is no passive text-marker delivery path: an older one was documented, never produced by `_fire`, and has been removed along with the two dead consumer branches that still stripped its prefix. `set_timer` is blocked on messaging channels (Telegram/WhatsApp/Discord) — use `create_automation` there.
 
-**Code:** `vaf/core/timers.py` (store + scheduler + the `_fire` wake-turn framing), `vaf/tools/timer.py` (the tools + `_resolve_session`), `vaf/core/headless_runner.py` (the `kind="timer"` wake emit before the turn), `web/app/page.tsx` (the `kind`-based wake card).
+**In the terminal app** the lane polls its own process's queue once a second and turns a task whose session matches the open conversation. A task for a DIFFERENT session is dropped with a note rather than swapping the transcript underneath the reader, and it is gone rather than deferred — the scheduler removed it from its in-memory store before firing.
+
+**Code:** `vaf/core/timers.py` (store + scheduler + the `_fire` wake-turn framing), `vaf/tools/timer.py` (the tools + `_resolve_session`), `vaf/core/headless_runner.py` (the `kind="timer"` wake emit before the turn), `vaf/cli/tui_app/agent_bridge.py` (`queue_tick` / `_drain_queue_once`), `web/app/page.tsx` (the `kind`-based wake card).
 
 ## Today status, persisted completion, and catch-up runs
 

@@ -126,6 +126,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **VAF no longer names one theme while showing another.** If your saved theme was
+  not the default, the terminal app's Theme list put its marker on the default row,
+  and the `vaf settings` menu labelled the default too, while the screen was painted
+  in the theme you had actually chosen. The name came from a value that only two of
+  the four terminal lanes ever loaded from your config; every surface now reads the
+  saved choice, and a `--theme` flag reaches them all. Worth knowing, because it made
+  the above look like the theme was not applied at all: `t` writes your choice
+  immediately, so cycling through the themes to look at them leaves you on the last
+  one you stopped at, and that is what the next start uses.
 - **A timer set in the terminal app now actually arrives.** Asking for a reminder
   in `vaf run` set the timer, said so, and then nothing happened when it elapsed -
   the terminal app never looked at the queue the timer fires into, so it expired

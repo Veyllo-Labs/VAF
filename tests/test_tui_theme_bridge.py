@@ -219,3 +219,159 @@ def test_a_stored_theme_that_no_longer_exists_falls_back(monkeypatch):
                         classmethod(lambda cls, key, default=None: "light"))
     assert initial_theme_key(None) == "vaf"
     assert "light" not in THEMES
+
+
+# ── one truth about which theme is current ──────────────────────────────────────────
+
+"""The incident this section was written for, and it is the SECOND of its kind.
+
+`test_no_theme_can_paint_the_terminal_light` above records the first: a theme at
+the end of the cycle order persisted, and the next start "looked for all the
+world like the theme was neither applied nor saved". It happened again, this
+time with `matrix` (near-black on #00ff41 green, which reads as a plain terminal),
+and the app made it worse rather than better - the settings overlay marked `vaf`
+while matrix was on screen, because the marker asked a store nobody had seeded.
+
+Measured at the time of the fix: THREE readers of ThemeManager.current()
+(screens.py, settings.py twice) against TWO lanes that seeded it by hand
+(run.py's modern lane, main.py) and two that did not (the full-screen app,
+`vaf-settings`).
+"""
+
+
+@pytest.fixture(autouse=True)
+def _fresh_theme_cache():
+    """`_current` is a class attribute and now caches across tests."""
+    from vaf.cli.themes import ThemeManager
+    before = ThemeManager._current
+    ThemeManager._current = None
+    yield
+    ThemeManager._current = before
+
+
+def _stored(monkeypatch, value):
+    """Make the config report `value` for every key read (theme is the only one
+    these tests touch)."""
+    import vaf.core.config as config_mod
+    monkeypatch.setattr(config_mod.Config, "get",
+                        classmethod(lambda cls, key, default=None: value))
+
+
+def _theme_rows():
+    """The settings overlay's theme menu, built by the real method. It reads no
+    `self`, so it runs without an app - the marker under test is the one a user
+    actually sees."""
+    from vaf.cli.tui_app.screens import SettingsScreen
+    screen = SettingsScreen.__new__(SettingsScreen)
+    return screen._menu_rows("theme")
+
+
+def _marked(rows):
+    return [key for key in THEME_ORDER
+            if any(f"{key:<12}" in str(r[2]) and "▍" in str(r[2]) for r in rows)]
+
+
+def test_the_current_theme_is_read_from_the_config_not_hardcoded(monkeypatch):
+    from vaf.cli.themes import ThemeManager
+
+    _stored(monkeypatch, "matrix")
+    assert ThemeManager.current() == "matrix"
+
+
+def test_get_theme_resolves_the_store_on_its_own(monkeypatch):
+    """It must not depend on someone having called current() first: TUI() asks
+    for colors before anything asks for the name (cli/tui.py builds its palette
+    in __init__), and an unresolved cache would hand it the default look."""
+    from vaf.cli.themes import ThemeManager
+
+    _stored(monkeypatch, "matrix")
+    assert ThemeManager.get_theme()["background"] == THEMES["matrix"]["background"]
+
+
+def test_the_settings_marker_sits_on_the_theme_that_is_on_screen(monkeypatch):
+    """The user-visible half. With matrix stored, the app paints matrix - and
+    the overlay used to put its marker on `vaf` and contradict the colors."""
+    _stored(monkeypatch, "matrix")
+    assert initial_theme_key(None) == "matrix", "the app would not be on matrix"
+    assert _marked(_theme_rows()) == ["matrix"]
+
+
+def test_an_explicit_theme_flag_reaches_the_marker(monkeypatch):
+    """`--theme` beats the stored value for the app, so it must beat it for the
+    overlay too, or the two disagree for the whole session."""
+    from vaf.cli.themes import ThemeManager
+
+    _stored(monkeypatch, "matrix")
+    ThemeManager.set_theme(initial_theme_key("dracula"))      # what run_tui does
+    assert _marked(_theme_rows()) == ["dracula"]
+
+
+def test_the_app_lane_seeds_the_cache_at_startup():
+    """Wiring, not stage: without this line the flag case above cannot happen,
+    and the behavioural test would pass over an unwired lane."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "cli" / "tui_app"
+           / "app.py").read_text(encoding="utf-8")
+    tail = src.split("theme_key = initial_theme_key(theme)", 1)[1][:500]
+    assert "ThemeManager.set_theme(theme_key)" in tail
+
+
+def test_set_theme_overrides_this_process_without_writing_the_config(monkeypatch):
+    """The classic `theme <name>` command changes the look for one session only
+    (run.py and main.py call set_theme with no Config.set beside it). Resolving
+    from the config on every read would silently undo it."""
+    import vaf.core.config as config_mod
+    from vaf.cli.themes import ThemeManager
+
+    written = []
+    _stored(monkeypatch, "vaf")
+    monkeypatch.setattr(config_mod.Config, "set",
+                        classmethod(lambda cls, k, v: written.append((k, v))))
+
+    assert ThemeManager.set_theme("gruvbox") is True
+    assert ThemeManager.current() == "gruvbox"
+    assert written == [], "an in-process override reached the config"
+
+
+def test_a_stored_theme_that_no_longer_exists_does_not_strand_the_manager(monkeypatch):
+    """Same guarantee the resolver already gives; the cache must not undercut it."""
+    from vaf.cli.themes import ThemeManager
+
+    _stored(monkeypatch, "light")
+    assert "light" not in THEMES
+    assert ThemeManager.current() == "vaf"
+    assert _marked(_theme_rows()) == ["vaf"]
+
+
+def test_an_unreadable_config_still_yields_a_usable_theme(monkeypatch):
+    """current() is called while drawing a menu. It must never raise into a
+    paint - a broken config costs the default look, not the overlay."""
+    import vaf.core.config as config_mod
+    from vaf.cli.themes import ThemeManager
+
+    def _boom(cls, key, default=None):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(config_mod.Config, "get", classmethod(_boom))
+    assert ThemeManager.current() == "vaf"
+    assert ThemeManager.get_theme()["background"] == THEMES["vaf"]["background"]
+
+
+def test_the_config_is_read_once_not_once_per_menu_row(monkeypatch):
+    """Config.get re-reads the file on every call (Config.load has no cache) and
+    the theme menu asks current() once per catalog entry."""
+    import vaf.core.config as config_mod
+    from vaf.cli.themes import ThemeManager
+
+    reads = []
+
+    def _counting(cls, key, default=None):
+        reads.append(key)
+        return "nord"
+
+    monkeypatch.setattr(config_mod.Config, "get", classmethod(_counting))
+    rows = _theme_rows()
+    assert _marked(rows) == ["nord"]
+    assert len(reads) <= 1, f"{len(reads)} config reads for {len(THEME_ORDER)} rows"
+    assert ThemeManager.current() == "nord"

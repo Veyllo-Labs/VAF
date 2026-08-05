@@ -233,30 +233,54 @@ THEMES: Dict[str, Dict[str, str]] = {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ThemeManager:
-    """Manages terminal themes."""
-    
-    _current: str = "vaf"
+    """Manages terminal themes.
+
+    `current()` is a per-process CACHE of the persisted `theme` config key, not
+    a store of its own. It is resolved on first read and then held, so that
+    `set_theme()` can still override the look for ONE session without writing
+    to disk - which is exactly what the classic `theme <name>` command does.
+
+    Deliberate: this used to start life as a hardcoded "vaf". That made it a
+    second, unseeded source of truth, and only two of the four lanes seeded it
+    by hand. The full-screen app and `vaf-settings` therefore reported "vaf"
+    while a completely different theme was on screen - a marker on the wrong
+    row and a menu label that contradicted the colors the user was looking at.
+    """
+
+    _current: Optional[str] = None      # None: not yet read from the config
     _themes: Dict[str, Dict[str, str]] = THEMES.copy()
-    
+
     @classmethod
     def get_theme(cls, name: str = None) -> Dict[str, str]:
         """Get a theme by name or current theme."""
-        theme_name = name or cls._current
+        theme_name = name or cls.current()
         return cls._themes.get(theme_name, cls._themes["vaf"])
-    
+
     @classmethod
     def set_theme(cls, name: str) -> bool:
-        """Set the current theme."""
+        """Set the current theme for this process only (no config write)."""
         if name in cls._themes:
             cls._current = name
             return True
         return False
-    
+
     @classmethod
     def current(cls) -> str:
-        """Get current theme name."""
+        """The active theme name, resolved from the config on first read.
+
+        Never raises and never returns an unknown name: a theme dropped from
+        the catalog must not strand whoever had it selected.
+        """
+        if cls._current is None:
+            stored = "vaf"
+            try:
+                from vaf.core.config import Config
+                stored = str(Config.get("theme", "vaf") or "vaf")
+            except Exception:
+                stored = "vaf"
+            cls._current = stored if stored in cls._themes else "vaf"
         return cls._current
-    
+
     @classmethod
     def list_themes(cls) -> list:
         """List all available themes."""

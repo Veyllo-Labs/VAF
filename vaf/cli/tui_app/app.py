@@ -23,6 +23,7 @@ from textual.containers import Horizontal
 
 from vaf.cli.commands import parse, suggest
 from vaf.cli.history import append_history, load_history
+from vaf.cli.themes import ThemeManager
 from vaf.cli.tui_app.screens import (
     ConfirmScreen,
     ContextNote,
@@ -818,6 +819,11 @@ def run_tui(message: str = None, theme: str = None, session_id: str = None,
     from vaf.cli.tui_app.agent_bridge import boot_bridge
 
     theme_key = initial_theme_key(theme)
+    # Seed the per-process theme cache the same way the modern lane does
+    # (`_run_modern` in run.py). Without it a `--theme` flag reaches the app
+    # but not the readers of ThemeManager.current(): the settings overlay would
+    # mark a different row than the colors on screen.
+    ThemeManager.set_theme(theme_key)
     events = TuiEvents()
     bridge = boot_bridge(events, theme_key, session_id, verbose)
 

@@ -64,7 +64,13 @@ second turn implementation:
   read that catalog, so the look is the same in either. The active theme is the
   `theme` config key, so a choice made with `t`, `theme <name>` or the Settings
   row is what the next start uses - and a stored theme that no longer exists
-  falls back to the default rather than stranding the user. Every theme in the
+  falls back to the default rather than stranding the user. That key is also
+  what answers *which* theme is current, everywhere: `ThemeManager.current()`
+  resolves it on first read and then holds it for the process, so the settings
+  marker, the `vaf-settings` menu and the colours on screen cannot disagree.
+  `ThemeManager.set_theme()` overrides that cache for one session without
+  writing to disk, which is exactly what the classic lane's `theme <name>`
+  command does. Every theme in the
   catalog is dark by contract (pinned by a test): the agent's mark and several
   accents are white, so a light background would make them invisible. `widgets.py` holds transcript and chrome widgets; `screens.py` the
   overlays; `agent_bridge.py` the single agent lane; `app.py` the assembly and

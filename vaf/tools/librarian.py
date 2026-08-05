@@ -296,7 +296,7 @@ You have access to this filesystem map for fast navigation:
         # ═══════════════════════════════════════════════════════════════════════
         # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
         # ═══════════════════════════════════════════════════════════════════════
-        from vaf.core.config import Config
+        from vaf.core.config import Config, subagent_provider_override
         from vaf.core.platform import Platform
         
         # If already in sub-agent terminal, run normally
@@ -329,11 +329,9 @@ You have access to this filesystem map for fast navigation:
                 _sub_env["VAF_USER_ROLE"] = str(_role_for_child)
 
             # Pass provider configuration to sub-agent (Best Practice: Inherit or override)
-            use_separate_provider = Config.get("subagent_use_separate_provider", False)
-            if use_separate_provider:
-                subagent_provider = Config.get("subagent_provider", "inherit")
-                if subagent_provider != "inherit":
-                    _sub_env["VAF_PROVIDER"] = subagent_provider
+            _sub_provider = subagent_provider_override()
+            if _sub_provider:
+                _sub_env["VAF_PROVIDER"] = _sub_provider
             
             cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
             

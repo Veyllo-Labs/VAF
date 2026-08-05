@@ -1348,3 +1348,46 @@ def resolve_caller_username(
     except Exception:
         # Cannot tell whose scope this is -> must not answer with the owner's name.
         return get_local_admin_username() if not user_scope_id else "scope_unknown"
+
+
+def subagent_provider_override() -> Optional[str]:
+    """The provider a sub-agent must run on, or None when it inherits the main one.
+
+    TWO KEYS, ONE DECISION, and that is the whole reason this exists.
+    `subagent_provider` names the choice, `subagent_use_separate_provider` gates
+    it, and the gate defaults to False - so a name written WITHOUT the gate is
+    silently inert. Nothing raises, nothing warns, the sub-agent simply keeps
+    the main provider.
+
+    Measured before this was written: SIX places derived the pair by hand, in
+    two byte-identical blocks. Four spawn sites - `tools/coder.py`,
+    `tools/librarian.py`, `tools/research_agent.py`, `tools/document_agent.py` -
+    turned it into a `VAF_PROVIDER` environment entry; two more,
+    `core/headless_runner.py` and `core/platform.py`, resolved it against the
+    main provider. A seventh caller, the terminal app's settings row, wrote only
+    the NAME, reported success, and changed nothing for any of the six.
+
+    Returns the override or None; never the string "inherit", which is a stored
+    sentinel and not a provider anyone can run on.
+    """
+    try:
+        if not Config.get("subagent_use_separate_provider", False):
+            return None
+        name = str(Config.get("subagent_provider", "inherit") or "inherit").strip()
+        return name if name and name != "inherit" else None
+    except Exception:
+        # A sub-agent that cannot read the config inherits; it must not fail to spawn.
+        return None
+
+
+def set_subagent_provider(name: Optional[str]) -> None:
+    """Record the sub-agent provider AND its gate, so the pair cannot drift.
+
+    "inherit", an empty value or None all mean the same thing: clear the gate
+    and let sub-agents follow the main agent. Written through `Config.set` so
+    the change observers fire exactly as they did when callers set both keys by
+    hand.
+    """
+    chosen = str(name or "inherit").strip() or "inherit"
+    Config.set("subagent_provider", chosen)
+    Config.set("subagent_use_separate_provider", chosen != "inherit")

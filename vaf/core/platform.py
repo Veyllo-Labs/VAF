@@ -632,7 +632,7 @@ class Platform:
                 )
                 try:
                     import requests
-                    from vaf.core.config import Config
+                    from vaf.core.config import Config, subagent_provider_override
                     session_id = _eff_session.strip()
                     task_id = _eff_task.strip()
                     agent_type = _eff_agent.strip()
@@ -660,10 +660,7 @@ class Platform:
                     if session_id and (task_id or agent_type):
                         title = (agent_type or "Sub-Agent").replace("_", " ").title()
                         cfg = Config.load()
-                        main_provider = cfg.get("provider", "local")
-                        subagent_provider = cfg.get("subagent_provider", "inherit")
-                        use_separate = cfg.get("subagent_use_separate_provider", False)
-                        effective_provider = subagent_provider if use_separate and subagent_provider != "inherit" else main_provider
+                        effective_provider = subagent_provider_override() or cfg.get("provider", "local")
                         if effective_provider != "local":
                             model = cfg.get(f"api_model_{effective_provider}", "") or cfg.get("model", "")
                         else:

@@ -31,7 +31,7 @@ import sys
 
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.cli.themes import ThemeManager
-from vaf.core.config import Config
+from vaf.core.config import Config, subagent_provider_override
 from vaf.core.platform import Platform
 from vaf.core.progress import StatePublisher
 from vaf.core.subagent_ipc import get_current_session_id
@@ -650,11 +650,9 @@ class ResearchAgentTool(BaseTool):
                 _sub_env["VAF_SESSION_ID"] = session_id
 
             # Pass provider configuration to sub-agent
-            use_separate_provider = Config.get("subagent_use_separate_provider", False)
-            if use_separate_provider:
-                subagent_provider = Config.get("subagent_provider", "inherit")
-                if subagent_provider != "inherit":
-                    _sub_env["VAF_PROVIDER"] = subagent_provider
+            _sub_provider = subagent_provider_override()
+            if _sub_provider:
+                _sub_env["VAF_PROVIDER"] = _sub_provider
             
             # Pass RAW topic to sub-agent (it will clean it up)
             cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]

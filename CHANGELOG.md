@@ -126,6 +126,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it sat in `~/VAF`. Stopping a persisted server is documented separately and unchanged.
 
 ### Fixed
+- **Choosing a provider for sub-agents in the terminal app now actually moves them.**
+  The row wrote the provider's name but not the switch that turns the choice on, so
+  it reported success, moved its marker onto your choice, and every sub-agent went
+  on using the main agent's provider. Six places worked out that pair by hand and
+  now ask one function, so the two halves cannot drift apart again. Two more things
+  come with it: the older `vaf settings` menu announced the chosen provider in its
+  panel even when the switch was off, and it does not any more; and picking a
+  provider you have no API key for is now refused in the terminal app too, instead
+  of being stored and failing inside every sub-agent afterwards.
 - **VAF no longer names one theme while showing another.** If your saved theme was
   not the default, the terminal app's Theme list put its marker on the default row,
   and the `vaf settings` menu labelled the default too, while the screen was painted

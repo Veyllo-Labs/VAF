@@ -80,7 +80,7 @@ Handles documents of any size using section-by-section generation (no context ov
         # ═══════════════════════════════════════════════════════════════════════
         # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
         # ═══════════════════════════════════════════════════════════════════════
-        from vaf.core.config import Config
+        from vaf.core.config import Config, subagent_provider_override
         from vaf.core.platform import Platform
         
         # If already in sub-agent terminal, run normally
@@ -103,11 +103,9 @@ Handles documents of any size using section-by-section generation (no context ov
                 _sub_env["VAF_SESSION_ID"] = session_id
 
             # Pass provider configuration to sub-agent
-            use_separate_provider = Config.get("subagent_use_separate_provider", False)
-            if use_separate_provider:
-                subagent_provider = Config.get("subagent_provider", "inherit")
-                if subagent_provider != "inherit":
-                    _sub_env["VAF_PROVIDER"] = subagent_provider
+            _sub_provider = subagent_provider_override()
+            if _sub_provider:
+                _sub_env["VAF_PROVIDER"] = _sub_provider
             
             # Windows cmd.exe limit ~8191 chars; pass long tasks via IPC only
             max_task_len = 3000

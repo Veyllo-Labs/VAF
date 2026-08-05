@@ -416,8 +416,13 @@ print(f"Connection test: {'✓ Success' if result else '✗ Failed'}")
 ```python
 from vaf.core.config import Config
 
+from vaf.core.config import subagent_provider_override
+
 print(f"Provider: {Config.get('provider')}")
-print(f"Sub-Agent Provider: {Config.get('subagent_provider')}")
+# Not `Config.get('subagent_provider')`: that key is half of a pair and says
+# nothing on its own. The resolver applies the gate and answers None when
+# sub-agents inherit the main provider.
+print(f"Sub-Agent Provider: {subagent_provider_override() or Config.get('provider')}")
 ```
 
 ### Reset to Local

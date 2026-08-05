@@ -107,8 +107,8 @@ print(agent.run("In one sentence, what is Python?"))
 | `anthropic_prompt_cache` | `True` | Anthropic only: send the system prompt as a `cache_control: ephemeral` block so the stable prefix is cached across multi-turn / tool loops (cost saver). Read with an inline default, not part of `DEFAULTS`. See [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
 | `anthropic_thinking` | `True` | Anthropic only: adaptive (extended) thinking on supported models (reasoning streams wrapped in `<think>` tags); ignored on models without thinking support. Read with an inline default, not part of `DEFAULTS`. |
 | `local_api_url` | `""` | OpenAI-compatible endpoint for the API-backend consumers of provider `local` (browser agent, local vision, cloud-to-local failover), e.g. an Ollama/vLLM URL. Empty = VAF's own llama-server. Does NOT redirect the main chat loop (see [EMBEDDING.md](../EMBEDDING.md)). Read with an inline default, not part of `DEFAULTS`. |
-| `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. |
-| `subagent_use_separate_provider` | `False` | Use `subagent_provider` instead of inheriting. |
+| `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. Half of a PAIR: read it with `config.subagent_provider_override()` and write it with `config.set_subagent_provider()`, never alone. Set without the gate below it is silently inert. |
+| `subagent_use_separate_provider` | `False` | The gate on `subagent_provider`. Written by `set_subagent_provider()`; nothing else should touch it. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |
 | `subagent_concurrent_chat_enabled` | `True` | Kill-switch for chat-while-a-sub-agent-runs (the SUB-AGENT ACTIVE prompt block). Renders only in API mode regardless (code gate on the main provider + an initialized API backend). Admin-only via the `subagent_` prefix. |
 

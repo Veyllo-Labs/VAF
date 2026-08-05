@@ -194,6 +194,11 @@ def _get_api_key_callers():
 CALLERS = {
     "vaf/api/voice_routes.py": 1,
     "vaf/cli/cmd/settings.py": 2,
+    # The terminal app refuses a sub-agent provider it has no key for, which is
+    # what the inquirer menu above it always did. It ASKS whether a key exists
+    # and never reads the value, so it adds a place that must keep working and
+    # no place a key can escape from.
+    "vaf/cli/tui_app/screens.py": 1,
     "vaf/core/api_backend.py": 1,
     "vaf/core/headless_runner.py": 1,
     "vaf/core/speech_api.py": 1,
@@ -221,7 +226,12 @@ def test_the_set_of_consumers_is_what_was_measured():
     that quietly stopped asking. Frozen by NAME rather than by count - the count was the
     thing that went wrong three times in the round that produced this file."""
     live = _get_api_key_callers()
-    assert live == CALLERS, f"the consumer set moved: {sorted(live ^ CALLERS)}"
+    # Both sides are dicts, so the difference has to be taken over their ITEMS.
+    # `live ^ CALLERS` raised TypeError instead: the guard fired correctly and
+    # then could not say what had moved.
+    assert live == CALLERS, (
+        "the consumer set moved: "
+        f"{sorted(set(live.items()) ^ set(CALLERS.items()))}")
 
 
 def test_every_write_site_routes_into_the_store():

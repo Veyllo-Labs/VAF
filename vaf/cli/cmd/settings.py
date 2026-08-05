@@ -8,7 +8,11 @@ from rich.text import Text
 from rich.console import Console
 from rich.terminal_theme import TerminalTheme
 from huggingface_hub import HfApi, hf_hub_download
-from vaf.core.config import Config
+from vaf.core.config import (
+    Config,
+    set_subagent_provider,
+    subagent_provider_override,
+)
 from vaf.core.provider_registry import PROVIDER_SPECS, api_provider_names
 from vaf.cli.ui import UI
 import os
@@ -854,11 +858,12 @@ def subagent_provider_menu():
     UI.clear()
     
     main_provider = Config.get("provider", "local")
-    subagent_provider = Config.get("subagent_provider", "inherit")
-    use_separate = Config.get("subagent_use_separate_provider", False)
-    
-    display_provider = subagent_provider if subagent_provider != "inherit" else f"{main_provider} (inherited)"
-    
+    # The override, not the stored name. The two disagree whenever the gate key
+    # is off, and this panel printed the NAME: it announced a provider that no
+    # sub-agent was running on. The gate was read into `use_separate` here and
+    # then never used.
+    display_provider = subagent_provider_override() or f"{main_provider} (inherited)"
+
     UI.panel(
         f"Main Agent: {main_provider.upper()}\nSub-Agent: {display_provider.upper()}", 
         title="🔧 Sub-Agent Provider Settings", 
@@ -897,9 +902,8 @@ def subagent_provider_menu():
             UI.console.input("[dim]Press Enter to continue...[/dim]")
             return
     
-    Config.set("subagent_provider", selected)
-    Config.set("subagent_use_separate_provider", selected != "inherit")
-    
+    set_subagent_provider(selected)
+
     if selected == "inherit":
         UI.success(f"✓ Sub-agents will use the same provider as main agent ({main_provider})")
     else:

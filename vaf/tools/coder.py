@@ -3105,7 +3105,7 @@ Thumbs.db
         # ═══════════════════════════════════════════════════════════════════
         # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
         # ═══════════════════════════════════════════════════════════════════
-        from vaf.core.config import Config
+        from vaf.core.config import Config, subagent_provider_override
         from vaf.core.platform import Platform
         from vaf.cli.ui import UI
         
@@ -3148,11 +3148,9 @@ Thumbs.db
                 _sub_env["VAF_ALLOWED_TOOLS"] = ",".join(sorted(caller_allowed))
 
             # Pass provider configuration to sub-agent
-            use_separate_provider = Config.get("subagent_use_separate_provider", False)
-            if use_separate_provider:
-                subagent_provider = Config.get("subagent_provider", "inherit")
-                if subagent_provider != "inherit":
-                    _sub_env["VAF_PROVIDER"] = subagent_provider
+            _sub_provider = subagent_provider_override()
+            if _sub_provider:
+                _sub_env["VAF_PROVIDER"] = _sub_provider
             
             # CRITICAL FIX: Use current python executable instead of 'vaf' command
             # This ensures we use the exact same code/environment as the main process

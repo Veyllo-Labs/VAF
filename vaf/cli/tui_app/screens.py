@@ -326,7 +326,7 @@ class SettingsScreen(ModalScreen[None]):
         if menu == "stt_lang":
             return self._choice_rows("speech_language")
         if menu == "subagent_provider":
-            return self._provider_rows("subagent_provider", include_inherit=True)
+            return self._subagent_provider_rows()
         if menu == "theme":
             from vaf.cli.themes import ThemeManager
             rows = []
@@ -354,19 +354,27 @@ class SettingsScreen(ModalScreen[None]):
                          f"[$primary]{marker}[/][$text]{_esc(display)}[/]"))
         return rows + [("back", None, "Back")]
 
-    def _provider_rows(self, key: str, include_inherit: bool = False) -> list:
-        from vaf.core.config import Config
-        current = str(self._cfg(key, "inherit" if include_inherit else "local"))
-        rows = []
-        if include_inherit:
-            marker = "▍" if current == "inherit" else " "
-            rows.append(("pick", (key, "inherit"),
-                         f"[$primary]{marker}[/][$text]Inherit from main agent[/]"))
-            rows.append(("sep", None, ""))
-        names = ["local"] + sorted(getattr(Config, "PROVIDER_MODELS", {}) or {})
-        for name in names:
+    def _subagent_provider_rows(self) -> list:
+        """The sub-agent provider menu, marked by what sub-agents ACTUALLY run on.
+
+        The marker follows `subagent_provider_override()`, not the stored name.
+        Those two disagree whenever the gate key is off, and this row used to
+        read the name: it marked a provider no sub-agent was running on, on a
+        screen whose only job is to say which one is in force.
+
+        Its own row kind, not the generic `pick`: the choice is a PAIR of config
+        keys and writing the name alone is inert (see `set_subagent_provider`).
+        A generic writer here is exactly how that happened.
+        """
+        from vaf.core.config import Config, subagent_provider_override
+        current = subagent_provider_override() or "inherit"
+        rows = [("subagent_provider", "inherit",
+                 f"[$primary]{'▍' if current == 'inherit' else ' '}[/]"
+                 f"[$text]Inherit from main agent[/]"),
+                ("sep", None, "")]
+        for name in ["local"] + sorted(getattr(Config, "PROVIDER_MODELS", {}) or {}):
             marker = "▍" if name == current else " "
-            rows.append(("pick", (key, name),
+            rows.append(("subagent_provider", name,
                          f"[$primary]{marker}[/][$text]{_esc(name)}[/]"))
         return rows + [("back", None, "Back")]
 
@@ -472,6 +480,21 @@ class SettingsScreen(ModalScreen[None]):
             Config.set(key, value)
             self._sync_live_agent(key, value)
             self.app.notify(f"{key}: {value}", timeout=1.5)
+            self._stack.pop()
+            self._rebuild()
+            self.app.post_message(SettingsChanged())
+            return
+        if kind == "subagent_provider":
+            from vaf.core.config import Config, set_subagent_provider
+            if arg not in ("inherit", "local") and not Config.get_api_key(arg):
+                # What `vaf settings` does: refuse rather than store a provider
+                # nothing can reach. Every sub-agent would spawn onto a backend
+                # that cannot build, one process away from any error message.
+                self.app.notify(f"no API key for {arg} - set one first",
+                                severity="warning", timeout=3.0)
+                return
+            set_subagent_provider(arg)
+            self.app.notify(f"sub-agents: {arg}", timeout=1.5)
             self._stack.pop()
             self._rebuild()
             self.app.post_message(SettingsChanged())

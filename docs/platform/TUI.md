@@ -156,9 +156,16 @@ The settings overlay is the `vaf settings` main menu as a stacked arrow menu.
 What it can change is decided by where a key is READ, not by how it looks:
 
 - **Written straight to the config** - boolean toggles, the TTS engine, the
-  input language, the sub-agent provider, the sub-agent timeout duration, the
-  auto-open tab cap, auto-start of the local server. Every one of these is read
-  live at its consumption site, so writing it IS the whole job.
+  input language, the sub-agent timeout duration, the auto-open tab cap,
+  auto-start of the local server. Every one of these is read live at its
+  consumption site, so writing it IS the whole job.
+- **Written as a PAIR** - the sub-agent provider. It used to be in the list
+  above, and that sentence was the defect: `subagent_provider` names the choice
+  while `subagent_use_separate_provider` gates it, so writing the name alone is
+  silently inert. Both halves go through `config.set_subagent_provider()`, the
+  row's marker follows `config.subagent_provider_override()` rather than the
+  stored name, and a provider with no API key is refused here exactly as the
+  inquirer menu refuses it.
 - **Applied to the running agent** - the provider and the API model, through
   the engine's own `reload_all_api_backends`. That is the supported way to move
   a live agent: it re-reads the config, rebuilds the backend under a lock and

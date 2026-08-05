@@ -26,7 +26,7 @@ from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log, append_domain_log_always, get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
-from vaf.core.config import Config
+from vaf.core.config import Config, subagent_provider_override
 from pathlib import Path
 
 # Memory management constants - AGGRESSIVE to prevent 25GB situations
@@ -575,10 +575,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
     def _get_subagent_model_info():
         cfg = Config.load()
-        main_provider = cfg.get("provider", "local")
-        subagent_provider = cfg.get("subagent_provider", "inherit")
-        use_separate = cfg.get("subagent_use_separate_provider", False)
-        effective_provider = subagent_provider if use_separate and subagent_provider != "inherit" else main_provider
+        effective_provider = subagent_provider_override() or cfg.get("provider", "local")
         if effective_provider != "local":
             model = cfg.get(f"api_model_{effective_provider}", "") or cfg.get("model", "")
         else:

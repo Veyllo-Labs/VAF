@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Changed
+- **Tool-loading diagnostics no longer print underneath the terminal app.** The
+  per-turn tool hot-reload, the custom-tool reload and a failed provider switch
+  wrote their warnings straight to the raw terminal - under the full-screen app
+  that corrupted the display mid-conversation. These messages now travel the
+  same event lane as the rest of VAF's status output: the terminal app shows
+  them as notes, the classic terminal shows the usual styled event line instead
+  of a bare `[WARN] ...`, and the web log receives them too.
 - **`vaf run --web` no longer starts the background service behind your back.**
   The README has always described this command as the dashboard WITHOUT the tray,
   and the lane hosts the dashboard itself - but if the background service was not

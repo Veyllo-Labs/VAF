@@ -832,7 +832,8 @@ class Agent:
                     new_backend = self._build_api_backend(new_provider)
                 except Exception as e:
                     if self.verbose:
-                        print(f"[Agent] reload_api_backend: cannot build '{new_provider}' backend: {e}")
+                        from vaf.cli.ui import UI
+                        UI.event("Debug", f"reload_api_backend: cannot build '{new_provider}' backend: {e}", style="dim")
                     return False
                 self.provider = new_provider
                 self.api_backend = new_backend
@@ -2497,10 +2498,11 @@ class Agent:
                 try:
                     module = importlib.import_module(f"vaf.tools.{name}")
                 except Exception as e:
+                    from vaf.cli.ui import UI
                     if "github" in name.lower():
-                        print(f"[WARN] GitHub tools module '{name}' failed to load (is PyGithub installed?): {e}")
+                        UI.event("Warning", f"GitHub tools module '{name}' failed to load (is PyGithub installed?): {e}", style="warning")
                     else:
-                        print(f"[ERROR] Failed to import tool module {name}: {e}")
+                        UI.event("Error", f"Failed to import tool module {name}: {e}", style="error")
                     continue
                 
                 # 3. Find classes that inherit from BaseTool
@@ -2510,7 +2512,8 @@ class Agent:
                         try:
                             instance = obj()
                         except Exception as e:
-                            print(f"[ERROR] Failed to instantiate tool {getattr(obj, 'name', str(obj))}: {e}")
+                            from vaf.cli.ui import UI
+                            UI.event("Error", f"Failed to instantiate tool {getattr(obj, 'name', str(obj))}: {e}", style="error")
                             continue
                         
                         # Tools intentionally NOT exposed to the Main Agent.
@@ -2606,7 +2609,8 @@ class Agent:
                         # Debug info (only if verbose)
                         # print(f"Loaded tool: {instance.name}")
             except Exception as e:
-                print(f"[ERROR] Failed to load tool {name}: {e}")
+                from vaf.cli.ui import UI
+                UI.event("Error", f"Failed to load tool {name}: {e}", style="error")
                 pass # Still ignore for stability, but report error
         
         # Live-reload path: only the built-in scan above is needed. Custom /
@@ -2668,7 +2672,8 @@ class Agent:
                 load_custom_tool_class,
             )
         except Exception as exc:
-            print(f"[WARN] custom_tools_registry not available: {exc}")
+            from vaf.cli.ui import UI
+            UI.event("Warning", f"custom_tools_registry not available: {exc}", style="warning")
             return
 
         manifest = load_manifest()
@@ -2683,7 +2688,8 @@ class Agent:
                     continue
                 self.tools[instance.name] = instance
             except Exception as exc:
-                print(f"[ERROR] Failed to load custom tool '{tool_name}': {exc}")
+                from vaf.cli.ui import UI
+                UI.event("Error", f"Failed to load custom tool '{tool_name}': {exc}", style="error")
 
     def _load_entry_point_tools(self) -> None:
         """
@@ -2706,7 +2712,8 @@ class Agent:
             from importlib.metadata import entry_points
             from vaf.tools.base import BaseTool
         except Exception as exc:
-            print(f"[WARN] entry-point tool discovery unavailable: {exc}")
+            from vaf.cli.ui import UI
+            UI.event("Warning", f"entry-point tool discovery unavailable: {exc}", style="warning")
             return
 
         try:
@@ -2716,14 +2723,16 @@ class Agent:
             # The project floor is 3.10, but stay defensive on older interpreters.
             eps = entry_points().get("vaf.tools", [])
         except Exception as exc:
-            print(f"[WARN] could not query 'vaf.tools' entry points: {exc}")
+            from vaf.cli.ui import UI
+            UI.event("Warning", f"could not query 'vaf.tools' entry points: {exc}", style="warning")
             return
 
         for ep in eps:
             try:
                 cls = ep.load()
                 if not (isinstance(cls, type) and issubclass(cls, BaseTool)):
-                    print(f"[WARN] entry-point tool '{ep.name}' is not a BaseTool subclass; skipped")
+                    from vaf.cli.ui import UI
+                    UI.event("Warning", f"entry-point tool '{ep.name}' is not a BaseTool subclass; skipped", style="warning")
                     continue
                 instance = cls()
                 # Entry-point tools target the main agent; skip coder-only ones.
@@ -2731,7 +2740,8 @@ class Agent:
                     continue
                 self.tools[instance.name] = instance
             except Exception as exc:
-                print(f"[ERROR] Failed to load entry-point tool '{getattr(ep, 'name', ep)}': {exc}")
+                from vaf.cli.ui import UI
+                UI.event("Error", f"Failed to load entry-point tool '{getattr(ep, 'name', ep)}': {exc}", style="error")
 
     def _load_mcp_tools(self) -> None:
         """Discover the tools of the MCP servers in mcp_servers.json and register each as a native
@@ -2749,7 +2759,8 @@ class Agent:
             tools, status = discover_mcp_tools(timeout_seconds=timeout)
             self._mcp_server_status = status
         except Exception as exc:
-            print(f"[WARN] MCP tool discovery skipped: {exc}")
+            from vaf.cli.ui import UI
+            UI.event("Warning", f"MCP tool discovery skipped: {exc}", style="warning")
             return
         for name, instance in tools.items():
             # Never overwrite a native/custom tool with the same name.
@@ -2792,7 +2803,8 @@ class Agent:
                 load_manifest,
             )
         except Exception as exc:
-            print(f"[WARN] reload_custom_tools: registry unavailable: {exc}")
+            from vaf.cli.ui import UI
+            UI.event("Warning", f"reload_custom_tools: registry unavailable: {exc}", style="warning")
             return
 
         # Remove all custom tool entries that were previously registered.
@@ -2814,7 +2826,8 @@ class Agent:
                 except Exception:
                     pass
 
-        print(f"[INFO] reload_custom_tools: active custom tools = {list(all_custom_names)}")
+        from vaf.cli.ui import UI
+        UI.event("Info", f"reload_custom_tools: active custom tools = {list(all_custom_names)}", style="dim")
 
     def reload_builtin_tools(self) -> None:
         """Hot-reload built-in tools (vaf/tools/*.py) without a restart: re-scan the
@@ -2883,11 +2896,13 @@ class Agent:
             try:
                 self.reload_builtin_tools()
             except Exception as exc:
-                print(f"[WARN] refresh tools: built-in reload failed: {exc}")
+                from vaf.cli.ui import UI
+                UI.event("Warning", f"refresh tools: built-in reload failed: {exc}", style="warning")
             try:
                 self.reload_custom_tools()
             except Exception as exc:
-                print(f"[WARN] refresh tools: custom reload failed: {exc}")
+                from vaf.cli.ui import UI
+                UI.event("Warning", f"refresh tools: custom reload failed: {exc}", style="warning")
         except Exception:
             pass
 

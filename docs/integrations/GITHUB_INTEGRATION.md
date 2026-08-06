@@ -61,12 +61,12 @@ The GitHub toolset is automatically discovered at startup. Current tool surface 
 `github_list_repos`, `github_get_file`, `github_list_directory`, `github_search_files`, `github_get_tree`, `github_list_issues`, `github_list_pulls`, `github_create_issue`, and `github_update_file`.
 These tools appear in **Settings → Advanced → Tools** only if the **PyGithub** package is installed in the Python environment used by VAF.
 
-VAF uses a **robust loading mechanism**: if the GitHub module fails to load (e.g., due to a missing dependency), VAF will log a `[WARN]` message but continue loading all other tools.
+VAF uses a **robust loading mechanism**: if the GitHub module fails to load (e.g., due to a missing dependency), VAF emits a warning event (visible in the console and mirrored to the web log) but continues loading all other tools.
 
 ### Enabling GitHub Tools
 1. **Verify Installation:** Ensure `PyGithub` is installed: `pip install PyGithub`.
 2. **Restart VAF:** The agent scans for tools only during the initialization phase.
-3. **Check UI:** Open **Settings → Advanced → Tools**. If they are still missing, check the console/logs for a warning like `[WARN] GitHub tools module ... failed to load`.
+3. **Check UI:** Open **Settings → Advanced → Tools**. If they are still missing, check the console/logs for a warning like `GitHub tools module ... failed to load`.
 
 ## Multi-User and Scope Handling
 
@@ -96,6 +96,6 @@ When using **network mode** (multiple users with different JWT scopes):
 
 - **GitHub tools missing from the Tools list**
   The most common cause is a missing `PyGithub` package. VAF isolates tool loading, so a failure here won't crash the app, but the tools will be skipped. Install the dependency and restart. You can click the **Refresh** icon in the Tools modal to force the UI to refetch the tool list from the running agent.
-  - Check the console or logs for a message like `[WARN] GitHub tools module ... failed to load`.
+  - Check the console or logs for a warning like `GitHub tools module ... failed to load`.
   - After installing `PyGithub`, restart VAF completely (not just reload the page).
   - If tools still don't appear, check logs for any errors related to `vaf.tools.github`.

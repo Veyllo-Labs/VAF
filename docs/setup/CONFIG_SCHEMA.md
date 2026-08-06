@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (289 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (290 keys).
 
 ## How configuration is set
 
@@ -331,6 +331,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `gc_enabled` | `True` | Background garbage collection of stale data. |
 | `gc_interval_hours` | `12` | GC interval. |
 | `gc_max_age_hours` | `48` | Max age before GC. |
+| `security_log_retention_days` | `14` | How long security logs are kept. They share the log directory and the dated-name convention with ordinary logs, so without this they were swept up by `gc_max_age_hours` after two days - an audit trail that erased itself. |
 | `queue_policy` | `"legacy"` | Request queue policy (admin-only): `legacy` (single priority heap) or `weighted_fair` (lane fairness across interactive/automation/background). Recommended `weighted_fair` when `parallel_main_workers > 1`. |
 | `queue_weight_interactive/automation/background` | `5` / `3` / `1` | Queue priorities. |
 | `update_check_on_start` | `True` | One-line "update available" hint at startup. |

@@ -108,26 +108,38 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
     # Track what changed for the changelog
     changes = []
 
-    # Update fields that are provided
+    # Update fields that are provided.
+    #
+    # `update_dict` is the ONLY membership test allowed here. `data.dict()` returns every
+    # field of the model, filling the ones the client never sent with None, so a check
+    # against it is always true - and the branches below then write that None into the
+    # profile. That is not theory: closing the "what's new" dialog sends nothing but
+    # `last_seen_announcement_version`, and it silently wiped main_messenger, city,
+    # country, timezone, date_format and time_format, logged as "Manual edit: updated".
+    # The quiet-hours block below was already fixed for exactly this reason; the other
+    # six fields were not, and every release fired it again.
+    #
+    # Clearing a field on purpose still works, because it arrives as an empty STRING
+    # rather than as None: `exclude_none` keeps "" and drops only what was never sent.
     update_dict = data.dict(exclude_none=True)
-    full_dict = data.dict()
+    full_dict = data.dict()          # system fields only, see last_seen_announcement_version
     from vaf.core.messaging_connections import KNOWN_CHANNELS as valid_main_messengers
-    if "main_messenger" in full_dict:
-        value = full_dict["main_messenger"]
+    if "main_messenger" in update_dict:
+        value = update_dict["main_messenger"]
         normalized = (value or "").strip().lower() or None
         normalized = normalized if normalized in valid_main_messengers else None
         if current.get("main_messenger") != normalized:
             changes.append("main_messenger")
             current["main_messenger"] = normalized
     for loc_key in ("city", "country"):
-        if loc_key in full_dict:
-            val = (full_dict[loc_key] or "").strip() or None
+        if loc_key in update_dict:
+            val = (update_dict[loc_key] or "").strip() or None
             if current.get(loc_key) != val:
                 changes.append(loc_key)
                 current[loc_key] = val
     for dt_key in ("timezone", "date_format", "time_format"):
-        if dt_key in full_dict:
-            val = (full_dict[dt_key] or "").strip() or None
+        if dt_key in update_dict:
+            val = (update_dict[dt_key] or "").strip() or None
             if dt_key == "time_format" and val and val.lower() not in ("24h", "12h"):
                 val = None
             if current.get(dt_key) != val:
@@ -168,10 +180,23 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
     if changes:
         if "change_log" not in current or not isinstance(current["change_log"], list):
             current["change_log"] = []
+        # Record WHO, not just what. The route has always had the username as a
+        # dependency and threw it away, which is why answering "who changed my
+        # profile" took a forensic reconstruction from file mtimes and prompt logs
+        # instead of a glance at this list. "updated" was also a lie whenever a
+        # field ended up empty, so the verb now follows the outcome.
+        _cleared = [k for k in changes if current.get(k) in (None, "", [])]
+        _set = [k for k in changes if k not in _cleared]
+        _parts = []
+        if _set:
+            _parts.append(f"updated {', '.join(_set)}")
+        if _cleared:
+            _parts.append(f"cleared {', '.join(_cleared)}")
         current["change_log"].append({
             "at": datetime.now().astimezone().isoformat(),
-            "action": f"Manual edit: updated {', '.join(changes)}",
-            "source": "settings_ui"
+            "action": f"Manual edit: {' and '.join(_parts)}",
+            "source": "settings_ui",
+            "user": username,
         })
 
     ws.save_user_identity(current)

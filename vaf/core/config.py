@@ -454,6 +454,12 @@ class Config:
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup
         "gc_interval_hours": 12,               # Run GC every N hours
         "gc_max_age_hours": 48,                # Delete files older than N hours
+        # Security logs are an AUDIT TRAIL, so they outlive ordinary logs by a wide
+        # margin. They share the app log directory and the dated-name convention, so
+        # without their own retention the 48-hour rule swept them up - measured: not a
+        # single security_events_*.jsonl survived on this machine. A trail that erases
+        # itself after two days cannot answer "what happened last week".
+        "security_log_retention_days": 14,     # Security logs are kept this long (audit trail)
 
         # Cloud Storage Sync Settings
         "cloud_sync_enabled": False,                               # Enable cloud storage sync feature

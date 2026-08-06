@@ -92,6 +92,14 @@ sinks are written together per event:
   as the `security` domain without extra wiring (ISO timestamp first, so the
   line parser renders the timestamp column).
 
+**Retention.** These files are kept for `security_log_retention_days` (default 14), not
+the `gc_max_age_hours` that governs ordinary logs. The distinction is not cosmetic: they
+share the log directory and the `<name>_<date>.<ext>` convention, so the garbage
+collector's 48-hour rule matched them by name and deleted the trail every two days.
+That went unnoticed for a long time because a missing log looks exactly like a period
+in which nothing happened. `vaf/core/garbage_collector.py` recognises them via
+`is_security_log()` and applies the longer limit.
+
 Contract rules:
 
 - **Never log secrets**: no passwords, no 2FA codes, no tokens. Usernames and

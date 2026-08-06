@@ -7,12 +7,15 @@ VAF Garbage Collector – periodic cleanup of temporary files, logs, and cache.
 Runs as a daemon thread every gc_interval_hours (default 12).
 - Log files: use dated names (basename_YYYY-MM-DD.{log,txt,jsonl} -- jsonl covers the timeline).
   GC deletes any such file whose date in the filename is older than gc_max_age_hours (default 48).
+  EXCEPT security logs (security_events_<date>.jsonl, security_<date>.log): they are an audit
+  trail and are kept for security_log_retention_days (default 14) instead.
 - Temp files: deletes by mtime (older than gc_max_age_hours).
 - Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
 - Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
 - Session context dirs (.vaf/main/sessions/<id>/): one accumulates per chat; deleted by the
   newest-file mtime (gc_max_age_hours), skipping the currently-live session.
-Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours.
+Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours,
+security_log_retention_days.
 """
 
 import gzip
@@ -31,6 +34,20 @@ logger = logging.getLogger("vaf.gc")
 # Pattern for dated log files: basename_YYYY-MM-DD.{log,txt,jsonl} (jsonl covers timeline_*.jsonl).
 # GC deletes files whose date in the name is older than gc_max_age_hours.
 DATED_LOG_PATTERN = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})\.(log|txt|jsonl)$", re.IGNORECASE)
+
+# Security logs live in the same directory and follow the same dated-name convention, so
+# the pattern above matches them too - which is how the audit trail came to be deleted
+# every 48 hours without anyone noticing (deletion looks exactly like "nothing happened").
+# They are recognised by name and kept for security_log_retention_days instead. The two
+# basenames come from vaf/core/security_events.py, which writes a structured .jsonl and a
+# human-readable .log side by side.
+SECURITY_LOG_BASENAMES = ("security_events", "security")
+
+
+def is_security_log(name: str) -> bool:
+    """True for a dated security log file (audit trail, longer retention)."""
+    m = DATED_LOG_PATTERN.match(name)
+    return bool(m) and m.group(1).lower() in SECURITY_LOG_BASENAMES
 
 # Temp-file prefixes used by VAF (see tempfile calls across the codebase).
 VAF_TEMP_PREFIXES = ("vaf_",)
@@ -295,12 +312,20 @@ class GarbageCollector:
         if not log_dir.exists():
             return
         try:
+            try:
+                from vaf.core.config import Config
+                _days = int(Config.get("security_log_retention_days", 14) or 14)
+            except Exception:
+                _days = 14
+            security_cutoff = datetime.now() - timedelta(days=max(1, _days))
             for entry in log_dir.iterdir():
                 if not entry.is_file():
                     continue
                 m = DATED_LOG_PATTERN.match(entry.name)
                 if m:
-                    self._delete_log_if_date_old(entry, cutoff, stats)
+                    # An audit trail outlives ordinary logs; same directory, different rule.
+                    limit = security_cutoff if is_security_log(entry.name) else cutoff
+                    self._delete_log_if_date_old(entry, limit, stats)
         except PermissionError:
             stats["errors"] += 1
 

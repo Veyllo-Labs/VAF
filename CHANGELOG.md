@@ -39,6 +39,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **Closing the "what's new" window no longer wipes parts of your profile.** Dismissing
+  the update announcement sent a single value to the server, but the profile endpoint
+  treated everything the message did not mention as "set this to empty" - so your main
+  messenger, city, country, timezone and date and time format were silently cleared, and
+  the change was recorded as if you had edited it yourself. It happened on every release.
+  Clearing a field on purpose still works.
+- **The profile history says who changed something, and admits when a value was
+  removed.** Entries recorded only what was touched, and always said "updated" even when
+  a field had been emptied. Both made the earlier bug look like a manual edit.
+- **Security logs are kept for two weeks instead of two days.** They sit in the same
+  folder as ordinary logs and follow the same naming, so the routine cleanup deleted them
+  after 48 hours. Nobody noticed, because a missing log looks exactly like a quiet period.
+  They now have their own retention (`security_log_retention_days`, default 14).
+
 - **Workflow variable filling is deterministic, and its log tells the truth.**
   When a matched workflow was missing inputs, which template default got applied
   could depend on Python's hash order (a fill loop removed items from the list it

@@ -499,6 +499,16 @@ docker compose -f docker-compose.memory.yml up -d
 3. Check logs: `docker compose -f docker-compose.memory.yml logs`
 4. Verify port 5432 is not in use: `netstat -an | grep 5432`
 
+What the agent says while the DB is down: the SEARCH lane deliberately
+returns an empty string on any failure (a chat turn must not die because
+RAG is down), but the `memory_search` TOOL probes the database before
+trusting an empty answer (`check_db_connection_sync`) and tells the model
+the memory database is unreachable - it must never report a dead DB as
+"no stored memories" (live incident: the stack had been stopped for hours
+and the agent declared its long-term memory a blank slate). Both `vaf tray`
+and `vaf run` start the stack when Docker and the compose file are present
+(`vaf/core/service_stack.py`).
+
 ### Embedding Model Slow to Load
 
 The embedding model is downloaded on first use (~90MB). Subsequent loads use the cached model.

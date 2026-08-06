@@ -279,9 +279,11 @@ When a runtime is present (or has just been set up), the installer manages the s
 
 > **Note:** Data in named volumes (e.g., `vaf_memory_pgdata`) is never lost during `up -d`. Only container images and configuration are updated.
 
-### When VAF Starts (`vaf tray`)
+### When VAF Starts (`vaf tray` or `vaf run`)
 
-When you start VAF (Desktop shortcut or `vaf tray`), the tray will also bring up the Docker stack if Docker is available.
+When you start VAF (Desktop shortcut, `vaf tray`, or the terminal app `vaf run`), it brings up the Docker stack if Docker is available. The lifecycle lives in one place, `vaf/core/service_stack.py`: engine bootstrap (macOS starts Docker Desktop or Colima, Windows starts Rancher/Docker Desktop), then a two-phase compose up - core registry-image services first (postgres, redis, sandbox, stt, gotenberg), the locally built ones (tts, vaf-browser) best-effort afterwards, so a failed local build can never take the database down with it. `vaf run` starts the stack in the background so booting the model never waits on a compose up.
+
+Note that quitting the TRAY stops the stack (containers and data survive for a fast restart) - which is exactly why the terminal app starts it too: a terminal-only session after a tray quit used to run against a dead memory database. Without a compose file (a pip install ships none) or without Docker, the start is skipped and the memory tools name the unreachable database instead of pretending the memory is empty.
 
 ### If Docker Wasn't Running During Install
 

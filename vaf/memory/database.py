@@ -515,7 +515,7 @@ async def init_db(drop_existing: bool = False):
 async def check_db_connection() -> bool:
     """
     Check if database connection is healthy.
-    
+
     Returns:
         True if connection is healthy, False otherwise
     """
@@ -526,6 +526,33 @@ async def check_db_connection() -> bool:
             return result.scalar() == 1
     except Exception as e:
         logger.error(f"Database connection check failed: {e}")
+        return False
+
+
+def check_db_connection_sync(timeout_seconds: float = 5.0) -> bool:
+    """The health check above, callable from a SYNC lane (tool dispatch).
+
+    Exists so a reader that got an empty result can tell "no rows" apart
+    from "database unreachable" - the memory tools reported a dead DB as an
+    empty memory. Runs the coroutine on a fresh loop; when this thread
+    already runs one, hops to a worker thread. False on any failure or
+    timeout - the caller is asking "can I trust an empty answer", and an
+    unanswerable probe means no.
+    """
+    import asyncio
+    import concurrent.futures
+
+    def _probe() -> bool:
+        return asyncio.run(asyncio.wait_for(check_db_connection(), timeout=timeout_seconds))
+
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _probe()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_probe).result(timeout=timeout_seconds + 3)
+    except Exception:
         return False
 
 

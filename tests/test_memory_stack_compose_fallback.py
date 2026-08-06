@@ -3,17 +3,21 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Regression: a docker CLI WITHOUT the compose plugin (Homebrew docker + Colima on macOS
 when ~/.docker/config.json lacks cliPluginsExtraDirs) fails 'docker compose up' with exit
-125 and "unknown shorthand flag: 'f' in -f". ensure_memory_stack_up must fall through to
+125 and "unknown shorthand flag: 'f' in -f". ensure_service_stack must fall through to
 the standalone docker-compose binary (which install.sh brews) instead of giving up - the
 pre-fix code logged the error and returned, leaving the whole memory stack (incl. the
 auth/setup DB) down on an otherwise healthy machine.
+
+The stack lifecycle lives in vaf/core/service_stack.py now (moved out of the tray so
+`vaf run` can start the same stack); the tray keeps only delegating names, and that
+delegation is pinned here too.
 
 Hermetic: subprocess.run is monkeypatched; no Docker, no containers.
 """
 from pathlib import Path
 
-import vaf.tray as tray
-from vaf.tray import _compose_plugin_missing
+import vaf.core.service_stack as stack
+from vaf.core.service_stack import _compose_plugin_missing
 
 
 def test_plugin_missing_classification():
@@ -33,6 +37,14 @@ class _Result:
         self.stderr = stderr
 
 
+def _hermetic(monkeypatch, fake_run):
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])  # repo root: compose file exists
+    monkeypatch.setattr(stack, "_ensure_macos_brew_path", lambda: None)
+    monkeypatch.setattr(stack, "is_docker_daemon_running", lambda: True)
+    monkeypatch.setattr(stack, "resolve_docker_exe", lambda: "docker")
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+
+
 def test_compose_plugin_missing_falls_back_to_legacy_binary(monkeypatch):
     """THE Mac regression: 'docker compose up' exits 125 (no plugin) -> the legacy
     docker-compose invocation must still be attempted and succeed."""
@@ -44,14 +56,8 @@ def test_compose_plugin_missing_falls_back_to_legacy_binary(monkeypatch):
             return _Result(125, "unknown shorthand flag: 'f' in -f")
         return _Result(0)
 
-    monkeypatch.chdir(Path(__file__).resolve().parents[1])  # repo root: compose file exists
-    monkeypatch.setattr(tray, "_ensure_macos_brew_path", lambda: None)
-    monkeypatch.setattr(tray, "_is_docker_daemon_running", lambda: True)
-    monkeypatch.setattr(tray, "_resolve_docker_exe", lambda: "docker")
-    monkeypatch.setattr(tray.subprocess, "run", fake_run)
-
-    tray.ensure_memory_stack_up()
-
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is True
     assert any(c[0] == "docker-compose" for c in calls), (
         f"legacy docker-compose fallback was never tried; calls: {calls}"
     )
@@ -68,14 +74,53 @@ def test_real_compose_failure_does_not_fall_back(monkeypatch):
             return _Result(1, "Error response from daemon: driver failed programming external connectivity")
         return _Result(0)
 
-    monkeypatch.chdir(Path(__file__).resolve().parents[1])
-    monkeypatch.setattr(tray, "_ensure_macos_brew_path", lambda: None)
-    monkeypatch.setattr(tray, "_is_docker_daemon_running", lambda: True)
-    monkeypatch.setattr(tray, "_resolve_docker_exe", lambda: "docker")
-    monkeypatch.setattr(tray.subprocess, "run", fake_run)
-
-    tray.ensure_memory_stack_up()
-
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is False
     assert not any(c[0] == "docker-compose" for c in calls), (
         f"fallback ran on a real compose failure; calls: {calls}"
     )
+
+
+def test_core_services_come_up_before_the_optional_builds(monkeypatch):
+    """The two-phase order is the whole point: a failed OPTIONAL local build
+    (tts/vaf-browser) must never abort the 'up' that carries the database."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "tts" in cmd:
+            return _Result(1, "build failed")
+        return _Result(0)
+
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is True, (
+        "a failed optional build took the core result down with it")
+    ups = [c for c in calls if "up" in c]
+    assert "postgres" in ups[0] and "tts" not in ups[0]
+    assert "tts" in ups[1]
+
+
+def test_no_compose_file_is_an_honest_no_op(monkeypatch, tmp_path):
+    """A pip install ships no compose file - nothing to start, nothing run."""
+    calls = []
+    monkeypatch.setattr(stack, "_ensure_macos_brew_path", lambda: None)
+    monkeypatch.setattr(stack, "is_docker_daemon_running", lambda: True)
+    monkeypatch.setattr(stack, "find_stack_root", lambda: None)
+    monkeypatch.setattr(stack.subprocess, "run",
+                        lambda cmd, **kw: calls.append(list(cmd)) or _Result(0))
+    assert stack.ensure_service_stack() is False
+    assert calls == []
+
+
+def test_the_tray_delegates_to_the_engine(monkeypatch):
+    import vaf.tray as tray
+
+    started, stopped = [], []
+    monkeypatch.setattr(tray, "ensure_service_stack",
+                        lambda log=None: started.append(True))
+    monkeypatch.setattr(tray, "stop_service_stack",
+                        lambda log=None: stopped.append(True))
+    tray.ensure_memory_stack_up()
+    tray.stop_memory_stack()
+    assert started == [True] and stopped == [True], (
+        "the tray grew its own stack lifecycle back instead of delegating")

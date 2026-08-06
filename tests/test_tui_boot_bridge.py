@@ -108,6 +108,14 @@ def boot_env(monkeypatch):
                         lambda: ipc_calls.append("cleanup_others"))
     monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: SCOPE)
     monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: "admin-test")
+    # The service-stack start is stubbed HARD: a boot test that reached the
+    # real primitive would run `docker compose up` against the machine.
+    import vaf.core.service_stack as stack_mod
+    stack_calls = []
+    monkeypatch.setattr(stack_mod, "find_stack_root",
+                        lambda: "/repo")
+    monkeypatch.setattr(stack_mod, "ensure_service_stack",
+                        lambda log=None: stack_calls.append("ensure"))
     # The langid warmup is deliberately unconditional in boot (first call
     # ~1.6s); the fake keeps the boot tests from paying it for real.
     import sys as _sys
@@ -117,7 +125,8 @@ def boot_env(monkeypatch):
     fake_langid = SimpleNamespace(classify=lambda t: langid_calls.append(t))
     monkeypatch.setitem(_sys.modules, "vaf.vendor.langid", fake_langid)
     monkeypatch.setattr(_vendor, "langid", fake_langid, raising=False)
-    return SimpleNamespace(agent=agent, web=web, ipc=ipc_calls, langid=langid_calls)
+    return SimpleNamespace(agent=agent, web=web, ipc=ipc_calls,
+                           langid=langid_calls, stack=stack_calls)
 
 
 def _events():
@@ -244,3 +253,31 @@ def test_boot_preloads_speech_only_when_enabled(boot_env, monkeypatch):
     assert "piper" in touched and ("voice", "de") in touched
     assert "stt" in touched, "boot judged the mic without building the capture stack"
     bridge.shutdown()
+
+
+def test_boot_starts_the_service_stack_in_the_background(boot_env):
+    """The tray starts the stack and STOPS it on quit - a terminal-only start
+    used to run against a dead memory DB. Boot spawns the same primitive."""
+    import time as _time
+
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    boot_bridge(_events(), "vaf", None, False)
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline and not boot_env.stack:
+        _time.sleep(0.02)
+    assert boot_env.stack == ["ensure"], (
+        "boot never started the service stack (or started it twice)")
+
+
+def test_boot_skips_the_stack_without_a_compose_file(boot_env, monkeypatch):
+    """A pip install ships no compose file - the honest branch is silence."""
+    import time as _time
+
+    import vaf.core.service_stack as stack_mod
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    monkeypatch.setattr(stack_mod, "find_stack_root", lambda: None)
+    boot_bridge(_events(), "vaf", None, False)
+    _time.sleep(0.2)
+    assert boot_env.stack == []

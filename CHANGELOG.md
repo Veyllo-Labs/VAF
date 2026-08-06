@@ -85,6 +85,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **The terminal app starts the Docker services, and a sleeping memory
+  database is named instead of impersonating an empty memory.** Quitting the
+  desktop tray stops the service stack (database, sandbox, speech) - so a
+  terminal-only session afterwards ran against a stopped memory database,
+  and asking the agent what it remembered got "I have no stored information"
+  over a database full of it. `vaf run` now brings the stack up in the
+  background exactly like the tray does (the whole start/stop logic lives in
+  one place now instead of only inside the tray), and when the database
+  really is unreachable, the memory search says so - the agent will tell you
+  the memory stack is down rather than declare itself amnesic. Without
+  Docker, everything keeps working as before, minus the services.
 - **Typing anything now interrupts the agent's speech in the terminal app.**
   The classic terminal always treated any input as "stop talking, I have
   something to say" - spoken output is asynchronous and routinely outlives the

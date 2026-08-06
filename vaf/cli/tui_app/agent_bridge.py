@@ -1268,6 +1268,20 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
         boot_tui.error("Git is required. Install it and run `vaf run` again.")
         raise SystemExit(1)
 
+    # The service stack (memory DB, sandbox, speech): the tray starts it and
+    # STOPS it on quit, so a terminal-only start used to run against a dead
+    # stack - memory_search then reported an empty memory that was in truth an
+    # unreachable one. Same engine primitive as the tray, on a background
+    # thread: the model load below must never wait on a compose up. No compose
+    # file (a pip install has none) or no Docker -> honest quiet skip, and the
+    # memory tool names the dead DB when asked. AFTER the git gate on purpose:
+    # a boot that is about to abort must not leave containers starting.
+    from vaf.core.service_stack import ensure_service_stack, find_stack_root
+    if find_stack_root() is not None:
+        boot_tui.info("Starting Docker services in the background (memory, sandbox, speech)...")
+        threading.Thread(target=ensure_service_stack, daemon=True,
+                         name="vaf-tui-services").start()
+
     session_mgr = SessionManager()
     session = None
     if session_id:

@@ -507,6 +507,21 @@ class MemorySearchTool(BaseTool):
                 query=query, k=k, user_scope_id=user_scope_id, caller="tool"
             )
             if not result or not result.strip():
+                # "Empty" has two very different truths, and the search lane
+                # deliberately flattens both to "" (a chat turn must not die
+                # because RAG is down). THIS lane exists to answer the user,
+                # so it must tell them apart: with the memory DB unreachable,
+                # "no stored information" is false and the agent would offer
+                # the user a fresh memory over a database full of one.
+                from vaf.memory.database import check_db_connection_sync
+                if not check_db_connection_sync():
+                    return (
+                        "The memory database is NOT reachable right now - this is a "
+                        "service problem, not an empty memory. Tell the user their "
+                        "long-term memory cannot be read at the moment and that the "
+                        "service stack needs to be running (it starts with the tray "
+                        "or start_vaf.sh). Do NOT claim there are no stored memories."
+                    )
                 return "No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on."
             return result
         except Exception as e:

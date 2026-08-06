@@ -288,7 +288,11 @@ What it can change is decided by where a key is READ, not by how it looks:
 - Boot (model load, warmup) runs in the plain terminal BEFORE the app takes
   the screen: llama.cpp writes C-level stderr that would corrupt app mode.
   The git preflight runs there too, for the same reason - an install prompt
-  only works while the terminal is still plain.
+  only works while the terminal is still plain. Boot also starts the Docker
+  service stack in the background (same engine primitive as the tray,
+  `vaf/core/service_stack.py`) - the tray stops the stack when it quits, so
+  a terminal-only session used to run against a dead memory database.
+  Without Docker or the compose file the start is skipped honestly.
 - A turn that fails writes its traceback to the dated crash log
   (`crash_YYYY-MM-DD.log`, see [DEBUGGING.md](../DEBUGGING.md)); only the path
   appears in the transcript, because a printed traceback would land under the

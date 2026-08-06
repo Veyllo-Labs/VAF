@@ -197,7 +197,10 @@ What it can change is decided by where a key is READ, not by how it looks:
 
 - The app lane does not start the web dashboard; `vaf run --web` therefore
   keeps the modern lane, which owns the web-input watcher and the result
-  notifier. The boundary is now SAID at startup rather than only in `--help`:
+  notifier. That lane hosts backend and frontend ITSELF and no longer
+  auto-starts the tray as a detached background service - the dashboard ends
+  with the session, which is what README promises for this flag; the
+  persistent service is `vaf tray`. The boundary is now SAID at startup rather than only in `--help`:
   the switch changes the whole interface, and a user who did not ask for that
   cannot otherwise tell a boundary from a broken app. The line appears only
   when the lane actually changes, so `tui_mode: modern` stays quiet. (The

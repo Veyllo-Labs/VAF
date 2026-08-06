@@ -136,3 +136,17 @@ def test_app_lane_receives_message_theme_and_session(dispatch):
     assert kwargs["message"] == "hi"
     assert kwargs["session_id"] == "abc123"
     assert kwargs["theme"] == "vaf"
+
+
+def test_web_does_not_start_the_tray_behind_the_users_back() -> None:
+    """README names `vaf run --web` as the dashboard WITHOUT the tray, and the
+    lane hosts backend and frontend itself. The deleted auto-start predated
+    that self-hosting and left a DETACHED background service running after the
+    session ended - behind a command that promised the opposite. The needle is
+    the spawn argument pair; the word "tray" alone appears in comments."""
+    from pathlib import Path
+
+    src = (Path(run_mod.__file__)).read_text(encoding="utf-8")
+    assert '"vaf.main", "tray"' not in src, (
+        "the tray auto-start is back in the run lane"
+    )

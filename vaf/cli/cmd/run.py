@@ -931,58 +931,14 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         current_session = session_mgr.new()
         session_mgr.save(current_session) # Initial save so it shows in Web UI
     
-    # ═══════════════════════════════════════════════════════════════
-    # TRAY APP CHECK / AUTO-START
-    # ═══════════════════════════════════════════════════════════════
-    # Check if the persistent server (WebUI port 8001) is running.
-    # If not, try to start 'vaf tray' in the background.
-    
-    tray_running = False
-    try:
-        from vaf.core.web_interface import internal_api_base
-        requests.get(f"{internal_api_base()}/health", timeout=0.2)
-        tray_running = True
-    except:
-        pass
-    
-    if not tray_running and web_enabled:
-        tui.event("System", "Starting background service (Tray App)...", style="dim")
-        try:
-            # Launch vaf tray detached
-            if platform.system() == "Windows":
-                # Windows: DETACHED_PROCESS to hide console
-                subprocess.Popen(
-                    [sys.executable, "-m", "vaf.main", "tray"],
-                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    close_fds=True
-                )
-            else:
-                # macOS/Linux: nohup equivalent
-                subprocess.Popen(
-                    [sys.executable, "-m", "vaf.main", "tray"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    preexec_fn=os.setpgrp
-                )
-            
-            # Wait briefly for it to initialize (max 3s)
-            with tui.spinner("Waiting for background service..."):
-                from vaf.core.web_interface import internal_api_base
-                for _ in range(30):
-                    try:
-                        requests.get(f"{internal_api_base()}/health", timeout=0.2)
-                        tray_running = True
-                        break
-                    except:
-                        time.sleep(0.1)
-                        
-            if tray_running:
-                tui.event("System", "Background service started.", style="success")
-            else:
-                 tui.event("Warning", "Could not verify background service startup (proceeding anyway).", style="warning")
-
-        except Exception as e:
-            tui.event("Warning", f"Failed to auto-start tray app: {e}", style="warning")
+    # No tray auto-start here, deliberately. This lane hosts the web UI
+    # itself (start_background_server + FrontendManager below), and README
+    # names `vaf run --web` as the way to get the dashboard WITHOUT the tray -
+    # the dashboard ends with the session. An auto-started tray predates the
+    # self-hosting and left a detached background service behind a command
+    # that promised the opposite. Anyone who wants the persistent service
+    # starts `vaf tray`; if one is already running, its server on port 8001
+    # simply keeps serving and nothing here changes.
 
     # ═══════════════════════════════════════════════════════════════
     # SESSION-BASED SUB-AGENT CLEANUP

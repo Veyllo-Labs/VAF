@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **`vaf run --web` no longer starts the background service behind your back.**
+  The README has always described this command as the dashboard WITHOUT the tray,
+  and the lane hosts the dashboard itself - but if the background service was not
+  running, the command quietly launched it as a detached process that outlived
+  your session. Now the dashboard lives and dies with your session, as promised.
+  If you relied on `vaf run --web` to bootstrap the persistent service, start it
+  the intended way: `vaf tray`. A service that is already running keeps serving
+  unchanged.
+
 ### Fixed
 - **`vaf update` now tells you why it could not answer.** Three different situations
   used to collapse into one sentence, "offline, or none published yet", whose two

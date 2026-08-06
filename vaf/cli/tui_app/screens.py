@@ -1189,14 +1189,25 @@ class SessionsPanel(Vertical):
         for i, entry in enumerate(self._entries):
             sid = str(entry.get("id", ""))
             name = str(entry.get("name") or sid[:12])
-            when = str(entry.get("updated_at") or "")[:16]
             count = entry.get("message_count")
+            summary = str(entry.get("summary") or "").strip()
             marker = "[$primary]▍[/]" if sid == active_id else " "
             if sid == active_id:
                 active_index = i
-            meta = f"{when}" + (f" · {count} msg" if count else "")
+            # The ID is the one field a user genuinely NEEDS from this list -
+            # `vaf run --session <id>` takes nothing else - and it was shown
+            # only for unnamed sessions (as their stand-in name). Width budget
+            # is 26 columns (panel 32 minus paddings and the indent), so the
+            # meta line carries id and count, and the third line the summary
+            # when there is one, else the date.
+            meta = sid[:12] + (f" · {count} msg" if count else "")
+            tail = (summary[:24] + "…") if len(summary) > 25 else summary
+            if not tail:
+                tail = str(entry.get("updated_at") or "")[:16]
             lv.append(ListItem(Static(
-                f"{marker}[$text]{_esc(name)}[/]\n  [$text-disabled]{_esc(meta)}[/]")))
+                f"{marker}[$text]{_esc(name)}[/]\n"
+                f"  [$text-disabled]{_esc(meta)}[/]\n"
+                f"  [$text-disabled]{_esc(tail)}[/]")))
         lv.index = active_index
 
     def focus_list(self) -> None:

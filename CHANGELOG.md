@@ -30,6 +30,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   submenu lists your real input devices and switches the live microphone at
   once; and About shows version, licence and links without leaving the app.
 
+### Added
+- **`/export <file>` writes the conversation from inside the terminal app** -
+  markdown, or JSON when the filename ends in `.json`. The sessions panel now
+  shows each session's id and a line of its summary, and `session current`
+  prints the full id - the one thing `vaf run --session <id>` needs and the
+  panel can only truncate. `session list` opens the panel instead of failing as
+  an unknown id.
+
 ### Fixed
 - **Setting the sub-agent timeout to "no limit" no longer arms a zero-minute
   timeout.** The row stored 0 minutes while the timeout stayed switched on - and a

@@ -135,7 +135,10 @@ def test_the_classic_completer_offers_only_words_that_route():
 
     offered = {c.insert for c in complete("/")}
     assert offered == {c.word for c in COMMANDS}
-    assert "export" not in offered
+    # `export` was the canonical phantom: offered while nothing routed it.
+    # It ROUTES now (registry entry, app handler, classic branch), so being
+    # offered is the guarantee working, not the phantom returning.
+    assert "export" in offered
 
 
 def test_the_app_palette_and_help_are_derived():

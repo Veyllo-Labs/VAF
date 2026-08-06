@@ -694,6 +694,7 @@ class VafApp(App):
             "clear": self._cmd_clear,
             "undo": lambda a: self._bridge.undo_last_change(),
             "restore": lambda a: self._bridge.restore_context(),
+            "export": self._cmd_export,
             "listen": lambda a: self.action_voice(),
             "halt": lambda a: self._bridge.stop_speech(),
             "restart": lambda a: self._request_restart(),
@@ -743,7 +744,28 @@ class VafApp(App):
         if not args:
             self.action_toggle_sessions()
             return
+        word = str(args[0]).lower()
+        # The classic lane had `session list` and `session current`; treating
+        # them as IDs sent both into a red "cannot load" note.
+        if word == "list":
+            panel = self.query_one("#sessions", SessionsPanel)
+            if not panel.has_class("visible"):
+                self.action_toggle_sessions()      # open, never close
+            else:
+                self._bridge.request_session_list()
+                panel.focus_list()
+            return
+        if word == "current":
+            self._bridge.describe_session()
+            return
         self._bridge.load_session(args[0])
+
+    def _cmd_export(self, args) -> None:
+        if not args:
+            # The classic contract: no default filename, an honest usage line.
+            self.add_event_note("Export", "usage: /export <file>", "warning")
+            return
+        self._bridge.export_session(args[0])
 
     def _cmd_clear(self, args) -> None:
         # The transcript goes NOW (the user asked for it); the agent-side reset

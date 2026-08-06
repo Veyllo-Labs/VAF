@@ -105,12 +105,15 @@ second turn implementation:
 Enter sends, Ctrl+J inserts a newline. Commands come from one shared registry
 (`vaf/cli/commands.py`) that every terminal lane reads, so the completer, the
 palette, the help screen and the dispatcher can no longer disagree: `help`,
-`settings`, `model`, `theme <name>`, `history`, `sessions`, `session <id>`,
-`tools`, `context`, `clear`, `undo`, `restore`, `listen`, `halt`, `restart`,
-`exit` - each with its classic aliases (`s`, `c`, `t`, `h`, `l`, `?`, `q`,
-`stop`/`quiet`/`stfu`, `reload`/`r`). They work typed alone or with a slash,
-and arguments keep their case, so `session AbC123` and `theme dark` do what
-they say.
+`settings`, `model`, `theme <name>`, `history`, `sessions`, `session <id>`
+(plus `session list` and `session current` - the latter prints the FULL id,
+which `vaf run --session <id>` needs and the panel can only truncate),
+`tools`, `context`, `clear`, `undo`, `restore`, `export <file>` (markdown, or
+json by extension; no argument is a usage line, never a surprise file),
+`listen`, `halt`, `restart`, `exit` - each with its classic aliases (`s`,
+`c`, `t`, `h`, `l`, `?`, `q`, `stop`/`quiet`/`stfu`, `reload`/`r`). They work
+typed alone or with a slash, and arguments keep their case, so
+`session AbC123` and `theme dark` do what they say.
 
 A word from that list is never sent to the model, and an unknown `/command` is
 reported inline with the closest match rather than becoming a message. A

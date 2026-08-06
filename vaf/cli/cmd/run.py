@@ -1894,6 +1894,22 @@ Tab             - Autocomplete
                         tui.info(f"Themes: {themes}")
                     continue
                 
+                elif cmd == "export":
+                    # The contract main.py always had: the path verbatim, no
+                    # default filename, markdown. (A BARE `export notes.md`
+                    # still goes to the model here - only `{"theme"}` is in
+                    # the bare-with-args set, and main.py only ever handled
+                    # the slash form.)
+                    if args:
+                        filepath = args[0]
+                        content = session_mgr.export(current_session, format="markdown")
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        tui.success(f"Exported to: {filepath}")
+                    else:
+                        tui.warning("Usage: /export <filename>")
+                    continue
+
                 elif cmd == "tools":
                     if hasattr(agent, 'tools'):
                         tools_list = [f"{name}: {tool.description[:50]}..." for name, tool in agent.tools.items()]

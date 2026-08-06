@@ -824,6 +824,49 @@ class AgentBridge:
             self._emit("session_list", self.list_sessions())
         self._submit(_run)
 
+    def describe_session(self) -> None:
+        """`session current`: the facts of THIS session as one note - above
+        all the full id, which is what `vaf run --session <id>` needs and
+        which the panel can only show truncated."""
+        def _run():
+            s = self.session
+            parts = [f"id {getattr(s, 'id', '?')}"]
+            name = getattr(s, "name", "") or ""
+            if name:
+                parts.append(f"name {name}")
+            msgs = getattr(s, "messages", None)
+            if msgs is not None:
+                parts.append(f"{len(msgs)} messages")
+            for label, attr in (("created", "created_at"), ("updated", "updated_at")):
+                value = str(getattr(s, attr, "") or "")[:16]
+                if value:
+                    parts.append(f"{label} {value}")
+            self.events.system_note(" · ".join(parts))
+        self._submit(_run)
+
+    def export_session(self, path: str) -> None:
+        """`/export <file>`: the conversation as markdown (or json by
+        extension), written where the user said.
+
+        On the lane, not the UI thread: it reads `self.session`, which a
+        running turn mutates - exactly the reason `load_session` queues too.
+        Failure is an Export note, never a crash-log path: a typo'd directory
+        is an answer, not an incident. The classic contract otherwise:
+        the path verbatim (expanduser only), markdown by default, success
+        says "Exported to: <path>".
+        """
+        def _run():
+            from pathlib import Path
+            try:
+                fmt = "json" if str(path).lower().endswith(".json") else "markdown"
+                content = self.session_mgr.export(self.session, format=fmt)
+                target = Path(str(path)).expanduser()
+                target.write_text(content, encoding="utf-8")
+                self.events.system_note(f"Exported to: {target}")
+            except Exception as exc:
+                self.events.event_note("Export", f"failed: {exc}", "error")
+        self._submit(_run)
+
     # ── misc ────────────────────────────────────────────────────────────────────────
     def _barge_in_stop(self) -> None:
         """Typing interrupts speech - the classic loop's barge-in, verbatim

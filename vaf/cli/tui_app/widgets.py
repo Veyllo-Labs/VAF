@@ -89,15 +89,20 @@ class Transcript(VerticalScroll):
 
 
 class UserMessage(Vertical):
-    """Role header (You · HH:MM) + accent-barred body - the old message_box, app-mode."""
+    """Role header (You · HH:MM) + accent-barred body - the old message_box, app-mode.
 
-    def __init__(self, text: str) -> None:
+    `when` is for REPLAYED messages: the head shows the time the message was
+    actually sent instead of claiming it happened just now."""
+
+    def __init__(self, text: str, when: str = "") -> None:
         super().__init__()
         self.add_class("user-msg-wrap")
         self._text = text
+        self._when = when
 
     def compose(self) -> ComposeResult:
-        yield Static(f"[$accent]You[/] [$text-disabled]· {_now()}[/]", classes="msg-head")
+        yield Static(f"[$accent]You[/] [$text-disabled]· {self._when or _now()}[/]",
+                     classes="msg-head")
         yield Static(self._text, classes="user-msg", markup=False)
 
 
@@ -135,10 +140,16 @@ class AgentMessage(Vertical):
     active slot forward and older replies drop theirs.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, when: str = "", static_text: str = "") -> None:
         super().__init__()
         self.add_class("agent-msg-wrap")
-        self._answer = ""
+        self._when = when          # replay: the reply's real time, not now
+        # Replay mode: the content is already complete, so it goes into the
+        # body at construction and NO flush ticker is started - feed/done on
+        # a freshly mounted widget would race on_mount (done before the timer
+        # exists leaves the interval running forever, the avatar-leak class).
+        self._static = bool(static_text)
+        self._answer = static_text
         self._think = ""
         self.avatar = AgentAvatar(classes="msg-avatar")
         self.avatar.display = False
@@ -146,7 +157,7 @@ class AgentMessage(Vertical):
         # showed as raw `**stars**` and raw ``` fences before. open_links=False
         # is deliberate - the default would open the system browser on a click,
         # bypassing the ux_auto_open_links setting that governs that decision.
-        self._body = Markdown(open_links=False)
+        self._body = Markdown(static_text, open_links=False)
         self._body.add_class("agent-msg")
         self._pending = ""
         self._flushes = 0
@@ -157,12 +168,14 @@ class AgentMessage(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="agent-head-row"):
             yield self.avatar
-            yield Static(f"[$primary]VAF[/] [$text-disabled]· {_now()}[/]",
+            yield Static(f"[$primary]VAF[/] [$text-disabled]· {self._when or _now()}[/]",
                          classes="msg-head")
         yield self._think_body
         yield self._body
 
     def on_mount(self) -> None:
+        if self._static:
+            return          # complete content, nothing will ever stream in
         # Chunks arrive 20-100 times a second on the agent lane. Appending per
         # chunk costs ~14% of the UI loop; re-rendering the whole document per
         # chunk is O(n^2). Coalescing at 100 ms keeps it flat (~3.5 ms a flush

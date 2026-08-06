@@ -598,7 +598,40 @@ class AgentBridge:
             self._rebind_local_admin()
             self._emit("session_switched", session.id,
                        len(getattr(session, "messages", []) or []))
+            # The transcript must FOLLOW the swap: without this the old
+            # conversation stays on screen above the new session's turns.
+            # fresh=True clears first - unlike the boot replay, which mounts
+            # under the start banner.
+            self._emit("transcript_replay", self._transcript_entries(session),
+                       True)
             self._refresh_context()
+        self._submit(_run)
+
+    @staticmethod
+    def _transcript_entries(session) -> list:
+        """(role, text, HH:MM) rows for a transcript replay - user/assistant
+        only, empty bodies dropped. The persisted timestamp is local ISO; its
+        HH:MM is shown so a replayed head does not claim the message happened
+        just now."""
+        entries = []
+        for m in getattr(session, "messages", []) or []:
+            role = m.get("role")
+            text = (m.get("content") or "").strip()
+            if role not in ("user", "assistant") or not text:
+                continue
+            ts = str(m.get("timestamp") or "")
+            when = ts[11:16] if len(ts) >= 16 else ""
+            entries.append((role, text, when))
+        return entries
+
+    def request_transcript_replay(self) -> None:
+        """Boot: a resumed session's conversation appears under the start
+        banner instead of an empty screen. A session without messages stays a
+        no-op - a fresh start keeps its clean banner."""
+        def _run():
+            entries = self._transcript_entries(self.session)
+            if entries:
+                self._emit("transcript_replay", entries, False)
         self._submit(_run)
 
     def _farewell(self, path) -> str:

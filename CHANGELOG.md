@@ -29,6 +29,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **Switching sessions in the terminal app now shows the conversation.**
+  Loading another session swapped the agent's memory but left the previous
+  conversation on screen, and a resumed session started with an empty
+  transcript as if nothing had ever been said. The transcript now follows: a
+  switch repaints the loaded conversation (the newest forty messages, with an
+  honest note when older ones were trimmed - `/export` writes the full
+  record), and starting VAF with an existing session shows its conversation
+  under the start banner. Replayed messages carry the time they were actually
+  sent.
 - **Automations and the tool catalog live in the terminal app's settings.**
   The Automations submenu shows what the classic menu showed - name, schedule,
   next run, enabled state - and selecting an automation switches it on or off;

@@ -229,9 +229,16 @@ What it can change is decided by where a key is READ, not by how it looks:
   heartbeat is NOT part of that wiring and runs on every interactive lane: it
   is the only signal the tray has that a CLI session is alive, and without it
   the tray unloads the local model mid-session.)
-  Closing the boundary properly is blocked behind the transcript replay named
-  under the queue below: the web UI's `LOAD_SESSION` and `NEW_SESSION` would
-  otherwise leave the previous conversation on screen under a new session id.
+  The transcript-replay half of that boundary is closed: a session switch
+  clears the transcript and repaints the loaded conversation (newest
+  `REPLAY_CAP` messages, an honest note names what was trimmed and points at
+  `/export`), and a resumed session boots with its conversation under the
+  start banner instead of an empty screen. Replayed bubbles carry the
+  persisted timestamp's HH:MM, not "now", and replayed agent messages are
+  STATIC - complete content at construction, no flush ticker, because
+  feed/done against a just-scheduled mount races on_mount and would leave
+  the 100 ms interval running forever (the avatar-leak class). What still
+  blocks the `__CMD__` session commands is only their producer wiring.
 - The in-process TaskQueue IS consumed now, once a second, and a fired timer
   arrives as an amber wake card followed by a real turn. There is exactly one
   producer in this process: the timer scheduler. The `__CMD__` session commands

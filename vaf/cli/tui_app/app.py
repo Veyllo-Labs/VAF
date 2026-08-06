@@ -159,6 +159,7 @@ class TuiEvents:
     def session_list(self, sessions):       self._ui(self._app_call, "show_session_list", sessions)
     def chrome_changed(self):               self._ui(self._app_call, "_refresh_chrome")
     def wake_message(self, text, kind):      self._ui(self._app_call, "add_wake_message", text, kind)
+    def transcript_replay(self, entries, fresh): self._ui(self._app_call, "replay_transcript", entries, fresh)
     def voice_level(self, phase, energy, threshold): self._ui(self._app_call, "voice_level", phase, energy, threshold)
     def voice_done(self, text, note):        self._ui(self._app_call, "voice_done", text, note)
 
@@ -387,6 +388,9 @@ class VafApp(App):
         threading.Thread(target=self._tasks_loop, daemon=True,
                          name="vaf-tui-tasks").start()
         self._bridge.refresh_context()
+        # A resumed session's conversation belongs on screen, under the
+        # banner - not behind an empty transcript that pretends a fresh start.
+        self._bridge.request_transcript_replay()
 
         if self._initial_message:
             self._send_user(self._initial_message)
@@ -537,6 +541,34 @@ class VafApp(App):
             f"switched to session {session_id[:12]} · {message_count} messages")
         if self.query_one("#sessions", SessionsPanel).has_class("visible"):
             self._bridge.request_session_list()
+
+    # The newest messages a replay paints as widgets. Enough to read back the
+    # working context; a 400-message session as 800 mounted widgets would make
+    # every switch pay seconds for scrollback nobody reads - /export carries
+    # the full record.
+    REPLAY_CAP = 40
+
+    def replay_transcript(self, entries, fresh: bool) -> None:
+        """Paint a session's conversation. `fresh` clears first (a session
+        SWITCH must not leave the old conversation above the new one); the
+        boot replay keeps the start banner and mounts beneath it."""
+        if fresh:
+            self.transcript.clear()
+            self._live_msg = None
+            self._avatar_host = None
+        entries = list(entries or [])
+        shown = entries[-self.REPLAY_CAP:]
+        if len(entries) > len(shown):
+            self.add_system_note(
+                f"{len(entries) - len(shown)} older messages not shown - "
+                f"/export <file> writes the full conversation")
+        for role, text, when in shown:
+            if role == "user":
+                self._mount_scrolled(UserMessage(text, when=when))
+            else:
+                # static_text: complete content, no flush ticker - feed/done
+                # against a just-scheduled mount races on_mount.
+                self._mount_scrolled(AgentMessage(when=when, static_text=text))
 
     def tool_started(self, tool: str, preview: str) -> None:
         card = ToolCard(tool, preview)

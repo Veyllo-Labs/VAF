@@ -201,6 +201,8 @@ class AgentBridge:
         # See begin_stopping(): the lane is FIFO, so a drain closure queued just
         # before the app exited still runs during teardown.
         self._stopping = threading.Event()
+        # One voice capture at a time; the Event is its cooperative cancel.
+        self._listen_stop = None
         self.farewell = ""            # printed by run_tui after the screen is free
         self.history: list = []       # (HH:MM, user text) for the history screen
 
@@ -739,6 +741,67 @@ class AgentBridge:
         except Exception:
             return False
 
+    def listen_voice(self) -> None:
+        """`l`/`listen`: capture one utterance and send it as a turn.
+
+        Its own daemon thread, not the agent lane: the classic contract is
+        "listening works any time", and the capture blocks for up to
+        timeout+utterance - parked on the serialized lane it would wait behind
+        a running turn, and parked on the UI thread it would freeze the app.
+        The captured text is then SUBMITTED to the lane like any typed
+        message, so a turn that is already running still goes first.
+
+        Presentation is the caller's: `on_state` feeds the overlay through the
+        event adapter (data, not painting - the reason the framework grew the
+        callback), and `voice_done` closes it. Cancel is cooperative:
+        `cancel_listen()` trips an Event that `should_stop` reads once per
+        chunk. One capture at a time; a second press is told so.
+        """
+        if self._listen_stop is not None:
+            self.events.event_note("Voice", "already listening", "warning")
+            return
+        stop = threading.Event()
+        self._listen_stop = stop
+
+        def _capture():
+            try:
+                from vaf.core.speech import get_speech_manager
+                sm = get_speech_manager()
+                if not sm.is_stt_enabled():
+                    self._emit("voice_done", None,
+                               "Speech input is disabled - Settings › Voice")
+                    return
+                sm.stop()          # never record the agent's own voice
+                text = sm.listen(
+                    timeout=5,
+                    on_state=lambda phase, energy=0.0, threshold=0.0:
+                        self._emit("voice_level", phase, energy, threshold),
+                    should_stop=stop.is_set,
+                )
+                if stop.is_set():
+                    self._emit("voice_done", None, "cancelled")
+                    return
+                # The transcript goes back to the APP, which routes it through
+                # the same send path a typed message takes - so the turn gets
+                # its "You" bubble and its history entry, and the
+                # review-before-send preference has one place to act. A direct
+                # _run_turn from here streamed an answer into a transcript
+                # with no visible question.
+                self._emit("voice_done", text or None,
+                           "" if text else "no speech detected")
+            except Exception as exc:
+                self._emit("voice_done", None, f"speech error: {exc}")
+            finally:
+                self._listen_stop = None
+
+        threading.Thread(target=_capture, daemon=True,
+                         name="vaf-tui-listen").start()
+
+    def cancel_listen(self) -> None:
+        stop = self._listen_stop
+        if stop is not None:
+            stop.set()
+
     def stop_speech(self) -> None:
         """`halt`/`stop`: silence the agent WHILE it is speaking.
 
@@ -1060,6 +1123,50 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
             agent.get_token_usage()
         except Exception:
             pass
+
+    # Speech preloads, in the boot phase ON PURPOSE: the terminal is still
+    # plain here, so Piper's download progress, ALSA's fd-2 chatter and an
+    # honest "pyaudio is not installed" all land where they are readable -
+    # lazily inside the app they would surface mid-turn, or shred the
+    # alternate screen. Ported from the classic boot; failures warn and never
+    # block the chat.
+    if agent.config.get("speech_tts_enabled", False):
+        try:
+            boot_tui.event("Speech", "Preloading TTS resources...", style="dim")
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            sm._check_piper()
+            sm._ensure_voice_model(agent.config.get("speech_language", "en-US")[:2])
+            boot_tui.event("Speech", "TTS resources ready", style="success")
+        except Exception as exc:
+            boot_tui.warning(f"TTS preload failed: {exc}")
+    if agent.config.get("speech_stt_enabled", False) or agent.config.get("stt_enabled", False):
+        try:
+            boot_tui.event("Speech", "Checking STT microphone...", style="dim")
+            from vaf.core.speech import get_speech_manager
+            sm = get_speech_manager()
+            # ensure_stt_capture, not a bare stt_mic read: with the docker
+            # engine the constructor skips mic init, and the bare read called
+            # every docker-stack machine "no microphone detected".
+            if sm.ensure_stt_capture():
+                boot_tui.event("Speech", "STT microphone ready", style="success")
+            else:
+                import importlib.util as _ilu
+                if _ilu.find_spec("pyaudio") is None:
+                    boot_tui.warning(
+                        'STT enabled but pyaudio is not installed - mic capture '
+                        'needs the optional speech extra: pip install pyaudio '
+                        '(or pip install "vaf[speech]")')
+                else:
+                    boot_tui.warning("STT enabled but no microphone detected")
+        except Exception as exc:
+            boot_tui.warning(f"STT check failed: {exc}")
+    try:
+        from vaf.vendor import langid
+        boot_tui.event("System", "Preloading language detection...", style="dim")
+        langid.classify("test")     # first call ~1.6s, every later one <1ms
+    except ImportError:
+        pass
 
     # The COMPLETE session swap - never the hand-rolled replay loops that the
     # classic lane still carries (those drop tool_calls, images and identity).

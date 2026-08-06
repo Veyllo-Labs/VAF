@@ -70,29 +70,46 @@ class GateScreen(ModalScreen[str]):
 
 
 class VoiceScreen(ModalScreen[str]):
-    """The classic listen_overlay, app-mode. Ships in this round but is routed
-    to a notice until the speech wiring lands (next round)."""
+    """The classic listen_overlay, app-mode - fed by REAL capture state.
+
+    The meter renders what the microphone hears: `set_state` receives the
+    (phase, energy, threshold) ticks the framework's capture callback emits,
+    so the bar is the actual RMS level on the same logarithmic scale the
+    painted classic meter used - not an animation pretending to listen.
+    Escape cancels the CAPTURE (cooperative, via the app), not just the view:
+    an overlay that closed while the microphone kept recording would send a
+    message nobody saw being taken.
+    """
 
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    LEVELS = "▁▂▃▄▅▆▇"
-
     def compose(self) -> ComposeResult:
         with Vertical(id="voice-box", classes="modal-box"):
-            yield Static("[bold $error]● Recording[/]", id="voice-title", classes="modal-title")
+            yield Static("[bold $vaf-muted]● Calibrating …[/]", id="voice-title",
+                         classes="modal-title")
             yield Static("", id="voice-bars")
             yield Static("[$vaf-muted]Speak now … (Silence to finish)[/]", id="voice-hint",
                          classes="modal-body")
             yield Static("[$text-disabled]esc[/] [$vaf-muted]cancel[/]", classes="modal-keys")
 
-    def on_mount(self) -> None:
-        import random
-        self._rand = random
-        self.set_interval(0.09, self._animate)
-
-    def _animate(self) -> None:
-        bars = "".join(f"[$error]{self._rand.choice(self.LEVELS)}[/]" for _ in range(24))
-        self.query_one("#voice-bars", Static).update(bars)
+    def set_state(self, phase: str, energy: float = 0.0, threshold: float = 0.0) -> None:
+        import math
+        titles = {
+            "calibrating": "[bold $vaf-muted]● Calibrating …[/]",
+            "recording": "[bold $error]● Recording[/]",
+            "speaking": "[bold $error]● SPEAKING[/]",
+            "processing": "[bold $vaf-muted]… Processing[/]",
+            "timeout": "[$warning]✗ No speech detected[/]",
+        }
+        try:
+            self.query_one("#voice-title", Static).update(
+                titles.get(phase, titles["recording"]))
+            bar_len = min(int(math.log(float(energy) + 1) * 2), 24)
+            colour = "$error" if phase == "speaking" else "$vaf-muted"
+            self.query_one("#voice-bars", Static).update(
+                f"[{colour}]{'█' * bar_len}[/][$vaf-border]{'░' * (24 - bar_len)}[/]")
+        except Exception:
+            pass                        # a late tick after dismiss is noise
 
     def show_heard(self, text: str) -> None:
         self.query_one("#voice-title", Static).update("[bold $success]✓ Heard[/]")
@@ -214,6 +231,8 @@ class SettingsScreen(ModalScreen[None]):
         "subagent_timeout_enabled": ("Sub-Agent Timeout", ""),
         "speech_tts_enabled": ("Speech Output (TTS)", ""),
         "speech_stt_enabled": ("Speech-to-Text (STT)", ""),
+        "ux_voice_review": ("Voice: review before send",
+                            "off = transcript sends immediately"),
         "persist_server": ("Server Persistence", ""),
         "auto_start_local_server": ("Auto-Start Local Server", ""),
     }
@@ -349,6 +368,7 @@ class SettingsScreen(ModalScreen[None]):
                 ("toggle", "speech_tts_enabled", ""),
                 ("choice", "speech_tts_engine", ""),
                 ("toggle", "speech_stt_enabled", ""),
+                ("toggle", "ux_voice_review", ""),
                 ("submenu", "mic", "Select Microphone"),
                 ("submenu", "stt_lang", "Select Input Language"),
                 ("later", "wake", "Wake Word"),

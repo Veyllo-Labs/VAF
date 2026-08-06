@@ -37,6 +37,7 @@ from vaf.cli.tui_app.screens import (
     SettingsChanged,
     SettingsScreen,
     ToolsScreen,
+    VoiceScreen,
 )
 from vaf.cli.tui_app.theme_bridge import (
     THEME_ORDER,
@@ -158,6 +159,8 @@ class TuiEvents:
     def session_list(self, sessions):       self._ui(self._app_call, "show_session_list", sessions)
     def chrome_changed(self):               self._ui(self._app_call, "_refresh_chrome")
     def wake_message(self, text, kind):      self._ui(self._app_call, "add_wake_message", text, kind)
+    def voice_level(self, phase, energy, threshold): self._ui(self._app_call, "voice_level", phase, energy, threshold)
+    def voice_done(self, text, note):        self._ui(self._app_call, "voice_done", text, note)
 
     def _app_call(self, name, *args) -> None:
         getattr(self._app, name)(*args)
@@ -618,8 +621,47 @@ class VafApp(App):
         self.push_screen(HelpScreen())
 
     def action_voice(self) -> None:
-        self.notify("Voice input lands in the next round - "
-                    "`vaf run --classic` has it today.", timeout=2.5)
+        """`l`: the classic listen flow - overlay up, capture on the bridge's
+        listen thread, the transcript sent as a turn. Escape cancels the
+        CAPTURE through the bridge, not only the view."""
+        if isinstance(self.screen, VoiceScreen):
+            return                      # one capture at a time; esc cancels
+
+        def _closed(_result) -> None:
+            self._bridge.cancel_listen()
+
+        self.push_screen(VoiceScreen(), _closed)
+        self._bridge.listen_voice()
+
+    def voice_level(self, phase: str, energy: float, threshold: float) -> None:
+        if isinstance(self.screen, VoiceScreen):
+            self.screen.set_state(phase, energy, threshold)
+
+    def voice_done(self, text, note: str) -> None:
+        """Close the overlay and route the transcript.
+
+        Through `_send_user` - the SAME path a typed message takes - so the
+        turn gets its "You" bubble and its history entry; the bridge
+        deliberately does not submit (a lane-side submit streamed an answer
+        into a transcript with no visible question). With `ux_voice_review`
+        on, the transcript lands in the input box instead: read, fix what the
+        transcription misheard, enter sends - escape or editing it away costs
+        nothing, which is the whole point of reviewing.
+        """
+        if isinstance(self.screen, VoiceScreen):
+            self.screen.dismiss("")
+        if text:
+            from vaf.core.config import Config
+            if Config.get("ux_voice_review", False):
+                box = self.query_one("#promptbox", PromptBox)
+                box.text = text
+                box.focus()
+                self.add_system_note("heard - edit if needed, enter sends")
+            else:
+                self._send_user(text)
+            return
+        if note and note != "cancelled":
+            self.add_event_note("Voice", note, "warning")
 
     def action_toggle_sessions(self) -> None:
         panel = self.query_one("#sessions", SessionsPanel)

@@ -27,6 +27,7 @@ class BootAgent:
 
     def __init__(self):
         self._session_id = "tmp-random-id"
+        self.config = {}              # speech preloads: both gates off
         self.calls = []
         self.sink = None
         self.current_session_id = None
@@ -107,7 +108,16 @@ def boot_env(monkeypatch):
                         lambda: ipc_calls.append("cleanup_others"))
     monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: SCOPE)
     monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: "admin-test")
-    return SimpleNamespace(agent=agent, web=web, ipc=ipc_calls)
+    # The langid warmup is deliberately unconditional in boot (first call
+    # ~1.6s); the fake keeps the boot tests from paying it for real.
+    import sys as _sys
+
+    import vaf.vendor as _vendor
+    langid_calls = []
+    fake_langid = SimpleNamespace(classify=lambda t: langid_calls.append(t))
+    monkeypatch.setitem(_sys.modules, "vaf.vendor.langid", fake_langid)
+    monkeypatch.setattr(_vendor, "langid", fake_langid, raising=False)
+    return SimpleNamespace(agent=agent, web=web, ipc=ipc_calls, langid=langid_calls)
 
 
 def _events():
@@ -195,4 +205,42 @@ def test_boot_falls_back_to_a_new_session_when_the_id_is_unknown(boot_env):
     bridge = boot_bridge(_events(), "vaf", "no-such-session", False)
     assert bridge.session.id == "new-sess-1"
     assert ("set_sid", "new-sess-1") in boot_env.ipc
+    bridge.shutdown()
+
+
+def test_boot_preloads_speech_only_when_enabled(boot_env, monkeypatch):
+    """The classic boot's third leg, ported: Piper + mic check run in the
+    plain-terminal phase - and ONLY when their switches are on, because the
+    first SpeechManager construction can open the microphone. The langid
+    warmup is unconditional (cheap fake here; real first call ~1.6s, and the
+    lazy alternative surfaces mid-chat)."""
+    import sys as _sys
+
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    touched = []
+    manager = SimpleNamespace(
+        _check_piper=lambda: touched.append("piper"),
+        _ensure_voice_model=lambda lang: touched.append(("voice", lang)),
+        # ensure_stt_capture, not a bare stt_mic read: the docker engine skips
+        # mic init in the constructor, so boot must BUILD the capture stack to
+        # judge it - a bare read called every docker-stack machine mic-less.
+        ensure_stt_capture=lambda: touched.append("stt") or True,
+    )
+    monkeypatch.setitem(_sys.modules, "vaf.core.speech",
+                        SimpleNamespace(get_speech_manager=lambda: manager))
+
+    # Both switches off: the audio stack is never touched.
+    bridge = boot_bridge(_events(), "vaf", None, False)
+    assert touched == []
+    assert boot_env.langid, "the langid warmup fell out of boot"
+    bridge.shutdown()
+
+    # Switches on: both preloads run, with the configured language.
+    boot_env.agent.config = {"speech_tts_enabled": True,
+                             "speech_stt_enabled": True,
+                             "speech_language": "de-DE"}
+    bridge = boot_bridge(_events(), "vaf", None, False)
+    assert "piper" in touched and ("voice", "de") in touched
+    assert "stt" in touched, "boot judged the mic without building the capture stack"
     bridge.shutdown()

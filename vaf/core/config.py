@@ -216,6 +216,11 @@ class Config:
         "ux_auto_open_outputs": True,
         # Safety cap for tabs opened automatically
         "ux_auto_open_max_tabs": 8,
+        # Voice capture in the terminal app: False = the transcript is sent
+        # immediately (the classic flow); True = it lands in the input box for
+        # editing first. A ux_ key on purpose - per-user preference, not an
+        # admin-gated speech_stt_* engine setting.
+        "ux_voice_review": False,
         # Run each sub-agent in its own terminal window
         "sub_agents_in_separate_terminals": True,
                 # Sub-Agent timeout settings

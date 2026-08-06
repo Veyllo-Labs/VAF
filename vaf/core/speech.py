@@ -98,6 +98,29 @@ class SpeechManager:
         except Exception:
             self.stt_mic = None
 
+    def ensure_stt_capture(self) -> bool:
+        """Build the LOCAL capture stack (recognizer + microphone) on demand.
+
+        Capture is local by definition - the ENGINE choice only decides where
+        the recorded audio is transcribed. The constructor skips mic init for
+        the docker engine, which is right for the web server process (its
+        audio arrives from the browser) and used to reach `listen()` too:
+        with the DEFAULT engine the CLI's microphone was never built, so a
+        push-to-talk answered "no speech" within half a second on every
+        machine running the docker STT stack - in the terminal app and in the
+        classic lane alike.
+        """
+        if not self.is_stt_enabled():
+            return False
+        sr = _lazy_load_sr()
+        if not sr:
+            return False
+        if not self.stt_recognizer:
+            self.stt_recognizer = sr.Recognizer()
+        if not self.stt_mic:
+            self._init_mic()
+        return self.stt_mic is not None
+
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
@@ -835,13 +858,39 @@ $player.Close()
 
         threading.Thread(target=_speak_worker, daemon=True).start()
 
-    def listen(self, prompt: str = "Listening...", timeout: int = 10, lang: str = None) -> Optional[str]:
+    def listen(self, prompt: str = "Listening...", timeout: int = 10, lang: str = None,
+               on_state=None, should_stop=None) -> Optional[str]:
         """
         Listens to microphone (STT).
         If lang is None, uses config 'speech_language' or defaults to 'en-US'.
+
+        `on_state` separates CAPTURE from PRESENTATION. Without it this method
+        paints its own level meter with raw cursor codes on stdout - fine when
+        the caller owns a plain terminal (the classic lane, the tray's mic
+        test), fatal under an alternate screen, which is why no full-screen
+        surface could ever host voice input. With a callback, nothing is
+        painted: each phase change and level tick arrives as
+        `on_state(phase, energy, threshold)` with phase one of "calibrating",
+        "recording", "speaking", "processing", "timeout" - data the caller
+        renders wherever it lives. The callback is an OBSERVER: it runs on the
+        capture thread, and an exception in it is swallowed rather than ending
+        the recording (a broken meter must not eat the utterance).
+
+        `should_stop` is a cooperative cancel the painted path never had:
+        checked once per chunk, a truthy answer abandons the capture and
+        returns None. Errors and warnings keep going through UI.* either way -
+        those are routed, not painted.
         """
-        if not HAS_STT: return None
-        if not self.stt_mic: return None
+        if not self.ensure_stt_capture():
+            return None
+
+        def _tell(phase: str, energy: float = 0.0, threshold: float = 0.0) -> None:
+            if on_state is None:
+                return
+            try:
+                on_state(phase, energy, threshold)
+            except Exception:
+                pass
         
         # CRITICAL: Stop TTS before starting STT to prevent interference
         # If we're currently speaking, the microphone will pick it up and cause feedback
@@ -869,9 +918,11 @@ $player.Close()
             import math
             import struct
             
-            # Show Language explicitly in UI
-            UI.event("Speech", f"Listening ({locale})...", style="dim")
-            
+            # Show Language explicitly in UI (painted path only - the callback
+            # caller renders its own chrome)
+            if on_state is None:
+                UI.event("Speech", f"Listening ({locale})...", style="dim")
+
             def _calculate_rms(data):
                 """Calculate RMS amplitude for 16-bit PCM data."""
                 count = len(data) // 2
@@ -882,38 +933,48 @@ $player.Close()
 
             with self.stt_mic as source:
                 # 1. Calibration
-                UI.print(f"[dim]Calibrating noise...[/dim]", end="\r")
+                _tell("calibrating")
+                if on_state is None:
+                    UI.print(f"[dim]Calibrating noise...[/dim]", end="\r")
                 self.stt_recognizer.adjust_for_ambient_noise(source, duration=1.0)
                 threshold = self.stt_recognizer.energy_threshold
-                
+
                 # 2. Recording Loop with Visuals
-                sys.stdout.write(f"\r\033[K● Recording ({locale})   ")
-                sys.stdout.flush()
-                
+                _tell("recording", 0, threshold)
+                if on_state is None:
+                    sys.stdout.write(f"\r\033[K● Recording ({locale})   ")
+                    sys.stdout.flush()
+
                 frames = []
                 start_time = time.time()
                 silence_start = None
                 has_spoken = False
-                
+
                 while True:
+                    if should_stop is not None and should_stop():
+                        if on_state is None:
+                            sys.stdout.write("\r\033[K")
+                        return None
                     # Check timeout (no speech start)
                     if not has_spoken and (time.time() - start_time > timeout):
-                        sys.stdout.write("\r\033[K\n") # Clear line
-                        UI.print("[yellow]Timeout: No speech detected.[/yellow]")
+                        _tell("timeout")
+                        if on_state is None:
+                            sys.stdout.write("\r\033[K\n") # Clear line
+                            UI.print("[yellow]Timeout: No speech detected.[/yellow]")
                         return None
-                        
+
                     # Read Chunk
                     buffer = source.stream.read(source.CHUNK)
                     if len(buffer) == 0: break
                     frames.append(buffer)
-                    
+
                     # Calculate Energy (RMS)
                     energy = _calculate_rms(buffer)
-                    
+
                     # Visual Bar (Logarithmic scale)
-                    bar_len = int(math.log(energy + 1) * 2) 
+                    bar_len = int(math.log(energy + 1) * 2)
                     bar = "█" * min(bar_len, 20)
-                    
+
                     # Visual feedback if speaking
                     status = "● Recording"
                     if energy > threshold:
@@ -926,14 +987,22 @@ $player.Close()
                                 silence_start = time.time()
                             elif time.time() - silence_start > 1.5: # 1.5s silence = End
                                 break
-                    
-                    # Direct stdout for smooth animation without newline spam
-                    # \033[K clears the line from cursor to end
-                    sys.stdout.write(f"\r\033[K[bold red]{status}[/bold red] [{bar:<20}] ({int(energy)}/{int(threshold)}) ")
-                    sys.stdout.flush()
-                
-                sys.stdout.write("\r\033[K") # Clear recording line
-                UI.print("[dim]Processing...[/dim]")
+
+                    _tell("speaking" if energy > threshold else "recording",
+                          energy, threshold)
+                    if on_state is None:
+                        # Direct stdout for smooth animation without newline
+                        # spam; \033[K clears the line from cursor to end.
+                        # Plain text on purpose: this is a RAW fd, and the
+                        # markup tags that used to sit here were printed
+                        # literally, brackets and all.
+                        sys.stdout.write(f"\r\033[K{status} [{bar:<20}] ({int(energy)}/{int(threshold)}) ")
+                        sys.stdout.flush()
+
+                _tell("processing")
+                if on_state is None:
+                    sys.stdout.write("\r\033[K") # Clear recording line
+                    UI.print("[dim]Processing...[/dim]")
                 
                 # Convert frames to AudioData
                 sr = _lazy_load_sr()
@@ -942,6 +1011,26 @@ $player.Close()
                     return None
                 frame_data = b"".join(frames)
                 audio = sr.AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
+
+                # The engine the user CHOSE decides where this audio goes. On
+                # the default "docker" engine the shared client transcribes it
+                # (cloud lane first when configured, else the local Whisper
+                # container - the same path Telegram and WhatsApp voice take).
+                # A failure is NAMED and never silently rerouted to Google's
+                # free web API: the user picked local processing.
+                from vaf.core.config import Config as _Config
+                if (_Config.get("speech_stt_engine", "docker") or "docker") == "docker":
+                    from vaf.core import speech_client
+                    api_text, _api_lang = speech_client.transcribe(
+                        audio.get_wav_data(), mime="audio/wav", filename="mic.wav")
+                    if api_text:
+                        self._play_success_sound()
+                        return api_text
+                    UI.warning(
+                        "Transcription failed: no cloud STT configured and the "
+                        "Whisper container did not answer - is the speech stack "
+                        "running (start_vaf.sh)?")
+                    return None
 
                 # Cloud STT provider lane: honour speech_stt_provider for the CLI
                 # mic too (otherwise mic audio silently goes to Google's free Web

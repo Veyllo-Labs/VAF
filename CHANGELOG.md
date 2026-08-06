@@ -53,6 +53,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   after 48 hours. Nobody noticed, because a missing log looks exactly like a quiet period.
   They now have their own retention (`security_log_retention_days`, default 14).
 
+- **Voice input works in the terminal app.** Pressing `l` (or `listen`) opens the
+  recording overlay with a live level meter showing what the microphone actually
+  hears, and the transcribed sentence is sent as your message - the same flow the
+  classic terminal always had, and the conversation shows your words above the
+  answer. If you would rather check the transcription first, turn on "Voice:
+  review before send" (Settings, Voice): the sentence then lands in the input
+  box for you to read and fix, and enter sends it. Escape cancels the recording
+  itself, not just the window. The speech resources are prepared at startup
+  while the terminal is still plain (Piper voice download, microphone check with
+  an honest "pyaudio is not installed" where that is the reason, language
+  detection warmup), so the first use does not stall mid-chat.
+- **Voice capture works on machines using the Docker speech stack - which is the
+  default.** Recording answered "no speech detected" within half a second, in the
+  terminal app and the classic lane alike: with the default speech engine the
+  microphone was simply never set up, because the engine choice was misread as
+  "no local capture needed" - it only decides where the audio is transcribed.
+  The microphone is now prepared when recording starts, and the recording goes to
+  the transcription lane you chose: your cloud STT provider if configured,
+  otherwise the local Whisper container - the same path Telegram and WhatsApp
+  voice messages take. It is never quietly rerouted to Google's free web API, and
+  a dead speech stack is named as what it is instead of "no speech detected".
+- **The classic recording line no longer prints formatting tags.** The level
+  meter wrote styling markup to the raw terminal, so the classic lane showed
+  literally "[bold red]● SPEAKING[/bold red]" while recording - since the day it
+  was written. It now paints plain text.
 - **Browsing themes no longer changes your startup theme.** Pressing `t` (or
   `theme <name>`) now switches the look for the current session only, exactly as
   the classic terminal always did - the Settings > Theme row is what saves a

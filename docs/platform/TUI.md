@@ -195,12 +195,13 @@ What it can change is decided by where a key is READ, not by how it looks:
   can fail on the network as easily as on the key) while the provider stays
   put. The verification runs on the agent lane, never on the UI thread, and the
   key value never reaches a note, an event or the transcript.
-- **Still pointing at `vaf settings`** - the local model, the context limit and
-  the model download. These need a genuinely new agent: `n_ctx` is a snapshot in
-  three places, and `load_model()` reuses a healthy running server without
-  checking which weights it serves. A half-working row would be worse than an
-  honest pointer. The microphone picker needs the speech backend and lands with
-  the voice round.
+- **Still pointing at `vaf settings`** - the local model and the model
+  download. These need a genuinely new agent: `load_model()` reuses a healthy
+  running server without checking which weights it serves. A half-working row
+  would be worse than an honest pointer. (The context limit and the microphone
+  left this list: writing `n_ctx` is what the classic menu does and the row
+  says when it applies; the microphone submenu enumerates real devices once
+  per entry behind an fd-2 guard.)
 
 ## Named boundaries (this round)
 
@@ -239,13 +240,24 @@ What it can change is decided by where a key is READ, not by how it looks:
   reply and the remainder opens a new bubble below your message - the split is
   explained by that note rather than removed, because removing it would mean
   buffering a live stream around every user mount in this lane.
-- Voice capture lands in a later round; the overlay that represents it says so
-  instead of pretending. Creating, renaming and deleting sessions is likewise
-  not in the app yet - loading one is. The local model, the context limit and
-  the model download stay with `vaf settings` for the reason given above. The classic
-  lane's speech preloads (TTS engine warmup, the STT microphone check, the
-  langid preload) are likewise not run at boot; until the voice round, the
-  first spoken reply pays the engine spin-up lazily.
+- Creating, renaming and deleting sessions is not in the app yet - loading one
+  is. The local model and the model download stay with `vaf settings` for the
+  reason given above. The classic lane's speech preloads (Piper check + voice
+  model, the STT microphone check with an honest "pyaudio is not installed",
+  the langid warmup) run in the BOOT phase now, where the terminal is still
+  plain and their output is readable.
+- Voice input works: `l` opens the recording overlay, whose meter renders the
+  REAL capture state - the framework's `listen()` grew an `on_state` callback
+  (data instead of painting; its raw-stdout meter would shred the alternate
+  screen) and a cooperative `should_stop`, which is how escape cancels the
+  CAPTURE rather than closing a view over a live microphone. The capture runs
+  on its own thread ("listening works any time"), and the transcript takes the
+  SAME send path a typed message does, so the turn shows your words before the
+  answer. With `ux_voice_review` on (Settings, Voice, "review before send")
+  the transcript lands in the input box instead: read what the transcription
+  heard, fix it, enter sends. The classic painted meter stays for the plain
+  lanes - minus the markup tags it had been printing literally to a raw fd
+  since it was written.
 - Boot (model load, warmup) runs in the plain terminal BEFORE the app takes
   the screen: llama.cpp writes C-level stderr that would corrupt app mode.
   The git preflight runs there too, for the same reason - an install prompt

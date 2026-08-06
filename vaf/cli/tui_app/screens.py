@@ -299,6 +299,9 @@ class SettingsScreen(ModalScreen[None]):
         # str = the honest reason there are none. Filled ONCE on entering the
         # submenu; _menu_rows must never enumerate itself (see _load_mics).
         self._mic_devices = None
+        # Automations submenu cache, same contract: loaded on entry (disk
+        # reads), invalidated on back and after every toggle.
+        self._automations = None
 
     # menu definitions ---------------------------------------------------------------
     def _cfg(self, key, default=None):
@@ -355,9 +358,9 @@ class SettingsScreen(ModalScreen[None]):
                 ("choice", "ux_auto_open_max_tabs", ""),
                 ("submenu", "subagent_provider", "Sub-Agent Provider"),
                 ("submenu", "voice", "TTS / STT Settings"),
-                ("later", "automations", "Automations"),
+                ("submenu", "automations", "Automations"),
                 ("sep", None, ""),
-                ("later", "tools", "Show All Tools"),
+                ("tools", None, "Show All Tools"),
                 ("toggle", "persist_server", ""),
                 ("about", None, "About VAF"),
                 ("back", None, "Exit Settings"),
@@ -393,6 +396,22 @@ class SettingsScreen(ModalScreen[None]):
                 marker = "▍" if active else " "
                 rows.append(("local_model", f,
                              f"[$primary]{marker}[/][$text]{_esc(f)}[/]"))
+            return rows + [("back", None, "Back")]
+        if menu == "automations":
+            state = self._automations
+            rows = []
+            if isinstance(state, str):
+                rows.append(("note", None, state))
+            elif not state:
+                rows.append(("note", None,
+                             "no automations yet - ask the agent, or: vaf automation create"))
+            else:
+                for tid, name, enabled, schedule, nxt in state:
+                    mark = "[$primary]●[/]" if enabled else "[dim]○[/]"
+                    rows.append(("automation", tid,
+                                 f"{mark} [$text]{_esc(name)}[/] "
+                                 f"[dim]{_esc(schedule)} · next {_esc(nxt)}[/dim]"))
+            rows.append(("automation_folder", None, "Open Automations Folder"))
             return rows + [("back", None, "Back")]
         if menu == "mic":
             current = self._cfg("speech_mic_index", None)
@@ -564,8 +583,53 @@ class SettingsScreen(ModalScreen[None]):
         if kind == "submenu":
             if arg == "mic":
                 self._load_mics()
+            elif arg == "automations":
+                self._load_automations()
             self._stack.append(arg)
             self._rebuild()
+            return
+        if kind == "tools":
+            # On TOP of this modal, like About - the settings stack survives.
+            self.app.action_tools()
+            return
+        if kind == "automation":
+            # The classic menu's primary action: one activation flips enabled.
+            try:
+                from vaf.core.automation import AutomationManager
+                mgr = AutomationManager()
+                task = mgr.get(arg)
+                if task is None:
+                    self.app.notify("automation not found - list refreshed",
+                                    severity="warning", timeout=2.5)
+                else:
+                    mgr.update(task.id, enabled=not task.enabled)
+                    self.app.notify(
+                        f"{task.name}: {'disabled' if task.enabled else 'enabled'}",
+                        timeout=1.5)
+            except Exception as exc:
+                self.app.notify(f"automation toggle failed: {exc}",
+                                severity="warning", timeout=3.0)
+                return
+            self._load_automations()
+            self._rebuild()
+            return
+        if kind == "automation_folder":
+            import subprocess
+            import sys
+            try:
+                from vaf.core.automation import AutomationManager
+                folder = str(AutomationManager().storage_dir)
+                opener = ("explorer" if sys.platform == "win32"
+                          else "open" if sys.platform == "darwin" else "xdg-open")
+                # Detached and silenced: a chatty opener must not write into
+                # the alternate screen.
+                subprocess.Popen([opener, folder],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                self.app.notify(f"opened: {folder}", timeout=2.0)
+            except Exception as exc:
+                self.app.notify(f"could not open the folder: {exc}",
+                                severity="warning", timeout=3.0)
             return
         if kind == "theme":
             key = THEME_ORDER[arg]
@@ -660,8 +724,11 @@ class SettingsScreen(ModalScreen[None]):
 
     def action_go_back(self) -> None:
         if len(self._stack) > 1:
-            if self._stack.pop() == "mic":
+            left = self._stack.pop()
+            if left == "mic":
                 self._mic_devices = None      # re-enumerate on next entry
+            elif left == "automations":
+                self._automations = None      # re-read on next entry
             self._rebuild()
         else:
             self.dismiss(None)
@@ -728,6 +795,23 @@ class SettingsScreen(ModalScreen[None]):
             m = re.match(r"^(\d+):\s*", text)
             devices.append((int(m.group(1)) if m else pos, text))
         self._mic_devices = devices
+
+    def _load_automations(self) -> None:
+        """Read the automations ONCE per submenu entry (disk), same contract
+        as `_load_mics`: the rows render only from `self._automations`. The
+        tuple carries exactly what the classic table showed - name, enabled,
+        `frequency @ time`, next run trimmed to the minute."""
+        try:
+            from vaf.core.automation import AutomationManager
+            mgr = AutomationManager()
+            self._automations = [
+                (t.id, t.name, bool(t.enabled),
+                 f"{t.frequency} @ {t.time}",
+                 (t.next_run or "-")[:16])
+                for t in mgr.list()
+            ]
+        except Exception as exc:
+            self._automations = f"automations unavailable: {exc}"
 
     @contextmanager
     def _quiet_fd2(self):

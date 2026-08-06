@@ -209,7 +209,11 @@ What it can change is decided by where a key is READ, not by how it looks:
   as in the classic menu. (The context limit and the microphone left earlier:
   writing `n_ctx` is what the classic menu does and the row says when it
   applies; the microphone submenu enumerates real devices once per entry
-  behind an fd-2 guard.)
+  behind an fd-2 guard. The Automations submenu carries the classic table -
+  enabled mark, schedule, next run - one activation flips enabled, and the
+  storage folder opens from its own row; reads are cached per entry like the
+  microphone list. "Show All Tools" pushes the existing tool catalog on top
+  of the settings modal.)
 
 ## Named boundaries (this round)
 

@@ -29,6 +29,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **Automations and the tool catalog live in the terminal app's settings.**
+  The Automations submenu shows what the classic menu showed - name, schedule,
+  next run, enabled state - and selecting an automation switches it on or off;
+  the storage folder opens from its own row. "Show All Tools" now opens the
+  tool catalog instead of pointing at a restart.
 - **The local model can be switched inside the terminal app, without losing
   the conversation.** "Select Active Model" now lists the models on disk with
   the active one marked, and picking one swaps the running agent live: the

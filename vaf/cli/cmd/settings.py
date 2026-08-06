@@ -1114,7 +1114,7 @@ def main_menu(agent=None):
         tts_enabled = bool(Config.get("speech_tts_enabled", False))
         tts_label = f"🔊 Speech Output (TTS) [{'ON' if tts_enabled else 'OFF'}]"
 
-        voice_label = "🎤 TTS / STT / Wake Word Settings"
+        voice_label = "🎤 TTS / STT Settings"
         
         # Get automation count
         try:

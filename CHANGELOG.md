@@ -48,7 +48,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   submenu lists your real input devices and switches the live microphone at
   once; and About shows version, licence and links without leaving the app.
 
-### Added
 - **`/export <file>` writes the conversation from inside the terminal app** -
   markdown, or JSON when the filename ends in `.json`. The sessions panel now
   shows each session's id and a line of its summary, and `session current`
@@ -57,6 +56,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **Typing anything now interrupts the agent's speech in the terminal app.**
+  The classic terminal always treated any input as "stop talking, I have
+  something to say" - spoken output is asynchronous and routinely outlives the
+  reply that produced it. The full-screen app only silenced speech when a new
+  turn actually started, so a slash command, a typo, or a message queued behind
+  a running turn left the agent talking over you. Every submitted input now
+  stops running speech before it is even parsed, silently; the explicit `halt`
+  still says "speech stopped".
+- **The settings no longer advertise a wake word.** Both terminal settings
+  menus carried "Wake Word" labels pointing at a feature that was removed from
+  VAF months ago (the always-on listener was dropped in February together with
+  its dependency). The dead row and the labels are gone; if a wake word
+  returns, it returns as a real feature, not as a menu entry that leads
+  nowhere.
 - **Closing the "what's new" window no longer wipes parts of your profile.** Dismissing
   the update announcement sent a single value to the server, but the profile endpoint
   treated everything the message did not mention as "set this to empty" - so your main

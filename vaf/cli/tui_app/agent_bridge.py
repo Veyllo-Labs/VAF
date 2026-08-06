@@ -867,11 +867,15 @@ class AgentBridge:
         if stop is not None:
             stop.set()
 
-    def stop_speech(self) -> None:
+    def stop_speech(self, *, announce: bool = True) -> None:
         """`halt`/`stop`: silence the agent WHILE it is speaking.
 
         Its own short thread, not the lane: the lane is exactly the thread that
         is busy running the turn whose speech the user wants stopped.
+
+        `announce=False` is the classic loop's UNCONDITIONAL barge-in: every
+        submitted input silences running speech before it is even parsed, and
+        says nothing about it - only the explicit `halt` command narrates.
         """
         def _run():
             try:
@@ -879,7 +883,8 @@ class AgentBridge:
                 get_speech_manager().stop()
             except Exception:
                 pass
-            self.events.system_note("speech stopped")
+            if announce:
+                self.events.system_note("speech stopped")
 
         threading.Thread(target=_run, daemon=True, name="vaf-tui-halt").start()
 

@@ -354,7 +354,7 @@ class SettingsScreen(ModalScreen[None]):
                 ("choice", "subagent_timeout_minutes", ""),
                 ("choice", "ux_auto_open_max_tabs", ""),
                 ("submenu", "subagent_provider", "Sub-Agent Provider"),
-                ("submenu", "voice", "TTS / STT / Wake Word Settings"),
+                ("submenu", "voice", "TTS / STT Settings"),
                 ("later", "automations", "Automations"),
                 ("sep", None, ""),
                 ("later", "tools", "Show All Tools"),
@@ -371,7 +371,6 @@ class SettingsScreen(ModalScreen[None]):
                 ("toggle", "ux_voice_review", ""),
                 ("submenu", "mic", "Select Microphone"),
                 ("submenu", "stt_lang", "Select Input Language"),
-                ("later", "wake", "Wake Word"),
                 ("back", None, "Back"),
             ]
         if menu.startswith("choice:"):

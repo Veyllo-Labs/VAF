@@ -1458,7 +1458,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     wake_word_detected_flag.set() # Force exit from input_box
                                     break
                                 time.sleep(0.2)
-                                if wake_word_detected_flag.is_set(): # Already set by voice
+                                if wake_word_detected_flag.is_set(): # already set elsewhere (the name is historical - web input is the only setter)
                                     break
                         
                         # Start watcher just for this input cycle

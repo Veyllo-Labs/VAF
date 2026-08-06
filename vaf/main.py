@@ -69,7 +69,6 @@ def bootstrap():
         # for brand-new Pythons; source build needs portaudio headers). Requiring it would
         # recreate the infinite prompt documented in the rumps NOTE below, because the
         # auto-install runs `pip install -r requirements.txt`, which no longer contains it.
-        # "openwakeword": "openwakeword", # Optional/Unstable on Mac
         # "onnxruntime": "onnxruntime",   # Optional/Unstable on Mac
         # Document Processing (PDF, Word, Excel, PowerPoint)
         "PyPDF2": "PyPDF2",

@@ -128,8 +128,11 @@ stays a message: only commands that declare arguments match with any.
 
 Destructive commands (`clear`, `undo`, `restart`) ask first, in a modal that
 does not block. `halt` runs on its own thread rather than the agent lane -
-the lane is exactly what is busy producing the speech being stopped.
-`restart` execs only after the app has released the screen.
+the lane is exactly what is busy producing the speech being stopped. Beyond
+the explicit command, EVERY submitted input silences running speech before it
+is parsed - the classic loop's unconditional barge-in: TTS is asynchronous
+and routinely outlives the turn that produced it. That stop is quiet; only
+`halt` narrates. `restart` execs only after the app has released the screen.
 
 Ctrl+P (palette), Ctrl+S (sessions), F1 (help) and Ctrl+Q (quit) reach the same
 places. Every overlay walks with arrow keys, activates with enter or space, and

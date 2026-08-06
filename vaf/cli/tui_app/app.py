@@ -846,6 +846,11 @@ class VafApp(App):
     # input --------------------------------------------------------------------------
     @on(PromptBox.Submitted)
     def _submitted(self, event: PromptBox.Submitted) -> None:
+        # The classic loop's unconditional barge-in, BEFORE any parsing: TTS is
+        # asynchronous and routinely outlives the turn that produced it, so any
+        # submitted input - a message, /help, even a typo - silences running
+        # speech. Quiet on purpose; only the explicit `halt` narrates.
+        self._bridge.stop_speech(announce=False)
         parsed = parse(event.text)
         if parsed.command is not None:
             self.run_command(parsed)

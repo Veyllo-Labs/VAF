@@ -867,6 +867,93 @@ class Agent:
 
             return True
 
+    def _apply_local_model_identity(self) -> None:
+        """Recompute what the LOCAL model file implies about this agent.
+
+        Single source of truth for `model_display_name`, `is_gemma_local` and
+        `model_mode` - the tool-call parser and the message-prepare merge gate
+        on these, so they must follow the weights: computed at construction and
+        re-run by reload_local_model after a swap (a Gemma -> Qwen swap that
+        kept `model_mode == "gemma4"` would keep the wrong parser active).
+        """
+        self.model_display_name = "VQ-1"
+        self.is_gemma_local = False
+        self.model_mode = None
+        fname = getattr(self, "filename", "").lower()
+        if "gemma" in fname:
+            self.model_display_name = "Gemma"
+            self.is_gemma_local = True
+            if "gemma-4" in fname or "gemma4" in fname:
+                self.model_mode = "gemma4"
+            elif "gemma-3n" in fname or "3n" in fname:
+                self.model_mode = "gemma3n"
+        elif "llama" in fname: self.model_display_name = "Llama"
+        elif "mistral" in fname: self.model_display_name = "Mistral"
+        elif "phi" in fname: self.model_display_name = "Phi"
+        elif "qwen" in fname: self.model_display_name = "Qwen"
+        elif "deepseek" in fname: self.model_display_name = "DeepSeek"
+
+    def reload_local_model(self) -> bool:
+        """Make the RUNNING local agent serve the GGUF named by the live config.
+
+        The counterpart of reload_api_backend for weight swaps. The server half
+        is `ensure_local_model` (model-aware and blocking, keeps the
+        single-server invariant); the agent half re-resolves
+        `filename`/`model_path` from the fresh config, recomputes the model
+        identity the tool-call parser gates on, rebuilds the system prompt and
+        KEEPS the running conversation by re-attaching the history tail -
+        `init_chat()` alone resets the history to the system message.
+
+        Returns True when the running agent now serves the configured model.
+        Refusals (False, nothing touched): a non-local provider (no weights to
+        serve), a `VAF_MODEL_OVERRIDE` env pin (sub-agent processes are pinned
+        to their model; the config must not override it), and library mode
+        (`self.llm` holds the weights in-process - swapping them means a full
+        reload, which needs a restart).
+
+        A FAILED server swap also returns False, but the fields stay at the
+        new resolution on purpose: the config is the source of truth, the old
+        weights are already unloaded by the failed start, and the in-turn
+        connection-retry path relaunches the server from these fields - rolling
+        them back would make it resurrect the model the user switched away from.
+        """
+        if os.environ.get("VAF_MODEL_OVERRIDE", "").strip():
+            return False
+        # Embedded library mode is caller-controlled (config_overrides): this
+        # method re-reads the on-disk config, so without the check a change on
+        # disk would move an embedded agent off the model its caller chose -
+        # the same guard reload_api_backend carries, for the same reason.
+        if getattr(self, "_config_overrides", None):
+            return False
+        if getattr(self, "provider", "local") != "local":
+            return False
+        if getattr(self, "llm", None) is not None:
+            return False
+        lock = getattr(self, "_backend_swap_lock", None)
+        if lock is None:
+            lock = self._backend_swap_lock = threading.Lock()
+        with lock:
+            self.config = Config.load()
+            self.ensure_model_exists()
+            from vaf.core.backend import ensure_local_model
+            if not ensure_local_model(self.model_path, reason="settings"):
+                return False
+            self.use_server = True
+            self._tokenizer_instance = None
+            self._apply_local_model_identity()
+            # Rebuild the system prompt for the new identity, keep the chat:
+            # init_chat is reused verbatim (prompt manager, VAF.md, identity)
+            # and the conversation tail is re-attached afterwards.
+            tail = list(getattr(self, "history", []) or [])[1:]
+            self.init_chat()
+            self.history.extend(tail)
+            sid = getattr(self, "current_session_id", None)
+            if sid:
+                # init_chat rebuilt prompt_manager with the global store; put the
+                # session-scoped persistence back (same order as a session load).
+                self._bind_session_persistence(sid)
+            return True
+
     def __init__(self, verbose=False, register_signals=True, config_overrides=None, run_kind=None,
                  host_audio=False, system_prompt=None):
         self.verbose = verbose
@@ -1011,8 +1098,9 @@ class Agent:
         
         # Extract model name for identity
         self.model_display_name = "VQ-1"
-        # Canonical Gemma-local mode (single source of truth): computed once here so the tool-call
-        # parser, the message-prepare merge, etc. all read these instead of re-matching "gemma" ad hoc.
+        # Canonical Gemma-local mode (single source of truth): computed here and re-run by
+        # reload_local_model after a weight swap, so the tool-call parser, the
+        # message-prepare merge, etc. all read these instead of re-matching "gemma" ad hoc.
         self.is_gemma_local = False   # local Gemma GGUF of any version
         self.model_mode = None        # "gemma4" / "gemma3n" / None -- gate for version-specific handling
         if self.provider != "local":
@@ -1026,19 +1114,7 @@ class Agent:
                 api_model = _tool_model_env
             self.model_display_name = api_model
         elif hasattr(self, 'filename'):
-            fname = self.filename.lower()
-            if "gemma" in fname:
-                self.model_display_name = "Gemma"
-                self.is_gemma_local = True
-                if "gemma-4" in fname or "gemma4" in fname:
-                    self.model_mode = "gemma4"
-                elif "gemma-3n" in fname or "3n" in fname:
-                    self.model_mode = "gemma3n"
-            elif "llama" in fname: self.model_display_name = "Llama"
-            elif "mistral" in fname: self.model_display_name = "Mistral"
-            elif "phi" in fname: self.model_display_name = "Phi"
-            elif "qwen" in fname: self.model_display_name = "Qwen"
-            elif "deepseek" in fname: self.model_display_name = "DeepSeek"
+            self._apply_local_model_identity()
         
         # We need tools to init prompt manager, but tools are loaded later.
         # So we init it here with empty dict and update it after tools load.

@@ -29,6 +29,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **The local model can be switched inside the terminal app, without losing
+  the conversation.** "Select Active Model" now lists the models on disk with
+  the active one marked, and picking one swaps the running agent live: the
+  llama server is restarted with the chosen weights (it verifies which model
+  it serves instead of blindly reusing whatever runs), the model-specific
+  behavior follows the new weights, and the chat you were in stays. The swap
+  waits until the new model has loaded and says so; while a reply is being
+  generated it refuses instead of pulling the model out from under it. With a
+  cloud provider selected, picking a file stores the choice for the next time
+  the local provider serves - as the classic menu did. Only the model download
+  still points at `vaf settings`.
 - **The context limit, custom numbers, the microphone and About live in the
   terminal app now.** Four more settings rows stop pointing at `vaf settings`:
   the context limit offers the classic presets plus a free value and says

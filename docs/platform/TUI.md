@@ -195,13 +195,18 @@ What it can change is decided by where a key is READ, not by how it looks:
   can fail on the network as easily as on the key) while the provider stays
   put. The verification runs on the agent lane, never on the UI thread, and the
   key value never reaches a note, an event or the transcript.
-- **Still pointing at `vaf settings`** - the local model and the model
-  download. These need a genuinely new agent: `load_model()` reuses a healthy
-  running server without checking which weights it serves. A half-working row
-  would be worse than an honest pointer. (The context limit and the microphone
-  left this list: writing `n_ctx` is what the classic menu does and the row
-  says when it applies; the microphone submenu enumerates real devices once
-  per entry behind an fd-2 guard.)
+- **Still pointing at `vaf settings`** - the model download (a long
+  cancellable network operation mid-app needs a background-work concept the
+  TUI does not have yet). The local model LEFT this list: the "Select Active
+  Model" submenu lists `models/*.gguf` with the active file marked, and a pick
+  swaps the running agent live through the engine's `reload_local_model` -
+  model-aware server swap, parser identity recomputed, conversation kept. The
+  swap runs on the agent lane (the new weights block while they load) and
+  refuses during a running turn; with a cloud provider only the config moves,
+  as in the classic menu. (The context limit and the microphone left earlier:
+  writing `n_ctx` is what the classic menu does and the row says when it
+  applies; the microphone submenu enumerates real devices once per entry
+  behind an fd-2 guard.)
 
 ## Named boundaries (this round)
 

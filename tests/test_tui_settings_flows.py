@@ -249,20 +249,21 @@ def test_an_unchanged_backend_says_so_instead_of_claiming_success(monkeypatch):
 # ── what stays a named boundary, and why ────────────────────────────────────────────
 
 def test_the_rebuild_only_flows_still_say_so():
-    """The local GGUF is NOT offered as a working row: `load_model()` reuses a
-    running llama server without checking which model it serves, and the swap
-    would need `init_chat()`, which wipes the history. A half-working row is
-    worse than an honest pointer.
+    """The Hugging-Face search stays an honest pointer: a long cancellable
+    download mid-app needs a background-work concept the TUI does not have.
 
-    The context limit LEFT this set on purpose: writing `n_ctx` is exactly
-    what the inquirer menu does, and the row now says WHEN it applies ("at the
-    next start") instead of refusing to write it at all. The set below may
-    only shrink through a row becoming genuinely functional - never through
-    one silently pretending.
+    Two rows LEFT this set through the only allowed exit - becoming genuinely
+    functional: the context limit writes `n_ctx` and says when it applies, and
+    the local model row swaps the weights live via the engine's
+    `reload_local_model` (model-aware server swap, history kept). The set
+    below may only shrink that way - never through a row silently pretending.
     """
     from vaf.cli.tui_app.screens import SettingsScreen
 
     screen = _screen({"provider": "local"})
-    later = {arg for kind, arg, _ in screen._menu_rows("main") if kind == "later"}
-    assert {"local_model", "search_models"} <= later
+    rows = screen._menu_rows("main")
+    later = {arg for kind, arg, _ in rows if kind == "later"}
+    assert "search_models" in later
     assert "context" not in later, "the context limit fell back to a dead row"
+    assert "local_model" not in later, "the local model fell back to a dead row"
+    assert ("submenu", "local_model", "Select Active Model") in rows

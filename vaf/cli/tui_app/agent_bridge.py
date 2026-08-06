@@ -725,6 +725,71 @@ class AgentBridge:
             return
         self._submit(_run)
 
+    def list_local_models(self):
+        """`models/*.gguf` plus the active file name, for the settings submenu.
+
+        The active marker uses the same normalization the classic menu used:
+        the config may hold a bare name, a `repo/file.gguf` ref or a name
+        without the extension.
+        """
+        import os
+        from vaf.core.config import Config
+        try:
+            files = sorted(f for f in os.listdir(getattr(self.agent, "models_dir", ""))
+                           if f.endswith(".gguf"))
+        except Exception:
+            files = []
+        current = str(Config.get("model") or "")
+        current_name = current.split("/")[-1]
+        if current_name and not current_name.endswith(".gguf"):
+            current_name += ".gguf"
+        return files, current_name
+
+    def apply_local_model(self, filename: str) -> None:
+        """Move the RUNNING local agent onto a different GGUF, live.
+
+        Same shape as apply_provider_change: the engine primitive
+        (`reload_local_model`) is the whole job - it re-resolves the file,
+        swaps the ONE llama server, recomputes the parser identity and keeps
+        the conversation. The swap blocks while the new weights load, which is
+        exactly why it runs on the lane and refuses while a turn is running.
+
+        With a non-local provider only the config moves (the classic contract):
+        the file becomes active the next time the local provider serves.
+        """
+        def _run():
+            from vaf.core.config import Config
+            Config.set("model", filename)
+            if getattr(self.agent, "provider", "local") != "local":
+                self.events.system_note(
+                    f"model saved: {filename} - applies when the provider is local")
+                self._emit("chrome_changed")
+                return
+            self.events.event_note(
+                "Model", f"switching local model to {filename} - the new "
+                         f"weights have to load, this can take a while", "info")
+            ok = False
+            try:
+                ok = bool(self.agent.reload_local_model())
+            except Exception as exc:
+                self.events.event_note("Model", f"local model switch failed: {exc}",
+                                       "error")
+            if ok:
+                self.events.system_note(f"switched to {filename}")
+            else:
+                self.events.event_note(
+                    "Model", f"{filename} is stored, but the running agent could "
+                             f"not switch - the server did not come up with it",
+                    "warning")
+            self._emit("chrome_changed")
+            self._refresh_context()
+
+        if self._busy:
+            self.events.event_note("Model", "not while a turn is running",
+                                   "warning")
+            return
+        self._submit(_run)
+
     @staticmethod
     def _api_key_verifies(provider: str) -> bool:
         """One real request against the provider, on the lane thread.

@@ -60,8 +60,8 @@ agent.shutdown()       # idempotent cleanup; safe to call manually
   already-running server without checking which model it serves - the
   model-aware stop-and-respawn lives in the server manager's start path and
   only runs when no healthy server responded. After changing the configured
-  model, restart the server (or process) rather than relying on
-  `load_model()` to swap it.
+  model, call `reload_local_model()` (which routes through the model-aware
+  `ensure_local_model`) rather than relying on `load_model()` to swap it.
 - `shutdown()` stops background helpers and reference-counts other VAF
   processes before touching the shared llama server, so it will not kill a
   server other sessions still use.
@@ -212,8 +212,10 @@ shape: [EMBEDDING.md](EMBEDDING.md).
   **It can only stop a server it owns.** In the desktop/tray product the `llama-server`
   child belongs to the tray's module-level `ServerManager` (`vaf/tray.py`), not to the
   agent, so `agent.server` is `None` there and the loaded GGUF stays resident across a
-  provider switch (verified on a single running instance). Releasing that one is the tray's
-  job and is not wired up yet. **Pass `force=True` when the provider may be unchanged
+  provider switch (verified on a single running instance). A WEIGHT swap is different:
+  `reload_local_model()` goes through `ensure_local_model`, which stops a foreign server
+  by force (`force_external=True`) - the same guarantee the voice-model lane relies on.
+  **Pass `force=True` when the provider may be unchanged
   but the key may have moved** - the default skips that case, which is why a config-reload
   that does not know which key changed must force. Do not reassign `provider`,
   `api_backend`, `use_server` or `llm` by hand; guarded by
@@ -223,15 +225,25 @@ shape: [EMBEDDING.md](EMBEDDING.md).
   prompt are built by `init_chat()`; `context_manager` and the `n_ctx` it was sized
   with are built once in `__init__`; and `filename` / `repo_id` / `model_path` for a
   local GGUF are resolved at construction. So a **provider or API-model change is
-  fully served** by this method, while changing the **local model or `n_ctx` still
-  needs a new agent** - and for the local model even that is not enough on its own,
-  because `load_model()` reuses a healthy running server without checking which
-  weights it serves (see the model-loading note above). Calling `init_chat()` to
-  "finish" a reload is a trap: it resets `history` to the system message, which is
-  fine when the caller already discarded the agent and destroys the conversation when
-  it did not. VAF's terminal app takes the first half only - it reloads for provider
-  and API model, and leaves the local model and `n_ctx` to `vaf settings` plus a
-  restart.
+  fully served** by this method, a **local model change is served by
+  `reload_local_model()`** (below), and only **`n_ctx` still needs a new agent**.
+  Calling `init_chat()` to "finish" a reload is a trap: it resets `history` to the
+  system message, which is fine when the caller already discarded the agent and
+  destroys the conversation when it did not. VAF's terminal app uses both reload
+  methods and leaves `n_ctx` to a restart.
+- `reload_local_model() -> bool` is the weight-swap counterpart: it re-resolves
+  `filename`/`model_path` from the live config, makes the ONE llama server hold that
+  GGUF (`ensure_local_model` - model-aware, blocking, stops a foreign server by
+  force), recomputes the identity the tool-call parser gates on
+  (`model_display_name` / `is_gemma_local` / `model_mode`, via
+  `_apply_local_model_identity`, the same single source `__init__` uses), rebuilds
+  the system prompt through `init_chat()` and RE-ATTACHES the conversation tail, then
+  re-points session persistence. It refuses (False, untouched) under a
+  `VAF_MODEL_OVERRIDE` env pin, a non-local provider, or library mode (`self.llm`
+  holds the weights in-process). A failed server start also returns False but keeps
+  the fields at the new resolution: the config is the source of truth and the in-turn
+  connection-retry relaunches from these fields. Guarded by
+  `tests/test_reload_local_model.py`.
 - `reload_all_api_backends(*, force=False) -> int` (module level in `vaf/core/agent.py`)
   is what a CONFIG CHANGE should call. It applies the above to every agent alive in the
   process and returns how many changed. **This sentence used to read "the only supported

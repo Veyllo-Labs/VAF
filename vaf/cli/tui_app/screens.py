@@ -341,7 +341,7 @@ class SettingsScreen(ModalScreen[None]):
             rows += [
                 ("sep", None, ""),
                 ("choice", "n_ctx", ""),
-                ("later", "local_model", "Select Active Model"),
+                ("submenu", "local_model", "Select Active Model"),
                 ("later", "search_models", "Search & Download New Models"),
                 ("toggle", "auto_start_local_server", ""),
                 ("sep", None, ""),
@@ -376,6 +376,25 @@ class SettingsScreen(ModalScreen[None]):
             ]
         if menu.startswith("choice:"):
             return self._choice_rows(menu.split(":", 1)[1])
+        if menu == "local_model":
+            # Rendered straight from disk, no cache: a directory listing is
+            # cheap (unlike the microphone enumeration) and the active marker
+            # must follow the config the moment a pick lands.
+            try:
+                files, current_name = self.app._bridge.list_local_models()
+            except Exception as exc:
+                return [("note", None, f"models unavailable: {exc}"),
+                        ("back", None, "Back")]
+            if not files:
+                return [("note", None, "no models in the models/ directory"),
+                        ("back", None, "Back")]
+            rows = []
+            for f in files:
+                active = f == current_name or (current_name and current_name in f)
+                marker = "▍" if active else " "
+                rows.append(("local_model", f,
+                             f"[$primary]{marker}[/][$text]{_esc(f)}[/]"))
+            return rows + [("back", None, "Back")]
         if menu == "mic":
             current = self._cfg("speech_mic_index", None)
             state = self._mic_devices
@@ -581,6 +600,16 @@ class SettingsScreen(ModalScreen[None]):
             self.app.push_screen(
                 NumberScreen(name, current, minimum=minimum, maximum=maximum,
                              hint=hint), _entered)
+            return
+        if kind == "local_model":
+            # The swap itself runs on the bridge's lane (the new weights have
+            # to load, which blocks for a while) - the row only hands the file
+            # over and points at the transcript, where the progress notes land.
+            self.app._bridge.apply_local_model(str(arg))
+            self.app.notify(f"switching to {arg} - see the chat for progress",
+                            timeout=2.5)
+            self._refresh_labels()
+            self.app.post_message(SettingsChanged())
             return
         if kind == "mic":
             try:

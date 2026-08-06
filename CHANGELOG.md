@@ -53,6 +53,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   after 48 hours. Nobody noticed, because a missing log looks exactly like a quiet period.
   They now have their own retention (`security_log_retention_days`, default 14).
 
+- **Browsing themes no longer changes your startup theme.** Pressing `t` (or
+  `theme <name>`) now switches the look for the current session only, exactly as
+  the classic terminal always did - the Settings > Theme row is what saves a
+  choice. Until now every press wrote the config immediately, so looking through
+  the catalog once left the LAST theme in the list as your new default: matrix,
+  which looks like a plain green terminal - and the next start seemed to have
+  lost the VAF theme entirely. The switch note now says it changed this session,
+  and where to save.
 - **Workflow variable filling is deterministic, and its log tells the truth.**
   When a matched workflow was missing inputs, which template default got applied
   could depend on Python's hash order (a fill loop removed items from the list it

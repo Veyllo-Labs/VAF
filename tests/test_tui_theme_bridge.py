@@ -375,3 +375,99 @@ def test_the_config_is_read_once_not_once_per_menu_row(monkeypatch):
     assert _marked(rows) == ["nord"]
     assert len(reads) <= 1, f"{len(reads)} config reads for {len(THEME_ORDER)} rows"
     assert ThemeManager.current() == "nord"
+
+
+# ── browsing is not choosing ────────────────────────────────────────────────────────
+
+"""THE THIRD THEME INCIDENT, same person, same landing spot. `t` used to
+persist on every press, so looking through the catalog rewrote the startup
+default step by step - and whoever walked the list once ended on its LAST
+entry, matrix, which reads as a plain green terminal. Twice the next
+`vaf run` then looked like the VAF theme was gone entirely.
+
+The classic lane never had this trap: its `theme <name>` set only the
+per-process cache (zero Config.set in that branch, measured), and the config
+was written by the deliberate `vaf settings` selection alone. The tests below
+pin that restored contract: `t` and `theme <name>` are session-only, the
+Settings > Theme row is the one place a theme becomes the default.
+"""
+
+
+def _detached_app():
+    import vaf.cli.tui_app.app as app_mod
+
+    record = {"themes": [], "notes": []}
+
+    class _A(app_mod.VafApp):
+        theme = property(lambda s: "", lambda s, v: record["themes"].append(v))
+
+        def notify(self, msg, **kw):
+            record["notes"].append(str(msg))
+
+    a = _A.__new__(_A)
+    a._theme_key = "vaf"
+    return a, record
+
+
+def test_the_t_cycle_writes_no_config(monkeypatch):
+    """The headline. Every press used to be a permanent choice.
+
+    Config.get is stubbed alongside Config.set: the cache assertion below
+    otherwise resolves from the REAL config file, and this test was caught
+    passing under a mutation because the machine's stored theme happened to
+    equal the expected one - written seconds earlier by a still-open app
+    running the old persisting code, mid live-incident."""
+    import vaf.core.config as config_mod
+    from vaf.cli.themes import ThemeManager
+
+    written = []
+    monkeypatch.setattr(config_mod.Config, "set",
+                        classmethod(lambda cls, k, v: written.append((k, v))))
+    monkeypatch.setattr(config_mod.Config, "get",
+                        classmethod(lambda cls, k, d=None: "vaf"))
+    app, record = _detached_app()
+    app.action_next_theme()
+    assert written == [], f"browsing persisted again: {written}"
+    assert app._theme_key == THEME_ORDER[1]
+    assert record["themes"] == [f"vaf-{THEME_ORDER[1]}"]
+    # The session cache moves WITH it, or the settings marker and the classic
+    # renderers would name a different theme than the one on screen.
+    assert ThemeManager.current() == THEME_ORDER[1]
+
+
+def test_theme_by_name_is_session_only_like_the_classic_lane(monkeypatch):
+    import vaf.core.config as config_mod
+
+    written = []
+    monkeypatch.setattr(config_mod.Config, "set",
+                        classmethod(lambda cls, k, v: written.append((k, v))))
+    app, record = _detached_app()
+    app._cmd_theme(["gruvbox"])
+    assert written == []
+    assert app._theme_key == "gruvbox"
+
+
+def test_the_notify_says_it_did_not_save():
+    """The trap was invisible; the note now names the boundary and the way to
+    make a choice stick."""
+    app, record = _detached_app()
+    app.action_next_theme()
+    assert record["notes"] and "session" in record["notes"][0]
+    assert "Settings" in record["notes"][0]
+
+
+def test_the_settings_row_is_still_the_one_that_saves():
+    """The other half of the contract, pinned from the source: the deliberate
+    selection persists (test_tui_round1_defects drives the behavior)."""
+    from pathlib import Path
+
+    import vaf.cli.tui_app.screens as screens_mod
+
+    src = Path(screens_mod.__file__).read_text(encoding="utf-8")
+    assert "persist_theme(key)" in src, "the Settings row stopped saving"
+
+    import vaf.cli.tui_app.app as app_mod
+
+    app_src = Path(app_mod.__file__).read_text(encoding="utf-8")
+    assert "persist_theme" not in app_src, (
+        "a persisting path is back in the app's theme handlers")

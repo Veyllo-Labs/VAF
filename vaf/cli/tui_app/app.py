@@ -43,7 +43,6 @@ from vaf.cli.tui_app.theme_bridge import (
     css_variables_for,
     initial_theme_key,
     make_textual_theme,
-    persist_theme,
     textual_theme_name,
 )
 from vaf.cli.tui_app.widgets import (
@@ -640,11 +639,19 @@ class VafApp(App):
             panel.focus_list()
 
     def action_next_theme(self) -> None:
+        """Cycle themes for THIS SESSION - browsing is not choosing.
+
+        This used to persist on every press, and it burned the same person
+        twice: looking through the list rewrites the startup default with each
+        step, and whoever walks it once ends on the LAST entry - matrix, which
+        reads as a plain green terminal, so the next `vaf run` looked like the
+        VAF theme was gone entirely. The classic lane never persisted here
+        (`theme <name>` in run.py sets only the process cache; the config was
+        written by `vaf settings` alone) - this restores that contract.
+        Saving a theme is the Settings > Theme row, a deliberate selection.
+        """
         idx = (THEME_ORDER.index(self._theme_key) + 1) % len(THEME_ORDER)
-        self._theme_key = THEME_ORDER[idx]
-        persist_theme(self._theme_key)
-        self.theme = textual_theme_name(self._theme_key)
-        self.notify(f"theme: {self._theme_key}", timeout=1.5)
+        self._apply_session_theme(THEME_ORDER[idx])
 
     @on(PromptBox.Changed)
     def _prompt_changed(self, event) -> None:
@@ -735,10 +742,20 @@ class VafApp(App):
                 "Theme", f"unknown theme {name!r} - have: "
                          + ", ".join(THEME_ORDER), "warning")
             return
-        self._theme_key = name
-        persist_theme(name)
-        self.theme = textual_theme_name(name)
-        self.notify(f"theme: {name}", timeout=1.5)
+        self._apply_session_theme(name)
+
+    def _apply_session_theme(self, key: str) -> None:
+        """One theme for this session, on all three surfaces that must agree:
+        the app key (get_css_variables + the `t` cycle count), Textual's
+        stylesheet, and the per-process ThemeManager cache (which the settings
+        marker and every classic renderer read). NO config write - see
+        action_next_theme for why browsing must not choose."""
+        from vaf.cli.themes import ThemeManager
+        self._theme_key = key
+        ThemeManager.set_theme(key)
+        self.theme = textual_theme_name(key)
+        self.notify(f"theme: {key} - this session; Settings › Theme saves it",
+                    timeout=2.5)
 
     def _cmd_session(self, args) -> None:
         if not args:

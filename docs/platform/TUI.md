@@ -62,9 +62,15 @@ second turn implementation:
   (success, warning, error) kept as desaturated hues because telling a gate
   warning from an error is the one job colour still has. Both terminal lanes
   read that catalog, so the look is the same in either. The active theme is the
-  `theme` config key, so a choice made with `t`, `theme <name>` or the Settings
-  row is what the next start uses - and a stored theme that no longer exists
-  falls back to the default rather than stranding the user. That key is also
+  `theme` config key - and only the Settings > Theme row writes it. `t` and
+  `theme <name>` change the look for THIS SESSION, exactly as the classic
+  lane's `theme` command always did: browsing must not choose. (It used to
+  persist on every press, and walking the list once therefore ended with the
+  LAST catalog entry as the startup default - matrix, which reads as a plain
+  green terminal; the next start then looked like the VAF theme was gone. The
+  same person hit that twice before this line existed.) A stored theme that no
+  longer exists falls back to the default rather than stranding the user.
+  That key is also
   what answers *which* theme is current, everywhere: `ThemeManager.current()`
   resolves it on first read and then holds it for the process, so the settings
   marker, the `vaf-settings` menu and the colours on screen cannot disagree.

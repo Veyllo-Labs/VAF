@@ -4612,7 +4612,18 @@ class Agent:
         }
 
         if lang == "de":
-            hint = "LANGUAGE_HINT: de (Answer in German. Ask clarifying questions in German as well.)"
+            # The orthography clause is deliberate and belongs HERE rather than in the
+            # static prompt: this line is rewritten into history[0] on every turn, so it
+            # sits above the conversation - including the model's own earlier replies.
+            # Since 2026-07 the chat lane emits German with ASCII substitutions, mixed
+            # word by word inside one reply (measured in the raw provider chunk, before
+            # any VAF code sees it), and the transliterated spelling is fed back to it as
+            # context, which makes it self-reinforcing. A rule further down the prompt
+            # loses against that example; this one outranks it. It reduces the habit, it
+            # does not switch it off, and only a live run can show how much.
+            hint = ("LANGUAGE_HINT: de (Answer in German. Ask clarifying questions in German "
+                    "as well. Write German orthography properly: use the letters ä, ö, ü and ß, "
+                    "never the ae/oe/ue/ss substitutes.)")
         elif lang == "en":
             hint = "LANGUAGE_HINT: en (Answer in English. Ask clarifying questions in English.)"
         elif lang and lang != "auto":

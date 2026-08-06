@@ -39,6 +39,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **German answers are asked to use real umlauts again.** For a while the assistant
+  had taken to writing "fuer" and "laeuft" instead of "für" and "läuft", sometimes
+  switching between both inside one sentence. That comes from the language model, not
+  from VAF, and it feeds itself: the model reads its own earlier replies and copies the
+  habit. The instruction VAF sends with every turn now asks for proper German spelling
+  explicitly, which curbs it. It will not be perfect, and a fresh chat shows it best.
 - **A bundled browser script that nobody used is gone.** It was a copy of a third-party
   fingerprinting library, 43 KB, kept in the tree long after VAF stopped injecting it,
   and it carried no author credit. Deleting it is the honest repair: nothing changes for

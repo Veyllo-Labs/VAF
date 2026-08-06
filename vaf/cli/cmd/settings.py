@@ -1027,13 +1027,13 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     UI.console.print(mascot, justify="center", style="bold cyan")
     UI.print()
     
+    # The words come from one place (info.about_facts); this menu only styles
+    # them - its version line and legal atoms had already drifted once.
+    from vaf.cli.cmd.info import about_facts
+    facts = about_facts()
+
     UI.console.print("[bold white]Veyllo Agent Framework (VAF)[/bold white]", justify="center")
-    try:
-        from vaf import __version__
-        version = __version__
-    except ImportError:
-        version = "0.0.0"
-    UI.console.print(f"[dim]Version {version}[/dim]\n", justify="center")
+    UI.console.print(f"[dim]Version {facts['version']}[/dim]\n", justify="center")
     
     UI.console.print("[bold magenta]Created by Mert Can Elsner[/bold magenta]", justify="center")
     UI.console.print("[cyan]Veyllo Labs[/cyan]\n", justify="center")
@@ -1051,14 +1051,14 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     
     panel_text = (
         "[bold]Dual-licensed: GNU AGPL-3.0-or-later or Commercial License[/bold]\n\n"
-        "Copyright (c) 2026 Veyllo GmbH\n\n"
+        f"Copyright {facts['copyright']}\n\n"
         "[bold green]✅ Under the AGPL (free):[/bold green] use for any purpose (personal/commercial), "
         "modify, and distribute. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted.\n\n"
         "[bold yellow]⚠ Copyleft:[/bold yellow] if you distribute VAF or run a [bold]modified[/bold] version "
         "as a network service (SaaS), you must make your source available under the AGPL.\n\n"
         "[bold blue]🏢 Commercial License:[/bold blue] for closed-source products or proprietary SaaS "
-        "without AGPL copyleft. Contact legal@veyllo.io.\n\n"
-        "Full terms: [bold]https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md[/bold]"
+        f"without AGPL copyleft. Contact {facts['contact']}.\n\n"
+        f"Full terms: [bold]{facts['terms_url']}[/bold]"
     )
     
     from rich.panel import Panel

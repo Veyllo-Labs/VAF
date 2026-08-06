@@ -108,39 +108,80 @@ def info():
     # Tip
     UI.print("\n[dim]To repair GPU support, run: 'vaf install-gpu'[/dim]")
 
+def about_facts() -> dict:
+    """The ONE source for what About says, wherever it is rendered.
+
+    Three renderers used to carry their own copy of the legal lines - this
+    command, the inquirer settings menu, and the terminal app's overlay - and
+    two had already drifted apart. The words live here once; renderers only
+    style them.
+
+    The licence points at a URL rather than a file path: an installed VAF has
+    its licences in the package metadata (dist-info/licenses/), not in the
+    user's working directory, and the commercial terms were never part of the
+    distribution at all.
+    """
+    try:
+        version = importlib.metadata.version("vaf")
+    except Exception:
+        # A source checkout without installed dist metadata still knows who
+        # it is. (The old inline line asked importlib.util without importing
+        # it - a latent AttributeError this extraction removes.)
+        try:
+            from vaf.version import __version__ as version
+        except Exception:
+            version = "dev"
+    terms_url = "https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md"
+    contact = "legal@veyllo.io"
+    return {
+        "name": "VAF - Veyllo Agentic Framework",
+        "version": version,
+        "copyright": "(c) 2026 Veyllo GmbH",
+        "credits": "Built by Veyllo Labs",
+        "terms_url": terms_url,
+        "contact": contact,
+        "license": (
+            "Dual-licensed: GNU AGPL-3.0-or-later (open source) or a Commercial License.",
+            f"Full terms: {terms_url}",
+            f"Commercial / OEM licensing: {contact}",
+        ),
+        "links": (
+            ("Website", "https://veyllo.io"),
+            ("GitHub", "https://github.com/Veyllo-Labs/VAF"),
+        ),
+    }
+
+
 @app.command("about")
 def about():
     """Show About / License information."""
-    UI.panel("文 VAF - Veyllo Agentic Framework", style="bold cyan")
-    
+    facts = about_facts()
+    UI.panel(f"文 {facts['name']}", style="bold cyan")
+
     logo = """
    O))         O))       O))))))))
-    O))       O))))      O))      
-     O))     O))  O))    O))      
-      O))   O))    O))   O))))))  
-       O)) O)) )))) O))  O))      
-        O))))        O)) O))      
-         O))          O))O))     (OO ) 
+    O))       O))))      O))
+     O))     O))  O))    O))
+      O))   O))    O))   O))))))
+       O)) O)) )))) O))  O))
+        O))))        O)) O))
+         O))          O))O))     (OO )
     """
     UI.print(f"[cyan]{logo}[/cyan]")
-    
-    UI.print(f"[bold]Version:[/bold] {importlib.metadata.version('vaf') if importlib.util.find_spec('vaf') else 'Dev'}")
-    UI.print("[bold]Copyright:[/bold] (c) 2026 Veyllo GmbH")
-    UI.print("[bold]Credits:[/bold] Built with ❤️ by Veyllo Labs")
+
+    UI.print(f"[bold]Version:[/bold] {facts['version']}")
+    UI.print(f"[bold]Copyright:[/bold] {facts['copyright']}")
+    UI.print(f"[bold]Credits:[/bold] {facts['credits']}")
     UI.print()
-    
+
     UI.print("[bold]License:[/bold]")
-    UI.print("Dual-licensed: [bold]GNU AGPL-3.0-or-later[/bold] (open source) or a [bold]Commercial License[/bold].")
-    # A URL rather than a file path: an installed VAF has its licences in the
-    # package metadata (dist-info/licenses/), not in the user's working directory,
-    # and the commercial terms were never part of the distribution at all.
-    UI.print("Full terms: [bold]https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md[/bold]")
-    UI.print("Commercial / OEM licensing: [bold]legal@veyllo.io[/bold]")
+    for line in facts["license"]:
+        UI.print(line)
     UI.print()
-    
+
     UI.print("[bold]Links:[/bold]")
-    UI.print("🌐 Website: https://veyllo.io")
-    UI.print("💻 GitHub:  https://github.com/Veyllo-Labs/VAF")
+    for label, url in facts["links"]:
+        UI.print(f"{label}: {url}")
 
 @app.command("install-gpu")
 def install_gpu():

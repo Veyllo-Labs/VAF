@@ -277,7 +277,8 @@ class VafApp(App):
     }
     #promptbox:focus { border: round $vaf-border-active; }
     #statusstrip { height: 1; padding: 0 1; background: $background; }
-    GateScreen, VoiceScreen, SettingsScreen, ModelScreen, HistoryScreen, HelpScreen {
+    GateScreen, VoiceScreen, SettingsScreen, ModelScreen, HistoryScreen, HelpScreen,
+    NumberScreen, AboutScreen, ApiKeyScreen, ConfirmScreen, ToolsScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.6);
     }

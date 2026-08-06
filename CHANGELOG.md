@@ -21,7 +21,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the intended way: `vaf tray`. A service that is already running keeps serving
   unchanged.
 
+### Added
+- **The context limit, custom numbers, the microphone and About live in the
+  terminal app now.** Four more settings rows stop pointing at `vaf settings`:
+  the context limit offers the classic presets plus a free value and says
+  honestly that it applies at the next start; the sub-agent timeout and the
+  auto-open tab cap take any number in their classic ranges; the microphone
+  submenu lists your real input devices and switches the live microphone at
+  once; and About shows version, licence and links without leaving the app.
+
 ### Fixed
+- **Setting the sub-agent timeout to "no limit" no longer arms a zero-minute
+  timeout.** The row stored 0 minutes while the timeout stayed switched on - and a
+  zero-minute timeout means every running sub-agent is stopped at the next cleanup
+  pass. Choosing "no limit" now switches the timeout off, exactly as the classic
+  menu always did, and choosing a duration switches it on.
+- **The microphone list selects the device you picked.** The classic picker
+  numbers the list by position, but the list is filtered - so on machines with
+  virtual audio devices the position could name a different microphone than the
+  one shown. The terminal app reads the device number printed in each entry.
 - **A long conversation no longer animates dozens of invisible dots.** Every reply
   in the terminal app carries the agent's living dot, but only the newest one shows
   it - the hidden ones kept animating anyway, ten times a second each, so a long

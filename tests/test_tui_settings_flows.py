@@ -249,12 +249,20 @@ def test_an_unchanged_backend_says_so_instead_of_claiming_success(monkeypatch):
 # ── what stays a named boundary, and why ────────────────────────────────────────────
 
 def test_the_rebuild_only_flows_still_say_so():
-    """The local GGUF and the context limit are NOT offered as working rows:
-    `load_model()` reuses a running llama server without checking which model
-    it serves, and `n_ctx` is a snapshot in three places while `init_chat()`
-    wipes the history. A half-working row is worse than an honest pointer."""
+    """The local GGUF is NOT offered as a working row: `load_model()` reuses a
+    running llama server without checking which model it serves, and the swap
+    would need `init_chat()`, which wipes the history. A half-working row is
+    worse than an honest pointer.
+
+    The context limit LEFT this set on purpose: writing `n_ctx` is exactly
+    what the inquirer menu does, and the row now says WHEN it applies ("at the
+    next start") instead of refusing to write it at all. The set below may
+    only shrink through a row becoming genuinely functional - never through
+    one silently pretending.
+    """
     from vaf.cli.tui_app.screens import SettingsScreen
 
     screen = _screen({"provider": "local"})
     later = {arg for kind, arg, _ in screen._menu_rows("main") if kind == "later"}
-    assert {"local_model", "search_models", "context"} <= later
+    assert {"local_model", "search_models"} <= later
+    assert "context" not in later, "the context limit fell back to a dead row"

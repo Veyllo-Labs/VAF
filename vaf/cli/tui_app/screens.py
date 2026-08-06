@@ -9,11 +9,17 @@ The settings screen is the `vaf settings` main menu (cli/cmd/settings.py) as a
 stacked arrow menu. Boolean rows write their real config keys immediately - the
 same single `Config.set` the inquirer menu performs. The provider and API model
 open the model overlay, which applies them to the RUNNING agent and asks for an
-API key when one is missing. Rows that still need a genuinely new agent or a
-backend this lane has not built yet (the local GGUF, the context limit, the
-model download, the microphone) display live values but route to `vaf settings`;
-each says so instead of pretending.
+API key when one is missing. The context limit and the numeric choices take a
+free value through NumberScreen, the microphone submenu enumerates real devices
+(once per entry, behind an fd-2 guard), and About renders the shared facts.
+Rows that still need a genuinely new agent (the local GGUF, the model download)
+display live values but route to `vaf settings`; each says so instead of
+pretending.
 """
+import os
+import re
+from contextlib import contextmanager
+
 from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -214,7 +220,8 @@ class SettingsScreen(ModalScreen[None]):
 
     TITLES = {"main": "Settings", "voice": "Settings › Voice",
               "theme": "Settings › Theme", "stt_lang": "Settings › Input Language",
-              "subagent_provider": "Settings › Sub-Agent Provider"}
+              "subagent_provider": "Settings › Sub-Agent Provider",
+              "mic": "Settings › Microphone"}
 
     # Rows that write ONE config key and are read live at their consumption
     # site: no backend call, no agent rebuild. They were "use vaf settings"
@@ -243,13 +250,36 @@ class SettingsScreen(ModalScreen[None]):
         "ux_auto_open_max_tabs": ("Max auto-opened tabs", [
             ("1", 1), ("4", 4), ("8", 8), ("12", 12), ("20", 20),
         ]),
+        # n_ctx is a llama-server LAUNCH argument and a build-time snapshot at
+        # its dominant consumers - the write lands, the note below says when.
+        "n_ctx": ("Context Limit", [
+            ("32768 (minimum / balanced)", 32768),
+            ("65536 (large)", 65536),
+            ("131072 (max)", 131072),
+        ]),
     }
+
+    # Choice keys that also take a free value; (minimum, maximum, hint) with
+    # None for an unbounded side. The submenu grows a "Custom..." row.
+    NUMBERS = {
+        "n_ctx": (32768, None, "tokens"),
+        "subagent_timeout_minutes": (0, 480, "minutes, 0 turns the timeout off"),
+        "ux_auto_open_max_tabs": (1, 20, "tabs"),
+    }
+
+    # Appended to the write notify when the value does NOT reach the running
+    # process - honesty about WHEN a stored choice applies.
+    PICK_NOTES = {"n_ctx": "applies at the next start"}
 
     def __init__(self) -> None:
         super().__init__()
         self._stack = ["main"]
         self._rows: list = []
         self._row_statics: list = []
+        # Microphone submenu cache: None = not loaded, list = devices,
+        # str = the honest reason there are none. Filled ONCE on entering the
+        # submenu; _menu_rows must never enumerate itself (see _load_mics).
+        self._mic_devices = None
 
     # menu definitions ---------------------------------------------------------------
     def _cfg(self, key, default=None):
@@ -291,7 +321,7 @@ class SettingsScreen(ModalScreen[None]):
                              f"API Model: [$text]{_esc(api_model)}[/]"))
             rows += [
                 ("sep", None, ""),
-                ("later", "context", f"Context Limit [$text]({int(self._cfg('n_ctx', 32768) or 32768):,})[/]"),
+                ("choice", "n_ctx", ""),
                 ("later", "local_model", "Select Active Model"),
                 ("later", "search_models", "Search & Download New Models"),
                 ("toggle", "auto_start_local_server", ""),
@@ -310,6 +340,7 @@ class SettingsScreen(ModalScreen[None]):
                 ("sep", None, ""),
                 ("later", "tools", "Show All Tools"),
                 ("toggle", "persist_server", ""),
+                ("about", None, "About VAF"),
                 ("back", None, "Exit Settings"),
             ]
             return rows
@@ -318,13 +349,27 @@ class SettingsScreen(ModalScreen[None]):
                 ("toggle", "speech_tts_enabled", ""),
                 ("choice", "speech_tts_engine", ""),
                 ("toggle", "speech_stt_enabled", ""),
-                ("later", "mic", "Select Microphone"),
+                ("submenu", "mic", "Select Microphone"),
                 ("submenu", "stt_lang", "Select Input Language"),
                 ("later", "wake", "Wake Word"),
                 ("back", None, "Back"),
             ]
         if menu.startswith("choice:"):
             return self._choice_rows(menu.split(":", 1)[1])
+        if menu == "mic":
+            current = self._cfg("speech_mic_index", None)
+            state = self._mic_devices
+            rows = []
+            if isinstance(state, str):
+                rows.append(("note", None, state))
+            elif not state:
+                rows.append(("note", None, "no microphones detected"))
+            else:
+                for idx, text in state:
+                    marker = "▍" if current == idx else " "
+                    rows.append(("mic", idx,
+                                 f"[$primary]{marker}[/][$text]{_esc(text)}[/]"))
+            return rows + [("back", None, "Back")]
         if menu == "stt_lang":
             return self._choice_rows("speech_language")
         if menu == "subagent_provider":
@@ -349,11 +394,24 @@ class SettingsScreen(ModalScreen[None]):
     def _choice_rows(self, key: str) -> list:
         label, options = self.CHOICES[key]
         current = self._cfg(key, self._RUNTIME_FALLBACKS.get(key))
+        # The timeout's "no limit" is not a minutes value, it is the ENABLED
+        # key switched off (see _write_choice) - so the marker follows the
+        # switch, not the stored minutes, or it would name a limit that is
+        # not in force.
+        timeout_off = (key == "subagent_timeout_minutes"
+                       and not self._toggle_state("subagent_timeout_enabled"))
         rows = []
         for display, value in options:
-            marker = "▍" if value == current else " "
+            if key == "subagent_timeout_minutes":
+                marked = ((value == 0 and timeout_off)
+                          or (value != 0 and not timeout_off and value == current))
+            else:
+                marked = value == current
             rows.append(("pick", (key, value),
-                         f"[$primary]{marker}[/][$text]{_esc(display)}[/]"))
+                         f"[$primary]{'▍' if marked else ' '}[/]"
+                         f"[$text]{_esc(display)}[/]"))
+        if key in self.NUMBERS:
+            rows.append(("number", key, "Custom..."))
         return rows + [("back", None, "Back")]
 
     def _subagent_provider_rows(self) -> list:
@@ -406,10 +464,17 @@ class SettingsScreen(ModalScreen[None]):
             return f"[$text-disabled]‹ {label}[/]"
         if kind == "later":
             return f"[$vaf-muted]{label}[/]  [$text-disabled](vaf settings)[/]"
+        if kind == "note":
+            return f"[$text-disabled]{_esc(label)}[/]"
         if kind == "choice":
             name, options = self.CHOICES[arg]
             current = self._cfg(arg, self._RUNTIME_FALLBACKS.get(arg))
             shown = next((d for d, v in options if v == current), str(current))
+            if (arg == "subagent_timeout_minutes"
+                    and not self._toggle_state("subagent_timeout_enabled")):
+                # The stored minutes are dormant while the switch is off -
+                # showing them would name a limit that is not in force.
+                shown = "no limit"
             return f"[$vaf-muted]{name:<24}[/] [$text]{_esc(shown)}[/]"
         if kind in ("provider", "api_model"):
             return f"[$vaf-muted]{label}[/]  [$text-disabled]›[/]"
@@ -459,6 +524,8 @@ class SettingsScreen(ModalScreen[None]):
             self.app.post_message(SettingsChanged())
             return
         if kind == "submenu":
+            if arg == "mic":
+                self._load_mics()
             self._stack.append(arg)
             self._rebuild()
             return
@@ -477,13 +544,36 @@ class SettingsScreen(ModalScreen[None]):
             self._rebuild()
             return
         if kind == "pick":
-            from vaf.core.config import Config
-            key, value = arg
-            Config.set(key, value)
-            self._sync_live_agent(key, value)
-            self.app.notify(f"{key}: {value}", timeout=1.5)
-            self._stack.pop()
-            self._rebuild()
+            self._write_choice(*arg)
+            return
+        if kind == "number":
+            minimum, maximum, hint = self.NUMBERS[arg]
+            current = self._cfg(arg, self._RUNTIME_FALLBACKS.get(arg))
+            name = self.CHOICES[arg][0]
+
+            def _entered(value) -> None:
+                if value is None:          # cancelled: change nothing at all
+                    return
+                self._write_choice(arg, value)
+
+            # Pushed ON TOP of this modal - never the dismiss-then-push of the
+            # provider rows below, which would throw the settings stack away.
+            self.app.push_screen(
+                NumberScreen(name, current, minimum=minimum, maximum=maximum,
+                             hint=hint), _entered)
+            return
+        if kind == "mic":
+            try:
+                from vaf.core.speech import get_speech_manager
+                with self._quiet_fd2():
+                    # Persists speech_mic_index AND re-inits the live mic.
+                    get_speech_manager().set_microphone(int(arg))
+            except Exception as exc:
+                self.app.notify(f"microphone change failed: {exc}",
+                                severity="warning", timeout=3.0)
+                return
+            self.app.notify(f"microphone: {arg}", timeout=1.5)
+            self._refresh_labels()
             self.app.post_message(SettingsChanged())
             return
         if kind == "subagent_provider":
@@ -500,6 +590,9 @@ class SettingsScreen(ModalScreen[None]):
             self._stack.pop()
             self._rebuild()
             self.app.post_message(SettingsChanged())
+            return
+        if kind == "about":
+            self.app.push_screen(AboutScreen())
             return
         if kind in ("provider", "api_model"):
             self.dismiss(None)
@@ -519,10 +612,100 @@ class SettingsScreen(ModalScreen[None]):
 
     def action_go_back(self) -> None:
         if len(self._stack) > 1:
-            self._stack.pop()
+            if self._stack.pop() == "mic":
+                self._mic_devices = None      # re-enumerate on next entry
             self._rebuild()
         else:
             self.dismiss(None)
+
+    # one chosen value for one choice key ---------------------------------------------
+    def _write_choice(self, key, value) -> None:
+        """Write, sync, say, return - shared by the preset rows and the Custom
+        number field so the two paths cannot drift.
+
+        `subagent_timeout_minutes` is special and DANGEROUS to write literally:
+        the cleanup pass computes `cutoff = now - minutes*60`, so an ENABLED
+        timeout of zero minutes times out every running sub-agent on its next
+        sweep (vaf/core/subagent_ipc.py). The classic menu therefore never
+        stored 0 - it switched `subagent_timeout_enabled` off and left the
+        minutes alone, and a real number switches it back on. Same here; the
+        preset "no limit" row used to store the 0 and carried exactly that
+        defect.
+        """
+        from vaf.core.config import Config
+        if key == "subagent_timeout_minutes":
+            if int(value or 0) <= 0:
+                Config.set("subagent_timeout_enabled", False)
+                self.app.notify("sub-agent timeout: off", timeout=1.5)
+            else:
+                minutes = max(1, min(int(value), 480))
+                Config.set(key, minutes)
+                Config.set("subagent_timeout_enabled", True)
+                self.app.notify(f"sub-agent timeout: {minutes} minutes",
+                                timeout=1.5)
+        else:
+            Config.set(key, value)
+            self._sync_live_agent(key, value)
+            note = self.PICK_NOTES.get(key)
+            self.app.notify(f"{key}: {value}" + (f" ({note})" if note else ""),
+                            timeout=2.5 if note else 1.5)
+        self._stack.pop()
+        self._rebuild()
+        self.app.post_message(SettingsChanged())
+
+    # microphone helpers --------------------------------------------------------------
+    def _load_mics(self) -> None:
+        """Enumerate input devices ONCE per submenu entry.
+
+        The rows must render from `self._mic_devices`: `_rebuild` and
+        `_refresh_labels` re-ask `_menu_rows` on every pick and stack move,
+        and each enumeration constructs a PyAudio instance - a real
+        audio-stack touch (and an fd-2 writer, see `_quiet_fd2`).
+
+        The index is PARSED from the "i: name" prefix rather than taken from
+        the position: the PyAudio path pre-formats and FILTERS the list, so
+        the position lies about the device index. The fallback path
+        (sr.Microphone names) has no prefix, and there position IS the index.
+        """
+        try:
+            from vaf.core.speech import get_speech_manager
+            with self._quiet_fd2():
+                names = get_speech_manager().list_microphones() or []
+        except Exception as exc:
+            self._mic_devices = f"microphones unavailable: {exc}"
+            return
+        devices = []
+        for pos, raw in enumerate(names):
+            text = str(raw)
+            m = re.match(r"^(\d+):\s*", text)
+            devices.append((int(m.group(1)) if m else pos, text))
+        self._mic_devices = devices
+
+    @contextmanager
+    def _quiet_fd2(self):
+        """C-level stderr to devnull for the duration.
+
+        ALSA writes its configuration warnings from C, past every
+        Python-level redirect, and under the alternate screen they shred the
+        display (the app's boot order exists for the same reason). Fail-open:
+        no fd games when dup fails.
+        """
+        try:
+            saved = os.dup(2)
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, 2)
+        except Exception:
+            yield
+            return
+        try:
+            yield
+        finally:
+            try:
+                os.dup2(saved, 2)
+                os.close(saved)
+                os.close(devnull)
+            except Exception:
+                pass
 
 
 class SettingsChanged(events.Message):
@@ -591,6 +774,76 @@ class ApiKeyScreen(ModalScreen[str]):
             self.query_one("#apikey-hint", Static).update(
                 f"[$error]that is only {len(value)} characters - "
                 f"check the paste[/]")
+            return
+        self.dismiss(value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class NumberScreen(ModalScreen["int | None"]):
+    """Type one bounded number, or leave without changing anything.
+
+    Dismisses with an int - never a str, because the settings rows compare the
+    stored value against option values with `==`, and a str would silently
+    unmark every row while looking stored. Escape and an empty submit both
+    dismiss None ("change nothing"); unlike the key field there is no third
+    meaning to carry. Out-of-range input updates the hint in place and keeps
+    the screen open: a mistyped number must be rejected where it was typed,
+    not stored and then surprise somewhere far away.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, title: str, current, minimum: "int | None" = None,
+                 maximum: "int | None" = None, hint: str = "") -> None:
+        super().__init__()
+        self._title = str(title)
+        self._current = current
+        self._min = minimum
+        self._max = maximum
+        self._hint = str(hint or "")
+
+    def _bounds_text(self) -> str:
+        if self._min is not None and self._max is not None:
+            return f"{self._min}..{self._max}"
+        if self._min is not None:
+            return f">= {self._min}"
+        if self._max is not None:
+            return f"<= {self._max}"
+        return ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="number-box", classes="modal-box"):
+            yield Static(f"[bold $text]{_esc(self._title)}[/]",
+                         classes="modal-title")
+            yield Static(f"[$vaf-muted]current:[/] [$text]{_esc(self._current)}[/]",
+                         classes="modal-body")
+            yield Input(id="number-input",
+                        placeholder=self._bounds_text() or "number")
+            parts = " · ".join(p for p in (self._hint, self._bounds_text()) if p)
+            yield Static(f"[$text-disabled]{_esc(parts)} · esc cancels[/]",
+                         id="number-hint", classes="modal-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#number-input", Input).focus()
+
+    @on(Input.Submitted, "#number-input")
+    def _submitted(self, event: Input.Submitted) -> None:
+        raw = str(event.value or "").strip()
+        if not raw:
+            self.dismiss(None)
+            return
+        try:
+            value = int(raw)
+        except ValueError:
+            self.query_one("#number-hint", Static).update(
+                f"[$error]{_esc(raw)} is not a whole number[/]")
+            return
+        if ((self._min is not None and value < self._min)
+                or (self._max is not None and value > self._max)):
+            self.query_one("#number-hint", Static).update(
+                f"[$error]out of range ({self._bounds_text()})[/]")
             return
         self.dismiss(value)
 
@@ -808,6 +1061,43 @@ class HelpScreen(ModalScreen[None]):
             yield Static("[$text-disabled]esc closes[/]", classes="modal-keys")
 
     def action_close_help(self) -> None:
+        self.dismiss(None)
+
+
+class AboutScreen(ModalScreen[None]):
+    """Version, copyright, licence, links - the `vaf about` panel as an overlay.
+
+    Every word comes from `info.about_facts()`; this screen only styles them.
+    Three renderers used to carry their own copy of the legal lines and two
+    had drifted - the facts live once now.
+    """
+
+    BINDINGS = [Binding("escape", "close_about", "close")]
+
+    def compose(self) -> ComposeResult:
+        # Lazy on purpose: info.py imports typer and the GPU detection, which
+        # have no business on this module's import graph.
+        from vaf.cli.cmd.info import about_facts
+        facts = about_facts()
+
+        with Vertical(id="about-box", classes="modal-box"):
+            yield Static(f"[bold $text]{_esc(facts['name'])}[/]",
+                         classes="modal-title")
+            yield Static(
+                f"[$vaf-muted]Version[/] [$text]{_esc(facts['version'])}[/]\n"
+                f"[$vaf-muted]Copyright[/] [$text]{_esc(facts['copyright'])}[/]\n"
+                f"[$vaf-muted]Credits[/] [$text]{_esc(facts['credits'])}[/]",
+                classes="modal-body")
+            yield Static(
+                "\n".join(f"[$text]{_esc(line)}[/]" for line in facts["license"]),
+                classes="modal-body")
+            yield Static(
+                "\n".join(f"[$vaf-muted]{_esc(label)}[/] [$text]{_esc(url)}[/]"
+                          for label, url in facts["links"]),
+                classes="modal-body")
+            yield Static("[$text-disabled]esc closes[/]", classes="modal-keys")
+
+    def action_close_about(self) -> None:
         self.dismiss(None)
 
 

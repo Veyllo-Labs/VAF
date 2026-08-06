@@ -22,6 +22,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Fixed
+- **A long conversation no longer animates dozens of invisible dots.** Every reply
+  in the terminal app carries the agent's living dot, but only the newest one shows
+  it - the hidden ones kept animating anyway, ten times a second each, so a long
+  session burned more and more CPU drawing into nothing. The visible dot animates
+  exactly as before; the hidden ones now rest until it is their turn again.
 - **`vaf update` now tells you why it could not answer.** Three different situations
   used to collapse into one sentence, "offline, or none published yet", whose two
   halves call for opposite reactions. The real case that exposed it was neither:

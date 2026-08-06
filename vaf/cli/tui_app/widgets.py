@@ -171,6 +171,9 @@ class AgentMessage(Vertical):
 
     def set_avatar_visible(self, visible: bool) -> None:
         self.avatar.display = visible
+        # And the animation with it: a hidden dot must not keep a 10 Hz timer
+        # rendering into display:none (see AgentAvatar.on_mount).
+        self.avatar.set_active(visible)
 
     def feed(self, chunk: str) -> None:
         # Stays synchronous and trivial: the agent lane must never wait on the
@@ -422,10 +425,31 @@ class AgentAvatar(Static):
         self._blink_at = random.randint(45, 90)
         self._oneshot_until = 0
         self._prev_state = "idle"
+        self._timer = None
 
     def on_mount(self) -> None:
-        self.set_interval(self.TICK, self._advance)
+        # The timer follows visibility. Every AgentMessage carries an avatar
+        # but only the NEWEST one shows it (the app moves the slot forward) -
+        # this timer used to run unconditionally at 10 Hz, so a transcript
+        # with N replies animated N dots, N-1 of them into display:none.
+        # Measured before the pause existed: 50 replies = 500 ticks/second
+        # for invisible dots, growing without bound. The visible dot animates
+        # exactly as before.
+        self._timer = self.set_interval(self.TICK, self._advance,
+                                        pause=not bool(self.display))
         self.update(self._render_body())
+
+    def set_active(self, visible: bool) -> None:
+        """Run the animation only while somebody can see it."""
+        if self._timer is None:
+            return
+        if visible:
+            self._timer.resume()
+            # An immediate frame, so unpausing never shows a stale body for
+            # up to one tick.
+            self.update(self._render_body())
+        else:
+            self._timer.pause()
 
     def set_state(self, state: str) -> None:
         if state in ("success", "error"):

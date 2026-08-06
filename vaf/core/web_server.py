@@ -99,30 +99,11 @@ app.add_middleware(
 # Max sessions sent to Web UI (sidebar list); increase if users have many chats.
 SESSION_LIST_LIMIT = 500
 
-# Session ID prefixes for channel chats (WhatsApp, Telegram, Discord). These are shown only in their dashboards, not in the main chat list.
-_CHANNEL_SESSION_PREFIXES = ("whatsapp_", "telegram_", "discord_")
-
-
-def _is_channel_session(session_id: str) -> bool:
-    """True if this session is a channel/contact chat (WhatsApp, Telegram, Discord), not a main Web UI chat."""
-    if not session_id or not isinstance(session_id, str):
-        return False
-    return session_id.startswith(_CHANNEL_SESSION_PREFIXES)
-
-
-def _web_ui_sessions(sessions: list) -> list:
-    """Filter to sessions that belong in the main Web UI sidebar (exclude channel and thinking-only sessions)."""
-    out = []
-    for s in sessions:
-        sid = s.get("id") or ""
-        if _is_channel_session(sid):
-            continue
-        # Thinking output now goes into web-default; hide legacy thinking_* sessions from the list
-        meta = s.get("metadata") or {}
-        if meta.get("source") == "thinking" or sid.startswith("thinking_"):
-            continue
-        out.append(s)
-    return out
+# The sidebar filter (channel + thinking sessions out) lives on the engine as
+# SessionManager.list_ui - one rule for every surface, the terminal app's
+# panel included. The channel prefixes come from the dispatch registry there;
+# this file carried a private copy of both until they diverged from nothing
+# but luck.
 
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
@@ -3169,8 +3150,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         user_scope_id = manager.get_connection_user(websocket)
         
         # Send initial session list (only Web UI chats; channel sessions appear in their dashboards)
-        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-        web_sessions = _web_ui_sessions(sessions)
+        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
         await websocket.send_json({
             "type": "session_list",
             "sessions": [
@@ -3218,8 +3198,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             session_mgr.save(new_sess)
             sid = new_sess.id
             # Refresh the list for the client so they see the new session
-            sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-            web_sessions = _web_ui_sessions(sessions)
+            web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
             await websocket.send_json({
                 "type": "session_list",
                 "sessions": [
@@ -3359,8 +3338,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if type == "get_sessions":
                     # user_scope_id is required for correct RAG scope and filtered session listing
                     user_scope_id = manager.get_connection_user(websocket)
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-                    web_sessions = _web_ui_sessions(sessions)
+                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
                         "sessions": [
@@ -3559,8 +3537,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         continue
                     session_mgr.delete(sid)
                     # Broadcast update ONLY to this user's connections
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-                    web_sessions = _web_ui_sessions(sessions)
+                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await manager.broadcast_to_user(user_scope_id, {
                         "type": "session_list",
                         "sessions": [
@@ -3578,8 +3555,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "error", "message": "Access denied"})
                         continue
                     if sid and session_mgr.hide(sid):
-                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-                        web_sessions = _web_ui_sessions(sessions)
+                        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": [
@@ -3608,8 +3584,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     manager.subscribe_to_session(websocket, new_sess.id)
                     
                     # Refresh list
-                    sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-                    web_sessions = _web_ui_sessions(sessions)
+                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
                         "sessions": [
@@ -3646,8 +3621,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         )
                         
                         # Broadcast update ONLY to this user's connections
-                        sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
-                        web_sessions = _web_ui_sessions(sessions)
+                        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": [

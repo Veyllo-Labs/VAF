@@ -588,23 +588,106 @@ class AgentBridge:
                 self.events.event_note("Session", f"cannot load {session_id}: {exc}",
                                        "error")
                 return
-            previous = self.session
-            self.session = session
-            if previous is not None and str(previous.id) != str(session.id):
-                if self._discard_if_untouched(previous):
-                    self.events.system_note(
-                        "the empty session you left was discarded")
-            self.agent.load_session_context(session.id)
-            self._rebind_local_admin()
-            self._emit("session_switched", session.id,
-                       len(getattr(session, "messages", []) or []))
-            # The transcript must FOLLOW the swap: without this the old
-            # conversation stays on screen above the new session's turns.
-            # fresh=True clears first - unlike the boot replay, which mounts
-            # under the start banner.
-            self._emit("transcript_replay", self._transcript_entries(session),
-                       True)
-            self._refresh_context()
+            self._switch_to(session)
+        self._submit(_run)
+
+    def _switch_to(self, session) -> None:
+        """Make `session` the live one - the runtime counterpart of the boot
+        sequence. Lane-side only (every caller is inside a _submit)."""
+        previous = self.session
+        self.session = session
+        if previous is not None and str(previous.id) != str(session.id):
+            if self._discard_if_untouched(previous):
+                self.events.system_note(
+                    "the empty session you left was discarded")
+        # Boot set this and the runtime switch never did: every
+        # session-scoped IPC read (the tasks line, the queue drain) kept
+        # answering for the PREVIOUS session after a switch.
+        try:
+            from vaf.core.subagent_ipc import set_current_session_id
+            set_current_session_id(str(session.id))
+        except Exception:
+            pass
+        self.agent.load_session_context(session.id)
+        self._rebind_local_admin()
+        self._emit("session_switched", session.id,
+                   len(getattr(session, "messages", []) or []))
+        # The transcript must FOLLOW the swap: without this the old
+        # conversation stays on screen above the new session's turns.
+        # fresh=True clears first - unlike the boot replay, which mounts
+        # under the start banner.
+        self._emit("transcript_replay", self._transcript_entries(session),
+                   True)
+        self._refresh_context()
+
+    def new_session(self) -> None:
+        """`session new` / the panel's `n`: create, persist, switch to it.
+
+        The scope stamp mirrors the boot create: the local admin owns what
+        this single-user lane creates, and the web's scope-filtered list
+        would otherwise show the session only by the legacy no-scope rule.
+        """
+        def _run():
+            try:
+                from vaf.core.config import get_local_admin_scope_id
+                try:
+                    scope = str(get_local_admin_scope_id())
+                except Exception:
+                    scope = None
+                session = self.session_mgr.new(user_scope_id=scope)
+                self.session_mgr.save(session)
+            except Exception as exc:
+                self.events.event_note("Session",
+                                       f"cannot create a session: {exc}", "error")
+                return
+            self._switch_to(session)
+        self._submit(_run)
+
+    def rename_session(self, session_id: str, new_name: str) -> None:
+        """Rename on disk via the engine primitive; if it is the LIVE session,
+        repair the in-memory copy too, so the exit save cannot write the old
+        name back over the rename - the repair every interactive lane carries."""
+        def _run():
+            name = " ".join(str(new_name).split())
+            if not name:
+                self.events.event_note("Session", "a name cannot be empty",
+                                       "warning")
+                return
+            if not self.session_mgr.rename(str(session_id), name):
+                self.events.event_note(
+                    "Session", f"cannot rename {str(session_id)[:12]}: not found",
+                    "error")
+                return
+            if str(self.session.id) == str(session_id):
+                self.session.name = name
+            self.events.system_note(f"session renamed to {name}")
+            self._emit("chrome_changed")
+            self._emit("session_list", self.list_sessions())
+        self._submit(_run)
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session file. The LIVE session is refused honestly - the
+        agent's history, the IPC scope and the transcript all point at it;
+        switching away first keeps every one of them coherent."""
+        def _run():
+            if str(self.session.id) == str(session_id):
+                self.events.event_note(
+                    "Session", "cannot delete the session you are in - "
+                               "switch to another one first", "warning")
+                return
+            try:
+                ok = bool(self.session_mgr.delete(str(session_id)))
+            except Exception as exc:
+                self.events.event_note("Session", f"delete failed: {exc}",
+                                       "error")
+                return
+            if ok:
+                self.events.system_note(f"session {str(session_id)[:12]} deleted")
+            else:
+                self.events.event_note("Session",
+                                       f"{str(session_id)[:12]} not found",
+                                       "warning")
+            self._emit("session_list", self.list_sessions())
         self._submit(_run)
 
     @staticmethod
@@ -974,8 +1057,16 @@ class AgentBridge:
         return f"{secs}s" if secs < 60 else f"{secs // 60}m {secs % 60}s"
 
     def list_sessions(self) -> list:
+        """The engine's ONE surface list (`list_ui`): channel and thinking
+        sessions stay in their dashboards, exactly as the web sidebar shows
+        it - the two lists rendering different sets was the divergence."""
         try:
-            return self.session_mgr.list(limit=20)
+            from vaf.core.config import get_local_admin_scope_id
+            try:
+                scope = str(get_local_admin_scope_id())
+            except Exception:
+                scope = None
+            return self.session_mgr.list_ui(limit=20, user_scope_id=scope)
         except Exception:
             return []
 
@@ -1086,6 +1177,17 @@ class AgentBridge:
                 if self._discard_if_untouched(self.session):
                     pass                    # nothing was said: leave no husk
                 else:
+                    # The on-disk NAME wins at exit: every rename path writes
+                    # the file (web included), and this full-object save must
+                    # not resurrect the name this process booted with.
+                    try:
+                        disk = self.session_mgr.load(str(self.session.id),
+                                                     restore_state=False,
+                                                     repoint=False)
+                        if disk.name and disk.name != self.session.name:
+                            self.session.name = disk.name
+                    except Exception:
+                        pass
                     path = self.session_mgr.save(self.session)
                     self.farewell = self._farewell(path)
             except Exception:

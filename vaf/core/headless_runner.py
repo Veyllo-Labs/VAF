@@ -2818,6 +2818,23 @@ def _handle_command(cmd_str, agent, session_mgr):
             agent.load_session_context(sid)
             print(f"[Headless] LOAD_SESSION: Switched agent context to {sid}")
 
+        elif cmd_type == "RENAME_SESSION":
+            # Format: __CMD__:RENAME_SESSION:id:new_name. The disk write
+            # already happened (SessionManager.rename in the WS handler);
+            # this repairs the copy THIS worker may hold in memory, so a
+            # later full-object save cannot write the old name back over
+            # the rename - the same repair the interactive lanes carry.
+            # This branch was missing: the command was silently swallowed.
+            try:
+                cmd_parts = cmd_str.split(":", 3)
+                sid = cmd_parts[2].strip()
+                new_name = cmd_parts[3].strip()
+                cur = getattr(session_mgr, "_current", None)
+                if cur is not None and str(getattr(cur, "id", "")) == sid:
+                    cur.name = new_name
+            except Exception:
+                pass
+
         elif cmd_type == "RELOAD_CONFIG":
             # The backend swap belongs to the agent, not to whoever happens to receive the
             # command: Agent.reload_api_backend does it with the swap lock, the sub-agent

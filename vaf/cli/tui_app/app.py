@@ -33,6 +33,7 @@ from vaf.cli.tui_app.screens import (
     HistoryScreen,
     ModelScreen,
     PaletteScreen,
+    RenameScreen,
     SessionsPanel,
     SettingsChanged,
     SettingsScreen,
@@ -281,7 +282,7 @@ class VafApp(App):
     #promptbox:focus { border: round $vaf-border-active; }
     #statusstrip { height: 1; padding: 0 1; background: $background; }
     GateScreen, VoiceScreen, SettingsScreen, ModelScreen, HistoryScreen, HelpScreen,
-    NumberScreen, AboutScreen, ApiKeyScreen, ConfirmScreen, ToolsScreen {
+    NumberScreen, AboutScreen, ApiKeyScreen, ConfirmScreen, ToolsScreen, RenameScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.6);
     }
@@ -754,6 +755,36 @@ class VafApp(App):
         if event.session_id and event.session_id != str(self._bridge.session.id):
             self._bridge.load_session(event.session_id)
 
+    @on(SessionsPanel.NewRequested)
+    def _session_new_requested(self, _event) -> None:
+        self.query_one("#sessions", SessionsPanel).remove_class("visible")
+        self.query_one("#promptbox", PromptBox).focus()
+        self._bridge.new_session()
+
+    @on(SessionsPanel.RenameRequested)
+    def _session_rename_requested(self, event) -> None:
+        sid, name = event.session_id, event.name
+
+        def _entered(value) -> None:
+            if value:
+                self._bridge.rename_session(sid, value)
+
+        # On TOP of the open panel - the list stays where the user was.
+        self.push_screen(RenameScreen(name), _entered)
+
+    @on(SessionsPanel.DeleteRequested)
+    def _session_delete_requested(self, event) -> None:
+        sid = event.session_id
+        label = event.name or sid[:12]
+
+        def _answered(yes) -> None:
+            if yes:
+                self._bridge.delete_session(sid)
+
+        self.push_screen(
+            ConfirmScreen(f"Delete session {label}? The file is removed."),
+            _answered)
+
     @on(SettingsChanged)
     def _settings_changed(self, _msg: SettingsChanged) -> None:
         self._refresh_chrome()
@@ -848,6 +879,18 @@ class VafApp(App):
             return
         if word == "current":
             self._bridge.describe_session()
+            return
+        if word == "new":
+            self._bridge.new_session()
+            return
+        if word == "rename":
+            rest = " ".join(str(a) for a in args[1:]).strip()
+            if not rest:
+                self.add_event_note("Command",
+                                    "usage: /session rename <new name>",
+                                    "warning")
+                return
+            self._bridge.rename_session(str(self._bridge.session.id), rest)
             return
         self._bridge.load_session(args[0])
 

@@ -156,13 +156,23 @@ The prompt carries the affordances the classic one had, from the same code:
 
 Ctrl+S opens the sessions panel: arrows walk it, enter loads the highlighted
 session (through the complete context swap, so tool calls and images survive),
-esc closes it. A session nobody actually wrote in is discarded rather than
-kept - on leaving it and on quitting - using the same criterion
-`SessionManager.cleanup_empty` applies (no message with role `user`), so
-starting the app and closing it again does not grow the list. Reading the list happens off the UI thread. On the way out, the
-plain terminal gets the session id and both ways back into it - the classic
-lane printed the same thing, minus its blocking "save?" question, since the
-app saves unconditionally.
+`n` creates a fresh one and switches to it, `r` renames the highlighted row
+(a small input modal on top of the panel), `d` deletes it after a confirm -
+the session you are IN is refused honestly, switch away first. `/session new`
+and `/session rename <name>` do the same from the prompt. The panel shows the
+engine's ONE surface list (`SessionManager.list_ui`) - the same filter the
+web sidebar uses, so channel and thinking sessions stay in their dashboards
+on both surfaces. Renames go through the engine primitive, which writes the
+file and nothing else; the file is the name's source of truth, and the app
+adopts the on-disk name before its exit save, so a rename made in the web
+while the app was open survives the app closing. Esc closes the panel. A
+session nobody actually wrote in is discarded rather than kept - on leaving
+it and on quitting - using the same criterion `SessionManager.cleanup_empty`
+applies (no message with role `user`), so starting the app and closing it
+again does not grow the list. Reading the list happens off the UI thread. On
+the way out, the plain terminal gets the session id and both ways back into
+it - the classic lane printed the same thing, minus its blocking "save?"
+question, since the app saves unconditionally.
 
 The settings overlay is the `vaf settings` main menu as a stacked arrow menu.
 What it can change is decided by where a key is READ, not by how it looks:
@@ -259,12 +269,10 @@ What it can change is decided by where a key is READ, not by how it looks:
   reply and the remainder opens a new bubble below your message - the split is
   explained by that note rather than removed, because removing it would mean
   buffering a live stream around every user mount in this lane.
-- Creating, renaming and deleting sessions is not in the app yet - loading one
-  is. The local model and the model download stay with `vaf settings` for the
-  reason given above. The classic lane's speech preloads (Piper check + voice
-  model, the STT microphone check with an honest "pyaudio is not installed",
-  the langid warmup) run in the BOOT phase now, where the terminal is still
-  plain and their output is readable.
+- The classic lane's speech preloads (Piper check + voice model, the STT
+  microphone check with an honest "pyaudio is not installed", the langid
+  warmup) run in the BOOT phase now, where the terminal is still plain and
+  their output is readable.
 - Voice input works: `l` opens the recording overlay, whose meter renders the
   REAL capture state - the framework's `listen()` grew an `on_state` callback
   (data instead of painting; its raw-stdout meter would shred the alternate

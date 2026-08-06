@@ -913,6 +913,40 @@ class ApiKeyScreen(ModalScreen[str]):
         self.dismiss(None)
 
 
+class RenameScreen(ModalScreen["str | None"]):
+    """One text field: a session's new name.
+
+    Dismisses with the cleaned name, or None for cancel - and empty input IS
+    cancel, because a session with an empty name would fall back to its id on
+    every surface, which is a worse rename than none.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, current: str = "") -> None:
+        super().__init__()
+        self._current = str(current or "")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="rename-box", classes="modal-box"):
+            yield Static("[bold $text]Rename session[/]", classes="modal-title")
+            yield Input(value=self._current, placeholder="session name",
+                        id="rename-input")
+            yield Static("[$text-disabled]enter saves · esc cancels[/]",
+                         classes="modal-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#rename-input", Input).focus()
+
+    @on(Input.Submitted, "#rename-input")
+    def _submitted(self, event: Input.Submitted) -> None:
+        value = " ".join(str(event.value or "").split())
+        self.dismiss(value or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class NumberScreen(ModalScreen["int | None"]):
     """Type one bounded number, or leave without changing anything.
 
@@ -1289,9 +1323,29 @@ class SessionsPanel(Vertical):
     lets the app do the loading - the panel knows nothing about the agent.
     """
 
-    BINDINGS = [Binding("escape", "leave_panel", "back", show=False)]
+    BINDINGS = [
+        Binding("escape", "leave_panel", "back", show=False),
+        Binding("n", "new_session", "new", show=False),
+        Binding("r", "rename_session", "rename", show=False),
+        Binding("d", "delete_session", "delete", show=False),
+    ]
 
     class Selected(events.Message):
+        def __init__(self, session_id: str, name: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+            self.name = name
+
+    class NewRequested(events.Message):
+        pass
+
+    class RenameRequested(events.Message):
+        def __init__(self, session_id: str, name: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+            self.name = name
+
+    class DeleteRequested(events.Message):
         def __init__(self, session_id: str, name: str) -> None:
             super().__init__()
             self.session_id = session_id
@@ -1300,7 +1354,8 @@ class SessionsPanel(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("[bold $text]sessions[/]", classes="panel-title")
         yield ListView(id="session-list")
-        yield Static("[$text-disabled]enter loads · esc back[/]", classes="modal-keys")
+        yield Static("[$text-disabled]enter loads · n new · r rename · "
+                     "d delete · esc back[/]", classes="modal-keys")
 
     def on_mount(self) -> None:
         self._entries: list = []
@@ -1355,6 +1410,31 @@ class SessionsPanel(Vertical):
             entry = self._entries[idx]
             self.post_message(self.Selected(str(entry.get("id", "")),
                                             str(entry.get("name") or "")))
+
+    def _highlighted(self):
+        """The entry under the cursor, or None - r/d act on THIS row."""
+        try:
+            idx = self.query_one("#session-list", ListView).index or 0
+        except Exception:
+            return None
+        if 0 <= idx < len(self._entries):
+            return self._entries[idx]
+        return None
+
+    def action_new_session(self) -> None:
+        self.post_message(self.NewRequested())
+
+    def action_rename_session(self) -> None:
+        entry = self._highlighted()
+        if entry is not None:
+            self.post_message(self.RenameRequested(
+                str(entry.get("id", "")), str(entry.get("name") or "")))
+
+    def action_delete_session(self) -> None:
+        entry = self._highlighted()
+        if entry is not None:
+            self.post_message(self.DeleteRequested(
+                str(entry.get("id", "")), str(entry.get("name") or "")))
 
     def action_leave_panel(self) -> None:
         self.remove_class("visible")

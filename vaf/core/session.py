@@ -348,14 +348,18 @@ class SessionManager:
 
         return filepath
     
-    def load(self, session_id: str, restore_state: bool = True) -> Session:
+    def load(self, session_id: str, restore_state: bool = True,
+             repoint: bool = True) -> Session:
         """
         Load a session by ID.
-        
+
         Args:
             session_id: ID of session to load
             restore_state: Whether to restore state to registry after loading
-            
+            repoint: Whether the loaded session becomes `_current`. Pass False
+                     to READ another session (rename, an exit-time name check)
+                     without changing what "current" means.
+
         Returns:
             Loaded Session instance
         """
@@ -369,9 +373,10 @@ class SessionManager:
                 else:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                
+
                 session = Session.from_dict(data)
-                self._current = session
+                if repoint:
+                    self._current = session
                 
                 # Restore state to registry if available
                 if restore_state and self.state_registry and self.state_registry.is_enabled():
@@ -676,14 +681,47 @@ class SessionManager:
         return deleted
     
     def rename(self, session_id: str, new_name: str) -> bool:
-        """Rename a session."""
+        """Rename a session ON DISK, and nothing else.
+
+        Deliberately free of load()'s side effects: `restore_state=False` /
+        `sync_state=False` keep the renamed session's runtime_state out of
+        the live registry (and the live snapshot out of a foreign session
+        file), and the manager's `_current` pointer is preserved - renaming
+        a session from a list must not change what "current" means. A
+        manager without a registry was safe here by accident; one WITH a
+        registry (the terminal app binds it) was not.
+
+        The caller that renames its OWN live session updates its in-memory
+        object itself - this method's contract is the file.
+        """
         try:
-            session = self.load(session_id)
+            session = self.load(session_id, restore_state=False, repoint=False)
             session.name = new_name
-            self.save(session)
+            self.save(session, sync_state=False)
             return True
         except FileNotFoundError:
             return False
+
+    def list_ui(self, limit: int = 50, user_scope_id: str = None) -> List[Dict]:
+        """The session list a CHAT SURFACE shows - one rule for every surface.
+
+        `list()` minus channel chats (their dashboards own them) and
+        thinking sessions (internal runs). The web sidebar and the terminal
+        app's panel both consume THIS, so what a session list shows cannot
+        diverge between surfaces again. The channel prefixes come from the
+        dispatch module's registry, not a local copy.
+        """
+        from vaf.core.tool_dispatch import CHANNEL_SESSION_PREFIXES
+        out = []
+        for s in self.list(limit=limit, user_scope_id=user_scope_id):
+            sid = str(s.get("id") or "")
+            if sid.startswith(CHANNEL_SESSION_PREFIXES):
+                continue
+            meta = s.get("metadata") or {}
+            if meta.get("source") == "thinking" or sid.startswith("thinking_"):
+                continue
+            out.append(s)
+        return out
 
     def cleanup_empty(self, exclude_session_id: str = None) -> int:
         """

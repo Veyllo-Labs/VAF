@@ -29,6 +29,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **Sessions can be created, renamed and deleted inside the terminal app.**
+  The sessions panel (Ctrl+S) gained `n` for a fresh session, `r` to rename
+  the highlighted one and `d` to delete it after a confirmation - deleting
+  the session you are in is refused until you switch away. `/session new`
+  and `/session rename <name>` do the same from the prompt. The panel now
+  shows the same list the web sidebar shows: messenger chats and internal
+  thinking runs stay in their dashboards instead of flooding the list.
+- **A session keeps ONE name everywhere, including across a web rename.**
+  Renaming is now a single engine operation that changes the session file
+  and nothing else - before, renaming from a list could silently drag the
+  renamed session's saved state into the running one. The terminal app
+  adopts the on-disk name before saving on exit, so renaming a chat in the
+  web while the terminal had it open no longer loses the new name when the
+  terminal closes; the background worker had silently ignored web renames
+  altogether and now honors them.
 - **Switching sessions in the terminal app now shows the conversation.**
   Loading another session swapped the agent's memory but left the previous
   conversation on screen, and a resumed session started with an empty

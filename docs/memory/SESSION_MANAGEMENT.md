@@ -206,6 +206,37 @@ except:
 
 ---
 
+## Session Names: the file is the source of truth
+
+There is no auto-titling: every new session is named `Session YYYY-MM-DD
+HH:MM` (`SessionManager.new`), and the only thing that changes a name is a
+rename. The consistency contract across surfaces:
+
+- **`SessionManager.rename(id, name)` writes the FILE and nothing else.** It
+  reads with `load(restore_state=False, repoint=False)` and saves with
+  `sync_state=False`, so renaming a session from a list can neither repoint
+  what "current" means nor move another session's runtime state through the
+  live state registry (a manager without a registry was safe here by
+  accident; one with a registry - the terminal app binds one - was not). A
+  caller that renames its own LIVE session updates its in-memory object
+  itself.
+- **Long-lived in-memory copies adopt the on-disk name before a full-object
+  save.** The terminal app does this before its exit save; the headless
+  runner repairs its copy on `__CMD__:RENAME_SESSION` (a branch it used to
+  swallow silently); the interactive lanes carry the same repair. Without
+  it, "last writer wins" resurrects the old name over a web rename.
+- **`SessionManager.list_ui(limit, user_scope_id)` is the ONE surface list**:
+  `list()` minus channel chats (`telegram_`/`whatsapp_`/`discord_` - the
+  prefixes come from the dispatch registry) and thinking sessions. The web
+  sidebar and the terminal app's panel both consume it, so the two lists
+  cannot diverge again.
+
+The terminal app's create/rename/delete lives in the sessions panel (`n` /
+`r` / `d`) and the `/session new` / `/session rename <name>` words; deleting
+the live session is refused (switch first). A runtime session switch also
+stamps `set_current_session_id` now - boot always did, the switch never,
+so session-scoped IPC reads answered for the previous session.
+
 ## Session Storage Format
 
 Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:

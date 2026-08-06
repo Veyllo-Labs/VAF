@@ -1302,6 +1302,17 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
     cleanup_other_sessions()
     session_mgr.cleanup_empty(exclude_session_id=session.id)
 
+    # One-time repair: sessions from before scope stamping have no owner, and
+    # the list's legacy rule shows them to EVERY user. They can only be the
+    # machine owner's (multi-user arrived WITH scoping), so claim them.
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        claimed = session_mgr.claim_unscoped(str(get_local_admin_scope_id()))
+        if claimed:
+            boot_tui.info(f"Claimed {claimed} legacy session(s) for the machine owner.")
+    except Exception:
+        pass
+
     agent = _make_cli_agent(verbose=verbose)
 
     try:

@@ -237,6 +237,15 @@ the live session is refused (switch first). A runtime session switch also
 stamps `set_current_session_id` now - boot always did, the switch never,
 so session-scoped IPC reads answered for the previous session.
 
+**Legacy unscoped sessions are claimed at boot.** The list's legacy rule
+shows sessions WITHOUT a `user_scope_id` to every user (while the ownership
+gate treats them as admin-only for actions) - so pre-scoping session names
+leaked into other users' sidebars. `SessionManager.claim_unscoped(scope)`
+stamps them with the machine owner's scope, which is the only owner they can
+have (multi-user arrived WITH scoping); both the terminal app's boot and the
+web server's startup run it once, idempotently. The legacy visibility rule
+itself stays as a belt for odd cases.
+
 ## Session Storage Format
 
 Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:

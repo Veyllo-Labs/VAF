@@ -762,6 +762,7 @@ def _get_trusted_sources_for_ui():
 
 _auth_db_init_task = None  # module-level ref so the background retry task is not garbage collected
 _auth_db_init_gate = threading.Lock()  # in TLS mode the same app runs on 8001 AND 8005 -> two lifespans
+_legacy_claim_done = False  # the unscoped-session claim runs once, not per lifespan
 
 
 @app.on_event("startup")
@@ -810,6 +811,25 @@ async def startup_event():
     loop = asyncio.get_running_loop()
     manager.set_server_loop(loop)
     log("WebServer", "VAF Web Interface: Event loop registered")
+
+    # One-time repair: pre-scoping sessions have no owner and the list's
+    # legacy rule shows them to EVERY user; claim them for the machine owner
+    # (multi-user arrived WITH scoping, so they cannot be anyone else's).
+    # Gated like the auth init: this startup event runs once per uvicorn
+    # server sharing the app (8001 + 8005 in TLS mode).
+    global _legacy_claim_done
+    with _auth_db_init_gate:
+        run_claim = not _legacy_claim_done
+        _legacy_claim_done = True
+    if run_claim:
+        try:
+            from vaf.core.config import get_local_admin_scope_id
+            claimed = await asyncio.to_thread(
+                session_mgr.claim_unscoped, str(get_local_admin_scope_id()))
+            if claimed:
+                log("WebServer", f"Claimed {claimed} legacy session(s) for the machine owner")
+        except Exception as e:
+            log("WebServer", f"Legacy session claim skipped: {e}")
 
     # Whare Wananga EAGER: opt-in background scanner that proactively trains safe, configured,
     # not-yet-learned tools (off by default; tolerates a not-yet-built agent). Guarded.

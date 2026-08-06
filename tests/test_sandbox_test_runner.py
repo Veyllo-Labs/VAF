@@ -202,3 +202,56 @@ def test_integration_real_pytest_pass_and_fail(tmp_path):
     (tmp_path / "test_fail.py").write_text("def test_bad():\n    assert 1 == 2\n")
     failed = run_project_tests(str(tmp_path))
     assert "TESTS FAILED" in failed and "test_bad" in failed, failed
+
+
+def test_pytest_is_installed_on_demand(monkeypatch):
+    """python:3.11-slim ships no pytest while pytest is the DEFAULT command -
+    every container recreation broke default runs until someone shelled in."""
+    import vaf.tools.sandbox_test_runner as r
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(list(cmd))
+        if "--version" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="No module named pytest")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(r.subprocess, "run", fake_run)
+    assert r._ensure_pytest_in_sandbox() is None
+    assert any("install" in c for c in calls), "the missing pytest was never installed"
+
+
+def test_a_present_pytest_pays_no_install(monkeypatch):
+    import vaf.tools.sandbox_test_runner as r
+
+    calls = []
+    monkeypatch.setattr(r.subprocess, "run",
+                        lambda cmd, **kw: calls.append(list(cmd)) or
+                        SimpleNamespace(returncode=0, stdout="pytest 9.1.1", stderr=""))
+    assert r._ensure_pytest_in_sandbox() is None
+    assert len(calls) == 1, "a satisfied probe still ran an install"
+
+
+def test_a_failed_install_is_an_honest_error(monkeypatch):
+    import vaf.tools.sandbox_test_runner as r
+
+    def fake_run(cmd, **kw):
+        return SimpleNamespace(returncode=1, stdout="", stderr="no network")
+
+    monkeypatch.setattr(r.subprocess, "run", fake_run)
+    out = r._ensure_pytest_in_sandbox()
+    assert out and "installing it failed" in out
+
+
+def test_the_runner_consults_the_ensure_before_running(monkeypatch, tmp_path):
+    """Wiring, not just the helper: with pytest already living in a warm
+    container, the integration test passes even without the ensure call -
+    only this seam goes red when the wiring is dropped."""
+    import vaf.tools.sandbox_test_runner as r
+
+    monkeypatch.setattr(r, "_sandbox_running", lambda: True)
+    monkeypatch.setattr(r, "_ensure_pytest_in_sandbox",
+                        lambda: "Cannot run tests: SENTINEL")
+    (tmp_path / "test_x.py").write_text("def test_a(): pass\n")
+    assert r.run_project_tests(str(tmp_path)) == "Cannot run tests: SENTINEL"

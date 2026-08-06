@@ -723,6 +723,45 @@ class SessionManager:
             out.append(s)
         return out
 
+    def claim_unscoped(self, user_scope_id: str) -> int:
+        """Stamp every session WITHOUT an owner scope as `user_scope_id`'s.
+
+        One-time repair for sessions from before scope stamping existed: the
+        list's legacy rule shows no-scope sessions to EVERY user, so their
+        names leaked into other users' sidebars, while the ownership gate
+        already treated them as admin-only for actions. A pre-scoping session
+        can only belong to the machine owner - multi-user arrived WITH
+        scoping - so the local admin scope is the truth, not a guess.
+        Idempotent, cheap when there is nothing to claim; the launchers call
+        it at boot. Reads and writes without touching `_current` or the
+        state registry (`repoint=False` / `sync_state=False`).
+        """
+        scope = str(user_scope_id or "").strip()
+        if not scope:
+            return 0
+        claimed = 0
+        seen = set()
+        for p in sorted(self.storage_dir.glob("*.json*")):
+            sid = p.name.split(".")[0]
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            try:
+                session = self.load(sid, restore_state=False, repoint=False)
+            except Exception:
+                continue
+            meta = session.metadata or {}
+            if str(meta.get("user_scope_id") or "").strip():
+                continue
+            session.metadata = {**meta, "user_scope_id": scope}
+            try:
+                self.save(session, sync_state=False,
+                          compress=p.suffix == ".gz")
+                claimed += 1
+            except Exception:
+                continue
+        return claimed
+
     def cleanup_empty(self, exclude_session_id: str = None) -> int:
         """
         Delete sessions that are empty or contain only system/internal messages.

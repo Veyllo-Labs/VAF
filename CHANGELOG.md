@@ -85,6 +85,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **Running project tests in the sandbox works on a fresh container.** The
+  sandbox image ships without pytest while pytest is the default test
+  command, so every container recreation broke "run the tests" with "No
+  module named pytest" until someone installed it by hand. The runner now
+  installs pytest on demand (once per container) and reports honestly when
+  it cannot.
+- **Old chats without an owner no longer show up in every user's list.**
+  Sessions created before per-user ownership existed carried no owner mark,
+  and the session list showed such sessions to every signed-in user - their
+  titles were visible to people they never belonged to (opening them was
+  always refused). On startup VAF now marks these legacy chats as the
+  machine owner's, which is the only person they can belong to, and they
+  disappear from everyone else's list.
 - **The terminal app starts the Docker services, and a sleeping memory
   database is named instead of impersonating an empty memory.** Quitting the
   desktop tray stops the service stack (database, sandbox, speech) - so a

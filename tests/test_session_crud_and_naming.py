@@ -323,3 +323,53 @@ def test_the_session_words_route_new_and_rename():
     assert calls[0] == "new"
     assert calls[1] == ("rename", "green123456", "Mein Projekt")
     assert calls[2][0] == "note", "a bare rename must be a usage line, not a load"
+
+
+# ── the legacy-scope claim ──────────────────────────────────────────────────────────
+
+def test_claim_unscoped_stamps_only_the_ownerless(tmp_path):
+    """Pre-scoping sessions leak their names into every user's list via the
+    legacy visibility rule; the claim gives them their only possible owner."""
+    mgr = _mgr(tmp_path)
+    a = mgr.new()
+    mgr.save(a, sync_state=False)
+    b = mgr.new(user_scope_id="ab12cd34")
+    mgr.save(b, sync_state=False)
+
+    assert mgr.claim_unscoped("12345678-1234-5678-1234-567812345678") == 1
+    da = mgr.load(a.id, restore_state=False, repoint=False)
+    db = mgr.load(b.id, restore_state=False, repoint=False)
+    assert da.metadata.get("user_scope_id") == "12345678-1234-5678-1234-567812345678"
+    assert db.metadata.get("user_scope_id") == "ab12cd34", (
+        "an already-owned session was relabeled")
+    assert mgr.claim_unscoped("12345678-1234-5678-1234-567812345678") == 0, (
+        "the claim is not idempotent")
+
+
+def test_claim_without_a_scope_is_a_no_op(tmp_path):
+    mgr = _mgr(tmp_path)
+    a = mgr.new()
+    mgr.save(a, sync_state=False)
+    assert mgr.claim_unscoped("") == 0
+    assert not (mgr.load(a.id, restore_state=False, repoint=False)
+                .metadata.get("user_scope_id"))
+
+
+def test_claimed_sessions_leave_other_users_lists(tmp_path):
+    mgr = _mgr(tmp_path)
+    a = mgr.new()
+    mgr.save(a, sync_state=False)
+    assert any(s["id"] == a.id for s in mgr.list(user_scope_id="ab12cd34")), (
+        "precondition: the legacy rule shows unscoped sessions to strangers")
+    mgr.claim_unscoped("12345678-1234-5678-1234-567812345678")
+    assert not any(s["id"] == a.id for s in mgr.list(user_scope_id="ab12cd34")), (
+        "the claimed session still leaks into a stranger's list")
+
+
+def test_the_web_startup_claims_once():
+    from pathlib import Path
+    import vaf.core.web_server as ws
+
+    src = Path(ws.__file__).read_text(encoding="utf-8")
+    assert "claim_unscoped" in src and "_legacy_claim_done" in src, (
+        "the web/tray boot lost its legacy-session claim")

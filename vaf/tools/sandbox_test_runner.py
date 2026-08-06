@@ -119,6 +119,36 @@ def _reject_non_test_command(command: Optional[str]) -> Optional[str]:
     return None
 
 
+def _ensure_pytest_in_sandbox() -> Optional[str]:
+    """The vaf-sandbox image is python:3.11-slim and ships NO pytest, while
+    pytest is this runner's DEFAULT command - every container recreation
+    silently broke default runs with 'No module named pytest' (the gap only
+    shows once the stack actually runs, which the service-stack autostart
+    now guarantees). Install on demand: the probe is cheap, the install is
+    idempotent and survives for the container's lifetime. Returns an error
+    string when pytest cannot be made available, None when it is usable."""
+    try:
+        probe = subprocess.run(
+            ["docker", "exec", SANDBOX_CONTAINER, "python3", "-m", "pytest", "--version"],
+            capture_output=True, text=True, timeout=20, **_docker_kwargs(),
+        )
+        if probe.returncode == 0:
+            return None
+        inst = subprocess.run(
+            ["docker", "exec", SANDBOX_CONTAINER, "python3", "-m", "pip", "install",
+             "--quiet", "--disable-pip-version-check", "pytest"],
+            capture_output=True, text=True, timeout=120, **_docker_kwargs(),
+        )
+        if inst.returncode != 0:
+            return (
+                "Cannot run tests: the sandbox has no pytest and installing it failed "
+                f"({(inst.stderr or '').strip()[:200]})."
+            )
+        return None
+    except Exception as exc:
+        return f"Cannot run tests: sandbox pytest check failed ({exc})."
+
+
 def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int = 180) -> str:
     """Run ``command`` (default pytest) against a copy of ``base_dir`` in the sandbox.
 
@@ -138,6 +168,10 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
             "Cannot run tests: the Docker sandbox (vaf-sandbox) is not running, so tests "
             "cannot be executed in isolation. Start the memory stack (Docker) and retry."
         )
+    if "pytest" in cmd:
+        pytest_err = _ensure_pytest_in_sandbox()
+        if pytest_err:
+            return pytest_err
     size = _included_size(base_dir)
     if size > _MAX_COPY_BYTES:
         return (

@@ -82,6 +82,10 @@ class StubMgr:
         self.cleaned.append(exclude_session_id)
         return 0
 
+    def claim_unscoped(self, user_scope_id):
+        self.claimed_scope = user_scope_id
+        return 0
+
 
 @pytest.fixture()
 def boot_env(monkeypatch):
@@ -281,3 +285,12 @@ def test_boot_skips_the_stack_without_a_compose_file(boot_env, monkeypatch):
     boot_bridge(_events(), "vaf", None, False)
     _time.sleep(0.2)
     assert boot_env.stack == []
+
+
+def test_boot_claims_legacy_unscoped_sessions_for_the_owner(boot_env):
+    """Pre-scoping sessions have no owner and the list's legacy rule shows
+    them to every user - boot stamps them with the machine owner's scope."""
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    boot_bridge(_events(), "vaf", None, False)
+    assert StubMgr.instances[0].claimed_scope == SCOPE

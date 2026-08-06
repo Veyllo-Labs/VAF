@@ -21,10 +21,18 @@ import threading
 
 _log = logging.getLogger(__name__)
 
-# Recommended dedicated voice model: Gemma 4 E4B (Apache 2.0). Verified
-# 2026-07: third-party German evaluations rate its spoken German noticeably
-# more natural than Qwen 3.5's, it has no thinking preamble to fight, and
-# llama.cpp b8746+ runs the E-series GGUFs. ~5.4 GB download.
+# Recommended dedicated voice model: Gemma 4 E4B. Verified 2026-07: third-party
+# German evaluations rate its spoken German noticeably more natural than
+# Qwen 3.5's, it has no thinking preamble to fight, and llama.cpp b8746+ runs
+# the E-series GGUFs. ~5.4 GB download.
+#
+# LICENSE, and it is NOT Apache-2.0 - an earlier version of this comment said so
+# and was wrong. Gemma weights ship under Google's own "Gemma Terms of Use" with a
+# Prohibited Use Policy, and the upstream repository is gated behind accepting
+# them. VAF does not redistribute the weights (they are fetched at first use), so
+# no notice obligation falls on this repository - but the terms do bind whoever
+# runs them, which is why this is a DEFAULT worth revisiting rather than a
+# formality. See the shipping rule in docs/legal/THIRD_PARTY.md.
 DEFAULT_VOICE_MODEL = "bartowski/google_gemma-4-E4B-it-GGUF/google_gemma-4-E4B-it-Q4_K_M.gguf"
 
 _ENSURE_THREAD_LOCK = threading.Lock()

@@ -39,6 +39,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **A bundled browser script that nobody used is gone.** It was a copy of a third-party
+  fingerprinting library, 43 KB, kept in the tree long after VAF stopped injecting it,
+  and it carried no author credit. Deleting it is the honest repair: nothing changes for
+  you, and one piece of somebody else's code no longer travels with every download.
+- **The bundled PDF viewer now ships the license it is used under.** VAF includes a copy
+  of Mozilla's pdf.js worker so documents can be displayed; its license asks that
+  recipients get the license text itself, and that text is now included rather than only
+  linked.
+- **A comment claimed the recommended voice model was Apache-licensed. It is not.** The
+  Gemma weights come under Google's own terms with usage restrictions. VAF never shipped
+  the weights and still downloads them only when you choose that model, so nothing about
+  your install changes - but the note in the code was wrong and is corrected.
+
 - **Setting the sub-agent timeout to "no limit" no longer arms a zero-minute
   timeout.** The row stored 0 minutes while the timeout stayed switched on - and a
   zero-minute timeout means every running sub-agent is stopped at the next cleanup

@@ -59,7 +59,10 @@ export const thirdPartyLicenses = [
   // Browser automation
   { name: 'browser-use', license: 'MIT', url: 'https://github.com/browser-use/browser-use' },
   { name: 'Playwright (Python)', license: 'Apache-2.0', url: 'https://github.com/microsoft/playwright-python' },
-  { name: 'playwright-stealth', license: 'MIT', url: 'https://github.com/Mattwmaster58/playwright_stealth' },
+  // playwright-stealth was removed: its bundled payload is no longer injected (the
+  // fingerprint supplement in vaf/tools/_stealth_supplement.js replaced it, because
+  // patching navigator is itself a tell), and the vendored copy has been deleted.
+  { name: 'pdf.js worker (Copyright 2024 Mozilla Foundation)', license: 'Apache-2.0', url: 'https://github.com/mozilla/pdf.js' },
   // Integrations & tools
   { name: 'PyGithub', license: 'LGPL-3.0', url: 'https://github.com/PyGithub/PyGithub' },
   { name: 'pytesseract', license: 'Apache-2.0', url: 'https://github.com/madmaze/pytesseract' },

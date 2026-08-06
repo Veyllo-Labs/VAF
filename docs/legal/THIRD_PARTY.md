@@ -254,6 +254,24 @@ the license requires.
 
 ---
 
+## Foreign files shipped inside this repository
+
+Distinct from everything above: these are not fetched by a package manager, they are
+checked in, so every clone, source archive and package carries a copy and the notice
+requirement applies to us. Their full license texts live in
+[licenses/](../../licenses/README.md), except where the file already carries the text
+in its own header. `tests/test_shipped_third_party_files.py` fails when a new one
+arrives without either.
+
+| File | Origin | License | How the notice is met |
+|---|---|---|---|
+| `vaf/vendor/langid/langid.py` | https://github.com/saffsd/langid.py | BSD-2-Clause, Copyright 2011 Marco Lui | full text verbatim in the file header |
+| `web/public/pdf.worker.min.mjs` | https://github.com/mozilla/pdf.js (`pdfjs-dist`) | Apache-2.0, Copyright 2024 Mozilla Foundation | header notice plus `licenses/pdfjs-dist-Apache-2.0.txt`, because section 4(a) asks for a copy of the license and not a link |
+
+Dependencies are deliberately NOT in that folder. Their notice requirements attach to
+distributing a copy, and VAF distributes none: pip and npm fetch them onto the user's
+own machine. They are credited in the tables above instead.
+
 ## Container images and model weights
 
 Not installed from PyPI/npm and therefore absent from the tables above, but pulled

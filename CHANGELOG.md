@@ -39,6 +39,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Fixed
+- **Workflow variable filling is deterministic, and its log tells the truth.**
+  When a matched workflow was missing inputs, which template default got applied
+  could depend on Python's hash order (a fill loop removed items from the list it
+  was walking), the log promised "using defaults" at a point where no default
+  could exist, and the same missing input was reported twice. Defaults now fill
+  first, the per-variable repair only handles inputs without one, and a single
+  line says what actually happens: the turn falls back to the agent.
 - **German answers are asked to use real umlauts again.** For a while the assistant
   had taken to writing "fuer" and "laeuft" instead of "für" and "läuft", sometimes
   switching between both inside one sentence. That comes from the language model, not

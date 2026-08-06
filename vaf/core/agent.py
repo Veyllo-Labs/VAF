@@ -271,6 +271,60 @@ _PROACTIVE_DECIDE_NUDGE = (
 )
 
 
+def _resolve_template_variables(template: dict, variables: dict, route_input: str) -> list:
+    """Fill a matched workflow template's variables; return what stays missing.
+
+    Three stages, cheapest truth first, narrated as they run: the LLM
+    extraction already put its findings into `variables` before this is
+    called; template DEFAULTS fill what it missed; a per-variable regex repair
+    (`WorkflowSelector._extract_value`) gets one shot at the raw input for
+    variables that have no default. Whatever remains missing is the CALLER's
+    verdict - this function never decides to abandon the workflow.
+
+    A module function rather than inline in `_try_workflow`, so it is
+    reachable for tests - and because its inline form carried two defects
+    that tests could then prove fixed: the default-fill loop REMOVED FROM THE
+    LIST IT WAS ITERATING, and since the variable set is a `set`, WHICH
+    variable got skipped depended on hash order - non-deterministic. The skip
+    was invisibly healed by a `defaults` re-check inside the repair stage,
+    which in turn made a third fill loop downstream dead code (nothing with a
+    default could ever reach it) - dead code that repeated the same
+    mutate-while-iterating mistake, under a message promising "using
+    defaults" at a point where no default could exist.
+    """
+    # Lazy like every other UI/workflow reach in this module: the slim base
+    # install imports vaf.core.agent without the CLI extras.
+    from vaf.cli.ui import UI
+    from vaf.workflows.selector import WorkflowSelector
+
+    template_variables = template.get("variables", {})
+    defaults = template.get("defaults", {})
+    missing = [var for var in template_variables if var not in variables]
+
+    # Defaults first, over a COPY: removing from the list being iterated
+    # skips the element after every hit.
+    for var_name in list(missing):
+        if var_name in defaults:
+            variables[var_name] = defaults[var_name]
+            missing.remove(var_name)
+
+    if variables:
+        UI.event("Debug", f"Extracted variables: {list(variables.keys())}", style="dim")
+
+    if missing:
+        UI.event("Debug", f"Missing variables (trying per-variable extraction): {missing}",
+                 style="dim")
+        selector = WorkflowSelector()
+        for var_name in list(missing):
+            extracted = selector._extract_value(
+                route_input, var_name, template_variables.get(var_name, ""))
+            if extracted:
+                variables[var_name] = extracted
+                missing.remove(var_name)
+
+    return missing
+
+
 def _mentions_workflow(text: str) -> bool:
     """Typo-tolerant "did the user speak of a workflow" check, shared by the
     router's no-match hint and the [WORKFLOW SUGGESTION] advisory (one copy,
@@ -5999,47 +6053,8 @@ class Agent:
             selector = WorkflowSelector()
             variables, missing = selector._extract_variables(route_input, template)
             
-            # Get required variables from template
-            template_variables = template.get("variables", {})
-            required_vars = set(template_variables.keys())
-            defaults = template.get("defaults", {})
-            
-            # Determine which variables are still missing
-            missing = [var for var in required_vars if var not in variables]
-            
-            # Fill in defaults for missing variables
-            for var_name in missing:
-                if var_name in defaults:
-                    variables[var_name] = defaults[var_name]
-                    missing.remove(var_name)
-            
-            # Debug: Log extracted variables
-            if variables:
-                UI.event("Debug", f"Extracted variables: {list(variables.keys())}", style="dim")
-            
-            # If variables are still missing, use selector as fallback
-            if missing:
-                UI.event("Debug", f"Missing variables (using fallback): {missing}", style="dim")
-                selector = WorkflowSelector()
-                missing_copy = list(missing)  # Use copy to avoid modification during iteration
-                for var_name in missing_copy:
-                    extracted = selector._extract_value(route_input, var_name, template_variables.get(var_name, ""))
-                    if extracted:
-                        variables[var_name] = extracted
-                        missing.remove(var_name)
-                    elif var_name in defaults:
-                        variables[var_name] = defaults[var_name]
-                        missing.remove(var_name)
-                
-                # If still missing critical variables, fall back to LLM
-                if missing:
-                    UI.event("Workflow", f"Missing inputs: {', '.join(missing)} - using defaults or falling back", style="warning")
-                    # Use defaults for remaining missing variables
-                    for var_name in missing:
-                        if var_name in defaults:
-                            variables[var_name] = defaults[var_name]
-                            missing.remove(var_name)
-            
+            missing = _resolve_template_variables(template, variables, route_input)
+
             # Create a SelectorResult for compatibility
             from vaf.workflows.selector import SelectorResult
             result = SelectorResult(
@@ -6054,7 +6069,7 @@ class Agent:
             
             template = result.template
             if result.missing_variables:
-                UI.event("Workflow", f"Missing inputs: {', '.join(result.missing_variables)}", style="warning")
+                UI.event("Workflow", f"Missing inputs: {', '.join(result.missing_variables)} - falling back to the agent", style="warning")
                 # For now, fall back to LLM if variables are missing
                 # Future: Could prompt user for missing values
                 return None

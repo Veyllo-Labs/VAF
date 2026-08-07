@@ -152,6 +152,33 @@ const SUBAGENT_KIND_LABEL: Record<string, string> = {
     librarian: 'Librarian', browser: 'Browser Agent',
 };
 
+// ── Window surfaces ──────────────────────────────────────────────────────────
+// The three flat surfaces every sub-agent view is built from. Written once because
+// the raw hex behind them takes NO part in the theme's folding palette swap
+// (docs/web-ui/DARKMODE.md): `bg-white` and `bg-gray-*` flip on their own, an
+// arbitrary `bg-[#F7F8FA]` does not. So each needs its `dark:` half spelled out - and
+// the shell alone was spelled out SEVEN times across the views, the canvas five. That
+// is the shape where some of them keep it and some do not, which is what shipped: the
+// librarian window came up with near-white panels in dark mode.
+//
+// Light values are copied verbatim from the sites they replace. Light mode stays
+// byte-identical by construction; the diff is `dark:` additions only (DESIGN.md).
+//
+// Raw hex is the ONLY thing here that needs a hand-written dark half. The accent
+// tints in these views - `bg-orange-50`, the type-chip palette, `text-orange-700` -
+// look like they need one and do not: every accent hue is re-pointed through
+// `--acc-<hue>-*` under `.dark` in app/globals.css. Adding `dark:` to one of those
+// does not fix anything, it REPLACES the design system's colour with an ad-hoc one.
+//
+// Dark values are tokens from DARKMODE.md, and they invert the depth rather than the
+// brightness: in light the chrome is the pale surface and the canvas recedes darker;
+// in dark the chrome is the LIGHTER `#202020` card and the canvas recedes to the
+// `#181818` page. Same "content sits below its frame" reading, both ways round.
+const WIN_SHELL = "bg-[#F7F8FA] dark:bg-[#202020]";      // outer window body
+const WIN_CANVAS = "bg-[#e9eaee] dark:bg-[#181818]";     // recessed content area
+const WIN_CANVAS_ALT = "bg-[#F9FAFB] dark:bg-[#181818]"; // same role, paler light value
+const WIN_BAR = "bg-[#f7f8fa] dark:bg-[#202020]";        // toolbar riding on the canvas
+
 /** Slim header strip shown while a custom view has opened (kind known) but no data has streamed yet. */
 function StartingBanner({ label }: { label: string }) {
     return (
@@ -815,7 +842,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -865,7 +892,7 @@ export default function SubAgentWindow({
 
                     <div className="flex min-h-0 flex-1">
                         {/* ── Paper document viewer ── */}
-                        <div ref={documentViewerRef} className="min-w-0 flex-1 overflow-y-auto bg-[#e9eaee] px-7 py-6">
+                        <div ref={documentViewerRef} className={`min-w-0 flex-1 overflow-y-auto ${WIN_CANVAS} px-7 py-6`}>
                             <A4ResearchPaper
                                 topic={document.title}
                                 metaLine={docMetaLine}
@@ -1023,7 +1050,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -1075,7 +1102,7 @@ export default function SubAgentWindow({
 
                     <div className="flex min-h-0 flex-1">
                         {/* ── Paper document viewer: true A4 sheets with automatic page breaks ── */}
-                        <div ref={researchViewerRef} className="min-w-0 flex-1 overflow-y-auto bg-[#e9eaee] px-7 py-6">
+                        <div ref={researchViewerRef} className={`min-w-0 flex-1 overflow-y-auto ${WIN_CANVAS} px-7 py-6`}>
                             <A4ResearchPaper
                                 topic={research.topic}
                                 metaLine={metaLine}
@@ -1248,7 +1275,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -1280,9 +1307,9 @@ export default function SubAgentWindow({
 
                     <div className="flex min-h-0 flex-1">
                         {/* ── Explorer: opened folder, files listed ── */}
-                        <div className="flex min-w-0 flex-1 flex-col bg-[#e9eaee]">
+                        <div className={`flex min-w-0 flex-1 flex-col ${WIN_CANVAS}`}>
                             {/* toolbar: back + breadcrumb + search */}
-                            <div className="flex h-10 flex-none items-center gap-2 border-b border-gray-200 bg-[#f7f8fa] px-3.5">
+                            <div className={`flex h-10 flex-none items-center gap-2 border-b border-gray-200 ${WIN_BAR} px-3.5`}>
                                 <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Overview"><ChevronLeft size={13} /></span>
                                 <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-gray-500">
                                     <span className="rounded px-1.5 py-0.5">~</span>
@@ -1317,14 +1344,14 @@ export default function SubAgentWindow({
                             </div>
                             {/* file listing */}
                             <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-                                <div className="sticky top-0 flex items-center gap-3 border-b border-gray-200 bg-[#e9eaee] px-3 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-gray-400">
+                                <div className={`sticky top-0 flex items-center gap-3 border-b border-gray-200 ${WIN_CANVAS} px-3 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-gray-400`}>
                                     <span className="flex-1">Name</span><span className="w-[74px] text-right">Size</span><span className="w-[88px] text-right">Modified</span>
                                 </div>
                                 {cf.entries.map((e, i) => {
                                     const Icon = iconFor(e.type, e.isDir);
                                     const ts = styleFor(e.isDir ? 'folder' : e.type);
                                     return (
-                                        <div key={`${e.name}-${i}`} className={cn("flex items-center gap-3 border-b border-[#e0e1e6] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]")}>
+                                        <div key={`${e.name}-${i}`} className={cn("flex items-center gap-3 border-b border-[#e0e1e6] dark:border-[#262626] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]")}>
                                             <span className={cn("flex h-5 w-5 flex-none items-center justify-center rounded-md", ts.bg, ts.fg)}><Icon size={12} /></span>
                                             <span className={cn("min-w-0 flex-1 truncate text-[12.5px] text-gray-800", e.isDir && "font-semibold")}>{e.name}</span>
                                             {e.match && <span className="flex-none rounded bg-orange-100 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-orange-700">Match</span>}
@@ -1416,7 +1443,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -1449,8 +1476,8 @@ export default function SubAgentWindow({
 
                     <div className="flex min-h-0 flex-1">
                         {/* ── Explorer (filesystem map / disk usage) ── */}
-                        <div className="flex min-w-0 flex-1 flex-col bg-[#e9eaee]">
-                            <div className="flex h-9 flex-none items-center gap-2 border-b border-gray-200 bg-[#f7f8fa] px-4">
+                        <div className={`flex min-w-0 flex-1 flex-col ${WIN_CANVAS}`}>
+                            <div className={`flex h-9 flex-none items-center gap-2 border-b border-gray-200 ${WIN_BAR} px-4`}>
                                 <Folder size={12} className="text-gray-400" />
                                 <span className="font-mono text-[11px] text-gray-600">{lib.root || '~'}</span>
                                 {lib.search?.query && (
@@ -1605,7 +1632,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -1614,7 +1641,7 @@ export default function SubAgentWindow({
                     {coderLoading && <StartingBanner label="Coder" />}
                     <div className="flex min-h-0 flex-1">
                         {/* ── Left column: header, tabs, editor, console ── */}
-                        <div className="flex min-w-0 flex-1 flex-col bg-[#F9FAFB]">
+                        <div className={`flex min-w-0 flex-1 flex-col ${WIN_CANVAS_ALT}`}>
                             <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                                 <div className="flex items-center gap-3">
                                     <div className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
@@ -2015,7 +2042,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -2131,7 +2158,7 @@ export default function SubAgentWindow({
         return (
             <div
                 className={cn(
-                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
                     isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
@@ -2203,7 +2230,7 @@ export default function SubAgentWindow({
                     </div>
                 )}
 
-                <div className={cn("flex flex-1 flex-col bg-[#F9FAFB]", !hasWorkflow && "rounded-l-2xl")}>
+                <div className={cn(`flex flex-1 flex-col ${WIN_CANVAS_ALT}`, !hasWorkflow && "rounded-l-2xl")}>
                     <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex items-center gap-3">
                             <div className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
@@ -2375,7 +2402,7 @@ export default function SubAgentWindow({
                     </div>
                 </div>
 
-                <div className="flex flex-1 flex-col bg-[#F9FAFB]">
+                <div className={`flex flex-1 flex-col ${WIN_CANVAS_ALT}`}>
                     <div className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
                         <div className="flex items-center gap-3">
                             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-black text-white shadow-sm">

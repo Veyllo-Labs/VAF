@@ -78,12 +78,18 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Emphasis badge / chip | `dark:bg-[#3a3a3a] dark:text-gray-100` |
 | Decorative icon / step badge (was blue-tinted `bg-gray-900`) | `dark:bg-[#2e2e2e]` |
 | User chat bubble | `dark:bg-[#242424]` |
+| Sub-agent window surfaces (`WIN_SHELL` / `WIN_CANVAS` / `WIN_CANVAS_ALT` / `WIN_BAR` in `web/components/SubAgentWindow.tsx`) | shell and toolbar `dark:bg-[#202020]`, recessed canvas `dark:bg-[#181818]`, file-row hairline `dark:border-[#262626]`. Raw hex, so nothing folds for them; the constants exist because seventeen sites shared four values and some were bound to be missed (they were - the librarian window shipped with near-white panels). Note the inversion: in light the chrome is the paler surface and the canvas recedes darker, in dark the chrome is the LIGHTER card and the canvas recedes to the page |
 | Thinking-process block | flat `dark:from-[#1e1e1e] dark:to-[#1e1e1e]` (no gradient), header `dark:text-gray-300` |
 
-**Two traps (both caused real bugs):**
+**Three traps (all caused real bugs):**
 - `dark:text-gray-900` renders **light** (`#ececec`) because the text ramp folds — never
   use it as "dark text". For dark text on a light dark-mode surface use a literal, e.g.
   `dark:text-[#181818]`.
+- The reverse trap: an accent tint such as `bg-orange-50` or `text-orange-700` looks
+  unthemed and is not — every accent hue is re-pointed through `--acc-<hue>-*` under
+  `.dark`. Adding a `dark:` override to one replaces the design system's color with an
+  ad-hoc value instead of fixing anything. Check `app/globals.css` before assuming; the
+  classes that genuinely need a hand-written dark half are raw hex, not named utilities.
 - A toggle knob must contrast the track in **both** states; make its fill
   state-dependent, not a single always-light value.
 

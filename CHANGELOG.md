@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The sub-agent windows are dark in dark mode.** The librarian's file browser
+  came up with bright, near-white panels: its window body, the file area behind
+  the listing and the toolbar above it were painted with fixed colour values,
+  and fixed values do not follow the theme. All sub-agent windows shared those
+  values, so the coder, research, document and browser views were bright in the
+  same places. They are now defined once and follow the theme. Light mode is
+  unchanged.
 - **Asking about files in one folder no longer answers about another one.** The
   librarian answers simple folder questions from a cached index in about a
   second. That index decided which folder to report from the file type in your

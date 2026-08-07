@@ -43,6 +43,16 @@ document is used in the first two (separate-process) modes:
 The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
 Terminal" box is a headless child process; inside a workflow there is no child at all.
 
+**The child works where the caller works.** A terminal window does not inherit the
+spawner's cwd on Linux (gnome-terminal is a D-Bus client of a long-lived server; children
+start in `$HOME`) or macOS (Apple event to the running Terminal.app), so a coder spawned
+from a project checkout never saw that project. `Platform.open_new_terminal` therefore
+stamps the caller's cwd into the child env as `VAF_PARENT_CWD` (one producer for every
+spawn site; an explicit `extra_env` value wins), and the sub-agent and workflow entries
+adopt it early via `Platform.adopt_parent_cwd()` - a missing directory is a quiet no-op,
+the child then starts in `$HOME` as before. The in-process workflow lane needs neither:
+it already runs in the caller's process and cwd.
+
 **Leak protection for `VAF_IN_SUBAGENT_TERMINAL`:** the flag lives in the long-lived main
 process while a legacy in-process workflow step runs, and `coding_agent`/co. check it to decide
 "run inline" vs "spawn the async child". A step that raised used to skip the restore and leak

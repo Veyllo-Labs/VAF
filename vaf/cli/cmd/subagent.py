@@ -65,10 +65,16 @@ def run_subagent(
 
     from vaf.core.config import Config
     from vaf.cli.ui import UI
+    from vaf.core.platform import Platform
     from vaf.core.subagent_ipc import get_ipc, set_current_session_id
     from vaf.core.subagent_debug import get_subagent_logger_from_env, summarize_result
     import traceback
-    
+
+    # Work where the caller works: terminal children start in $HOME on Linux
+    # and macOS, so the coder never saw the project the main agent was started
+    # in. BEFORE the debug logger, so the cwd it records is the adopted one.
+    Platform.adopt_parent_cwd()
+
     # Restore session ID from environment (passed from main agent)
     session_id = os.environ.get("VAF_SESSION_ID", "").strip()
     if session_id:

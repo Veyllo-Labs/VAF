@@ -52,6 +52,11 @@ def run_workflow(
     The entire workflow executes here with its own context.
     Only the final summary is reported back to the main agent via IPC.
     """
+    # Work where the caller works (see Platform.adopt_parent_cwd): a workflow
+    # step that runs the coder must see the same project the main agent saw.
+    from vaf.core.platform import Platform
+    Platform.adopt_parent_cwd()
+
     # Initialize debug logger early
     debug_logger = None
     try:

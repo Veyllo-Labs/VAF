@@ -539,6 +539,27 @@ class Platform:
         return Platform.has_command("git")
     
     @staticmethod
+    def adopt_parent_cwd() -> bool:
+        """Child-process bootstrap: work where the SPAWNING agent worked.
+
+        `open_new_terminal` stamps the caller's cwd into the child env as
+        VAF_PARENT_CWD (the cwd itself does not survive the spawn on Linux or
+        macOS - see the comment there); the sub-agent and workflow entries call
+        this once, early, so `os.getcwd()` answers the same everywhere - the
+        coder's project-root check, VAF.md context, workspace tools. A missing
+        or vanished directory is a quiet False: starting in $HOME as before is
+        better than dying before the task is even read.
+        """
+        target = os.environ.get("VAF_PARENT_CWD", "").strip()
+        if not target or not os.path.isdir(target):
+            return False
+        try:
+            os.chdir(target)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def open_new_terminal(command: str, title: str = None, extra_env: dict = None) -> bool:
         """
         Open a new terminal window and execute a command. OS-independent.
@@ -562,6 +583,14 @@ class Platform:
         # Effective per-spawn context: prefer the explicit extra_env, fall back to the process
         # environment (so unmigrated callers and the single-worker default behave exactly as before).
         _ee = {k: str(v) for k, v in (extra_env or {}).items() if v is not None}
+        # The child should work WHERE its caller works. Terminal children do not
+        # inherit the cwd on Linux (gnome-terminal is a D-Bus client of a
+        # long-lived server: they start in $HOME) or macOS (Apple event to the
+        # running Terminal.app) - so the coder spawned from a project checkout
+        # never saw that project and fell back to VAF_Projects. One producer
+        # here for every spawn site; the child adopts it via adopt_parent_cwd().
+        # setdefault: an explicit caller value wins.
+        _ee.setdefault("VAF_PARENT_CWD", os.getcwd())
         _eff_session = _ee.get("VAF_SESSION_ID") or os.environ.get("VAF_SESSION_ID", "")
         _eff_task = _ee.get("VAF_TASK_ID") or os.environ.get("VAF_TASK_ID", "")
         _eff_agent = _ee.get("VAF_AGENT_TYPE") or os.environ.get("VAF_AGENT_TYPE", "")

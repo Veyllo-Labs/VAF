@@ -93,6 +93,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   dependency clean regardless.
 
 ### Fixed
+- **The coder works in the folder you started VAF in.** Open a terminal in
+  your project (an IDE terminal counts), run `vaf run`, ask for a code
+  change - the coding agent now works on THAT project. Before, the separate
+  terminal it runs in started in your home directory instead of your
+  project, so the project-detection never matched and the work landed in a
+  fresh `VAF_Projects` folder. The main agent hands its working directory
+  to every spawned sub-agent and workflow now; explicit paths in the task
+  still win, and "create a new project" still gets a fresh folder.
 - **Running project tests in the sandbox works on a fresh container.** The
   sandbox image ships without pytest while pytest is the default test
   command, so every container recreation broke "run the tests" with "No

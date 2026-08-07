@@ -26,7 +26,7 @@ from pathlib import Path
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
-from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use, log_timeline_event
+from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
@@ -9504,15 +9504,20 @@ class Agent:
                         arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                     except: arguments = {}
 
-                    # Debug: log tool use with session/scope for user-isolation debugging (only when debug logs on)
+                    # The tool_use audit line is NOT written here any more: the funnel writes
+                    # it for every lane (ToolCaller._audit_log). Only the timeline event,
+                    # which needs the call id this loop owns, stays.
                     _tl_call_id = tc.get('id', '')
                     _tl_start = time.time()
                     try:
                         from vaf.core.subagent_ipc import get_current_session_id
                         _sid = get_current_session_id() or getattr(self, "current_session_id", None)
                         _scope = getattr(self, "_current_user_scope_id", None)
-                        _args_preview = json.dumps(arguments, ensure_ascii=False) if arguments else ""
-                        log_tool_use(function_name, session_id=_sid, user_scope_id=_scope, arguments_preview=_args_preview)
+                        # Through make_json_serializable: a Path in the arguments used to make
+                        # json.dumps raise, and the shared except below then swallowed the
+                        # timeline event along with it.
+                        _args_preview = json.dumps(make_json_serializable(arguments),
+                                                   ensure_ascii=False) if arguments else ""
                         log_timeline_event('tool_start', tool=function_name, call_id=_tl_call_id,
                                            session=str(_sid or ''), scope=str(_scope or ''),
                                            args=_args_preview[:500])

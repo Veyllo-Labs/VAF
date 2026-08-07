@@ -265,14 +265,19 @@ User: "What is the weather?"
 
 ## 8. Tool-use debug log (user-scope isolation)
 
-When **Debug Logs** are enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`), each tool execution is written to `logs/tool_use_YYYY-MM-DD.log` with:
+When **Debug Logs** are enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`), each tool call ATTEMPT is written to `logs/tool_use_YYYY-MM-DD.log` with:
 
 - `tool` — tool name
-- `session_id` — current chat session ID
+- `session_id` — current session ID
 - `user_scope_id` — user-scope UUID used for RAG/memory isolation (may be empty on local/single-user)
-- `args_preview` — truncated arguments (first 200 chars)
+- `args_preview` — sanitized arguments, truncated to 200 chars (heavy fields such as `write_file.content` or `bash.command` appear as length + digest + a bounded excerpt, the same treatment the event stream gets)
 
 Use this to verify which user scope UUID is used for each tool call when debugging local vs multi-user or isolation issues. Log files are dated and cleaned by the garbage collector like other app logs.
+
+Two properties are deliberate:
+
+- **Attempts, not executions.** The line is written by `ToolCaller._audit_log` as the first step of the funnel, before the policy check - so a call refused by the tool policy, the account allowlist, an embedder's authorizer or a cancelled confirmation gate still leaves a line. For a file whose purpose is tenant isolation, the rejected cross-tenant attempt is the most valuable entry it can hold. (The event stream behaves the opposite way on purpose: a blocked call emits nothing, so no consumer reports it as run.)
+- **Every lane that uses the funnel.** Chat, the workflow engine, the librarian, the training runner, and any tool an embedder registered through `add_tool()`. Known gap: the coder runs `tool.run()` directly and never builds a `ToolCaller`, so its tool calls do not appear here. `multi_tool_use.parallel` returns before the funnel, so its inner tool calls are logged individually and the wrapper itself is not.
 
 ---
 

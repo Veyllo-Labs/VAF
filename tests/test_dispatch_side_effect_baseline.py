@@ -9,6 +9,12 @@ process environment, the persistent trust store, the turn's allow-once set, and 
 tool sets. They are the part of a refactor nobody diffs, because they are invisible in the
 result.
 
+Not measured here, and named so the list does not read as complete: a dispatch also appends
+one line to `tool_use_<date>.log` (`ToolCaller._audit_log`, pinned by
+tests/test_tool_use_audit_log.py). Files in the log directory were outside this baseline
+when it was frozen, and widening a frozen measurement after the fact would make it a record
+of two different moments.
+
 WHAT THIS IS REALLY FOR - the asymmetry of `_record_tool_used`. There are 23 `return`
 statements before the recording line, so a dispatch that ends early never updates the
 router's recency. Measured, that is not arbitrary:

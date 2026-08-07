@@ -667,7 +667,8 @@ Runnable version, including the authorizer below:
 [examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).
 It is the one example that needs no provider and no network.
 
-What one `execute()` does, in order: evaluate policy (`admin_only`,
+What one `execute()` does, in order: write one audit line to
+`tool_use_<date>.log` (see below), evaluate policy (`admin_only`,
 `channel_restrictions`), consult the account allowlist (the resolver you
 registered, if any - its own section below), consult your authorizer, consult
 the confirmation gate, emit `tool_start`, validate and repair the arguments
@@ -700,6 +701,16 @@ The supported arguments:
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
+
+**It writes an audit line per call.** Every `execute()` appends one line to
+`tool_use_<date>.log` - timestamp, tool, `session_id`, `user_scope_id`, and a
+sanitized 200-character argument preview - before anything else happens, so a
+call your authorizer or the allowlist refused is recorded too. That is what
+makes the file usable for "which tenant reached for what". Turn it off with
+`debug_logs_enabled: false` in the on-disk config, choose where it lands with
+`VAF_LOG_DIR`; see [DEBUGGING.md](DEBUGGING.md). Without `VAF_LOG_DIR` a
+pip-installed VAF writes to `Platform.data_dir()/logs`, never into your
+site-packages.
 
 Two limits, stated plainly:
 

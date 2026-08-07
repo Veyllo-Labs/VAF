@@ -12,6 +12,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Changed
+- **The tool-use log now covers every lane, not only chat.** `tool_use_*.log`
+  records which session and which user scope were behind a tool call - the first
+  place to look when isolation looks wrong. It was written from the chat loop
+  only, so workflow steps, librarian sub-tools, training samples and tools added
+  by an embedded application never appeared in it. The shared dispatcher writes
+  it now, so all of them do. Two details worth knowing: a call that a permission
+  check refused is logged too (a blocked attempt is exactly what this file is
+  opened for), and the argument preview is sanitized the same way the live event
+  stream already was, so a large field such as a file's contents is summarised by
+  length and digest instead of pasted in whole. The coder's own tool loop does not
+  use the shared dispatcher and is still absent.
 - **A pip-installed VAF no longer writes logs into its own install directory.**
   The log directory search included the folder above the package, which in a
   checkout is the repository and in a pip install is site-packages. Installed

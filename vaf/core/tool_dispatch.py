@@ -707,8 +707,10 @@ class ToolCaller:
         The ORDER below is contract, not convenience, and three parts of it were only
         discovered by measuring (tests/test_dispatch_event_baseline.py):
 
-        - a hard policy block and a refused gate emit NOTHING and dispatch nothing, so a
-          consumer never sees a blocked tool reported as run;
+        - a hard policy block and a refused gate emit NOTHING onto the EVENT STREAM and
+          dispatch nothing, so a consumer never sees a blocked tool reported as run. The
+          audit line written by ``_audit_log`` is the deliberate exception and runs first,
+          for the reason given there;
         - a schema error is about THIS call while the duplicate-guard message is about
           another one already running, so the schema error wins;
         - the result is truncated LAST, after any hook has had its say, because
@@ -717,6 +719,8 @@ class ToolCaller:
         import time
 
         tool = self.tools.get(name)
+
+        self._audit_log(name, args)
 
         decision = self._policy(name, tool)
         if decision.blocked:
@@ -825,6 +829,41 @@ class ToolCaller:
             return ""
         return (f"The tool '{name}' is not enabled for your account. "
                 f"An administrator can enable it in user management.")
+
+    def _audit_log(self, name, args) -> None:
+        """One line into ``tool_use_<date>.log``: which tool, which session, which scope.
+
+        FIRST in the pipeline, before the policy block, and that placement IS the point.
+        The file answers user-isolation questions, so a call turned away by the policy, the
+        account allowlist, the authorizer or a cancelled gate is the most valuable line it
+        can hold: a rejected cross-tenant attempt is what somebody opens this file to find.
+        Writing it next to the ``tool_start`` event would read tidier and would silently
+        drop all four. This also keeps the file's meaning as it has always been - the chat
+        loop wrote its line before dispatching too.
+
+        Here rather than in one lane, so every lane gets it: the workflow engine, the
+        librarian, the training runner, and any tool an embedder registered through
+        ``add_tool``. Known gap, named rather than papered over: the coder calls
+        ``tool.run`` directly and never builds a ToolCaller, so its calls are still absent.
+        Putting that lane on the funnel is a policy and gate change, not a logging one.
+
+        The preview is the SANITIZED one, the same the event stream gets: a heavy field
+        arrives as length, digest and a bounded excerpt instead of the whole body. This
+        file lives until the garbage collector reaches it and is served over HTTP to
+        admins, so it should not be the LESS careful of the two artefacts. It also removes
+        a real failure: the raw ``json.dumps`` this replaces raised on a Path in the
+        arguments, and the line simply never appeared.
+
+        Never raises and never blocks the call - observation, not a gate.
+        """
+        try:
+            from vaf.core.log_helper import log_tool_use
+            log_tool_use(
+                name, session_id=self.session_id, user_scope_id=self.user_scope_id,
+                arguments_preview=json.dumps(self._preview(name, args), ensure_ascii=False),
+            )
+        except Exception:
+            pass
 
     def _preview(self, name, args):
         """Argument preview for the event stream - heavy fields stripped, Paths stringified."""

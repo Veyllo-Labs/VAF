@@ -268,7 +268,7 @@ The `merge=true` parameter (default) pairs `tool_start` + `tool_end` events by `
 | `type` | Event type: `thinking_run`, `tool_end`, `tool_start`, … |
 | `run_id` | For `thinking_run`: extracts the full multi-line block from `vaf_think_*.log` |
 | `call_id` | For tool events: matched against the JSONL timeline entry |
-| `tool` | Tool name: filters `tool_use_*.log` lines to this tool |
+| `tool` | Tool name: filters `tool_use_*.log` lines to this tool. `multi_tool_use.parallel` matches nothing - the wrapper returns before the funnel, so only its inner tool calls are logged |
 | `session` | Session ID for additional filtering |
 | `window_s` | Time window in seconds (default 30, max 120) |
 

@@ -92,7 +92,7 @@
       "judge_reason": "The agent correctly predicted that the tool would succeed and return no lines because the start line is beyond the file's content."
     },
     {
-      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\", \"start_line\": 1000, \"end_line\": 2000}",
+      "intent": "{\"path\": \"/home/user/projects/demo/README.md\", \"start_line\": 1000, \"end_line\": 2000}",
       "predicted": "error: The tool will return an error because start_line (1000) exceeds the total number of lines in the file.",
       "actual": "error: Access denied: VAF program directory is protected",
       "match": true,
@@ -121,7 +121,7 @@
       "scenario_by": "judge"
     },
     {
-      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\", \"start_line\": 0, \"end_line\": 0}",
+      "intent": "{\"path\": \"/home/user/projects/demo/README.md\", \"start_line\": 0, \"end_line\": 0}",
       "predicted": "success: It will return the entire content of the README.md file because start_line=0 triggers reading the whole file.",
       "actual": "error: Access denied: VAF program directory is protected",
       "match": false,

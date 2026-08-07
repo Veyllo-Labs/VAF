@@ -168,10 +168,6 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
             "Cannot run tests: the Docker sandbox (vaf-sandbox) is not running, so tests "
             "cannot be executed in isolation. Start the memory stack (Docker) and retry."
         )
-    if "pytest" in cmd:
-        pytest_err = _ensure_pytest_in_sandbox()
-        if pytest_err:
-            return pytest_err
     size = _included_size(base_dir)
     if size > _MAX_COPY_BYTES:
         return (
@@ -179,6 +175,13 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
             f"({size // (1024*1024)} MB > {_MAX_COPY_BYTES // (1024*1024)} MB after excluding "
             f"{', '.join(sorted(_EXCLUDE_DIRS))}). Narrow the project or run a smaller subset."
         )
+    # LAST of the refusals on purpose: this one talks to Docker, while every
+    # check above is local and free. Ordering it earlier made a too-large
+    # project report a sandbox problem instead of its own size.
+    if "pytest" in cmd:
+        pytest_err = _ensure_pytest_in_sandbox()
+        if pytest_err:
+            return pytest_err
 
     # uuid suffix: the sandbox is shared, and two runs in the same process/second must
     # not collide on the same dir (which cleanup would then delete out from under each other).

@@ -74,7 +74,7 @@
       "phase": "learn"
     },
     {
-      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\"}",
+      "intent": "{\"path\": \"/home/user/projects/demo/README.md\"}",
       "predicted": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
       "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
       "match": true,
@@ -92,7 +92,7 @@
       "judge_reason": "The agent predicted an error for an empty path, and the actual response was an error indicating path is required, matching the prediction."
     },
     {
-      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\"}",
+      "intent": "{\"path\": \"/home/user/projects/demo/README.md\"}",
       "predicted": "error: The tool will return an error because there is no active session (Document Editor requires Web UI with active chat session), as seen in the first attempt when a valid file path was provided.",
       "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
       "match": true,
@@ -113,7 +113,7 @@
     {
       "intent": "{\"path\": \"C:\\\\Users\\\\Administrator\\\\Documents\\\\report.docx\"}",
       "predicted": "success: The document at the given path will be opened in the Document Editor panel for viewing and editing.",
-      "actual": "error: Error: File not found: /mnt/veyllo1/VAF/C:\\Users\\Administrator\\Documents\\report.docx",
+      "actual": "error: Error: File not found: /home/user/projects/demo/C:\\Users\\Administrator\\Documents\\report.docx",
       "match": false,
       "phase": "challenge",
       "verdict": "fail",
@@ -143,7 +143,7 @@
     {
       "intent": "{\"path\": \"~/claude-1000/ww_seed/seed.txt\"}",
       "predicted": "error: The tool will return 'Error: File not found: ~/claude-1000/ww_seed/seed.txt' because the tilde '~' is not expanded, so the file path is invalid.",
-      "actual": "error: Error: File not found: /mnt/veyllo1/VAF/~/claude-1000/ww_seed/seed.txt",
+      "actual": "error: Error: File not found: /home/user/projects/demo/~/claude-1000/ww_seed/seed.txt",
       "match": true,
       "phase": "challenge",
       "verdict": "pass",

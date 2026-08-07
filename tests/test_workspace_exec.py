@@ -54,7 +54,7 @@ def test_docker_is_always_refused(tmp_path, monkeypatch):
     ran = {"x": False}
     monkeypatch.setattr(wx, "_run", lambda *a, **k: ran.__setitem__("x", True) or (0, "", ""))
     for cmd in (
-        f"docker run --rm --privileged -v/mnt/veyllo1/VAF:/h alpine cat /h/x",
+        "docker run --rm --privileged -v/srv/project:/h alpine cat /h/x",
         "docker run --rm -v/:/hostfs alpine ls",
         "docker run -v $(pwd)/../../..:/x alpine ls",
     ):

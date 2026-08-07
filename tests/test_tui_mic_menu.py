@@ -25,6 +25,7 @@ Three contracts, each against its failure mode:
 """
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from vaf.cli.tui_app.screens import SettingsScreen
@@ -165,6 +166,9 @@ def test_building_the_menus_never_imports_the_audio_stack():
         "assert 'vaf.core.speech' not in sys.modules, 'menu build imported the audio stack'\n"
         "print('clean')\n"
     )
+    # The repo root, derived - never a machine path: a hardcoded one made this
+    # test pass on one laptop and fail in every clone and every CI job.
+    repo_root = Path(__file__).resolve().parents[1]
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                         text=True, cwd="/mnt/veyllo1/VAF")
+                         text=True, cwd=str(repo_root))
     assert out.returncode == 0 and "clean" in out.stdout, out.stderr[-800:]

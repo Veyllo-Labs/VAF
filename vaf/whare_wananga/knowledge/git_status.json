@@ -30,7 +30,7 @@
   "predict_records": [
     {
       "intent": "{}",
-      "predicted": "success: The tool will output the current git status of the repository at /mnt/veyllo1/VAF, showing modified, staged, and untracked files.",
+      "predicted": "success: The tool will output the current git status of the repository at /home/user/projects/demo, showing modified, staged, and untracked files.",
       "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
       "match": true,
       "phase": "learn"

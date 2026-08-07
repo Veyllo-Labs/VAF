@@ -139,6 +139,36 @@ def test_no_real_home_paths_in_tracked_content():
     )
 
 
+def test_no_checkout_path_in_tracked_content():
+    """This repo's own absolute location must never appear in committed content.
+
+    Not a privacy rule like the layers above - a correctness one, and it runs on
+    every machine because the needle is derived from THIS checkout: whatever
+    absolute path the repo happens to live at, no tracked file may name it. A
+    checkout path in code works on exactly one computer.
+
+    It exists because a test passed `cwd="<this repo's absolute path>"` to
+    subprocess.run. Green on the author's laptop, broken in every clone - and
+    it stayed invisible for a day because CI was down during the outage that
+    would otherwise have caught it in minutes. The home-path layer above misses
+    this shape entirely when the checkout lives outside a home directory.
+    """
+    needle = str(_REPO)
+    offenders = []
+    for rel, p in _tracked_text_files():
+        if rel == "tests/test_public_repo_hygiene.py":
+            continue                      # this file names the needle by construction
+        text = p.read_bytes().decode("utf-8", errors="ignore")
+        if needle in text:
+            offenders.append(rel)
+    assert not offenders, (
+        f"The repository's own absolute path ({needle}) appears in committed content - "
+        "that code runs on one machine only. Derive it instead "
+        "(Path(__file__).resolve().parents[N]) or use tmp_path:\n"
+        + "\n".join(f"  {o}" for o in sorted(offenders))
+    )
+
+
 def test_the_home_path_detector_actually_detects():
     """Both directions, because a shape check that never refuses anything reads exactly like
     a clean repository."""

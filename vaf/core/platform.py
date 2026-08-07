@@ -284,6 +284,14 @@ class Platform:
             base = os.environ.get("APPDATA", str(Path.home()))
             return Path(base) / "vaf"
         elif Platform.is_macos():
+            # An explicitly SET XDG variable wins on macOS too (the common
+            # cross-platform convention). It is the only isolation seam this
+            # platform has: everything else here derives from HOME alone, so
+            # a test run without a throwaway HOME wrote synthetic rows into
+            # the REAL ~/Library store. Unset -> native default, unchanged.
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config:
+                return Path(xdg_config) / "vaf"
             return Path.home() / "Library" / "Application Support" / "vaf"
         else:
             xdg_config = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
@@ -301,6 +309,10 @@ class Platform:
             base = os.environ.get("LOCALAPPDATA", os.environ.get("APPDATA", str(Path.home())))
             return Path(base) / "vaf"
         elif Platform.is_macos():
+            # SET XDG wins on macOS too - see config_dir for why.
+            xdg_data = os.environ.get("XDG_DATA_HOME")
+            if xdg_data:
+                return Path(xdg_data) / "vaf"
             return Path.home() / "Library" / "Application Support" / "vaf"
         else:
             xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
@@ -318,6 +330,10 @@ class Platform:
             base = os.environ.get("LOCALAPPDATA", os.environ.get("APPDATA", str(Path.home())))
             return Path(base) / "vaf" / "cache"
         elif Platform.is_macos():
+            # SET XDG wins on macOS too - see config_dir for why.
+            xdg_cache = os.environ.get("XDG_CACHE_HOME")
+            if xdg_cache:
+                return Path(xdg_cache) / "vaf"
             return Path.home() / "Library" / "Caches" / "vaf"
         else:
             xdg_cache = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))

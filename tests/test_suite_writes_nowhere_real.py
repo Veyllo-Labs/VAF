@@ -44,6 +44,10 @@ REPO = Path(__file__).resolve().parents[1]
 # supposed to catch was actively happening.
 CHILD_ENV_TO_CLEAR = (
     "VAF_LOG_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "VAF_TEST_STORE_ROOT",
+    # The Windows mechanisms too: leaving the caller's real %LOCALAPPDATA%/%APPDATA% in the
+    # child meant a broken isolation delivered into the REAL store on win32 while the scratch
+    # profile stayed spotless - the counter-proof shape this comment block warns about.
+    "LOCALAPPDATA", "APPDATA",
 )
 
 # Every Platform directory accessor, frozen WITH THE MECHANISM THAT GOVERNS IT - PER
@@ -75,9 +79,15 @@ PLATFORM_DIR_AXES = {
     "get_research_dir":   {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
     "vaf_dir":            {"linux": _HOME,  "darwin": _HOME, "win32": _PROFILE},
     "get_context_log_dir": {"linux": _HOME, "darwin": _HOME, "win32": _PROFILE},
-    "config_dir":         {"linux": _XDG_C, "darwin": _HOME, "win32": _APP},
-    "data_dir":           {"linux": _XDG_D, "darwin": _HOME, "win32": _LOCAL},
-    "cache_dir":          {"linux": _XDG_K, "darwin": _HOME, "win32": _LOCAL},
+    # darwin follows a SET XDG variable since the store dirs gained that seam - it is the
+    # only mechanism test isolation has there (everything else on macOS derives from HOME
+    # alone, so before the seam a suite run without a throwaway HOME wrote synthetic rows
+    # into the developer's REAL ~/Library store). Unset XDG still means the native
+    # Library paths under HOME; this table records what governs when the detector varies
+    # a mechanism that is present.
+    "config_dir":         {"linux": _XDG_C, "darwin": _XDG_C, "win32": _APP},
+    "data_dir":           {"linux": _XDG_D, "darwin": _XDG_D, "win32": _LOCAL},
+    "cache_dir":          {"linux": _XDG_K, "darwin": _XDG_K, "win32": _LOCAL},
 }
 
 # Every mechanism that could govern an axis on any platform. Varied one at a time.
@@ -284,11 +294,13 @@ def test_a_real_pytest_run_delivers_nothing_into_the_callers_home(tmp_path):
     property is "writes land where the isolation says", and proving it must not require
     dirtying the thing being protected.
 
-    SCOPE, stated so a green run is not over-read: the assertion covers all three XDG
-    locations, but the witness module only exercises the DATA one. Config and cache are
-    guarded for the day something starts writing there, not demonstrated today. The
-    redirect for all four axes is covered by the two tests above; only delivery on the data
-    axis is proven here.
+    SCOPE, stated so a green run is not over-read: the assertion covers the WHOLE scratch
+    home except `~/.vaf` (one rule on every platform - the earlier version globbed three
+    Linux directory names that do not exist on macOS or Windows, so the guard was silently
+    green there while proving nothing), but the witness module only exercises the DATA
+    axis. Config and cache are guarded for the day something starts writing there, not
+    demonstrated today. The redirect for all four axes is covered by the two tests above;
+    only delivery on the data axis is proven here.
     """
     scratch_home = tmp_path / "home"
     scratch_home.mkdir()
@@ -297,6 +309,10 @@ def test_a_real_pytest_run_delivers_nothing_into_the_callers_home(tmp_path):
     for var in CHILD_ENV_TO_CLEAR:
         env.pop(var, None)                 # the child must isolate itself, not inherit it
     env["HOME"] = str(scratch_home)
+    # The home mechanism Windows actually reads (see HOME_MECHANISM): without this the
+    # child's Path.home() on win32 is the runner's REAL profile and this probe both
+    # pollutes it and proves nothing. Harmless on POSIX.
+    env["USERPROFILE"] = str(scratch_home)
 
     subprocess.run(
         [sys.executable, "-m", "pytest", "tests/test_messaging_connections.py", "-q",
@@ -304,16 +320,46 @@ def test_a_real_pytest_run_delivers_nothing_into_the_callers_home(tmp_path):
         cwd=REPO, env=env, capture_output=True, text=True,
     )
 
-    # Only the XDG-governed default locations. `~/.vaf` follows HOME and is SUPPOSED to be
-    # written here - that is the other mechanism doing its job, not a leak.
+    # ONE rule on every platform, instead of globbing three Linux directory names that do
+    # not exist on the other two (which made this assertion unfailable there - a guard
+    # that was silently green on macOS and Windows while the darwin store had NO
+    # isolation seam at all): everything the child leaves in the scratch home is an
+    # escape, except `~/.vaf` - that one follows the home mechanism and is SUPPOSED to
+    # land here. The conftest isolation must have redirected every store axis (XDG on
+    # POSIX - macOS honours a SET variable now - LOCALAPPDATA/APPDATA on Windows) into
+    # pytest's temp area, so a clean scratch home IS the proof.
     escaped = sorted(
         str(p.relative_to(scratch_home))
-        for base in (".local/share", ".config", ".cache")
-        for p in (scratch_home / base).rglob("*") if p.is_file()
+        for p in scratch_home.rglob("*")
+        if p.is_file() and ".vaf" not in p.relative_to(scratch_home).parts[:1]
     )
     assert not escaped, (
-        f"a test run wrote into the caller's home on an XDG axis: {escaped}. A throwaway "
-        f"HOME does not redirect those - only the conftest isolation does, and without it "
-        f"every suite run mixes synthetic rows into the developer's real stores. That has "
-        f"already turned one measurement into a false security finding."
+        f"a test run wrote into the caller's home outside ~/.vaf: {escaped}. A throwaway "
+        f"HOME does not redirect the store axes - only the conftest isolation does, and "
+        f"without it every suite run mixes synthetic rows into the developer's real "
+        f"stores. That has already turned one measurement into a false security finding."
     )
+
+
+def test_the_darwin_store_dirs_honor_a_set_xdg_variable(monkeypatch):
+    """The seam itself, exercised on every platform via a forced branch: the
+    macOS store dirs follow an explicitly SET XDG variable - the only
+    isolation mechanism they have, since everything else there derives from
+    HOME alone - and keep the native Library defaults when it is unset."""
+    from vaf.core.platform import Platform
+
+    monkeypatch.setattr(Platform, "is_windows", staticmethod(lambda: False))
+    monkeypatch.setattr(Platform, "is_macos", staticmethod(lambda: True))
+    monkeypatch.setenv("XDG_DATA_HOME", "/synthetic/data")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/synthetic/cfg")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/synthetic/cache")
+    assert Platform.data_dir() == Path("/synthetic/data/vaf")
+    assert Platform.config_dir() == Path("/synthetic/cfg/vaf")
+    assert Platform.cache_dir() == Path("/synthetic/cache/vaf")
+
+    for var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(var)
+    home = Path.home()
+    assert Platform.data_dir() == home / "Library" / "Application Support" / "vaf"
+    assert Platform.config_dir() == home / "Library" / "Application Support" / "vaf"
+    assert Platform.cache_dir() == home / "Library" / "Caches" / "vaf"

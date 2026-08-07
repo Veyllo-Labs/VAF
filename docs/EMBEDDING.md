@@ -387,7 +387,9 @@ instead of disabling the gate:
 - mark a working directory trusted (`mark_trusted_dir`),
 - set a per-tool policy to allow (`set_tool_policy`),
 - both persist in `trust.json` under the platform config dir
-  (Linux `~/.config/vaf/`, macOS `~/Library/Application Support/vaf/`,
+  (Linux `~/.config/vaf/`, macOS `~/Library/Application Support/vaf/` - an
+  explicitly set `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME` wins on
+  macOS too, which is how a test harness isolates the store there,
   Windows `%APPDATA%/vaf/`) - per OS user across all projects, not per
   project.
 

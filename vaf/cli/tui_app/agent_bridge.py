@@ -212,7 +212,28 @@ class AgentBridge:
         return get_web_interface()
 
     # ── lane plumbing ────────────────────────────────────────────────────────────────
+    def _stamp_session_ctx(self) -> None:
+        """Tell THIS thread which session it serves.
+
+        The session id lives in a ContextVar, and a ContextVar set on the main
+        thread (boot) is invisible to independently started threads - each one
+        begins with a fresh context. Every bridge-owned thread that touches
+        session-scoped state must therefore stamp itself. The live failure
+        this fixes: tools executed on the lane read `None`, so working-memory
+        writes landed in the legacy GLOBAL store while the plan gate read the
+        (empty) session store - and bounced a fully-planned model until its
+        loop-cap gave up.
+        """
+        try:
+            from vaf.core.subagent_ipc import set_current_session_id
+            set_current_session_id(str(self.session.id))
+        except Exception:
+            pass
+
     def _lane_loop(self) -> None:
+        # Every turn and every submitted job runs on THIS thread: it must know
+        # its session before the first tool executes.
+        self._stamp_session_ctx()
         while True:
             fn = self._queue.get()
             if fn is None:
@@ -1030,8 +1051,26 @@ class AgentBridge:
         try:
             from datetime import datetime
 
-            from vaf.core.subagent_ipc import get_current_session_id, get_ipc
+            from vaf.core.subagent_ipc import (get_current_session_id, get_ipc,
+                                               session_context)
             ipc = get_ipc()
+            # SCOPED, not a permanent stamp: this runs on whatever thread
+            # polls (the app's tasks thread live, the caller's thread in
+            # tests), and a stamp that outlives the read leaks the session
+            # onto a foreign thread - it killed the env fallback for every
+            # later reader on that thread. session_context restores even the
+            # "never told" state, which a save-and-restore from out here
+            # cannot (told-None and never-told answer differently).
+            with session_context(str(self.session.id)):
+                return self._tasks_snapshot_rows(ipc, datetime)
+        except Exception:
+            pass
+        return entries
+
+    def _tasks_snapshot_rows(self, ipc, datetime) -> list:
+        entries = []
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
             for task in ipc.get_active_tasks_for_current_session():
                 elapsed = self._elapsed(datetime.fromisoformat(task.created_at))
                 agent_type = task.agent_type
@@ -1170,6 +1209,18 @@ class AgentBridge:
         self._queue.put(None)
 
         def _finalize():
+            # SCOPED, because this runs on its own daemon thread only when a
+            # turn is still in flight - otherwise INLINE on the caller's
+            # thread, and a permanent stamp there told the caller's context a
+            # session it never declared (in tests: the main thread, killing
+            # the env fallback for everything after). The shutdown path counts
+            # active sessions, so it must know which one it is - for exactly
+            # this block, and not a moment longer.
+            from vaf.core.subagent_ipc import session_context
+            with session_context(str(self.session.id)):
+                _finalize_body()
+
+        def _finalize_body():
             deadline = time.monotonic() + 5.0
             while self._busy and time.monotonic() < deadline:
                 time.sleep(0.1)

@@ -108,3 +108,50 @@ def test_the_coder_stays_in_a_project_cwd(monkeypatch, tmp_path):
 
     base = CodingAgentTool._determine_base_dir(dummy, "create new project for a blog")
     assert base == "GENERATED-NEW", "create-intent must still get a fresh folder"
+
+
+# ── the verdict must not call an edit a failure ─────────────────────────────────────
+
+def _git(args, cwd):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                          text=True, check=True)
+
+
+def test_an_edit_only_run_is_an_outcome_not_a_failure(tmp_path):
+    """The create-bookkeeping stays empty when a run only MODIFIES files; the
+    live incident reported "FAILED / No files were created" over a committed,
+    successful README edit. Git knows better and is asked."""
+    from vaf.tools.coder import _rescue_edited_outcome
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(["init", "-q"], repo)
+    _git(["config", "user.email", "t@example.invalid"], repo)
+    _git(["config", "user.name", "t"], repo)
+    (repo / "README.md").write_text("# alt\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "base"], repo)
+    baseline = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    (repo / "README.md").write_text("# alt\n\n## Installation\n")
+    out = _rescue_edited_outcome([], str(repo), baseline)
+    assert out == ["README.md"], out
+
+    # A truly empty run stays an honest failure.
+    _git(["checkout", "-q", "--", "README.md"], repo)
+    assert _rescue_edited_outcome([], str(repo), baseline) == []
+
+    # Non-empty bookkeeping passes through untouched (no needless git work).
+    assert _rescue_edited_outcome(["a.py"], str(repo), baseline) == ["a.py"]
+
+
+def test_the_verdict_consults_the_rescue():
+    """Wiring pin inside the 6000-line run(): the helper is worthless if the
+    verdict does not call it before the files_created split."""
+    import inspect
+
+    import vaf.tools.coder as c
+
+    src = inspect.getsource(c.CodingAgentTool.run)
+    assert "files_created = _rescue_edited_outcome(" in src

@@ -139,6 +139,20 @@ if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
 
 ## Session ID Sources
 
+**The context variable is per-thread.** `set_current_session_id` writes a
+ContextVar, and a value set on the main thread (boot) is invisible to
+independently started threads - each begins with a fresh context. Every
+thread that touches session-scoped state must stamp itself: a thread you OWN
+declares once at start (`set_current_session_id`), a thread you only BORROW
+for one read uses the `session_context(sid)` context manager - it restores
+even the "never told" state, which save-and-restore from outside cannot
+(told-None and never-told answer differently). The terminal app's bridge
+stamps its worker lane permanently and its tasks poll and shutdown finalizer
+scoped. The live failure this rule comes from:
+tools executing on the un-stamped lane read `None`, working-memory writes
+landed in the legacy GLOBAL store, and the plan gate - reading the empty
+session store - bounced a fully-planned model until its loop-cap gave up.
+
 | Location | Variable | Purpose |
 |----------|----------|---------|
 | Frontend State | `currentSessionId` | Currently selected session in UI |

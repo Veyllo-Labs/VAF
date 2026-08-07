@@ -1211,6 +1211,30 @@ def set_current_session_id(session_id: Optional[str]):
         pass
 
 
+@contextmanager
+def session_context(session_id: Optional[str]):
+    """Serve ONE read/write as `session_id` on the current thread, then put the
+    thread's context back EXACTLY as it was - including "never told".
+
+    Exists because save-and-restore is impossible from outside: "told None"
+    and "never told" answer differently (the env fallback fires only for
+    never-told), and `get_current_session_id()` cannot tell a caller which of
+    the two it saw. Only the ContextVar token can restore the untold state.
+    First consumer: the terminal app's tasks poll, which borrows a FOREIGN
+    thread for a session-scoped read - a permanent stamp there leaked the
+    session onto whatever thread happened to call, which in the test suite
+    was the main thread and killed the env fallback for every later test.
+    """
+    token = _session_ctx.set(str(session_id) if session_id else None)
+    try:
+        yield
+    finally:
+        try:
+            _session_ctx.reset(token)
+        except Exception:
+            pass
+
+
 def get_current_session_id() -> Optional[str]:
     """The session this run serves, or `None`. Context first, process boundary second.
 

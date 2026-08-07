@@ -588,6 +588,31 @@ from vaf.core.subagent_ipc import (
 
 # Set the current session ID (called when a new session starts)
 set_current_session_id("session_abc123")
+```
+
+**The session context is PER-THREAD.** It lives in a `ContextVar`, and a value
+set on one thread is invisible to independently started threads - each begins
+with a fresh context. Two forms, chosen by ownership:
+
+- **A thread you OWN** (a worker lane, a poll loop you started) declares its
+  session once with `set_current_session_id(...)` at thread start and re-declares
+  on a session switch. "Told `None`" is a declaration too, and it is remembered:
+  the env fallback (`VAF_SESSION_ID`, the child-process case) fires only for a
+  thread that was NEVER told.
+- **A thread you only BORROW** for one session-scoped read or write uses
+  `session_context(sid)` (a context manager) - it restores the thread's context
+  EXACTLY as it was, including the never-told state, which a save-and-restore
+  from outside cannot do (told-`None` and never-told answer differently, and
+  `get_current_session_id()` cannot tell a caller which of the two it saw).
+
+The live failure this contract comes from: the terminal app's worker lane was
+never told its session, tools on it read `None`, working-memory writes landed
+in the legacy GLOBAL store, and the plan gate - reading the empty session
+store - bounced a fully-planned model until its loop-cap gave up. The
+follow-up failure: a PERMANENT stamp on a borrowed thread leaked the session
+onto it and killed the env fallback for every later reader there.
+
+```python
 
 # Clean up tasks from previous sessions
 cleanup_other_sessions()

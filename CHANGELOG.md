@@ -93,6 +93,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   dependency clean regardless.
 
 ### Fixed
+- **Setting a plan in the terminal app works on the first try.** Tools run
+  on the terminal app's worker thread, and that thread never learned which
+  session it serves - so working-memory writes (plan, notes, tasks) landed
+  in a global store while the plan check read the session's own, empty one.
+  The agent then got "set a plan first" bounces despite having just set one,
+  retried with reworded plans, and finally got through only because the
+  check gives up after three blocks. Every worker thread now knows its
+  session, so the plan lands where the check looks - first try.
+- **An edit-only coding run no longer reports failure.** The coding agent
+  counted only files it CREATED, so a task like "add a section to the
+  README" ended with "Task Failed - No files were created" over a
+  successful, even committed edit. When nothing was created, the verdict
+  now asks git what changed since the run began; edits count as the
+  outcome, and only a run that truly changed nothing keeps the honest
+  failure message.
 - **The coder works in the folder you started VAF in.** Open a terminal in
   your project (an IDE terminal counts), run `vaf run`, ask for a code
   change - the coding agent now works on THAT project. Before, the separate

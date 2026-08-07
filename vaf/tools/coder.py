@@ -347,6 +347,25 @@ def _detect_run_changes(base_dir: str, run_start_sha: str) -> List[str]:
         return []
 
 
+def _rescue_edited_outcome(files_created, base_dir: str, baseline_sha: str) -> List[str]:
+    """The verdict must not call an EDIT a failure.
+
+    `files_created` is the create-bookkeeping, and a run that only MODIFIED
+    existing files (the everyday "add a section to the README" case) leaves it
+    empty - the run then reported "FAILED / No files were created" over a
+    working tree it had just changed and even committed, and the main agent
+    relayed the failure to a user looking at the successful edit (live
+    incident). When the bookkeeping is empty, ask git what actually changed
+    since the run's baseline; a non-empty answer IS the outcome. Best-effort:
+    on any git problem the original (empty) list comes back and the honest
+    failure message stands.
+    """
+    if files_created:
+        return files_created
+    changed = _detect_run_changes(base_dir, baseline_sha)
+    return changed if changed else files_created
+
+
 _README_EXTS = {"", ".md", ".markdown", ".rst", ".txt", ".adoc"}
 
 
@@ -9698,6 +9717,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             except Exception:
                 final_commit_note = ""
         git_line = f"**💾 {final_commit_note}**\n" if final_commit_note else ""
+
+        # Edits count as outcomes: an empty create-bookkeeping is re-checked
+        # against git before it may declare the run failed.
+        files_created = _rescue_edited_outcome(files_created, base_dir,
+                                               _diff_baseline_sha)
 
         if files_created:
             # ═══════════════════════════════════════════════════════════════

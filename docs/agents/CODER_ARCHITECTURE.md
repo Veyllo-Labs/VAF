@@ -275,6 +275,15 @@ The inactivity auto-complete (idle with files present) runs the same determinist
     *   **IF Errors:** Sets `current_state.linter_errors_active = True`.
     *   Injects system message with error details.
 
+### Final verdict: edits count as outcomes
+The end-of-run SUCCESS/FAILED split keys on `files_created` (the create
+bookkeeping), which stays empty for a run that only MODIFIED existing files -
+the everyday "add a section to the README" case reported "Task Failed - No
+files were created" over a committed, successful edit. Before the split,
+`_rescue_edited_outcome` re-checks an empty list against git
+(`_detect_run_changes` since the run baseline); a non-empty answer IS the
+outcome, and only a run that truly changed nothing keeps the failure message.
+
 ### `task_done` (Lines ~5287-5823) - The Enforcement Gate
 *   **Gate 1: "No Files Created"**
     *   **IF** task type implies creation (e.g. "create script") **AND** `files_created` is empty:

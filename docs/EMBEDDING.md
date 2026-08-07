@@ -906,6 +906,16 @@ parallelism, create multiple `Agent` instances (each in its own thread is
 fine). `run()` blocks; `await run_async()` wraps it in a thread executor (see
 [Async applications](#async-applications)) - there is no natively async engine.
 
+One corollary when you use SESSION-scoped features (sub-agents, per-session
+working memory): the current session lives in a per-thread `ContextVar`, and a
+value set on one thread is invisible to threads you start yourself. The thread
+that drives an agent must declare its session
+(`vaf.core.subagent_ipc.set_current_session_id`) - once at thread start, again
+on a session switch; for a one-off session-scoped call from a borrowed thread
+use the `session_context(sid)` context manager, which restores the thread's
+context exactly as it was. Skipping this quietly routes session-scoped writes
+into the legacy global store - VAF's own terminal app shipped that bug.
+
 ### More extension points
 
 Beyond tools, the product loads three other user-extensible artifact kinds -

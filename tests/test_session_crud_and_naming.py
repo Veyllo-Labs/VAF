@@ -188,7 +188,9 @@ def test_a_runtime_switch_finally_stamps_the_ipc_session(monkeypatch):
                                        "timestamp": ""}])
     b.session_mgr.load = lambda sid, **kw: other
     b.load_session("ab12cd34")
-    assert _wait(lambda: set_ids == ["ab12cd34"]), set_ids
+    # The lane stamps its own session at start (thread-context fix), so the
+    # switch target is the LAST stamp, not the only one.
+    assert _wait(lambda: bool(set_ids) and set_ids[-1] == "ab12cd34"), set_ids
     b.shutdown()
 
 
@@ -198,7 +200,7 @@ def test_new_session_creates_stamps_and_switches(monkeypatch):
     assert _wait(lambda: any(e[0] == "session_switched" and e[1] == "red654321"
                              for e in events)), events
     assert calls["saved"], "the new session was never persisted"
-    assert set_ids == ["red654321"]
+    assert set_ids and set_ids[-1] == "red654321", set_ids
     scope_kw = calls["saved"][0].metadata
     assert "user_scope_id" in scope_kw, "the create lost its owner stamp"
     b.shutdown()
@@ -373,3 +375,109 @@ def test_the_web_startup_claims_once():
     src = Path(ws.__file__).read_text(encoding="utf-8")
     assert "claim_unscoped" in src and "_legacy_claim_done" in src, (
         "the web/tray boot lost its legacy-session claim")
+
+
+# ── the thread gap: bridge threads know their session ───────────────────────────────
+
+def test_the_lane_thread_knows_its_session(monkeypatch):
+    """Tools execute on the bridge's lane thread, and a ContextVar set on the
+    main thread at boot is invisible there - every session-scoped read and
+    write answered for NO session. The live failure: working-memory writes
+    landed in the legacy global store while the plan gate read the empty
+    session store and bounced a fully-planned model until its loop-cap."""
+    import vaf.core.subagent_ipc as ipc_mod
+
+    # Built WITHOUT the rig's set_current_session_id stub: the lane stamps at
+    # thread start, and a stub active at construction would swallow exactly
+    # the stamp this test measures.
+    session = SimpleNamespace(
+        id="green123456", name="alt",
+        messages=[{"role": "user", "content": "hi", "timestamp": ""}])
+    agent = SimpleNamespace(get_token_usage=lambda: (1, 2),
+                            set_event_sink=lambda s: None,
+                            shutdown=lambda: None,
+                            load_session_context=lambda sid: None)
+
+    class _Ev:
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    b = AgentBridge(agent, session, SimpleNamespace(), _Ev(),
+                    web_interface_getter=lambda: SimpleNamespace(
+                        resolve_gate=lambda *a: True))
+    seen = []
+    b._submit(lambda: seen.append(ipc_mod.get_current_session_id()))
+    assert _wait(lambda: bool(seen)), "the lane never ran the probe"
+    assert seen == ["green123456"], (
+        f"a lane-side tool would serve session {seen[0]!r} - the global-store "
+        f"split-brain again")
+    b.shutdown()
+
+
+def test_the_tasks_poll_thread_knows_its_session(monkeypatch):
+    import threading
+
+    import vaf.core.subagent_ipc as ipc_mod
+
+    b, events, calls, set_ids = _bridge(monkeypatch)
+    monkeypatch.undo()
+    seen = []
+
+    class _Ipc:
+        def get_active_tasks_for_current_session(self):
+            seen.append(ipc_mod.get_current_session_id())
+            return []
+
+        def get_paused_workflows_for_session(self, sid):
+            return []
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _Ipc())
+    after = []
+
+    def _poll_and_probe():
+        b.tasks_snapshot()
+        # The stamp must NOT outlive the read: this thread was only borrowed,
+        # and a permanent stamp here leaked the session onto foreign threads -
+        # in the suite it was the main thread, and it killed the env fallback
+        # for every later reader (two tests went red in a different file).
+        monkeypatch.setenv("VAF_SESSION_ID", "ab12cd34")
+        after.append(ipc_mod.get_current_session_id())
+
+    t = threading.Thread(target=_poll_and_probe)
+    t.start()
+    t.join(timeout=5)
+    assert seen == ["green123456"], (
+        f"the tasks line polled for session {seen[0] if seen else '<never ran>'!r}")
+    assert after == ["ab12cd34"], (
+        f"the poll's stamp outlived the read: the borrowed thread now answers {after}")
+    b.shutdown()
+
+
+def test_shutdown_does_not_tell_the_callers_thread(monkeypatch):
+    """The finalizer runs INLINE on the caller's thread when no turn is in
+    flight - a permanent stamp there told that thread a session it never
+    declared (in the suite: the main thread, and the env fallback died for
+    every later reader; two tests in another file went red). The finalizer's
+    stamp is scoped now: told inside, exactly as-before outside."""
+    import vaf.core.subagent_ipc as ipc_mod
+
+    session = SimpleNamespace(
+        id="green123456", name="alt",
+        messages=[{"role": "user", "content": "hi", "timestamp": ""}])
+    agent = SimpleNamespace(get_token_usage=lambda: (1, 2),
+                            set_event_sink=lambda s: None,
+                            shutdown=lambda: None,
+                            load_session_context=lambda sid: None)
+
+    class _Ev:
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    before = ipc_mod.get_current_session_id()
+    b = AgentBridge(agent, session, SimpleNamespace(), _Ev(),
+                    web_interface_getter=lambda: SimpleNamespace(
+                        resolve_gate=lambda *a: True))
+    b.shutdown()
+    time.sleep(0.3)
+    assert ipc_mod.get_current_session_id() == before, (
+        "shutdown left the caller's thread told - the suite-wide context poison")

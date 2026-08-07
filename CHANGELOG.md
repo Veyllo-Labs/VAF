@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Changed
+- **A pip-installed VAF no longer writes logs into its own install directory.**
+  The log directory search included the folder above the package, which in a
+  checkout is the repository and in a pip install is site-packages. Installed
+  copies now fall through to the normal application data directory; a checkout is
+  unaffected. Set `VAF_LOG_DIR` to choose explicitly.
 - **Tool-loading diagnostics no longer print underneath the terminal app.** The
   per-turn tool hot-reload, the custom-tool reload and a failed provider switch
   wrote their warnings straight to the raw terminal - under the full-screen app

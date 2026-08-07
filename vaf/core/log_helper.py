@@ -76,14 +76,38 @@ def is_debug_logging_enabled() -> bool:
         return True
 
 
+def source_checkout_logs(root: Path) -> Optional[Path]:
+    """``<root>/logs``, but only when ``root`` really is a source checkout.
+
+    ``root`` is the directory one level above the ``vaf`` package. In a git checkout or
+    an installer layout that is the repo, and pointing the logs there is what makes a
+    ``vaf run`` write next to the tray (which pins ``VAF_LOG_DIR`` to the same place). For
+    a wheel install the very same path is **site-packages**, and every writer that reached
+    this candidate was creating ``site-packages/logs/`` in the user's venv.
+
+    The probe is the one ``vaf/main.py`` already uses to tell the two layouts apart: only
+    the checkout and installer layouts ship ``requirements.txt`` one level above the
+    package. Kept as a separate function so both branches can be tested without owning a
+    wheel install.
+    """
+    return (root / "logs") if (root / "requirements.txt").exists() else None
+
+
 def get_app_log_dir() -> Path:
-    """Resolve app log directory (same order as headless _get_debug_log_dir)."""
+    """Resolve app log directory (same order as headless ``_get_debug_log_dir``).
+
+    Other writers keep their own copies of this candidate list (the web interface, the
+    tray, the desktop leak diagnostics). They are all harness processes that only ever run
+    from a checkout or an installer layout; this one is the copy a library caller reaches,
+    because ``ToolCaller`` writes through it.
+    """
     candidates: list[Path] = []
     env_dir = os.environ.get("VAF_LOG_DIR")
     if env_dir:
         candidates.append(Path(env_dir))
-    repo_logs = Path(__file__).resolve().parents[2] / "logs"
-    candidates.append(repo_logs)
+    repo_logs = source_checkout_logs(Path(__file__).resolve().parents[2])
+    if repo_logs is not None:
+        candidates.append(repo_logs)
     candidates.append(Platform.data_dir() / "logs")
     candidates.append(Platform.vaf_dir() / "logs")
     candidates.append(Path(__file__).resolve().parents[1] / "logs")

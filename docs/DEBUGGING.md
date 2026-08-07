@@ -12,20 +12,24 @@ The app log directory is the first of these where a `mkdir` succeeds
 (`vaf/core/log_helper.py get_app_log_dir`):
 
 1. `$VAF_LOG_DIR` (environment variable)
-2. `<repo>/logs` (two levels above `vaf/core/`; for a pip install this is
-   inside site-packages)
+2. `<repo>/logs` (two levels above `vaf/core/`) - **only in a source checkout
+   or installer layout**, detected by a `requirements.txt` next to the `vaf`
+   package. A pip install skips this candidate, so it never writes into
+   site-packages
 3. `Platform.data_dir()/logs` (Linux `~/.local/share/vaf`, macOS
    `~/Library/Application Support/vaf`, Windows `%LOCALAPPDATA%/vaf`)
 4. `~/.vaf/logs`
 5. package `vaf/logs`, then the current working directory as last resort
 
 The tray pins `VAF_LOG_DIR` to the repo `logs/` at startup, so in a normal
-checkout everything lands there. A few writers use slightly different orders
-and two writers ignore `VAF_LOG_DIR` entirely: the sub-agent debug tree
-(repo `logs/debug/`, else `~/.vaf/logs/debug`) and the desktop leak
-diagnostics. For everything else, set `VAF_LOG_DIR` explicitly - especially
-when embedding, where the default can otherwise land inside your venv's
-site-packages.
+checkout everything lands there. A few writers use slightly different orders,
+and the ones that keep their own copy of the list (web interface, tray,
+desktop leak diagnostics) still include the repo candidate unconditionally -
+they only ever run from a checkout or an installer layout. Two writers ignore
+`VAF_LOG_DIR` entirely: the sub-agent debug tree (repo `logs/debug/`, else
+`~/.vaf/logs/debug`) and the desktop leak diagnostics. When embedding, set
+`VAF_LOG_DIR` explicitly if you want the files somewhere other than
+`Platform.data_dir()/logs`.
 
 The pytest suite pins `VAF_LOG_DIR` to a temporary directory for the entire
 run (`tests/conftest.py`), so test-generated logs and security events never

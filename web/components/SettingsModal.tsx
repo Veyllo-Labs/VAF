@@ -1378,12 +1378,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
         const rawMain = (userIdentityDraft.main_messenger || '').trim().toLowerCase();
         const main_messenger = ['telegram', 'discord', 'slack', 'signal', 'whatsapp', 'email'].includes(rawMain) ? rawMain : null;
+        // Empty means CLEAR, and it has to travel as an empty string. The server treats
+        // "absent" as "leave alone" (anything else lets a partial request wipe fields it
+        // never mentioned - that is how closing the update dialog erased six of them), so
+        // `undefined` or `null` here would silently make these fields impossible to empty.
         const updateData = {
             name: userIdentityDraft.name.trim() || undefined,
             preferred_language: userIdentityDraft.preferred_language.trim() || undefined,
-            city: userIdentityDraft.city.trim() || undefined,
-            country: userIdentityDraft.country.trim() || undefined,
-            main_messenger: main_messenger as string | null,
+            city: userIdentityDraft.city.trim(),
+            country: userIdentityDraft.country.trim(),
+            main_messenger: (main_messenger ?? '') as string,
             preferences: parseList(userIdentityDraft.preferences),
             dos: parseList(userIdentityDraft.dos),
             donts: parseList(userIdentityDraft.donts),
@@ -1438,10 +1442,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             const res = await fetch('/api/user/user-identity', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
+                // Empty string, not undefined: an absent field means "leave alone" on the
+                // server, so these three could never be cleared again (see the persona form).
                 body: JSON.stringify({
-                    timezone: dateTimeTimezone.trim() || undefined,
-                    date_format: dateTimeDateFormat.trim() || undefined,
-                    time_format: dateTimeTimeFormat.trim() || undefined,
+                    timezone: dateTimeTimezone.trim(),
+                    date_format: dateTimeDateFormat.trim(),
+                    time_format: dateTimeTimeFormat.trim(),
                 }),
             });
             if (res.ok) {

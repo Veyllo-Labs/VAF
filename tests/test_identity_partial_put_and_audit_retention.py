@@ -92,6 +92,31 @@ def test_the_route_does_not_gate_profile_fields_on_the_unfiltered_dict():
 
 # ── The nameless entry ───────────────────────────────────────────────────────
 
+def test_the_forms_send_an_empty_string_for_a_cleared_field():
+    """The client half of the same contract, and the half the first fix forgot.
+
+    Server-side, "absent" now means "leave alone" - which is what stops a partial request
+    from wiping fields it never mentioned. But both settings forms sent `undefined` (and
+    `null` for the messenger) whenever the input was empty, so after that change these six
+    fields could no longer be cleared at all: emptying the box and saving did nothing.
+    The data-loss bug had been the only thing making it work. Empty has to travel as an
+    empty STRING for the two halves to agree."""
+    src = Path(__file__).resolve().parent.parent / "web" / "components" / "SettingsModal.tsx"
+    text = src.read_text(encoding="utf-8")
+    for line in (
+        "city: userIdentityDraft.city.trim(),",
+        "country: userIdentityDraft.country.trim(),",
+        "main_messenger: (main_messenger ?? '') as string,",
+        "timezone: dateTimeTimezone.trim(),",
+        "date_format: dateTimeDateFormat.trim(),",
+        "time_format: dateTimeTimeFormat.trim(),",
+    ):
+        assert line in text, (
+            f"a clearable field stopped sending an empty string: {line!r}. With `undefined` "
+            f"the server leaves the old value in place and the field can never be emptied."
+        )
+
+
 def test_the_change_log_entry_records_who_and_what_really_happened():
     """Pins both halves: the username the route already has, and a verb that follows the
     outcome. "updated" was written even when a field ended up empty, which is how a

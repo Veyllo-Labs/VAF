@@ -245,7 +245,51 @@ class BaseTool(ABC):
     # ═══════════════════════════════════════════════════════════════════════════
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════════════
-    
+
+    #: Cap for one ``log()`` message. Domain logs have no rotation and the garbage
+    #: collector only reaches them at the end of the day, so an unbounded message is an
+    #: unbounded file. In-tree callers cap by hand; a method that strangers use cannot
+    #: rely on that.
+    LOG_MESSAGE_CHARS = 2000
+
+    def log(self, message) -> None:
+        """Write one diagnostic line to ``tools_<date>.log``.
+
+        This is the supported way for a tool to log. It goes to the same place as the rest
+        of VAF's diagnostics, follows the same ``debug_logs_enabled`` switch and the same
+        ``VAF_LOG_DIR``, and the garbage collector cleans up after it - none of which is
+        true for a ``logging.getLogger`` of your own, and none of which requires importing
+        anything out of ``vaf.core``.
+
+        The tool name and the current session id are filled in for you::
+
+            self.log("[FETCH] upstream returned 503, retrying")
+            # 2026-01-01T12:00:00 [get_weather] session=green123456 [FETCH] upstream ...
+
+        Group your own lines with a ``[PREFIX]``, the way the rest of the log families do.
+
+        The caller's identity is deliberately NOT added. It is not ambient - it arrives as
+        arguments to ``run()``, and a tool instance is shared by every user of an agent, so
+        anything cached on ``self`` would leak across them. If you want the scope in your
+        line, declare ``identity_kwargs`` and put it there yourself.
+
+        Never raises and never returns anything: a broken log line must not be able to fail
+        a tool call. Silently does nothing when debug logging is off.
+        """
+        try:
+            from vaf.core.log_helper import append_domain_log
+            from vaf.core.subagent_ipc import get_current_session_id
+            try:
+                session = get_current_session_id() or "-"
+            except Exception:
+                session = "-"
+            text = str(message).replace("\n", " ").replace("\r", " ")
+            if len(text) > self.LOG_MESSAGE_CHARS:
+                text = text[:self.LOG_MESSAGE_CHARS] + f"... [+{len(text) - self.LOG_MESSAGE_CHARS} chars]"
+            append_domain_log("tools", f"[{getattr(self, 'name', '?')}] session={session} {text}")
+        except Exception:
+            pass
+
     def query_llm(self, messages, max_tokens=300, temperature=0.7, timeout: int = None,
                   provider: str = None, model: str = None,
                   allow_reasoning_fallback: bool = True) -> Optional[str]:
@@ -368,6 +412,9 @@ class BaseTool(ABC):
                     # reasoning_content deltas keep the connection alive but are not collected.
         except Exception as e:
             try:
+                # Deliberately not self.log(): a broken local stream is a BACKEND diagnosis,
+                # and backend_*.log is the file DEBUGGING.md points at for provider trouble.
+                # Moving it to tools_*.log would hide it from the person looking for it.
                 from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"{self.name} stream ended: {type(e).__name__}: {str(e)[:120]}")
             except Exception:

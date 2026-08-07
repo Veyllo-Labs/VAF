@@ -45,6 +45,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **Tools can write their own log lines: `self.log(...)`.** Every tool - including
+  one written by a third party against the public `BaseTool` - can now report what
+  it is doing without reaching into VAF's internals. Lines land in `tools_*.log`
+  with the tool name and session filled in, follow the same `VAF_LOG_DIR` and
+  `Debug Logs` settings as everything else, and are cleaned up by the same garbage
+  collector. It never raises, so a logging mistake cannot fail a tool call.
 - **Sessions can be created, renamed and deleted inside the terminal app.**
   The sessions panel (Ctrl+S) gained `n` for a fresh session, `r` to rename
   the highlighted one and `d` to delete it after a confirmation - deleting

@@ -64,7 +64,10 @@ def redacted_uvicorn_log_config() -> Dict[str, Any]:
     return cfg
 
 # Domains get a single {domain}.log file each; use prefixes like [COMPACTION], [EMIT] inside messages.
-ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach")
+# "tools" is what BaseTool.log() writes to, so a tool - ours or a third party's - never has
+# to pick a domain. An unknown domain is a silent no-op below, which is a fine failure mode
+# for in-tree code that can be grepped and a terrible one for a public method.
+ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach", "tools")
 
 
 def is_debug_logging_enabled() -> bool:

@@ -485,14 +485,7 @@ class AgentWorkflowBuilderTool(BaseTool):
         # forensic the full run_temp step list existed nowhere (the timeline
         # truncates tool args) - whether a step referenced prior outputs via
         # {placeholders} had to be inferred from the coder's received task.
-        try:
-            from vaf.core.log_helper import append_domain_log
-            append_domain_log(
-                "backend",
-                f"[RUN_TEMP] name={name!r} steps={json.dumps(normalised, ensure_ascii=False)[:4000]}",
-            )
-        except Exception:
-            pass
+        self.log(f"[RUN_TEMP] name={name!r} steps={json.dumps(normalised, ensure_ascii=False)[:4000]}")
 
         # ── Validation auto-enable ────────────────────────────────────────────
         # Content/agent steps get per-step output validation by DEFAULT. This
@@ -514,14 +507,7 @@ class AgentWorkflowBuilderTool(BaseTool):
             for s in _validatable_steps:
                 s.validate = True
                 _auto_validated.append(s.tool)
-            try:
-                from vaf.core.log_helper import append_domain_log
-                append_domain_log(
-                    "backend",
-                    f"[RUN_TEMP] auto-enabled output validation for steps: {sorted(set(_auto_validated))}",
-                )
-            except Exception:
-                pass
+            self.log(f"[RUN_TEMP] auto-enabled output validation for steps: {sorted(set(_auto_validated))}")
 
         # Tool registry: prefer agent's live tools (full set), fall back to stubs
         tools = self._collect_tools()

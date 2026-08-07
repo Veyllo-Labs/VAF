@@ -545,12 +545,22 @@ class WeatherTool(BaseTool):
         city = (kwargs.get("city") or "").strip()
         if not city:
             return "Error: 'city' is required."
+        self.log(f"[WEATHER] looking up {city}")
         # ... call your weather API here ...
         return f"It is sunny in {city}, 22°C."
 ```
 
 `run()` always returns a **string** — never raise; return an `"Error: ..."` string on
 failure so the agent can react.
+
+`self.log(message)` writes one line to `tools_<date>.log` in the VAF log directory, with
+your tool's name and the current session id filled in. Use it instead of
+`logging.getLogger` or an import from `vaf.core.log_helper`: it follows `VAF_LOG_DIR` and
+the `debug_logs_enabled` switch, the garbage collector cleans up after it, and it never
+raises. Group your lines with a `[PREFIX]`, as the other log families do. The caller's
+identity is not added for you - a tool instance is shared by every user of an agent, so
+nothing identity-shaped may live on `self`; declare `identity_kwargs` and put it in the
+message yourself if you need it.
 
 ### tests/test_weather.py
 

@@ -71,6 +71,7 @@ gates the domain logs, queue metrics, timeline, and channel logs. Notes:
 | `prompt_*.log` | The full system prompt as sent (`[SYSTEM_FULL]` blocks) and persona (`[SOUL]`) lines |
 | `headless_*.log` | Headless runner startup/lifecycle checkpoints |
 | `tool_use_*.log` | One line per tool call ATTEMPT: timestamp, tool, session id, user scope, 200-char sanitized args preview - the first stop for user-isolation questions. Written by the shared funnel, so it covers chat, workflows, the librarian and embedder-registered tools; a call refused by policy/allowlist/authorizer/gate is logged too (that is the point). The coder's own loop does not go through the funnel and is absent |
+| `tools_*.log` | What individual tools chose to report about themselves, via `BaseTool.log()`: timestamp, tool name, session id, message. Third-party tools land here too |
 | `timeline_*.jsonl` | Hash-chained event timeline (`tool_start`/`tool_end`, sub-agent and thinking runs); served with chain verification via `GET /api/logs/timeline/events` |
 | `vaf_think_*.log` | Proactive/thinking runs, one human-readable block per run |
 | `startup_trace_*.txt`, `tray_startup_*.txt`, `tray_debug_*.log` | Startup sequencing; tray issues |

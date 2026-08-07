@@ -330,6 +330,9 @@ async def ingest_document_knowledge(
     from vaf.memory.rag import RagPipeline
     from vaf.memory.attachment_rag import _split_into_sections
     from vaf.core.config import Config
+    # Not BaseTool.log(): this is a module-level helper shared by two tools, so there is no
+    # self to name - and the ingest lines belong in memory_*.log next to the rest of the RAG
+    # trail, which a fixed "tools" domain could not give them.
     try:
         from vaf.core.log_helper import append_domain_log
     except Exception:  # pragma: no cover

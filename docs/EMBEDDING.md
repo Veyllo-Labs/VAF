@@ -615,8 +615,23 @@ class WeatherTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         city = kwargs["city"]
+        self.log(f"[WEATHER] looking up {kwargs['city']}")
         return f"It is sunny in {city}."
 ```
+
+`self.log(message)` is the supported way for a tool to write a diagnostic
+line. It appends to `tools_<date>.log` in the VAF log directory, filling in
+your tool's name and the current session id, and it inherits everything the
+rest of VAF's logging has: the `VAF_LOG_DIR` redirect, the
+`debug_logs_enabled` switch, dated files, and garbage collection. It never
+raises, so a broken log line cannot fail a tool call. Do not import
+`vaf.core.log_helper` - that is internal and offers no stability promise.
+
+The caller's identity is deliberately not added to the line: it is not
+ambient, and one tool instance is shared by every user of an agent, so
+anything cached on `self` would leak across them. If you want the scope in
+your own lines, declare it via `identity_kwargs` (below) and write it
+yourself.
 
 To give ONE embedded Agent instance this tool - no package, no file drop-in:
 
@@ -962,7 +977,8 @@ Stable public surface (safe to build on):
 - `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
-- `BaseTool` - the tool contract, including the `identity_kwargs` declaration.
+- `BaseTool` - the tool contract, including the `identity_kwargs` declaration
+  and `self.log(message)`.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains
   exported for tools that need the boundary around something other than a whole `run()`.

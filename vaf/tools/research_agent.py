@@ -2015,6 +2015,8 @@ class ResearchAgentTool(BaseTool):
                     # for the idle timeout) but are intentionally not collected.
         except Exception as e:
             try:
+                # Deliberately not self.log(): same reason as BaseTool._stream_local_completion -
+                # a dropped provider stream belongs in backend_*.log, not in tools_*.log.
                 from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"research section stream ended: {type(e).__name__}: {str(e)[:120]}")
             except Exception:

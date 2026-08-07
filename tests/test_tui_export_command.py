@@ -81,6 +81,11 @@ def test_a_json_extension_selects_json_case_insensitively(tmp_path):
 
 def test_tilde_is_expanded(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # USERPROFILE too: expanduser() reads HOME on POSIX but USERPROFILE on
+    # Windows, so redirecting only HOME writes the export into the runner's
+    # REAL profile there and this assertion fails - the sibling tests carry
+    # the same pair for the same reason.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     b, notes = _bridge()
     b.export_session("~/chat.md")
     _drain(b)

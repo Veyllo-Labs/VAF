@@ -333,15 +333,48 @@ You have access to this filesystem map for intelligent file operations:
 Current OS: {self.map['os']}
 """
 
+    #: Words that name a standard LOCATION, and the map key they resolve to. Word-boundary
+    #: matched, so 'doc' does not match 'docker' and 'movie' does not match 'remove'.
+    #: Only the four folders the fast path has always answered for; anything else falls
+    #: through to a real search rather than growing this table on speculation.
+    _LOCATION_WORDS = (
+        ("documents", r"documents?|dokumente?n?|docs?"),
+        ("downloads", r"downloads?|downloadordner"),
+        ("pictures", r"pictures?|images?|photos?|fotos?|bilder"),
+        ("videos", r"videos?|movies?|filme?"),
+    )
+
+    #: Words that name a file TYPE, and the extension the scan counts it under. A type is
+    #: NOT a location - conflating the two is what made every PDF question an answer about
+    #: the Documents folder.
+    _TYPE_WORDS = (
+        ("pdf", r"pdfs?"),
+        ("docx", r"docx"),
+        ("txt", r"txts?"),
+        ("jpg", r"jpe?gs?"),
+        ("png", r"pngs?"),
+        ("mp4", r"mp4s?"),
+        ("mp3", r"mp3s?"),
+        ("zip", r"zips?"),
+    )
+
     def query_fast(self, question: str) -> Optional[str]:
         """
         Attempts to answer simple queries directly from the map.
-        
+
         This avoids expensive file_search operations.
-        
+
+        Location first, type second, and never a count the scan did not take. The old
+        version matched INTENT in a fixed order with the file types folded into the
+        Documents branch, so "how many PDFs are in Downloads" answered about Documents -
+        the type keyword decided the folder and the folder keyword was never reached.
+        Measured on a real map: Downloads held 33 PDFs, the answer said 9, which is the
+        Documents count. Same shape as the 2026-07-13 incident one layer up: an answer
+        about a folder nobody asked about, delivered fast enough to look authoritative.
+
         Args:
             question: Natural language question
-        
+
         Returns:
             Answer string if found, None if needs file search
         """
@@ -353,49 +386,62 @@ Current OS: {self.map['os']}
         q = re.sub(r"\S*[/\\]\S*", " ", q)
         q = re.sub(r"\b[\w-]+\.[a-z0-9]{1,5}\b", " ", q)
 
-        # Documents query (word-boundary matching: 'doc' must not match 'docker',
-        # 'mov' must not match 'remove')
-        if re.search(r"\b(documents?|dokumente?n?|pdfs?|txts?|docx|docs?)\b", q):
-            docs = self.map['locations'].get('documents', {})
-            types = docs.get('file_types', {})
-            
-            pdf = types.get('pdf', 0)
-            txt = types.get('txt', 0)
-            docx = types.get('docx', 0)
-            total = docs.get('total_files', 0)
-            
-            return (
-                f"Documents folder contains: "
-                f"{pdf} PDFs, {txt} TXTs, {docx} DOCXs "
-                f"(Total: {total} files)"
-            )
-        
-        # Pictures query
-        if re.search(r"\b(pictures?|images?|photos?|fotos?|bilder|jpe?gs?|pngs?)\b", q):
-            pics = self.map['locations'].get('pictures', {})
-            types = pics.get('file_types', {})
-            
-            jpg = types.get('jpg', 0) + types.get('jpeg', 0)
-            png = types.get('png', 0)
-            total = pics.get('total_files', 0)
-            
-            return f"Pictures folder: {jpg} JPGs, {png} PNGs (Total: {total} images)"
-        
-        # Downloads query
-        if re.search(r"\bdownloads?\b", q):
-            dl = self.map['locations'].get('downloads', {})
-            total = dl.get('total_files', 0)
-            return f"Downloads folder: {total} files"
-        
-        # Videos query
-        if re.search(r"\b(videos?|movies?|filme?|mp4|mov)\b", q):
-            vids = self.map['locations'].get('videos', {})
-            total = vids.get('total_files', 0)
-            return f"Videos folder: {total} files"
-        
-        # No quick answer available
+        location = next((name for name, pattern in self._LOCATION_WORDS
+                         if re.search(rf"\b(?:{pattern})\b", q)), None)
+        file_type = next((ext for ext, pattern in self._TYPE_WORDS
+                          if re.search(rf"\b(?:{pattern})\b", q)), None)
+
+        if location:
+            return self._answer_for_location(location, file_type)
+        if file_type:
+            return self._answer_across_locations(file_type)
         return None
-    
+
+    def _answer_for_location(self, location: str, file_type: Optional[str]) -> Optional[str]:
+        """Stats for ONE named folder, or None when the map cannot honestly answer."""
+        loc = (self.map.get('locations') or {}).get(location)
+        if not loc:
+            return None                      # folder not on this machine: let the search look
+
+        label = location.capitalize()
+        total = loc.get('total_files', 0)
+        types = loc.get('file_types')
+
+        if file_type is not None:
+            if not types:
+                # No per-type data for this folder. A zero here would be a count nobody
+                # took, dressed as one - fall through to a real search instead.
+                return None
+            return (f"{label} folder contains {types.get(file_type, 0)} "
+                    f"{file_type.upper()}s (of {total} files in total)")
+
+        if types:
+            top = ", ".join(f"{n} {ext.upper()}s" for ext, n
+                            in sorted(types.items(), key=lambda kv: -kv[1])[:4] if n)
+            if top:
+                return f"{label} folder contains: {top} (Total: {total} files)"
+        return f"{label} folder: {total} files"
+
+    def _answer_across_locations(self, file_type: str) -> Optional[str]:
+        """A type question with no folder named - answer for every folder that has the data.
+
+        The old code answered "Documents" here. That is a guess presented as a fact, and on
+        this machine it was the wrong folder by a factor of three. Naming every folder costs
+        nothing (the counts are already in the map) and cannot be silently wrong.
+        """
+        counts = []
+        for name, loc in (self.map.get('locations') or {}).items():
+            types = loc.get('file_types')
+            if types and types.get(file_type):
+                counts.append((name, types[file_type]))
+        if not counts:
+            return None
+
+        counts.sort(key=lambda kv: -kv[1])
+        where = ", ".join(f"{name.capitalize()} {n}" for name, n in counts)
+        return f"{file_type.upper()}s by folder: {where} (Total: {sum(n for _, n in counts)})"
+
+
     def suggest_search_location(self, filename: str) -> Path:
         """
         Suggests the best location to search for a file.

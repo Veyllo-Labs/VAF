@@ -11,6 +11,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Asking about files in one folder no longer answers about another one.** The
+  librarian answers simple folder questions from a cached index in about a
+  second. That index decided which folder to report from the file type in your
+  question, not from the folder you named - so "how many PDFs are in Downloads"
+  came back with the count from Documents, fluently and fast enough to look
+  authoritative. Measured on one machine: 33 PDFs in Downloads, answer said 9,
+  which is the Documents figure. The folder you name now decides the answer; a
+  question with no folder gets the counts for every folder instead of a guess;
+  and where the index has no figures at all it stays quiet and lets a real
+  search run rather than reporting a zero nobody counted.
+
 ### Changed
 - **The tool-use log now covers every lane, not only chat.** `tool_use_*.log`
   records which session and which user scope were behind a tool call - the first

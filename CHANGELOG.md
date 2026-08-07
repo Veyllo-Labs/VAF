@@ -84,6 +84,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   panel can only truncate. `session list` opens the panel instead of failing as
   an unknown id.
 
+### Security
+- **PostCSS updated (8.5.26).** The build toolchain's CSS processor could be
+  tricked into reading arbitrary `.map` files when it processes CSS from an
+  untrusted source without a known input file, disclosing their contents in
+  the generated source map. VAF only ever runs it over its own stylesheets at
+  build time, so no VAF installation was exposed - the update keeps the
+  dependency clean regardless.
+
 ### Fixed
 - **Running project tests in the sandbox works on a fresh container.** The
   sandbox image ships without pytest while pytest is the default test

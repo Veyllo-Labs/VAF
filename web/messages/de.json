@@ -598,7 +598,7 @@
       "enableVoiceInput": "Spracheingabe aktivieren",
       "sttEngine": "STT-Engine",
       "dockerStt": "Docker (Whisper)",
-      "localStt": "Lokal",
+      "localStt": "Lokal (faster-whisper, separat installieren)",
       "dockerSttUrl": "STT-URL (Docker)",
       "sttDesc": "Spracheingabe über die konfigurierte Sprach-Lane: standardmäßig der lokale Whisper-Container, oder der oben gewählte Cloud-Anbieter.",
       "tts": "Sprachausgabe (TTS)",

@@ -492,3 +492,69 @@ def test_elevenlabs_stt_unknown_iso639_3_is_none(monkeypatch):
     _mock_httpx(monkeypatch, lambda *a, **kw: _Resp(200, {"text": "hi", "language_code": "zzz"}))
     text, lang = sa.transcribe(b"OggS....")
     assert text == "hi" and lang is None   # unknown -> no bad hint
+
+
+# ---------------------------------------------------------------------------
+# resolve_stt_engine: the ONE place that decides where recorded audio goes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stored", ["", None, "docker", "Docker", "  DOCKER  ",
+                                    "whisper", "off", "docker "])
+def test_only_the_literal_local_means_local(monkeypatch, stored):
+    """No installer ships faster-whisper, so a value nobody recognises must
+    never reroute a user's audio into it - it means the default lane."""
+    _cfg(monkeypatch, {"speech_stt_engine": stored})
+    assert sa.resolve_stt_engine() == "docker"
+
+
+@pytest.mark.parametrize("stored", ["local", "Local", "  LOCAL  "])
+def test_an_explicit_local_pick_is_honoured(monkeypatch, stored):
+    _cfg(monkeypatch, {"speech_stt_engine": stored})
+    assert sa.resolve_stt_engine() == "local"
+
+
+def test_a_resolving_cloud_provider_beats_the_engine_toggle(monkeypatch):
+    """The documented contract (CONFIG_SCHEMA: the provider "takes precedence
+    over speech_stt_engine"). The CLI mic used to ignore it, so a stale "local"
+    pick sent cloud users into an engine that was never installed."""
+    _cfg(monkeypatch, {"speech_stt_provider": "openai", "speech_stt_engine": "local"},
+         keys={"openai": "sk-key"})
+    assert sa.resolve_stt_engine() == "docker"
+
+
+def test_a_provider_without_a_key_does_not_win(monkeypatch):
+    """Precedence belongs to a provider that can actually run. A configured but
+    unusable one leaves the engine toggle in charge."""
+    _cfg(monkeypatch, {"speech_stt_provider": "openai", "speech_stt_engine": "local"},
+         keys={})
+    assert sa.resolve_stt_engine() == "local"
+    _cfg(monkeypatch, {"speech_stt_provider": "openai", "speech_stt_engine": ""}, keys={})
+    assert sa.resolve_stt_engine() == "docker"
+
+
+def test_resolve_stt_engine_never_raises(monkeypatch):
+    from vaf.core.config import Config
+
+    def _boom(cls, k, d=None):
+        raise RuntimeError("config on fire")
+    monkeypatch.setattr(Config, "get", classmethod(_boom))
+    monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: ""))
+    assert sa.resolve_stt_engine() == "docker"
+
+
+def test_both_microphone_lanes_ask_the_resolver(monkeypatch):
+    """Wiring pin. The two lanes hand-rolled this decision and disagreed; a
+    resolver nobody calls would let them drift apart again."""
+    import inspect
+
+    import vaf.core.speech as speech
+    import vaf.core.web_server as web_server
+
+    web_src = inspect.getsource(web_server.websocket_endpoint)
+    assert "resolve_stt_engine()" in web_src, "web mic stopped asking the resolver"
+    assert 'Config.get("speech_stt_engine"' not in web_src, \
+        "web mic reads the raw engine key again"
+
+    cli_src = inspect.getsource(speech.SpeechManager.listen)
+    assert "resolve_stt_engine()" in cli_src, "CLI mic stopped asking the resolver"
+    assert "speech_stt_engine" not in cli_src, "CLI mic reads the raw engine key again"

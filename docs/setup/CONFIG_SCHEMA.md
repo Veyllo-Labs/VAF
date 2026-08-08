@@ -264,7 +264,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 |-----|---------|---------|
 | `stt_enabled` | `False` | Legacy STT toggle (ORed with `speech_stt_enabled`; admin-only). |
 | `speech_stt_enabled` | `False` | Enable speech-to-text (canonical key). |
-| `speech_stt_engine` | `"docker"` | `docker` or `local` (faster-whisper). |
+| `speech_stt_engine` | `"docker"` | `docker` or `local` (faster-whisper, `pip install vaf[speech]`). Read through `speech_api.resolve_stt_engine()`, never raw: only the literal `local` selects faster-whisper, anything else means `docker`, and a resolving `speech_stt_provider` outranks both. |
 | `speech_stt_docker_url` | `http://localhost:5003` | STT container URL. |
 | `speech_stt_whisper_model` | `"base"` | Local Whisper model size. |
 | `speech_tts_enabled` | `False` | Enable text-to-speech. |
@@ -277,7 +277,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speech_tts_provider` | `""` | Cloud TTS provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_tts_engine`; falls back to the local engine on API errors. |
 | `speech_tts_api_model` | `""` | Model for the cloud TTS provider (`""` = default: ElevenLabs `eleven_flash_v2_5`, OpenAI `gpt-4o-mini-tts`). |
 | `speech_tts_api_voice` | `""` | Voice for the cloud TTS provider: ElevenLabs voice ID or OpenAI voice name (`""` = default). |
-| `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `veyllo`, `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. Seeded to `veyllo` the first time a Veyllo key is added (onboarding OR later in Settings) while no STT provider was chosen (`Config.apply_veyllo_stt_default`); an explicit later choice overwrites it. |
+| `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `veyllo`, `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine` when it resolves (known provider, STT-capable, key present); falls back to the Docker Whisper container on API errors, not to faster-whisper. Seeded to `veyllo` the first time a Veyllo key is added (onboarding OR later in Settings) while no STT provider was chosen (`Config.apply_veyllo_stt_default`); an explicit later choice overwrites it. |
 | `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: Veyllo `veyllo-transcribe`, ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
 | `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Kept in the encrypted store; redacted for non-admin reads. |
 | `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |

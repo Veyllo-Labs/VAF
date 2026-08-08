@@ -129,11 +129,26 @@ Before TTS playback, content is cleaned via `_clean_markdown()`:
 | Engine | Description | Configuration |
 |--------|-------------|---------------|
 | `docker` | Whisper via HTTP API | **Recommended** |
-| `local` | faster-whisper + ffmpeg | Requires local installation |
+| `local` | faster-whisper + ffmpeg | `pip install vaf[speech]` (not in the base install) |
 
-When `speech_stt_provider` is set (`veyllo`, `elevenlabs`, or `openai`), the cloud
-lane takes precedence over `speech_stt_engine`, with automatic fallback to the local
-lane on any API error. See [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
+**One resolver decides, for every microphone: `speech_api.resolve_stt_engine()`.**
+It answers `docker` or `local`, and both mic lanes (Web UI and CLI) ask it instead
+of reading `speech_stt_engine` themselves - they used to, and they disagreed about
+the rule below. Two things it settles:
+
+- When `speech_stt_provider` is set (`veyllo`, `elevenlabs`, or `openai`) AND
+  resolves (known, STT-capable, key present), the cloud lane takes precedence over
+  `speech_stt_engine`. On any API error the turn degrades to the **Docker container**,
+  not to faster-whisper - both live behind `speech_client.transcribe`. See
+  [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
+- Only the literal `local` selects faster-whisper. An unset, empty or unrecognised
+  value means `docker`, because faster-whisper is an optional extra and audio must
+  not be routed into an engine that may not be installed.
+
+A configured provider whose key is missing does NOT win - it cannot run - so the
+engine toggle decides again. The Settings selector therefore also resets
+`speech_stt_engine` to `docker` when a cloud provider is picked, so that case lands
+on the container rather than on a stale `local` pick.
 
 ### Docker Whisper STT
 

@@ -152,6 +152,35 @@ def select_stt_backend() -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
+def resolve_stt_engine() -> str:
+    """Which engine transcribes recorded audio: ``"docker"`` or ``"local"``.
+
+    ``"docker"`` means the shared client (``vaf/core/speech_client.py``): the
+    cloud provider lane first when one resolves, then the Whisper container.
+    ``"local"`` means in-process faster-whisper.
+
+    Two rules, both of which callers used to hand-roll and disagree about:
+
+    * A resolving cloud provider WINS over the engine toggle. That is the
+      documented contract (``docs/setup/CONFIG_SCHEMA.md``: the provider
+      "takes precedence over ``speech_stt_engine``"), and the two lanes stated
+      it differently - the web mic honoured it, the CLI mic did not.
+    * Anything that is not the literal ``"local"`` means the default. An
+      unset, empty or unknown value must not reroute a user's audio into
+      faster-whisper, which no installer ships.
+
+    Never raises: a config problem falls back to the recommended engine.
+    """
+    try:
+        if select_stt_backend()[0]:
+            return "docker"
+        from vaf.core.config import Config
+        engine = (Config.get("speech_stt_engine", "docker") or "docker").strip().lower()
+        return "local" if engine == "local" else "docker"
+    except Exception:
+        return "docker"
+
+
 def synthesize(text: str, lang: str = "en", *, want_format: str = "wav") -> Optional[bytes]:
     """Cloud TTS: text to audio bytes (RIFF, or OggS when want_format='ogg').
 

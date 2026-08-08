@@ -180,6 +180,13 @@ class SpeechManager:
         if not self.is_stt_enabled():
             return False
         # If engine is "docker", we don't need local STT at all
+        #
+        # NAMED BOUNDARY - deliberately NOT speech_api.resolve_stt_engine().
+        # That resolver answers "where does recorded audio go", this asks
+        # "does a microphone have to be opened at startup", and the two only
+        # look alike. Folding them together would also let a configured cloud
+        # provider close the CLI microphone, and it would need a live mic test
+        # on all three platforms to prove. The raw read stays until then.
         engine = Config.get("speech_stt_engine", "docker")
         return engine != "docker"
 
@@ -1012,14 +1019,15 @@ $player.Close()
                 frame_data = b"".join(frames)
                 audio = sr.AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
 
-                # The engine the user CHOSE decides where this audio goes. On
-                # the default "docker" engine the shared client transcribes it
-                # (cloud lane first when configured, else the local Whisper
-                # container - the same path Telegram and WhatsApp voice take).
-                # A failure is NAMED and never silently rerouted to Google's
-                # free web API: the user picked local processing.
-                from vaf.core.config import Config as _Config
-                if (_Config.get("speech_stt_engine", "docker") or "docker") == "docker":
+                # One resolver decides where this audio goes, the same one the
+                # web mic asks: a configured cloud provider wins, otherwise the
+                # engine the user chose. "docker" means the shared client
+                # (cloud lane first, then the local Whisper container - the same
+                # path Telegram and WhatsApp voice take). A failure is NAMED and
+                # never silently rerouted to Google's free web API: the user
+                # picked local processing.
+                from vaf.core import speech_api as _speech_api
+                if _speech_api.resolve_stt_engine() == "docker":
                     from vaf.core import speech_client
                     api_text, _api_lang = speech_client.transcribe(
                         audio.get_wav_data(), mime="audio/wav", filename="mic.wav")
@@ -1032,21 +1040,11 @@ $player.Close()
                         "running (start_vaf.sh)?")
                     return None
 
-                # Cloud STT provider lane: honour speech_stt_provider for the CLI
-                # mic too (otherwise mic audio silently goes to Google's free Web
-                # API below). Falls back to recognize_google on None.
-                try:
-                    from vaf.core import speech_api
-                    if speech_api.select_stt_backend()[0]:
-                        api_text, _api_lang = speech_api.transcribe(
-                            audio.get_wav_data(), mime="audio/wav", filename="mic.wav"
-                        )
-                        if api_text:
-                            self._play_success_sound()
-                            return api_text
-                except Exception:
-                    pass
-
+                # No cloud lane call here any more: a resolving provider already
+                # sent this audio through the shared client above, which tries
+                # the very same provider first and then the container. Reaching
+                # this point means engine "local" AND no provider, so Google's
+                # free Web API below is the only remaining recognizer.
                 try:
                     text = self.stt_recognizer.recognize_google(audio, language=locale)
 

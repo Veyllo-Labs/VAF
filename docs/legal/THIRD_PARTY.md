@@ -142,6 +142,8 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 |---|---|---|
 | SpeechRecognition | >=3.10.0 | BSD-3-Clause |
 | pyaudio | >=0.2.14 | MIT |
+| sherpa-onnx | >=1.13 | Apache-2.0 |
+| faster-whisper | >=1.0.0 | MIT |
 
 ### browser (python_version >= 3.11)
 | Package | Min version | License |

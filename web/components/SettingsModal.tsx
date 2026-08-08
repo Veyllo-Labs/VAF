@@ -3212,6 +3212,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     } else {
                                                         // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
                                                         handleChange('speech_stt_provider', v);
+                                                        // Leave no contradictory engine behind: picking a
+                                                        // cloud provider on top of an earlier "local" pick
+                                                        // used to keep speech_stt_engine='local', so the
+                                                        // day the key stopped resolving the audio dropped
+                                                        // into faster-whisper while Settings showed a
+                                                        // cloud provider. The documented fallback is the
+                                                        // Docker lane.
+                                                        handleChange('speech_stt_engine', 'docker');
                                                         handleChange('speech_stt_api_model',
                                                             v === 'elevenlabs' ? 'scribe_v2'
                                                             : v === 'veyllo' ? 'veyllo-transcribe'

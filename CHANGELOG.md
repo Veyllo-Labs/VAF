@@ -24,6 +24,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   already running got reused as long as it held the right model - so the new
   setting changed nothing until something else happened to restart it. VAF
   now notices that the running server cannot see and restarts it.
+- **Voice input stops blaming faster-whisper for everything.** The error
+  "faster-whisper not installed" was shown for any import problem at all,
+  including an installed faster-whisper whose native part refuses to load -
+  a common case on macOS. The message now names the setting that led there
+  and the actual reason, so the search starts in the right place.
+- **Picking a cloud speech provider no longer leaves a local engine behind.**
+  Choosing a provider on top of an earlier "Local" pick kept the engine on
+  "Local", so the day the key stopped working the microphone dropped into an
+  engine that is not part of the standard installation, while the settings
+  showed a cloud provider. A cloud provider now also switches the engine back,
+  and one place decides where recorded audio goes - the two microphones (web
+  and terminal) used to decide it differently.
+- **The local speech engine can be installed at all now.** Settings offered
+  "Local" speech recognition for an engine that no installer delivered.
+  It is part of the speech extra from now on: `pip install "vaf[speech]"`,
+  and the option says so.
 
 ## [0.1.0a21] - 2026-08-08
 

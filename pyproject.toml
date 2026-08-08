@@ -115,7 +115,13 @@ memory = [
     "numpy>=1.24.0",
     "redis>=5.0.0",
 ]
-speech = ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14", "sherpa-onnx>=1.13"]
+# faster-whisper is the "local" STT engine offered in Settings. It used to be
+# declared nowhere, so the option could not be satisfied by any documented
+# install command; it lives in this extra rather than the base dependencies
+# because its native runtime (ctranslate2) is a large platform-specific wheel
+# and the recommended engine is the Whisper container.
+speech = ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14", "sherpa-onnx>=1.13",
+          "faster-whisper>=1.0.0"]
 browser = [
     "browser-use>=0.12.9; python_version >= '3.11'",
     "playwright>=1.49.0; python_version >= '3.11'",

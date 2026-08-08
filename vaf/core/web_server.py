@@ -127,32 +127,52 @@ _whisper_model_lock = threading.Lock()
 # Hence the teardown pop, plus a liveness intersection at the reading end.
 _VOICE_CALLS: dict = {}
 
+def _rss_mb() -> float:
+    """Resident memory in MB for the load log, 0.0 when psutil is unavailable.
+
+    Diagnostics must never decide whether transcription works.
+    """
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
 def get_whisper_model():
     """Get or lazily load the Whisper STT model (singleton)."""
     global _whisper_model
     if _whisper_model is None:
         with _whisper_model_lock:
             if _whisper_model is None:  # Double-check
+                model_size = Config.get("speech_stt_whisper_model", "base")
+                # ONLY the faster-whisper import may raise ImportError out of
+                # here: the caller turns that into "local STT is not usable",
+                # and the memory bookkeeping below used to sit in the same try,
+                # so a missing psutil was reported as a missing faster-whisper.
+                # The original message travels with it - an installed package
+                # whose native dependency fails to load (arch mismatch, a
+                # frequent macOS case) says something different from an absent
+                # one, and the user needs to see which.
                 try:
                     import importlib
-                    import psutil
-
-                    model_size = Config.get("speech_stt_whisper_model", "base")
-                    mem_before = psutil.Process().memory_info().rss / (1024 * 1024)
-                    log("WebServer", f"Loading WhisperModel ({model_size}, CPU, int8) - Memory before: {mem_before:.0f}MB")
 
                     whisper_module = importlib.import_module("faster_whisper")
                     WhisperModel = getattr(whisper_module, "WhisperModel")
-                    _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                except ImportError as exc:
+                    raise ImportError(
+                        f"faster-whisper is not usable ({exc}). "
+                        'Install it with: pip install "vaf[speech]"'
+                    ) from exc
 
-                    mem_after = psutil.Process().memory_info().rss / (1024 * 1024)
-                    log("WebServer", f"WhisperModel ({model_size}) loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
+                mem_before = _rss_mb()
+                log("WebServer", f"Loading WhisperModel ({model_size}, CPU, int8) - Memory before: {mem_before:.0f}MB")
+                _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                mem_after = _rss_mb()
+                log("WebServer", f"WhisperModel ({model_size}) loaded - Memory after: {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
 
-                    # Log to file (consolidated in memory.log)
-                    append_domain_log("memory", f"[WHISPER] WhisperModel({model_size}): {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
-
-                except ImportError:
-                    raise ImportError("faster-whisper not installed. Install with: pip install faster-whisper")
+                # Log to file (consolidated in memory.log)
+                append_domain_log("memory", f"[WHISPER] WhisperModel({model_size}): {mem_before:.0f}MB -> {mem_after:.0f}MB (delta: {mem_after-mem_before:.0f}MB)")
     return _whisper_model
 
 def unload_whisper_model():
@@ -6232,11 +6252,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             })
                             continue
 
-                        stt_engine = Config.get("speech_stt_engine", "docker")
                         text = ""
 
                         from vaf.core import speech_api as _speech_api
-                        if stt_engine == "docker" or _speech_api.select_stt_backend()[0]:
+                        if _speech_api.resolve_stt_engine() == "docker":
                             # Shared speech client: cloud provider lane first when
                             # speech_stt_provider is set, then Docker Whisper
                             # (/asr with /transcribe fallback, parsing inside).
@@ -6265,10 +6284,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 model = get_whisper_model()
                                 segments, info = model.transcribe(temp_path, beam_size=5)
                                 text = " ".join([segment.text for segment in segments])
-                            except ImportError:
+                            except ImportError as import_error:
+                                # Name the SETTING that led here and the REAL reason.
+                                # "not installed" used to be printed for every
+                                # ImportError, including an installed faster-whisper
+                                # whose native dependency does not load (a common
+                                # arch mismatch on macOS), which sent people looking
+                                # in the wrong place. No installer ships the package,
+                                # so choosing this engine at all is the usual cause.
                                 await websocket.send_json({
                                     "type": "stt_error",
-                                    "error": "faster-whisper not installed. Use STT engine 'Docker' or: pip install faster-whisper"
+                                    "error": (
+                                        "Local STT (faster-whisper) is selected in "
+                                        "Settings > Voice, but it is not usable: "
+                                        f"{import_error} Switch the engine to Docker "
+                                        "in Settings to use the Whisper container instead."
+                                    )
                                 })
                                 continue
                             except Exception as transcribe_error:

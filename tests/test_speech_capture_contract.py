@@ -64,11 +64,15 @@ class _Source:
         return False
 
 
-def _manager(monkeypatch, chunks, recognized="hallo welt", engine="google"):
+def _manager(monkeypatch, chunks, recognized="hallo welt", engine="local"):
     """`engine` defaults to the legacy google path so the pre-existing chain
-    stays pinned; the docker tests below pass "docker". Config is stubbed
+    stays pinned; the docker tests below pass "docker". That default used to
+    be the made-up value "google", which reached the legacy chain only because
+    the lane read "anything that is not docker" - speech_api.resolve_stt_engine
+    now treats an unrecognised value as the default lane, so the legacy chain
+    is reached by the one value that really selects it. Config is stubbed
     BECAUSE the capture now ensures its own stack via is_stt_enabled - a rig
-    reading the machine's real config would flip with the owner's settings
+    reading the machine's real config would flip with the machine's settings
     (it did: these tests broke the moment the docker lane landed)."""
     import vaf.core.config as config_mod
 

@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/wordmark-dark-bg.png">
-  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/wordmark-light-bg.png" width="210" alt="Veyllo">
-</picture>
+<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/wordmark-dark-bg.png" width="210" alt="Veyllo">
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 

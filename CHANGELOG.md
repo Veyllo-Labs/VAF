@@ -31,6 +31,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   search run rather than reporting a zero nobody counted.
 
 ### Added
+- **The README says plainly what VAF sends and where it goes.** A new
+  "What VAF sends, and where" section: VAF collects no usage data and reports
+  nothing to Veyllo, there is no analytics SDK and no crash reporter, and the
+  only outbound request VAF makes on its own is the startup version check
+  against GitHub's public releases API - which carries no data about you and
+  which `update_check_on_start: false` turns off. The section is equally plain
+  about the other direction: if you point VAF at a cloud provider, your prompts
+  go to that provider. "No telemetry" means Veyllo receives nothing; it does not
+  mean a cloud-backed agent works without talking to the cloud. The README badge
+  row now also shows the release, last commit, tool and test counts, the number
+  of supported LLM providers, and the supported platforms.
 - **The license now states, in one place, what a fork owes its users.** VAF
   carries a short legal notice under Section 7(b) of the AGPL, in English and
   German, naming its origin and the obligations that come with it: pass it on

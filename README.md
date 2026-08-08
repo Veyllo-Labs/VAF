@@ -7,7 +7,11 @@
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 
-[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
+[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/Veyllo-Labs/VAF?include_prereleases&label=release&color=green)](https://github.com/Veyllo-Labs/VAF/releases) [![Last commit](https://img.shields.io/github/last-commit/Veyllo-Labs/VAF?color=blue)](https://github.com/Veyllo-Labs/VAF/commits/main) [![Stars](https://img.shields.io/github/stars/Veyllo-Labs/VAF?logo=github&color=yellow)](https://github.com/Veyllo-Labs/VAF/stargazers)
+
+[![Tools](https://img.shields.io/badge/tools-110%2B-blue)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/TOOLS_CATALOG.md) [![Tests](https://img.shields.io/badge/tests-4000%2B-brightgreen)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![LLM providers](https://img.shields.io/badge/LLM%20providers-6-blueviolet)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/INSTALLATION_GUIDE.md)
+
+[![Local models](https://img.shields.io/badge/local%20models-supported-success)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![No telemetry](https://img.shields.io/badge/telemetry-none-brightgreen)](https://github.com/Veyllo-Labs/VAF#what-vaf-sends-and-where) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
 
 **Dual-licensed:** free under the [GNU AGPL-3.0](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE), or a [commercial license](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
 
@@ -298,6 +302,30 @@ Key config options (`config.json`):
 | `gpu_layers` | `99` | Layers to offload to GPU (`0` = CPU only) |
 | `web_ui_enabled` | `true` | Start web UI alongside the agent |
 | `persist_server` | `false` | Keep llama-server running after VAF exits |
+
+### What VAF sends, and where
+
+**VAF collects no usage data and reports nothing to Veyllo.** There is no analytics
+SDK, no crash reporter, and no identifier tied to you or your installation. Your
+conversations, memory, credentials and files stay in `~/.vaf/` and in your own database
+container.
+
+By default VAF makes exactly **one** outbound request of its own: a version check against
+the public GitHub releases API at startup, so it can print a one-line "update available"
+hint. It sends no data about you or your usage - GitHub sees the request the way it sees
+any anonymous API call. Turn it off with `update_check_on_start: false`.
+
+Everything else that leaves your machine is something **you** configured, and it goes to
+that provider, not to us:
+
+| If you configure... | Then this goes there |
+|---|---|
+| `provider: local` | nothing - the model runs on your machine |
+| A cloud provider (`openai`, `anthropic`, `google`, `deepseek`, `openrouter`, `veyllo`) | your prompts and tool results, to that provider |
+| Web search, mail, calendar, messaging integrations | the requests those features make, to those services |
+
+So "no telemetry" means what it says: **we** receive nothing. It does not mean an agent
+you point at a cloud model works without talking to that cloud.
 
 ---
 

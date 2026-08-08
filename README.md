@@ -1,5 +1,10 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.png"
+     width="880" alt="See it work: the main agent. You ask in plain language, it plans the work and delegates each part to a specialist sub-agent. Below, the same agent in the full-screen terminal app and in the desktop window.">
+
+*One agent, one session store, one config - in your terminal or in your browser.*
+
 # VAF - Veyllo Agentic Framework
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
@@ -9,11 +14,6 @@ An autonomous agent framework built on top of local and cloud LLMs. VAF runs as 
 [![Lines of code](https://img.shields.io/badge/source-280k%2B%20lines-informational)](https://ghloc.vercel.app/Veyllo-Labs/VAF?branch=main) [![Tools](https://img.shields.io/badge/tools-110%2B-blue)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/TOOLS_CATALOG.md) [![Tests](https://img.shields.io/badge/tests-4000%2B-brightgreen)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![LLM providers](https://img.shields.io/badge/LLM%20providers-6-blueviolet)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/INSTALLATION_GUIDE.md)
 
 [![Local models](https://img.shields.io/badge/local%20models-supported-success)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![No telemetry](https://img.shields.io/badge/telemetry-none-brightgreen)](https://github.com/Veyllo-Labs/VAF#what-vaf-sends-and-where) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
-
-<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/hero.png"
-     width="880" alt="The same agent in two places: the full-screen terminal app on the left, the desktop window on the right">
-
-*One agent, one session store, one config - in your terminal or in your browser.*
 
 </div>
 

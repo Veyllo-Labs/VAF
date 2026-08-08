@@ -94,6 +94,30 @@ subject to the laws of Germany and **supplement** Sections 15 and 16 of the AGPL
 > Produkthaftungsgesetz; c) arglistiges Verschweigen eines Mangels. Im Übrigen ist die
 > Haftung ausgeschlossen, soweit gesetzlich zulässig.
 
+### Additional Term under Section 7(b) - Preservation of Legal Notices
+
+As permitted by Section 7(b) of the AGPL, the following is a specified reasonable legal
+notice. It must be preserved in the source of the Software and of all modified versions,
+whether conveyed as source, conveyed in object form, or made available to users over a
+network under Section 13.
+
+> **Notice.** This software is derived from VAF (Veyllo Agentic Framework),
+> Copyright © Veyllo GmbH. It is licensed under the GNU Affero General Public License,
+> version 3 or later. If you convey it, you must pass it on under the same license and
+> make the corresponding source available to your recipients. If you run a modified
+> version as a network service, Section 13 of that license requires you to offer the
+> users of that service the complete corresponding source code of your version. A
+> commercial license removing these copyleft obligations is available from Veyllo GmbH
+> at https://veyllo.io. Notice reference: 17f46056-1744-4574-9564-0770a6ba799b.
+
+This term requires **preservation only**. It does **not** require the notice to be
+displayed in any user interface, and nothing in it restricts renaming, rebranding,
+modifying, or commercially operating your version: the AGPL permits all of that, provided
+its source-disclosure terms are honored.
+
+The notice is static text. VAF does not transmit it or the reference it contains;
+preserving it involves no telemetry, no tracking, and no communication with Veyllo GmbH.
+
 ### Trademarks and Brand Assets
 
 The code license does **not** grant trademark rights. "VAF", "Veyllo Agentic Framework",
@@ -206,6 +230,31 @@ den Abschnitten 15 und 16 der AGPL:
 
 Dieser Wortlaut ist die maßgebliche Fassung; die englische Fassung oben gibt denselben
 Inhalt wieder.
+
+### Zusätzliche Bedingung nach Abschnitt 7(b) - Erhalt von Rechtshinweisen
+
+Wie nach Abschnitt 7(b) der AGPL zulässig, ist der folgende Text ein bestimmter,
+angemessener Rechtshinweis. Er ist im Quelltext der Software und aller veränderten
+Versionen zu erhalten: bei Weitergabe im Quelltext, bei Weitergabe in Objektform und bei
+Bereitstellung über ein Netzwerk nach Abschnitt 13.
+
+> **Hinweis.** Diese Software stammt von VAF (Veyllo Agentic Framework),
+> Copyright © Veyllo GmbH. Sie steht unter der GNU Affero General Public License,
+> Version 3 oder später. Bei Weitergabe ist sie unter derselben Lizenz weiterzugeben und
+> der zugehörige Quelltext den Empfängern verfügbar zu machen. Wer eine veränderte
+> Version als Netzwerkdienst betreibt, muss den Nutzern dieses Dienstes nach Abschnitt 13
+> den vollständigen zugehörigen Quelltext seiner Version anbieten. Eine kommerzielle
+> Lizenz ohne diese Copyleft-Pflichten ist bei der Veyllo GmbH erhältlich:
+> https://veyllo.io. Aktenzeichen des Hinweises: 17f46056-1744-4574-9564-0770a6ba799b.
+
+Diese Bedingung verlangt **ausschließlich den Erhalt** des Hinweises. Sie verlangt
+**nicht**, ihn in einer Benutzeroberfläche anzuzeigen, und sie hindert nicht am
+Umbenennen, Umbranden, Verändern oder kommerziellen Betrieb der eigenen Version: all das
+erlaubt die AGPL, sofern ihre Pflicht zur Quelloffenlegung erfüllt wird.
+
+Der Hinweis ist statischer Text. VAF überträgt weder ihn noch das darin enthaltene
+Aktenzeichen; sein Erhalt bedeutet keinerlei Telemetrie, Nachverfolgung oder
+Kommunikation mit der Veyllo GmbH.
 
 ### Marken und Markenwerte
 

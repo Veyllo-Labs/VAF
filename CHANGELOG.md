@@ -30,6 +30,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and where the index has no figures at all it stays quiet and lets a real
   search run rather than reporting a zero nobody counted.
 
+### Added
+- **The license now states, in one place, what a fork owes its users.** VAF
+  carries a short legal notice under Section 7(b) of the AGPL, in English and
+  German, naming its origin and the obligations that come with it: pass it on
+  under the same license, make the corresponding source available, and if you run
+  a modified version as a network service, offer that service's users your
+  complete source. It also names the commercial license as the way out of those
+  obligations. A fork must keep the notice in its source. It does **not** have to
+  be displayed anywhere, and it restricts nothing else - renaming, rebranding and
+  commercial operation stay permitted, exactly as the AGPL allows. The notice is
+  static text: nothing about it is transmitted, and it involves no telemetry of
+  any kind.
+
 ### Changed
 - **Files VAF writes and reads back now say which format they are in.** Three
   stores kept no format identity of their own, so a reader had to guess from the

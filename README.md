@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.png"
+<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.gif"
      width="880" alt="VAF - Veyllo Agentic Framework. The open-source AI agent framework and harness with persistent memory and tools for web, code and files - fully self-sufficient in-house, or with models from the cloud. Below the title, the desktop window in front and the full-screen terminal app behind it.">
 
 *One agent, one session store, one config - in your terminal or in your browser.*

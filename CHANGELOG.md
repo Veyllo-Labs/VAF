@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **A local model that can see images finally does.** Local vision only
+  worked if you had explicitly set the vision provider to "local" - leaving
+  it on its default meant the local server started without the image
+  bridge, and the agent answered that images are not supported while the
+  settings looked correct. The empty setting now means what it means
+  everywhere else: use whatever the main agent uses, if it can see images. A
+  chosen cloud provider still wins, and still handles the images itself.
+- **Turning local vision on takes effect without restarting VAF.** The image
+  bridge is chosen when the model server starts, and a server that was
+  already running got reused as long as it held the right model - so the new
+  setting changed nothing until something else happened to restart it. VAF
+  now notices that the running server cannot see and restarts it.
+
 ## [0.1.0a21] - 2026-08-08
 
 ### Added

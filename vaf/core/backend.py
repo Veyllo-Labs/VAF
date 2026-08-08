@@ -335,7 +335,17 @@ def resolve_mmproj_for(model_path: str) -> str:
     """
     from vaf.core.config import Config
     try:
-        if (Config.get("vision_provider", "") or "").strip().lower() != "local":
+        # Ask the ONE resolver instead of reading the raw key: an EMPTY
+        # vision_provider means "whatever the main agent uses, if it can see"
+        # (vision_infer.select_vision_backend), and reading the key directly
+        # made that case mean "no vision at all" HERE while every other reader
+        # honoured it. A local vision model therefore started its server
+        # without --mmproj and answered "image input is not supported" - with
+        # nothing in the settings looking wrong. An explicitly chosen provider
+        # still wins, and a cloud one still means the projector stays off.
+        from vaf.core.vision_infer import select_vision_backend
+        vp, _vm = select_vision_backend()
+        if (vp or "").strip().lower() != "local":
             return ""
         models_dir = os.path.dirname(os.path.abspath(model_path))
         ref = (Config.get("vision_local_mmproj", "") or "").strip()
@@ -635,6 +645,33 @@ class ServerManager:
                 f.write(str(pid))
         except:
             pass
+
+    # `--mmproj` is a LAUNCH argument, so a running server either has the
+    # vision projector or it does not - and the reuse check compares only the
+    # MODEL. Turning local vision on therefore changed nothing until something
+    # else happened to restart the server, and llama kept answering "image
+    # input is not supported" while the setting said vision was on. This file
+    # records what the running server was launched WITH, so the reuse check
+    # can notice the mismatch.
+    @property
+    def _vision_state_file(self) -> str:
+        return self.pid_file + ".mmproj"
+
+    def _save_vision_state(self, mmproj_path: str) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.pid_file), exist_ok=True)
+            with open(self._vision_state_file, "w", encoding="utf-8") as f:
+                f.write(mmproj_path or "")
+        except Exception:
+            pass
+
+    def _running_vision_state(self) -> str:
+        """What the running server was launched with ("" = no projector)."""
+        try:
+            with open(self._vision_state_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
     
     def _remove_pid(self):
         """Remove PID file on clean shutdown."""
@@ -642,6 +679,13 @@ class ServerManager:
             if os.path.exists(self.pid_file):
                 os.remove(self.pid_file)
         except:
+            pass
+        # The vision record belongs to that server; leaving it behind would
+        # make the next reuse check compare against a dead server's launch.
+        try:
+            if os.path.exists(self._vision_state_file):
+                os.remove(self._vision_state_file)
+        except Exception:
             pass
 
     def resolve_latest_release(self):
@@ -919,9 +963,21 @@ class ServerManager:
             response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
             if response.status_code == 200:
                 if _loaded_model_matches(model_path, port):
-                    self.process = None  # Reuse existing external process
-                    UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
-                    return True
+                    # Same model is not enough: the vision projector is a
+                    # launch argument, so a server started before local vision
+                    # was turned on can never see images no matter how long it
+                    # is reused (live incident: switching vision to local
+                    # changed nothing until the next full restart).
+                    _wanted_mmproj = resolve_mmproj_for(model_path)
+                    if bool(_wanted_mmproj) != bool(self._running_vision_state()):
+                        UI.event("Server",
+                                 "Server on :%d runs %s the vision projector - restarting"
+                                 % (port, "without" if _wanted_mmproj else "with"),
+                                 style="dim")
+                    else:
+                        self.process = None  # Reuse existing external process
+                        UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                        return True
                 UI.event("Server",
                          f"Server on :{port} holds a different model - restarting with "
                          f"{os.path.basename(model_path)}", style="dim")
@@ -1321,6 +1377,9 @@ class ServerManager:
                 # able to find the server during the WHOLE load window (minutes on slow
                 # setups), not only once it is ready.
                 self._save_pid(self.process.pid)
+                # Record whether THIS server can see images, so the reuse check
+                # above can tell a vision-capable server from a blind one.
+                self._save_vision_state(mmproj_path)
 
                 # Windows: Add process to job object for automatic cleanup
                 if self.system == "Windows" and self._job_handle:

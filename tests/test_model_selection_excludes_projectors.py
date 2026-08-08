@@ -165,3 +165,73 @@ def test_the_swap_still_floors_the_context_window(monkeypatch, tmp_path):
     monkeypatch.setattr(backend, "ServerManager", _Mgr)
     backend.ensure_local_model(str(model))
     assert seen["n_ctx"] == 32768, seen
+
+
+# ── local vision follows the main agent, and the server reuse knows it ──────────────
+
+def test_an_empty_vision_setting_follows_the_main_agent(monkeypatch, tmp_path):
+    """The default is EMPTY, and every other reader takes that to mean "use
+    the main agent's provider if it can see". The server start read the raw
+    key instead, so a local vision model launched WITHOUT its projector and
+    answered "image input is not supported" while the settings looked fine
+    (live incident on a local Gemma)."""
+    import vaf.core.backend as backend
+    import vaf.core.vision_infer as vi
+
+    model = tmp_path / "google_gemma-4-E4B-it-Q4_K_M.gguf"
+    model.write_bytes(b"x")
+    (tmp_path / "mmproj-google_gemma-4-E4B-it-Q4_K_M.gguf").write_bytes(b"y")
+
+    monkeypatch.setattr(vi, "select_vision_backend", lambda: ("local", "gemma"))
+    assert backend.resolve_mmproj_for(str(model)).endswith(
+        "mmproj-google_gemma-4-E4B-it-Q4_K_M.gguf")
+
+    # A cloud vision provider still means: no projector on the local server.
+    monkeypatch.setattr(vi, "select_vision_backend", lambda: ("veyllo", "veyllo-chat"))
+    assert backend.resolve_mmproj_for(str(model)) == ""
+
+
+def test_reuse_restarts_when_the_running_server_cannot_see(monkeypatch, tmp_path):
+    """`--mmproj` is a launch argument: a server started before local vision
+    was switched on stays blind forever if reuse only compares the model."""
+    import vaf.core.backend as backend
+
+    mgr = backend.ServerManager.__new__(backend.ServerManager)
+    mgr.pid_file = str(tmp_path / "server.pid")
+
+    mgr._save_vision_state("")                       # started WITHOUT vision
+    assert mgr._running_vision_state() == ""
+    mgr._save_vision_state("/models/mmproj-x.gguf")  # started WITH vision
+    assert mgr._running_vision_state() == "/models/mmproj-x.gguf"
+
+    # The comparison the reuse branch makes is a boolean one: has projector
+    # vs wants projector. Both mismatches must force a restart.
+    for running, wanted in (("", "/models/mmproj-x.gguf"), ("/models/mmproj-x.gguf", "")):
+        mgr._save_vision_state(running)
+        assert bool(wanted) != bool(mgr._running_vision_state())
+
+
+def test_a_clean_shutdown_takes_the_vision_record_with_it(tmp_path):
+    """The record describes ONE running server. Surviving its own server would
+    make the next reuse check compare against a launch that is long gone."""
+    import vaf.core.backend as backend
+
+    mgr = backend.ServerManager.__new__(backend.ServerManager)
+    mgr.pid_file = str(tmp_path / "server.pid")
+    open(mgr.pid_file, "w").close()
+    mgr._save_vision_state("/models/mmproj-x.gguf")
+
+    mgr._remove_pid()
+    assert not os.path.exists(mgr.pid_file)
+    assert not os.path.exists(mgr._vision_state_file)
+    assert mgr._running_vision_state() == ""
+
+
+def test_the_reuse_branch_actually_consults_the_vision_state():
+    """Wiring pin: the state file is worthless if the reuse path ignores it."""
+    import inspect
+
+    import vaf.core.backend as backend
+
+    src = inspect.getsource(backend.ServerManager._start_server_locked)
+    assert "_running_vision_state()" in src, "server reuse stopped checking for vision"

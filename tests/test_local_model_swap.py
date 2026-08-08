@@ -110,10 +110,27 @@ def _cfg_map(monkeypatch, mapping):
                         classmethod(lambda cls, k, d=None: mapping.get(k, d)))
 
 
-def test_mmproj_off_when_vision_not_local(monkeypatch, tmp_path):
-    _cfg_map(monkeypatch, {"vision_provider": ""})
+def test_mmproj_off_when_vision_is_not_local(monkeypatch, tmp_path):
+    """A cloud vision provider means the local server stays blind - that
+    provider sees the images itself.
+
+    This test used to assert the same for an EMPTY setting, which was the
+    defect: empty means "follow the main agent if it can see"
+    (vision_infer.select_vision_backend), and every other reader honoured
+    that while the server start read the raw key. A local vision model
+    therefore launched without its projector and answered "image input is
+    not supported" with nothing in the settings looking wrong.
+    """
+    import vaf.core.vision_infer as vi
+
     model = tmp_path / "qwen3.5-4b-test.gguf"
     model.write_bytes(b"g")
+
+    monkeypatch.setattr(vi, "select_vision_backend", lambda: ("veyllo", "veyllo-chat"))
+    assert backend.resolve_mmproj_for(str(model)) == ""
+
+    # And when nothing can see at all.
+    monkeypatch.setattr(vi, "select_vision_backend", lambda: (None, None))
     assert backend.resolve_mmproj_for(str(model)) == ""
 
 

@@ -19,7 +19,7 @@ After each user message is fully processed (after `chat_step` returns), the head
 
 - **Who:** `user_scope_id` (or a default key for single-user).
 - **When:** current timestamp.
-- **Where:** `source` — `"web"`, `"telegram"`, `"whatsapp"`, `"cli"`, or `"discord"`.
+- **Where:** `source` - `"web"`, `"telegram"`, `"whatsapp"`, `"cli"`, or `"discord"`.
 - **About what:** a short preview of the user message (single line, max 80 characters, whitespace normalized).
 
 That record is written to a JSON file in the platform data directory (see [Storage](#storage)). The **next** turn will read this as "last interaction"; the current turn does not see itself in "last interaction".
@@ -133,7 +133,7 @@ The following are examples of the session-related lines inside the **`<context>`
 
 ---
 
-**Example 1 — First message in the session (current channel only)**  
+**Example 1 - First message in the session (current channel only)**  
 No previous interaction is stored yet. Only the current channel is known (e.g. WebUI).
 
 ```
@@ -146,7 +146,7 @@ current_channel: WebUI
 
 ---
 
-**Example 2 — Second message, same channel (WebUI)**  
+**Example 2 - Second message, same channel (WebUI)**  
 The user had sent one message a few minutes ago in the WebUI; the current message is also from the WebUI.
 
 ```
@@ -160,7 +160,7 @@ current_channel: WebUI
 
 ---
 
-**Example 3 — User switched from Telegram to WebUI**  
+**Example 3 - User switched from Telegram to WebUI**  
 The last interaction was on Telegram (with a short preview); the current one is in the WebUI.
 
 ```
@@ -168,14 +168,14 @@ The last interaction was on Telegram (with a short preview); the current one is 
 Today is Thursday, 2026-05-28 10:03:09.
 os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
 last_interaction: Alex 10 min ago via Telegram
-prior_topic: "Can you check the deployment status?" (previous chat — current message may be unrelated)
+prior_topic: "Can you check the deployment status?" (previous chat - current message may be unrelated)
 current_channel: WebUI
 </context>
 ```
 
 ---
 
-**Example 4 — German UI language**  
+**Example 4 - German UI language**  
 Same idea as Example 3, but the prompt language is German, so relative time is in German.
 
 ```
@@ -183,7 +183,7 @@ Same idea as Example 3, but the prompt language is German, so relative time is i
 Heute ist Donnerstag, 28.05.2026 10:03:09.
 os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
 last_interaction: Alex vor 10 Min. via Telegram
-prior_topic: "Kannst du den Deployment-Status prüfen?" (previous chat — current message may be unrelated)
+prior_topic: "Kannst du den Deployment-Status prüfen?" (previous chat - current message may be unrelated)
 current_channel: WebUI
 </context>
 ```
@@ -196,20 +196,20 @@ current_channel: WebUI
 
 When the agent reaches out to the user during a background **Thinking Mode** pass (e.g. "Hey Alex, are you there?") and waits for a reply, the question text is stored via `set_waiting_for_reply(question_text=...)` in `vaf/core/thinking_mode.py`.
 
-When the user replies, `chat_step()` reads this stored question and stashes it on `self._thinking_reply_context`. Then `_prepare_messages()` injects it as a `role:system` message **directly before the final user message** in the list sent to the LLM — so the model knows what it originally asked.
+When the user replies, `chat_step()` reads this stored question and stashes it on `self._thinking_reply_context`. Then `_prepare_messages()` injects it as a `role:system` message **directly before the final user message** in the list sent to the LLM, so the model knows what it originally asked.
 
 **Why not modify `user_input` directly?**  
 Earlier versions prepended `[Context: ...]` to `user_input` itself. This caused the prefix to be stored in `self.history` and to appear in WebUI chat bubbles on page reload. The current approach keeps `self.history` clean: the user's message is stored as typed, and the context only lives in the ephemeral messages list passed to the LLM for that single turn.
 
-**Scope:** works across all channels (WebUI, Telegram, WhatsApp, Discord) — the state is keyed by `user_scope_id`, not by channel or session.
+**Scope:** works across all channels (WebUI, Telegram, WhatsApp, Discord) - the state is keyed by `user_scope_id`, not by channel or session.
 
 **Code locations:**
 
 | Responsibility | File | Notes |
 |---|---|---|
 | Store outbound question | `vaf/core/thinking_mode.py` | `set_waiting_for_reply(question_text=...)` |
-| Read + stash on reply | `vaf/core/agent.py` | `chat_step()` — sets `self._thinking_reply_context` |
-| Inject into LLM messages | `vaf/core/agent.py` | `_prepare_messages()` — system msg before last user msg; clears after use |
+| Read + stash on reply | `vaf/core/agent.py` | `chat_step()` - sets `self._thinking_reply_context` |
+| Inject into LLM messages | `vaf/core/agent.py` | `_prepare_messages()` - system msg before last user msg; clears after use |
 | Clear waiting state | `vaf/core/thinking_mode.py` | `clear_waiting_for_reply()` called in `chat_step()` after stash |
 
 ---

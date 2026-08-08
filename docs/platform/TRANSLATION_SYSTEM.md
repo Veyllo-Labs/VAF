@@ -1,4 +1,4 @@
-# Translation System — Technical Specification
+# Translation System - Technical Specification
 
 This document describes the design, behaviour, and maintenance of the Web UI translation system. It is written for maintainers and contributors who need to add languages, add or change strings, or understand how the system works.
 
@@ -150,9 +150,9 @@ The user changes the UI language in **Settings → Interface**. The first sectio
 
 ## 11. Related documentation
 
-- **I18N.md** — Short reference for adding languages and keys, and for the generator script.
-- **WEB_UI.md** — Overview of the Web UI and its stack; references the translation system.
-- **context-check rule** — For UI or translation changes, the rule instructs to check I18N.md and to use translation keys for any new user-visible text.
+- **I18N.md** - Short reference for adding languages and keys, and for the generator script.
+- **WEB_UI.md** - Overview of the Web UI and its stack; references the translation system.
+- **context-check rule** - For UI or translation changes, the rule instructs to check I18N.md and to use translation keys for any new user-visible text.
 
 ---
 

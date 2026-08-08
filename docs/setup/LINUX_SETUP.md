@@ -10,7 +10,7 @@ The automated installer ([install.sh](../../install.sh)) is the recommended path
 build/audio/desktop system packages (step 1), provisions Python via [uv](https://docs.astral.sh/uv/)
 (no system Python required), provisions **Node** (portable download, falling back to your package
 manager / NodeSource), and **auto-installs and starts Docker** (distro package + `systemctl enable
---now docker` + adds you to the `docker` group) when it is missing — parity with the macOS and
+--now docker` + adds you to the `docker` group) when it is missing - parity with the macOS and
 Windows installers. The package lists below are for the manual path, or if you prefer to install
 things ahead of time.
 
@@ -105,7 +105,7 @@ Use `vaf.sh` in the project root:
 
 **start:**
 - Checks if Docker containers are running, starts them if not
-- If VAF is already running — including an instance started via the tray, which writes no `.vaf.pid` — reports it and exits without starting a second instance
+- If VAF is already running - including an instance started via the tray, which writes no `.vaf.pid` - reports it and exits without starting a second instance
 - Otherwise starts VAF in the background (PID stored in `.vaf.pid`)
 - Log: `logs/vaf_run.log`
 
@@ -117,7 +117,7 @@ Use `vaf.sh` in the project root:
 - Fallback: SIGKILL if process does not respond
 
 **status:**
-- Reports whether VAF is running by probing the backend health endpoint, so it is correct no matter how VAF was started — directly, via the tray, or via `vaf.sh start` — even when no `.vaf.pid` file exists
+- Reports whether VAF is running by probing the backend health endpoint, so it is correct no matter how VAF was started - directly, via the tray, or via `vaf.sh start` - even when no `.vaf.pid` file exists
 - Works in both plain-HTTP and TLS mode (`local_network_tls_enabled`); the `.vaf.pid` file is only used as secondary detail
 - Shows whether llama-server is running
 - Shows status of all Docker containers, warning with `[!!]` if any container is `unhealthy`
@@ -145,7 +145,7 @@ Use `vaf.sh` in the project root:
 
 `vaf.sh start` runs VAF in **headless mode** (`VAF_NATIVE_WRAPPER=1 vaf.main tray`). In this mode `pystray` is never imported, so no X11 display is required. This works on Wayland, pure server sessions, and any environment without a desktop.
 
-The backend, agent loop, and frontend manager all start as daemon threads inside the same process — no tray icon is shown.
+The backend, agent loop, and frontend manager all start as daemon threads inside the same process - no tray icon is shown.
 
 If you want the X11 tray icon (XWayland required):
 ```bash
@@ -162,7 +162,7 @@ VAF uses GPU acceleration in two places:
 
 ### 1. Local model inference (llama-server)
 
-Uses **Vulkan** — works with NVIDIA, AMD, and Intel GPUs without the CUDA toolkit (only the GPU driver is needed).
+Uses **Vulkan** - works with NVIDIA, AMD, and Intel GPUs without the CUDA toolkit (only the GPU driver is needed).
 
 On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected.
 
@@ -183,9 +183,9 @@ VAF automatically enables Chromium GPU rasterization for smooth rendering. The f
 --num-raster-threads=4
 ```
 
-> **Note:** `--enable-zero-copy` is intentionally omitted — it maps GPU texture memory into the process address space, which causes the process to appear to use several GB of additional RAM in system monitors (the memory is GPU-backed and not actually paged, but tools like `top` report it as RSS). Removing it has no visible impact on rendering performance.
+> **Note:** `--enable-zero-copy` is intentionally omitted - it maps GPU texture memory into the process address space, which causes the process to appear to use several GB of additional RAM in system monitors (the memory is GPU-backed and not actually paged, but tools like `top` report it as RSS). Removing it has no visible impact on rendering performance.
 
-No manual configuration needed — these are applied automatically.
+No manual configuration needed - these are applied automatically.
 
 ---
 
@@ -195,7 +195,7 @@ No manual configuration needed — these are applied automatically.
 
 **Cause:** llama-server build `b4320` crashed in `common_chat_templates_support_enable_thinking` when processing the model's embedded Jinja chat template with `--jinja` enabled. Jinja was enabled by default in that build even without the flag.
 
-**Status:** Fixed — VAF now downloads `b9058+` (Vulkan binary) which handles the native template correctly. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
+**Status:** Fixed - VAF now downloads `b9058+` (Vulkan binary) which handles the native template correctly. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
 
 ### Docker permission error
 

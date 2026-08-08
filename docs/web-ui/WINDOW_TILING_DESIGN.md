@@ -9,7 +9,7 @@ today and how it can be generalized.
 ## The problem it solves
 
 A browser sub-agent running inside a workflow produces live screenshot frames, but the SubAgent
-dock is suppressed during a workflow — its textual output is routed to the Workflow Runtime
+dock is suppressed during a workflow - its textual output is routed to the Workflow Runtime
 terminal instead. Without tiling, the user sees "browser running" with no view of what it is doing,
 and forcing the dock open puts it underneath the fixed Workflow Runtime overlay on the right edge,
 overlapping. Tiling places the browser view immediately to the left of the Workflow Runtime window
@@ -33,17 +33,17 @@ browser-in-workflow case is handled by the dedicated tile described below.
 
 ## How the browser tile works
 
-`web/components/BrowserLiveTile.tsx` is a slim fixed window — header, URL bar, a live JPEG `<img>`
+`web/components/BrowserLiveTile.tsx` is a slim fixed window - header, URL bar, a live JPEG `<img>`
 frame, and a close button. It is positioned with an explicit `right` offset so it docks immediately
 to the left of the panel it sits beside:
 
-- `rightOffset = 500` — the Workflow Runtime width at the `md`+ breakpoint, so the tile occupies the
+- `rightOffset = 500` - the Workflow Runtime width at the `md`+ breakpoint, so the tile occupies the
   strip from `right: 500` to `right: 960`.
 - Gated to `xl` screens, so two ~500 px panels never crowd out the chat on smaller displays.
 
 `web/app/page.tsx` drives it from `subAgentState.browserFrame` / `browserUrl`:
 
-- On `browser_frame_update` **inside a workflow**, the overlapping SubAgent dock is **not** opened —
+- On `browser_frame_update` **inside a workflow**, the overlapping SubAgent dock is **not** opened -
   the tile renders the visual instead. Standalone (no workflow), the browser view still uses the
   SubAgent dock as usual.
 - `browserFrame` is cleared on `workflow_start` (so no stale frame from a previous run lingers) and
@@ -51,7 +51,7 @@ to the left of the panel it sits beside:
 - The tile is user-dismissible for the current run (`browserTileClosed`) and re-armed on the next
   workflow start.
 
-The resulting layout: Workflow Runtime occupies `right: 0–500`, the browser tile `right: 500–960` —
+The resulting layout: Workflow Runtime occupies `right: 0–500`, the browser tile `right: 500–960` -
 side by side, no overlap.
 
 ## Limitations
@@ -62,7 +62,7 @@ side by side, no overlap.
   correct for the current single browser-to-runtime pair but does not generalize to three or more
   panels (see below).
 - During later workflow steps (for example document writing) the tile keeps showing the **last**
-  browser frame until `workflow_done` — acceptable, since it is the last state the browser was in.
+  browser frame until `workflow_done` - acceptable, since it is the last state the browser was in.
 
 ## Extending to a general tiling manager
 
@@ -71,7 +71,7 @@ right-docked panels arrange themselves automatically:
 
 - **Right-dock registry.** A store of the currently-open right-docked panels, each with an id, a
   measured width, and an order. A hook (for example `useRightDockStack()`) returns the cumulative
-  `right` offset per panel so they stack horizontally from the right anchor leftward — removing the
+  `right` offset per panel so they stack horizontally from the right anchor leftward - removing the
   hard-coded `500` and supporting three or more panels.
 - **Measured widths.** Read each panel's real width (for example via `ResizeObserver`) so offsets
   stay correct across breakpoints and any future resizable panels.

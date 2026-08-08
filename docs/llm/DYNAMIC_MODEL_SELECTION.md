@@ -273,7 +273,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 | Anthropic | Yes, all Claude 3+ | `claude-sonnet-4-6` |
 | Google | Yes, all Gemini | `gemini-2.5-flash` |
 | OpenRouter | Yes, varies | `openai/gpt-4o` |
-| DeepSeek | No | — |
+| DeepSeek | No | - |
 | Local | Yes, via `vision_provider = local` (llama server + mmproj projector) | loaded GGUF |
 
 ### Image persistence in chat

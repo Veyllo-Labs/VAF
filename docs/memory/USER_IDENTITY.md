@@ -97,7 +97,7 @@ So in local mode, one logical “local user” is used everywhere: same `user_sc
 When **network is enabled** and users log in:
 
 - Each user has a `user_scope_id` (UUID from auth DB) for RAG/memories and a `username` for `~/.vaf/users/<username>/user_identity.json`.
-- WebSocket sets these from the JWT; HTTP API routes read them from `request.state.user` — a consolidated dict set by `AuthMiddleware` after JWT validation (see [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#layer-3-jwt-authentication-middleware)).
+- WebSocket sets these from the JWT; HTTP API routes read them from `request.state.user` - a consolidated dict set by `AuthMiddleware` after JWT validation (see [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#layer-3-jwt-authentication-middleware)).
 
 ## Per-user loading
 

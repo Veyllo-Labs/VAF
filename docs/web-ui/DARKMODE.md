@@ -1,4 +1,4 @@
-# Dark Mode — Color Reference
+# Dark Mode - Color Reference
 
 The exact colors the VAF web UI uses in **dark mode**, for every surface, control,
 the agent avatar and its animation. Its twin is [LIGHTMODE.md](LIGHTMODE.md) (same
@@ -6,7 +6,7 @@ structure, light values). The shared mechanism and design tokens live in
 [DESIGN.md](DESIGN.md); avatar behavior in [AgentAvatar.md](AgentAvatar.md).
 
 Dark mode is a **neutral gray** theme anchored on `#181818`. There is deliberately
-**no blue or amber accent** for active/emphasis states — they use a light neutral.
+**no blue or amber accent** for active/emphasis states - they use a light neutral.
 Accent hues (status colors, links, category chips) are kept only where they carry
 meaning.
 
@@ -29,7 +29,7 @@ turns dark with **no per-component edits**. The values below are those variables
 
 Note the fold: `gray-500..950`, `black`, `text-white` and `text-gray-50..300` are
 **not** changed by the swap. That is why some dark-mode colors are set as explicit
-`dark:` overrides on the component (buttons, toggles, badges, the avatar) — listed in
+`dark:` overrides on the component (buttons, toggles, badges, the avatar) - listed in
 the Components section.
 
 ## Surfaces
@@ -62,7 +62,7 @@ the Components section.
 | Mid | `text-gray-600` | `#a0a0a0` | `--txt-gray-600` |
 | Secondary / dim | `text-gray-500`, `--muted-foreground` | `#8a8a8a` (`0 0% 54%`) | `--txt-gray-500` |
 | Placeholder / icon | `text-gray-400`, `placeholder-gray-400` | `#6b6b6b` | `--txt-gray-400` |
-| Light text on dark chips | `text-gray-100..300`, `text-white` | stock (`#f3f4f6`…`#ffffff`) | not folded — stays light |
+| Light text on dark chips | `text-gray-100..300`, `text-white` | stock (`#f3f4f6`…`#ffffff`) | not folded - stays light |
 
 ## Components (explicit `dark:` overrides)
 
@@ -82,11 +82,11 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Thinking-process block | flat `dark:from-[#1e1e1e] dark:to-[#1e1e1e]` (no gradient), header `dark:text-gray-300` |
 
 **Three traps (all caused real bugs):**
-- `dark:text-gray-900` renders **light** (`#ececec`) because the text ramp folds — never
+- `dark:text-gray-900` renders **light** (`#ececec`) because the text ramp folds - never
   use it as "dark text". For dark text on a light dark-mode surface use a literal, e.g.
   `dark:text-[#181818]`.
 - The reverse trap: an accent tint such as `bg-orange-50` or `text-orange-700` looks
-  unthemed and is not — every accent hue is re-pointed through `--acc-<hue>-*` under
+  unthemed and is not - every accent hue is re-pointed through `--acc-<hue>-*` under
   `.dark`. Adding a `dark:` override to one replaces the design system's color with an
   ad-hoc value instead of fixing anything. Check `app/globals.css` before assuming; the
   classes that genuinely need a hand-written dark half are raw hex, not named utilities.
@@ -100,17 +100,17 @@ The avatar is a rounded square **body** with a white **dot** (eye). See
 
 | Part | Dark-mode value |
 |---|---|
-| Active body | `#2d2d2d` (neutral gray — no blue tint) |
+| Active body | `#2d2d2d` (neutral gray - no blue tint) |
 | Dim / archived body | `#1e1e1e` (a bit darker, to distinguish from active) |
 | Eye (active) | `#ffffff` |
 | Eye (dim) | `#8a8a8a` |
 | Overlay glyph inks (orbs, rings, halo, check, bang) | `#ececec` (glow dimmed) |
-| Step dots — active (think/say) | bright `#e6e6e6` |
-| Step dots — done | mid `#6b6b6b` |
-| Step dots — pending | faint near-bg ring `#4a4a4a` |
+| Step dots - active (think/say) | bright `#e6e6e6` |
+| Step dots - done | mid `#6b6b6b` |
+| Step dots - pending | faint near-bg ring `#4a4a4a` |
 | Expanded-dot halo | `hsl(var(--background))` = `#181818` (was a white glow) |
 
-All the animation **effects glow light** in dark mode — only colors change, never the
+All the animation **effects glow light** in dark mode - only colors change, never the
 geometry or timing. The scene effects run on an `--ink` variable system (`.tsc`/`.asc`
 in `globals.css`); under `.dark` it is redefined to a light ink so the thinking glyph
 stream (`.tgly`), particles, lens/terminal/globe, and the plan-step boxes (`.planbox`,
@@ -131,7 +131,7 @@ own body square stays the neutral avatar body (`#2d2d2d`).
 | Semantic accents kept | primary/link blue `217 91% 60%`, destructive red `0 84% 60%` |
 | `color-scheme` | `dark` (native selects, date pickers, scrollbars) |
 
-## Protected — stay light in dark mode
+## Protected - stay light in dark mode
 
 These deliberately keep their light appearance:
 
@@ -151,16 +151,16 @@ These deliberately keep their light appearance:
 - User-content iframes and screenshots.
 - Modal scrims (`bg-black/NN`).
 - Status / semantic colors: green success, red error, amber/yellow **warnings**, blue
-  **info** links and category chips — unchanged in both themes.
+  **info** links and category chips - unchanged in both themes.
 
 ## Adding new UI
 
 1. Prefer plain Tailwind neutrals (`bg-white`, `bg-gray-50`, `text-gray-900`,
-   `border-gray-200`) — they flip automatically.
+   `border-gray-200`) - they flip automatically.
 2. For an active/on/emphasis element, add the `dark:` override from the Components
    table (never invent a new active color; never reintroduce blue or amber).
-3. Never change the non-`dark:` classes for a color fix — light mode must stay
+3. Never change the non-`dark:` classes for a color fix - light mode must stay
    byte-identical (verify: a token diff should show only `dark:` additions).
-4. Raw hex / inline styles / JS palettes / canvas / SVG do not flip — theme them
+4. Raw hex / inline styles / JS palettes / canvas / SVG do not flip - theme them
    explicitly (read `useThemeStore`, or point at a CSS variable such as
    `hsl(var(--background))`).

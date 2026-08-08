@@ -20,7 +20,7 @@ For anything beyond a small fix, please open an issue first to discuss the chang
     pip install -r requirements.txt   # Python runtime deps (this is what CI installs)
     pip install -e .                  # install the vaf package + the `vaf` CLI entry point
     ```
-    For the **full runtime** (Docker memory stack + Web UI + tray), run `./install.sh` instead — it
+    For the **full runtime** (Docker memory stack + Web UI + tray), run `./install.sh` instead - it
     provisions Python, Node, Docker and the Web UI for you.
 
 2.  **Create a Branch**
@@ -85,7 +85,7 @@ For anything beyond a small fix, please open an issue first to discuss the chang
 - [ ] Update `CHANGELOG.md` if this is a user-facing change
 - [ ] **Verify CI/CD:** Ensure your local tests pass; GitHub Actions will run the same suite.
 - [ ] Re-read your changes - ensure they are clean and well-thought-out
-- [ ] **Sign off your commits** (`git commit -s`) — see [License & Contributor Terms](#license--contributor-terms) below
+- [ ] **Sign off your commits** (`git commit -s`) - see [License & Contributor Terms](#license--contributor-terms) below
 - [ ] **Web UI text:** If you add or change user-visible strings in the Web UI, use translation keys and update the locale files under `web/messages/` (see [docs/platform/I18N.md](docs/platform/I18N.md)).
 
 ### PR Description Template
@@ -197,11 +197,11 @@ Built a tool or workflow you're proud of? Share it with the community - record a
 VAF is **dual-licensed**: open source under the **GNU AGPL-3.0-or-later** and, separately,
 under a **commercial license** sold by Veyllo GmbH (see [LICENSING.md](LICENSING.md) and
 [COMMERCIAL.md](../docs/legal/COMMERCIAL.md)). For this dual model to work, every contribution must be
-usable under **both** licenses — which is what the terms below establish.
+usable under **both** licenses - which is what the terms below establish.
 
 **Opening a pull request (or otherwise submitting a patch or material) constitutes your
 agreement to all three Contributor Terms below.** These terms are accepted by the act of
-submitting — the commit sign-off in (3) is a *separate* record of origin and is **not**, by
+submitting - the commit sign-off in (3) is a *separate* record of origin and is **not**, by
 itself, the instrument that conveys the grant in (2).
 
 1. **Inbound license.** Your contribution is provided under the **AGPL-3.0-or-later**, the
@@ -211,7 +211,7 @@ itself, the instrument that conveys the grant in (2).
    **Veyllo GmbH** an irrevocable, perpetual, worldwide, non-exclusive, royalty-free,
    sublicensable, and transferable license to use, reproduce, modify, distribute, and
    **relicense** your contribution under **any terms, including proprietary/commercial
-   terms** — so that your contribution can be included in both the AGPL Community Edition and
+   terms**, so that your contribution can be included in both the AGPL Community Edition and
    Veyllo GmbH's commercial/Enterprise offerings. This grant is what makes the dual-license
    model possible; without it, your code could not be shipped under the commercial license.
    This grant binds independently of, and in addition to, the sign-off in (3).
@@ -229,8 +229,8 @@ itself, the instrument that conveys the grant in (2).
    to origin only; your acceptance of terms 1 and 2 comes from submitting the contribution,
    not from the sign-off line.)
 
-If you cannot make the commercial relicensing grant in (2) — for example, your contribution
-includes third-party code under an incompatible license — say so explicitly in the PR so we
+If you cannot make the commercial relicensing grant in (2) - for example, your contribution
+includes third-party code under an incompatible license - say so explicitly in the PR so we
 can handle it appropriately (e.g. keep it clearly attributed and AGPL-only, outside the
 commercial offering).
 

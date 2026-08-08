@@ -4,7 +4,7 @@
 
 VAF uses a **two-phase workflow system**: an LLM-powered router detects whether the user's request matches a workflow, and the **main agent** decides whether to actually execute it. This prevents false-positive auto-executions (e.g. triggering `create_website` when the user asks to *change* an existing site) while keeping the full power of multi-step workflows available.
 
-With the **Agatic vNext** update, the Workflow Router is fully dynamic and "Plug & Play" — it discovers available workflows at runtime and maps user intent to capabilities without hardcoded rules.
+With the **Agatic vNext** update, the Workflow Router is fully dynamic and "Plug & Play" - it discovers available workflows at runtime and maps user intent to capabilities without hardcoded rules.
 
 The same router pass also covers **skills** as a second tier: if no workflow matches, the router checks whether an Agent Skill (SKILL.md) matches and, if so, suggests it. See [Skills](SKILLS.md).
 
@@ -21,13 +21,13 @@ User message
         → No match   → return None → agent LLM runs
 ```
 
-**Problem:** The main agent — which has full conversation history, `[SESSION WORKSPACE]`, and user tone — was never consulted. A fast LLM call made a binary, irreversible decision. Paths containing words like "Create" in the folder name could trip the router even for pure edit requests.
+**Problem:** The main agent - which has full conversation history, `[SESSION WORKSPACE]`, and user tone - was never consulted. A fast LLM call made a binary, irreversible decision. Paths containing words like "Create" in the folder name could trip the router even for pure edit requests.
 
 ### New Flow (recommendation)
 
 ```
 User message + [SESSION WORKSPACE] context
-    → _try_workflow() [LLM router — same detection logic]
+    → _try_workflow() [LLM router - same detection logic]
         → Match found → store as self._pending_workflow_hint → return None
         → No match   → return None
     → Agent LLM runs WITH full context:
@@ -37,13 +37,13 @@ User message + [SESSION WORKSPACE] context
         → Agent decides: call execute_workflow() OR call coding_agent() directly
 ```
 
-**Exception — `@workflow_id` explicit prefix:** If the user types `@create_website make me a site`, the workflow is still executed directly without going through the hint system. This is an unambiguous user command.
+**Exception - `@workflow_id` explicit prefix:** If the user types `@create_website make me a site`, the workflow is still executed directly without going through the hint system. This is an unambiguous user command.
 
 ---
 
 ## Routing Process
 
-### Step 1 — Skip Conditions
+### Step 1 - Skip Conditions
 
 Before the LLM router runs, `_try_workflow()` checks cheap fast guards. If any matches, the function returns `None` immediately and the main agent handles everything.
 
@@ -52,7 +52,7 @@ Before the LLM router runs, `_try_workflow()` checks cheap fast guards. If any m
 | `VAF_IN_AUTOMATION` env var is set | Automation tasks have their own `workflow_steps`; routing would double-execute. |
 | `"CURRENT DOCUMENT (Editor)"` in input | User is editing a document; use `replace_editor_selection` / `document_editor` tools instead. |
 
-### Step 2 — LLM Router
+### Step 2 - LLM Router
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -91,7 +91,7 @@ The router returns a single token: `workflow:<id>`, `skill:<id>`, or `none`. A
 workflow hint (the two are mutually exclusive). Skill matching is described in
 [Skills](SKILLS.md); the rest of this document covers the workflow path.
 
-### Step 3 — Workflow Hint Injection
+### Step 3 - Workflow Hint Injection
 
 If the router matched a workflow, `chat_step()` prepends a `[WORKFLOW SUGGESTION]` block to the user input before calling the LLM (built by `_build_workflow_suggestion_note`, a pure module-level function so tests can pin the exact note):
 
@@ -100,15 +100,15 @@ If the router matched a workflow, `chat_step()` prepends a `[WORKFLOW SUGGESTION
 Pre-extracted variables: description="Restaurant website"
 To start it call: execute_workflow(workflow_id="create_website", variables={...})
 IMPORTANT: If the user is asking to edit or modify an existing project
-(see [SESSION WORKSPACE] above), use coding_agent with project_path instead
-— do NOT start a creation workflow.
+(see [SESSION WORKSPACE] above), use coding_agent with project_path instead -
+do NOT start a creation workflow.
 
 <original user message>
 ```
 
 When the user's own message mentions a workflow (same shared detection as Step 3b, `_mentions_workflow`), the note additionally offers `create_agent_workflow(action="run_temp")` as the fallback: a WRONG template match must not eat an explicit workflow request. Live incident: the suggestion was the only workflow path shown, the model rightly declined the mismatched template - and then did every step manually, because the run_temp hint lived only in the no-match branch. Advisory wording, like everything this router emits.
 
-The hint is **one-shot** — it is consumed and cleared immediately. The next message starts fresh with no pre-set hint.
+The hint is **one-shot** - it is consumed and cleared immediately. The next message starts fresh with no pre-set hint.
 
 **Routing runs on the RAW user message.** The WebUI lane enriches the user input (the `[SESSION WORKSPACE]` preamble, front-office blocks) BEFORE `chat_step()`, and the router used to route on that enriched text: the preamble's wording (`coding_agent`, `projects`, `write_file`) steered a plain websearch request to a CODE workflow, and the variable extractor stuffed the entire preamble into `query=` (the same incident). `chat_step(raw_user_input=...)` now carries the pre-enrichment message; `_try_workflow(route_input=...)` uses it for the router match, variable extraction, the explicit `@workflow` parse, the workflow-mention detection, language detection and the intent lock. The LLM still sees the enriched text; gate checks that look for enrichment markers (the editor block) deliberately keep reading the enriched input. Lanes that pass the raw message as `user_input` already (CLI) omit the parameter.
 
@@ -123,13 +123,13 @@ The hint branches on whether the user's own message mentions a workflow at all (
 
 The substring match is deliberately cheap and imprecise (it can also fire on an unrelated mention - small talk about "my daily workflow", a document literally named "workflow doc"), so **both branches stay advisory, not directive** - matching this file's own "agent decides" principle from the New Flow above. Neither branch instructs the model that it *must* call `run_temp`; both explicitly defer to its judgment and note the tool's own 2+-step requirement, so a false match cannot push an unwanted call and a genuine but single-step "workflow" request does not walk into the tool's own rejection with no warning. Domain examples are avoided entirely (the old fixed wording used "weather" as its example of something that never needs a workflow - directly contradicting a user who explicitly asked to run a weather lookup AS a workflow, and the model complied by doing every step manually instead of building one, per its own instruction).
 
-### Step 4 — Main Agent Decides
+### Step 4 - Main Agent Decides
 
 The main agent sees:
 
-- `[SESSION WORKSPACE]` — stable workspace path for this chat session
-- `[ACTIVE PROJECT]` — most recently created/edited project
-- `[WORKFLOW SUGGESTION]` — pre-detected workflow + pre-extracted variables
+- `[SESSION WORKSPACE]` - stable workspace path for this chat session
+- `[ACTIVE PROJECT]` - most recently created/edited project
+- `[WORKFLOW SUGGESTION]` - pre-detected workflow + pre-extracted variables
 - Full conversation history
 
 It can then make an informed decision:
@@ -151,7 +151,7 @@ It can then make an informed decision:
 | `list_workflows()` | Browse all available workflows with descriptions |
 | `create_agent_workflow(action, ...)` | Create and run workflows at runtime (see below) |
 
-Both `execute_workflow` and `list_workflows` are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` — the hint is a starting point, not a constraint.
+Both `execute_workflow` and `list_workflows` are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` - the hint is a starting point, not a constraint.
 
 A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a **saved template id** (from `list_workflows`), never the name of a tool - in particular never `"create_agent_workflow"` itself, which is the *other* tool (builds/runs a workflow, does not look one up by id). Both tools' descriptions now say this explicitly, and `execute_workflow` detects a live tool-name collision and redirects to the right tool instead of just repeating the template list (`vaf/tools/workflow_executor.py`).
 
@@ -179,11 +179,11 @@ Who continues a paused run is documented in
 [SUBAGENT_IPC.md](SUBAGENT_IPC.md#who-resumes-and-how-far): the CLI drain runs the remaining
 steps, while the Web UI drain currently only closes a run whose awaited step was the last one.
 
-### `create_agent_workflow` — runtime workflow creation
+### `create_agent_workflow` - runtime workflow creation
 
 The agent can define and run its own workflows at runtime without any human involvement. Two modes:
 
-#### `run_temp` — ephemeral plan execution
+#### `run_temp` - ephemeral plan execution
 
 ```python
 create_agent_workflow(
@@ -200,7 +200,7 @@ create_agent_workflow(
 - No file is written to disk. Nothing is saved after execution.
 - Ideal for complex one-off tasks: the agent designs a multi-step plan, executes it, and returns the result.
 - Available to the agent in **any session** (not admin-only).
-- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
+- The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** - all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
 - Each step's `output` is available as `{variable}` in subsequent steps.
 - **Weak-model step repair (`_repair_raw_step`):** the canonical step shape is `input` + `tool`,
   but a weak model reliably mangles the FIELD NAMES while getting the plan right - live incident:
@@ -242,7 +242,7 @@ create_agent_workflow(
   it next to "completed successfully", concluded the run produced nothing, and redid all the work
   manually (live incident; see also the removed librarian completion-message anti-pattern in the
   templates).
-- **Minimum two steps.** A single-step `run_temp` is rejected with an error — a lone step has no output to chain and gains nothing from the engine, so the agent should call that tool directly instead. The only exception is a single `create_automation` step (scheduling a task, as the built-in "Create Scheduled Task" workflow does), which is allowed.
+- **Minimum two steps.** A single-step `run_temp` is rejected with an error - a lone step has no output to chain and gains nothing from the engine, so the agent should call that tool directly instead. The only exception is a single `create_automation` step (scheduling a task, as the built-in "Create Scheduled Task" workflow does), which is allowed.
 
 ##### Step fields
 
@@ -255,7 +255,7 @@ create_agent_workflow(
 | `on_success` | string | Jump to this step's `output` name on success. |
 | `on_failure` | string | Jump to this step's `output` name on failure (suppresses abort). |
 | `optional` | bool | Skip on failure instead of aborting. |
-| `assertions` | list | Output checks — failed assertions retry only this step (not the whole workflow). |
+| `assertions` | list | Output checks - failed assertions retry only this step (not the whole workflow). |
 | `max_assertion_retries` | int | How many times to retry on assertion failure. Default: `1`. |
 | `validate` | bool | Opt-in: LLM-check this content/agent step's output against its goal, retry with a correction up to 3× then accept. See **Per-step output validation** below. Default: `false`. |
 
@@ -275,11 +275,11 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 
-At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/<uid[:8]>/<session_id>/Patent Workflow/` — same user/chat scoping as coder projects) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step (`document_writer` currently ignores the injected `project_path` and writes into the session workspace itself). Relative new-artifact paths in `write_file` (`path`) and `move_file` (`src`/`dst`) steps are resolved against the same directory, so a bare filename like `draft.md` never resolves against the backend process cwd. Explicit absolute or `~`-anchored paths, folder aliases the filesystem tools resolve themselves (`Desktop/…`, `Documents/…`), and relative paths pointing at an existing file (in-place updates) are left untouched. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
+At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/<uid[:8]>/<session_id>/Patent Workflow/` - same user/chat scoping as coder projects) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step (`document_writer` currently ignores the injected `project_path` and writes into the session workspace itself). Relative new-artifact paths in `write_file` (`path`) and `move_file` (`src`/`dst`) steps are resolved against the same directory, so a bare filename like `draft.md` never resolves against the backend process cwd. Explicit absolute or `~`-anchored paths, folder aliases the filesystem tools resolve themselves (`Desktop/…`, `Documents/…`), and relative paths pointing at an existing file (in-place updates) are left untouched. All steps therefore write to the same folder - no scattered timestamp-suffixed directories.
 
 The path is also available as `{workflow_project_path}` in step input templates:
 
@@ -303,7 +303,7 @@ Every run seeds a fixed set of **temporal built-ins** into the variable scope, s
 
 A real user-supplied variable of the same name always wins (built-ins are seeded with `setdefault`). These exist because LLM-generated automation workflows routinely write filenames like `report_{date}.html`; without a value, the run used to abort.
 
-**Unknown placeholders are non-fatal.** A simple `{var}` the engine cannot resolve (not a step output, not a built-in) is left **literally** in the text (`"{var}"`) instead of aborting the workflow — so one hallucinated placeholder can no longer fail an entire scheduled automation. Nested access to a missing object (`{step.field}`) still raises, surfaced as a per-step `Missing variable` error.
+**Unknown placeholders are non-fatal.** A simple `{var}` the engine cannot resolve (not a step output, not a built-in) is left **literally** in the text (`"{var}"`) instead of aborting the workflow, so one hallucinated placeholder can no longer fail an entire scheduled automation. Nested access to a missing object (`{step.field}`) still raises, surfaced as a per-step `Missing variable` error.
 
 ##### Delivery steps (`send_to_user`)
 
@@ -345,11 +345,11 @@ messenger push (no double message; see
  "max_assertion_retries": 2}
 ```
 
-On assertion failure the engine retries **only that step** with a correction hint prepended — previous steps are not re-run.
+On assertion failure the engine retries **only that step** with a correction hint prepended - previous steps are not re-run.
 
 ##### Per-step output validation (opt-in, `validate: true`)
 
-Assertions are deterministic substring checks. For content/agent steps you often want a *semantic* check: did the output actually fulfil the step's goal? Set `"validate": true` on the step and an LLM judges the output against the step's goal (its `description`/`input`). On a mismatch the step is re-run with a correction hint, up to **3** times (`workflow_step_validation_max_retries`); after that the last version is **accepted** and the workflow continues — validation never hard-fails the step, and a validator error is treated as a pass.
+Assertions are deterministic substring checks. For content/agent steps you often want a *semantic* check: did the output actually fulfil the step's goal? Set `"validate": true` on the step and an LLM judges the output against the step's goal (its `description`/`input`). On a mismatch the step is re-run with a correction hint, up to **3** times (`workflow_step_validation_max_retries`); after that the last version is **accepted** and the workflow continues - validation never hard-fails the step, and a validator error is treated as a pass.
 
 ```python
 {"input": "Write a one-page summary of {research} focused on pricing.",
@@ -359,7 +359,7 @@ Assertions are deterministic substring checks. For content/agent steps you often
 ```
 
 - **Eligible tools only:** `document_agent`, `document_writer`, `research_agent`, `coding_agent`, `browser_agent`, `librarian_agent` (a correction-retry can't change a deterministic tool's output, so `validate` is ignored elsewhere).
-- **No lenient fast-path:** unlike the Main Agent's direct sub-agent validation, this judges the *content* — a step that merely reports "saved successfully" but produced the wrong/empty document is caught.
+- **No lenient fast-path:** unlike the Main Agent's direct sub-agent validation, this judges the *content* - a step that merely reports "saved successfully" but produced the wrong/empty document is caught.
 - **Auto-enable (was a confirmation gate):** if a workflow has eligible steps but **none** sets `validate`, `run_temp` now enables validation on those steps automatically and RUNS; `skip_validation: true` is the explicit opt-out. The old behavior returned a `[VALIDATION CHECK]` bounce asking the agent to re-call with flags - a live incident showed a weak model bouncing twice (retrying without the flags both times) and then doing every step manually while its correctly authored workflow never ran. Validation-on is exactly what the bounce text recommended, so the system decides it itself.
 - Globally toggled via `workflow_step_validation_enabled` (default on). See [Sub-Agent IPC](SUBAGENT_IPC.md#per-step-output-validation-opt-in).
 
@@ -377,11 +377,11 @@ steps=[
      "tool": "coding_agent", "output": "step1"},
     {"input": "Read /tmp/{wf_id}/report.json, add valuation section, write it back.",
      "tool": "coding_agent", "output": "step2"},
-    # Step N always reads the full, growing report.json — nothing is lost.
+    # Step N always reads the full, growing report.json - nothing is lost.
 ]
 ```
 
-#### `create` — persistent workflow (admin-only)
+#### `create` - persistent workflow (admin-only)
 
 ```python
 create_agent_workflow(
@@ -395,7 +395,7 @@ create_agent_workflow(
 ```
 
 - Saves to `~/.vaf/workflows/{workflow_id}.py` with a `# created_by: agent` marker.
-- Immediately reloads `WORKFLOW_TEMPLATES` — available via `execute_workflow()` and visible in the WebUI Workflows tab.
+- Immediately reloads `WORKFLOW_TEMPLATES` - available via `execute_workflow()` and visible in the WebUI Workflows tab.
 - Agent can only delete workflows it created itself (ownership enforced by first-line marker).
 - Requires an **admin session** (same gate as `create_agent_tool`).
 
@@ -414,7 +414,7 @@ The `workflow` module is activated in the system prompt whenever the conversatio
 
 The module instructs the agent:
 
-1. Check `[SESSION WORKSPACE]` — if a workspace exists and the user is asking to **edit/improve**, use `coding_agent`. **Do NOT start a creation workflow** that would discard the user's work.
+1. Check `[SESSION WORKSPACE]` - if a workspace exists and the user is asking to **edit/improve**, use `coding_agent`. **Do NOT start a creation workflow** that would discard the user's work.
 2. If creating something new, call `execute_workflow` with the suggested (or adjusted) variables.
 3. If unsure what's available, call `list_workflows` first.
 
@@ -422,7 +422,7 @@ The module instructs the agent:
 
 ## Dynamic Discovery
 
-Workflows are discovered at runtime via `list_templates()`. Adding a new workflow file makes it automatically available to the router and to `list_workflows` — no code changes required.
+Workflows are discovered at runtime via `list_templates()`. Adding a new workflow file makes it automatically available to the router and to `list_workflows` - no code changes required.
 
 ---
 
@@ -454,7 +454,7 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 |--------------|-----------|---------------|
 | "Erstelle eine neue Website für ein Restaurant" | none | `execute_workflow("create_website", {description: "Restaurant"})` |
 | "Mach die Farben der Seite dunkler" | `/VAF_Projects/Webseite Foo` | `coding_agent(task="...", project_path="/VAF_Projects/Webseite Foo")` |
-| "Kannst du den Titel ändern?" | `/VAF_Projects/Webseite Foo` | `coding_agent` — no workflow |
+| "Kannst du den Titel ändern?" | `/VAF_Projects/Webseite Foo` | `coding_agent` - no workflow |
 | "@create_website Portfolio-Seite" | any | Direct execution (explicit command, no hint) |
 | "Welche Workflows gibt es?" | any | `list_workflows()` |
 
@@ -462,12 +462,12 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ## Related Documentation
 
-- [Skills](SKILLS.md) — Agent Skills (SKILL.md), the second routing tier sharing this router
-- [Session Management](../memory/SESSION_MANAGEMENT.md) — `project_path` / `[SESSION WORKSPACE]`
-- [Coder Architecture](CODER_ARCHITECTURE.md) — `coding_agent` tool internals
-- [Context Management](../memory/CONTEXT_MANAGEMENT.md) — Intent Locking details
-- [Sub-Agent IPC](SUBAGENT_IPC.md) — How workflows execute tasks
-- [User Isolation](../security/USER_ISOLATION.md) — Per-user project directories
+- [Skills](SKILLS.md) - Agent Skills (SKILL.md), the second routing tier sharing this router
+- [Session Management](../memory/SESSION_MANAGEMENT.md) - `project_path` / `[SESSION WORKSPACE]`
+- [Coder Architecture](CODER_ARCHITECTURE.md) - `coding_agent` tool internals
+- [Context Management](../memory/CONTEXT_MANAGEMENT.md) - Intent Locking details
+- [Sub-Agent IPC](SUBAGENT_IPC.md) - How workflows execute tasks
+- [User Isolation](../security/USER_ISOLATION.md) - Per-user project directories
 
 ---
 

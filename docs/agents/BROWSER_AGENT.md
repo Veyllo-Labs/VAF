@@ -1,6 +1,6 @@
 # Browser Agent
 
-VAF's `browser_agent` tool gives the AI agent the ability to control a real Chromium browser — navigating pages, clicking elements, filling forms, handling JavaScript-heavy sites, and extracting structured content from live web applications.
+VAF's `browser_agent` tool gives the AI agent the ability to control a real Chromium browser - navigating pages, clicking elements, filling forms, handling JavaScript-heavy sites, and extracting structured content from live web applications.
 
 Unlike `web_search` (which calls search APIs and returns text snippets) or `webfetch` (which fetches static HTML), `browser_agent` renders pages exactly as a human would see them in a browser.
 
@@ -67,11 +67,11 @@ The VAF agent receives `browser_agent` as one of its available tools alongside `
 
 | Situation | Tool chosen |
 |---|---|
-| "What's the current price of X on amazon.com?" | `browser_agent` — prices are loaded by JS |
-| "Search for Python tutorials" | `web_search` — static content, faster |
-| "Log into my dashboard and get the usage report" | `browser_agent` — requires login + navigation |
-| "Get the plain text of this Wikipedia article" | `webfetch` — static HTML, no interaction needed |
-| "Fill out the contact form on example.com" | `browser_agent` — form interaction required |
+| "What's the current price of X on amazon.com?" | `browser_agent` - prices are loaded by JS |
+| "Search for Python tutorials" | `web_search` - static content, faster |
+| "Log into my dashboard and get the usage report" | `browser_agent` - requires login + navigation |
+| "Get the plain text of this Wikipedia article" | `webfetch` - static HTML, no interaction needed |
+| "Fill out the contact form on example.com" | `browser_agent` - form interaction required |
 
 ### Tool call format
 
@@ -131,22 +131,22 @@ Once the agent calls `browser_agent`, the following happens:
 
 For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). A background `_stop_monitor` polls this flag every 0.5 s and, when stop is requested:
 
-1. calls browser-use's cooperative `agent.stop()` — the run halts cleanly at the next step boundary. This is the reliable path: a bare asyncio cancel cannot interrupt a blocking LLM call running in the executor thread, and browser-use can swallow a single `CancelledError` mid-step.
+1. calls browser-use's cooperative `agent.stop()` - the run halts cleanly at the next step boundary. This is the reliable path: a bare asyncio cancel cannot interrupt a blocking LLM call running in the executor thread, and browser-use can swallow a single `CancelledError` mid-step.
 2. then cancels the run task to unblock as soon as the current step returns.
 
 The monitor keeps trying until the run actually ends, instead of giving up after one attempt, so a swallowed cancel can no longer leave the browser running to `max_steps`. A fully hung LLM call can only be interrupted once it returns, since the executor thread cannot be force-killed.
 
 ### Result format
 
-The tool always returns a plain string — the VAF agent reads it and incorporates it into its response to the user.
+The tool always returns a plain string - the VAF agent reads it and incorporates it into its response to the user.
 
 ```
 Browser task completed.
 
 Result:
-1. "Show HN: I built a local-first AI framework" — 342 points
-2. "Ask HN: What are you working on? (May 2026)" — 287 points
-3. "Postgres 18 released" — 241 points
+1. "Show HN: I built a local-first AI framework" - 342 points
+2. "Ask HN: What are you working on? (May 2026)" - 287 points
+3. "Postgres 18 released" - 241 points
 ...
 ```
 
@@ -156,7 +156,7 @@ Result:
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `task` | string | Yes | — | Plain-language description of what the browser should do. Include URLs, credentials, and what data to extract. |
+| `task` | string | Yes | - | Plain-language description of what the browser should do. Include URLs, credentials, and what data to extract. |
 | `max_steps` | integer | No | 25 | Maximum number of browser actions before stopping. Cap: 100. |
 | `allowed_domains` | string[] | No | unrestricted | Whitelist of domains the browser may visit. Prevents the agent from navigating outside the intended scope. |
 | `persistent` | boolean | No | `false` | If `true`, cookies and login state are saved after the task and restored on the next call with the same `session` name. Use for sites that require login. |
@@ -186,11 +186,11 @@ After login, go to /settings/billing and return the current plan name and next r
 
 ## Persistent Sessions
 
-By default every `browser_agent` call starts with a completely clean browser profile — no cookies, no login state. This is safe but means the agent must re-login on every task.
+By default every `browser_agent` call starts with a completely clean browser profile - no cookies, no login state. This is safe but means the agent must re-login on every task.
 
-With `persistent=true`, VAF saves the browser's cookies and storage state to `~/.vaf/browser_sessions/<scope>/{session}.json` after each task and restores it at the start of the next call with the same session name. The `<scope>` segment is the caller's sanitized user_scope_id (or the local-admin scope in single-user mode) — see [Per-user session isolation](#per-user-session-isolation).
+With `persistent=true`, VAF saves the browser's cookies and storage state to `~/.vaf/browser_sessions/<scope>/{session}.json` after each task and restores it at the start of the next call with the same session name. The `<scope>` segment is the caller's sanitized user_scope_id (or the local-admin scope in single-user mode) - see [Per-user session isolation](#per-user-session-isolation).
 
-### First call — login
+### First call - login
 
 ```json
 {
@@ -202,7 +202,7 @@ With `persistent=true`, VAF saves the browser's cookies and storage state to `~/
 
 After this call, `~/.vaf/browser_sessions/<scope>/tipico.json` (where `<scope>` is the caller's user_scope_id) contains the session cookies.
 
-### Subsequent calls — already logged in
+### Subsequent calls - already logged in
 
 ```json
 {
@@ -212,7 +212,7 @@ After this call, `~/.vaf/browser_sessions/<scope>/tipico.json` (where `<scope>` 
 }
 ```
 
-The agent navigates directly to the page — no login step needed.
+The agent navigates directly to the page - no login step needed.
 
 ### Session file location
 
@@ -224,7 +224,7 @@ The agent navigates directly to the page — no login step needed.
     └── banking.json
 ```
 
-Each file is a Playwright `storage_state` JSON — contains cookies, localStorage, and sessionStorage for all domains visited during the session.
+Each file is a Playwright `storage_state` JSON - contains cookies, localStorage, and sessionStorage for all domains visited during the session.
 
 ### Per-user session isolation
 
@@ -245,7 +245,7 @@ Session files contain login cookies in plain text. They are stored per user unde
 
 ## LLM Bridge
 
-`browser_agent` does **not** use a separate AI service. It routes all reasoning through VAF's own configured LLM — the same model used for everything else (local Ollama, OpenAI, Anthropic, DeepSeek, etc.).
+`browser_agent` does **not** use a separate AI service. It routes all reasoning through VAF's own configured LLM - the same model used for everything else (local Ollama, OpenAI, Anthropic, DeepSeek, etc.).
 
 ```
 browser-use internal loop
@@ -261,21 +261,21 @@ browser-use internal loop
         Your configured provider (Ollama / OpenAI / Anthropic / ...)
 ```
 
-The bridge (`VAFLLMBridge`) implements browser-use's `BaseChatModel` protocol and delegates every LLM call to `APIBackendManager` — the same class used by all other VAF tools.
+The bridge (`VAFLLMBridge`) implements browser-use's `BaseChatModel` protocol and delegates every LLM call to `APIBackendManager` - the same class used by all other VAF tools.
 
 ### On-demand vision
 
-The browser agent uses **`use_vision='auto'`** — browser-use decides per-step whether to attach a screenshot. Screenshots are only sent to the LLM when the page cannot be understood from DOM text alone (e.g. image-heavy pages, CAPTCHAs, visual challenges).
+The browser agent uses **`use_vision='auto'`** - browser-use decides per-step whether to attach a screenshot. Screenshots are only sent to the LLM when the page cannot be understood from DOM text alone (e.g. image-heavy pages, CAPTCHAs, visual challenges).
 
 When a screenshot is sent, `VAFLLMBridge` handles it based on the configured provider:
 
 | Main provider | Vision handling |
 |---|---|
-| Anthropic, Google, GPT-4o | Screenshot passed natively — provider sees the image directly |
+| Anthropic, Google, GPT-4o | Screenshot passed natively - provider sees the image directly |
 | DeepSeek, non-vision models | Screenshot sent to `vision_provider` (configured in Settings → AI & Model) → text description injected into the message |
-| No vision provider configured | Screenshot skipped — DOM-only fallback |
+| No vision provider configured | Screenshot skipped - DOM-only fallback |
 
-The agent also has a `describe_page_visually()` action it can call explicitly when stuck — for example, if it detects a CAPTCHA in the DOM and needs to understand what type it is before deciding how to proceed. Vision cost is only paid when actually needed — not on every step.
+The agent also has a `describe_page_visually()` action it can call explicitly when stuck - for example, if it detects a CAPTCHA in the DOM and needs to understand what type it is before deciding how to proceed. Vision cost is only paid when actually needed - not on every step.
 
 ### LLM model recommendation
 
@@ -310,10 +310,10 @@ When `browser_agent` is running, the **SubAgent Window** in the WebUI opens auto
 └─────────────────────────────────────┘
 ```
 
-- **URL bar** — shows the current page URL, updated with every screenshot
-- **Live indicator** — red pulsing dot disappears when the task ends
-- **Frame rate** — ~1 frame per 1.5 seconds (JPEG quality 55, ~30–80 KB/frame)
-- **Console** — tool start/end events and log lines still shown below the viewport
+- **URL bar** - shows the current page URL, updated with every screenshot
+- **Live indicator** - red pulsing dot disappears when the task ends
+- **Frame rate** - ~1 frame per 1.5 seconds (JPEG quality 55, ~30–80 KB/frame)
+- **Console** - tool start/end events and log lines still shown below the viewport
 
 The viewport is visible in both **dock mode** (right side panel) and **overlay mode** (full-screen modal, triggered by clicking the SubAgent bubble in the chat).
 
@@ -343,13 +343,13 @@ See [Window Tiling](../web-ui/WINDOW_TILING_DESIGN.md) and [Workflow UI Componen
 
 ### Permission level: `write`
 
-`browser_agent` is classified as a `write` tool — it can navigate, click, and submit forms, but does not require a separate destructive-action confirmation gate. Actions visible in the live view give the user real-time oversight of what the agent is doing.
+`browser_agent` is classified as a `write` tool - it can navigate, click, and submit forms, but does not require a separate destructive-action confirmation gate. Actions visible in the live view give the user real-time oversight of what the agent is doing.
 
 ### Network isolation
 
-The CDP port (`9222`) is bound to `127.0.0.1` only — it is **never exposed** to the network or other machines.
+The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to the network or other machines.
 
-The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname — a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
+The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname - a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
 
 ### Domain restriction
 
@@ -368,7 +368,7 @@ This prevents the browser agent from following redirects or links to unintended 
 
 By default, `browser_agent` is **blocked** on Telegram, WhatsApp, and Discord channels: these channels have no interactive confirmation flow, so channel-restricted tools cannot run there.
 
-This is controlled by the `channel_tools_unrestricted` setting (Settings → Advanced, default **on**). When enabled, messaging-channel sessions get the same tools as the main agent — including `browser_agent` — and run **without** the per-call confirmation gate. The channel whitelist (`paired_only` by default) and the per-user `admin_only` checks still apply; turn it off to restrict channel sessions to non-channel-restricted tools.
+This is controlled by the `channel_tools_unrestricted` setting (Settings → Advanced, default **on**). When enabled, messaging-channel sessions get the same tools as the main agent - including `browser_agent` - and run **without** the per-call confirmation gate. The channel whitelist (`paired_only` by default) and the per-user `admin_only` checks still apply; turn it off to restrict channel sessions to non-channel-restricted tools.
 
 ---
 
@@ -376,7 +376,7 @@ This is controlled by the `channel_tools_unrestricted` setting (Settings → Adv
 
 ### Concurrency / Multi-user
 
-By default, `browser_agent` serialises all calls — only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the call waits in a queue for up to **120 seconds** before giving up with a "Browser agent is busy" message.
+By default, `browser_agent` serialises all calls - only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the call waits in a queue for up to **120 seconds** before giving up with a "Browser agent is busy" message.
 
 This avoids memory exhaustion and tab interference in the shared Chromium container.
 
@@ -422,7 +422,7 @@ If you run the browser container on a separate machine or in a cloud environment
 VAF_BROWSER_CDP_URL=ws://browser-host.internal:9222
 ```
 
-Make sure the CDP port is not exposed publicly — restrict access at the firewall level.
+Make sure the CDP port is not exposed publicly - restrict access at the firewall level.
 
 ---
 
@@ -430,14 +430,14 @@ Make sure the CDP port is not exposed publicly — restrict access at the firewa
 
 VAF hardens the browser so a vanilla automated browser's obvious tells are removed. The robust, hard-to-bypass parts live in how Chromium is launched (`docker/browser/entrypoint.sh`), not in fragile JavaScript:
 
-- **Headed Chromium under Xvfb** — not `--headless`. The new headless mode still has subtle, detectable tells; a real headed browser does not.
-- **`--disable-blink-features=AutomationControlled`** — `navigator.webdriver` is natively `false` (no detectable JS redefine).
-- **Version-matched User-Agent** — derived at startup from the actual Chromium version, with no "HeadlessChrome" marker; consistent with `navigator.platform = "Linux x86_64"`.
+- **Headed Chromium under Xvfb** - not `--headless`. The new headless mode still has subtle, detectable tells; a real headed browser does not.
+- **`--disable-blink-features=AutomationControlled`** - `navigator.webdriver` is natively `false` (no detectable JS redefine).
+- **Version-matched User-Agent** - derived at startup from the actual Chromium version, with no "HeadlessChrome" marker; consistent with `navigator.platform = "Linux x86_64"`.
 - **HTTP/2 kept on**, realistic window size (1920×1080), `en-US` locale.
 - **Fingerprint supplement** (`vaf/tools/_stealth_supplement.js`, injected via CDP at connect time): replaces the software-renderer "SwiftShader" WebGL string with a realistic Linux/Mesa value and adds subtle, seeded canvas/audio noise. It **never** touches `navigator` (own-property pollution is itself a tell, so playwright-stealth is intentionally **not** injected).
-- **Behavioural cadence** — randomized pauses between actions and a short per-step "think time" instead of machine-perfect timing.
+- **Behavioural cadence** - randomized pauses between actions and a short per-step "think time" instead of machine-perfect timing.
 
-This passes common bot-detection checks (`navigator.webdriver`, headless UA, WebGL, plugins, `window.chrome`). **Honest limits:** it does not match TLS JA3/JA4 fingerprints or fully spoof WebRTC, so aggressive managed WAFs (Cloudflare-managed, Kasada, Akamai) can still block, and a flagged/datacenter IP remains the hard limit — use a residential proxy for those.
+This passes common bot-detection checks (`navigator.webdriver`, headless UA, WebGL, plugins, `window.chrome`). **Honest limits:** it does not match TLS JA3/JA4 fingerprints or fully spoof WebRTC, so aggressive managed WAFs (Cloudflare-managed, Kasada, Akamai) can still block, and a flagged/datacenter IP remains the hard limit - use a residential proxy for those.
 
 ### Proxy and timezone
 
@@ -465,7 +465,7 @@ When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC
 
 The container runs a **supervised** Chromium process **headed under a virtual X display (Xvfb)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
 
-**Default behaviour:** each task starts with a clean browser profile — no cookies, no login state.
+**Default behaviour:** each task starts with a clean browser profile - no cookies, no login state.
 
 **Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/<scope>/{session}.json` (one subdirectory per user_scope_id) after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
 
@@ -536,17 +536,17 @@ The task was too complex for the step budget, or the site uses techniques that d
 
 ### `ERR_HTTP2_PROTOCOL_ERROR` on certain sites
 
-A site may terminate the connection when it detects an automated browser fingerprint — Chromium reports this as `ERR_HTTP2_PROTOCOL_ERROR`. This is a network-layer bot detection, not a CAPTCHA.
+A site may terminate the connection when it detects an automated browser fingerprint - Chromium reports this as `ERR_HTTP2_PROTOCOL_ERROR`. This is a network-layer bot detection, not a CAPTCHA.
 
 The container keeps **HTTP/2 enabled** (real Chrome uses it; disabling it is itself a fingerprint tell), and relies on the headed + fingerprint hardening described in [Anti-Bot Detection](#anti-bot-detection) to avoid being flagged in the first place. QUIC is left off because UDP through Docker NAT is unreliable; it is tunable in `docker/browser/entrypoint.sh`.
 
-If you still see this error, the site is likely doing TLS fingerprinting (JA3) — a deeper layer that a non-patched Chromium cannot defeat; a residential proxy (see [Anti-Bot Detection](#anti-bot-detection)) is the practical lever there.
+If you still see this error, the site is likely doing TLS fingerprinting (JA3) - a deeper layer that a non-patched Chromium cannot defeat; a residential proxy (see [Anti-Bot Detection](#anti-bot-detection)) is the practical lever there.
 
 ### CAPTCHA / bot detection
 
 See [Anti-Bot Detection](#anti-bot-detection) for the full hardening (headed Chromium, automation-flag removal, version-matched UA, and the fingerprint supplement). This makes the browser pass common detection checks; a vanilla automated browser does not.
 
-When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session/IP trust — the hardening helps, but a flagged IP remains the hard limit.
+When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session/IP trust - the hardening helps, but a flagged IP remains the hard limit.
 
 ---
 
@@ -559,7 +559,7 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
 | **Single browser instance** | All tasks share one Chromium process. Concurrent requests are serialised by a queue (see [Concurrency](#concurrency--multi-user)). |
-| **Live view frame rate** | ~1 frame/1.5 s — sufficient for monitoring, not a real-time stream. |
+| **Live view frame rate** | ~1 frame/1.5 s - sufficient for monitoring, not a real-time stream. |
 
 ---
 
@@ -568,8 +568,8 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | File | Purpose |
 |---|---|
 | [vaf/tools/browser_agent.py](../../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
-| [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` — WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
-| [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) — standalone runs |
+| [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` - WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
+| [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) - standalone runs |
 | [web/components/BrowserLiveTile.tsx](../../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
 | [web/app/page.tsx](../../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
 | [vaf/tools/_stealth_supplement.js](../../vaf/tools/_stealth_supplement.js) | Fingerprint supplement injected via CDP (WebGL renderer realism + canvas/audio noise) |

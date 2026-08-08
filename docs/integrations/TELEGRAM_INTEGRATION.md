@@ -346,7 +346,7 @@ The extracted text is inlined for the current turn and **additionally indexed fo
 
 ### Incoming Photos (Vision)
 
-When the user sends a **photo**, the bridge downloads the highest-resolution rendition and routes it to the **vision pipeline** — the same path the Web UI uses for image attachments:
+When the user sends a **photo**, the bridge downloads the highest-resolution rendition and routes it to the **vision pipeline** - the same path the Web UI uses for image attachments:
 
 1. Bridge downloads the photo and persists it to the user's attachments folder (`_persist_attached_images_to_files`)
 2. The image is attached to the agent turn via `metadata["images"]` (referenced by path)
@@ -358,11 +358,11 @@ An image sent as a **file** (uncompressed document) is detected by MIME type and
 
 ### Reading Telegram history (agent tools)
 
-Incoming and outgoing Telegram messages are recorded in a searchable, per-user message store, so the agent can recall past conversations — the Telegram counterpart of the WhatsApp read tools:
+Incoming and outgoing Telegram messages are recorded in a searchable, per-user message store, so the agent can recall past conversations - the Telegram counterpart of the WhatsApp read tools:
 
-- `read_telegram_chat` — read a Telegram chat's recent messages (defaults to the user's own chat)
-- `find_telegram_messages` — search Telegram messages by keyword
-- `telegram_inbox` — list Telegram chats that have stored messages
+- `read_telegram_chat` - read a Telegram chat's recent messages (defaults to the user's own chat)
+- `find_telegram_messages` - search Telegram messages by keyword
+- `telegram_inbox` - list Telegram chats that have stored messages
 
 They respect per-user scope isolation. History that predates this feature is imported into the store once, on first use.
 

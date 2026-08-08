@@ -19,7 +19,7 @@ The overlay mirrors the behavior when toggling the network settings (Local Netwo
 - **API to Local:**
   On the switch back the activity loop detects the local provider and **(re)loads the local model** right away (`start_model_async`). After `RELOAD_CONFIG` the local path is active again.
 
-This live load/unload is driven by the **tray activity loop** (which reads `provider` each tick — desktop only), NOT by `on_config_changed`. That is a statement about the LOCAL MODEL's memory only. The BACKEND swap is a separate lane and `on_config_changed` does own it: it has a branch on `provider` and on any `api_key_*`, and applies the change to the running agents. The config save itself also still queues `__CMD__:RELOAD_CONFIG` for the headless runner, so both lanes converge on the same per-agent method.
+This live load/unload is driven by the **tray activity loop** (which reads `provider` each tick - desktop only), NOT by `on_config_changed`. That is a statement about the LOCAL MODEL's memory only. The BACKEND swap is a separate lane and `on_config_changed` does own it: it has a branch on `provider` and on any `api_key_*`, and applies the change to the running agents. The config save itself also still queues `__CMD__:RELOAD_CONFIG` for the headless runner, so both lanes converge on the same per-agent method.
 
 ## Technical notes
 
@@ -31,6 +31,6 @@ This live load/unload is driven by the **tray activity loop** (which reads `prov
 
 ## Related documentation
 
-- **WEB_UI.md** — Web UI overview and status indicators
-- **WEBUI_WEBSOCKET_FLOW.md** — message types (including `config_saved`, `model_state`)
-- **SYSTEM_TRAY.md** — tray, idle timeout, and persistent mode
+- **WEB_UI.md** - Web UI overview and status indicators
+- **WEBUI_WEBSOCKET_FLOW.md** - message types (including `config_saved`, `model_state`)
+- **SYSTEM_TRAY.md** - tray, idle timeout, and persistent mode

@@ -114,6 +114,6 @@ Then:
 
 ## See also
 
-- [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md) — RAG architecture, compaction, API, configuration
-- [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) — How memory context is injected into the prompt
-- [USER_IDENTITY.md](USER_IDENTITY.md) — User profile (name, do’s/don’ts, preferences); the agent updates it via `update_user_identity` so the model learns the user better over time
+- [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md) - RAG architecture, compaction, API, configuration
+- [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) - How memory context is injected into the prompt
+- [USER_IDENTITY.md](USER_IDENTITY.md) - User profile (name, do’s/don’ts, preferences); the agent updates it via `update_user_identity` so the model learns the user better over time

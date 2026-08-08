@@ -23,7 +23,7 @@ Standard libraries (`os`, `json`, `re`, `threading`) and `rich` components are i
     *   **CRITICAL:** Appends linter results directly to `history` as a `system` message. This ensures the LLM sees errors immediately.
 
 ### History Management: Tool-Call Content Stripping
-After a successful `write_file` call, the agent walks backwards through `history` to find the corresponding `assistant` message. The `content` field inside the tool-call's JSON arguments is replaced with `[content omitted — N bytes written to disk]`. The rest of the tool-call (path, id) is preserved. This keeps the history size bounded regardless of file size.
+After a successful `write_file` call, the agent walks backwards through `history` to find the corresponding `assistant` message. The `content` field inside the tool-call's JSON arguments is replaced with `[content omitted - N bytes written to disk]`. The rest of the tool-call (path, id) is preserved. This keeps the history size bounded regardless of file size.
 
 ### Who owns the screen (`UI.live`)
 The coder never builds a `rich.Live` itself. It asks `vaf.cli.tui.UI.live(...)`, which returns a real `Live` when the terminal is free and a silent `_NoopLive` (all methods no-ops, so call sites need no per-call guards) when a full-screen app owns it. The same factory serves the librarian and the research agent - each of the three used to decide this alone and each got it wrong differently, the researcher's `isatty()` check most instructively: it is True under a full-screen app, so the guard passed and the screen was overwritten anyway. Guarded by `tests/test_live_display_ownership.py`, which greps for direct `Live(` construction because `research_agent` imports it function-locally.
@@ -50,10 +50,10 @@ Implements a "Mini-IDE" using `rich.live`.
 
 `run()` resolves the project directory in this order (normal mode):
 
-1.  **`project_path` kwarg** — expanded/absolutized first. If it names a FILE (see the
+1.  **`project_path` kwarg** - expanded/absolutized first. If it names a FILE (see the
     file-vs-directory rule below), it is split into directory + target-file hint and the
     directory becomes the candidate. Unsafe candidates are ignored (fall through to 2-4).
-2.  **Explicit path in the task text** — `_extract_explicit_task_path()` matches phrase forms
+2.  **Explicit path in the task text** - `_extract_explicit_task_path()` matches phrase forms
     ("im Verzeichnis /x", "in directory /x", "path: /x") and bare absolute paths
     (`/home|/tmp|/mnt|/root/...` or Windows drive paths). Dots are part of the match (filenames
     keep their extension) and quotes end it. The match is split file-vs-directory the same way;
@@ -64,7 +64,7 @@ Implements a "Mini-IDE" using `rich.live`.
 4.  **`_determine_base_dir`** (below) as the fallback.
 
 **File-vs-directory rule (`_looks_like_file_path` / `_split_explicit_path`):** an existing
-filesystem entry decides directly (a directory named like a file stays a directory — the
+filesystem entry decides directly (a directory named like a file stays a directory - the
 continue-project case). A path that does not exist yet counts as a file only when its basename
 has a known file extension (`_FILE_TARGET_EXTENSIONS`, curated: `project.v2` stays a directory).
 A file target is split into `(dirname, basename)`; the basename becomes the **target-file hint**,
@@ -75,7 +75,7 @@ deliverable nested inside. `os.makedirs` failures (`FileExistsError` / `NotADire
 return an actionable error string instead of a traceback.
 
 ### `_determine_base_dir(task, provided_path)` (The Smart Switch)
-*   **Safety guard:** `is_unsafe_project_dir(path)` rejects the user's home directory itself, the standard user dirs (Documents, Desktop, ... — their subdirectories are fine), `~/.vaf` and the VAF program tree as work directories. Applied to every path source below; unsafe paths fall through to `_generate_project_directory`. Sub-agent terminals historically spawned with CWD=$HOME on Linux/macOS (terminal emulators do not inherit the spawner's cwd), where `~/.vaf` (and a stray `~/.git`) would otherwise make home look like a project root — the guard stays for exactly that shape. Since the VAF_PARENT_CWD handoff (`Platform.open_new_terminal` stamps the caller's cwd, the sub-agent entry adopts it via `Platform.adopt_parent_cwd()`), a coder spawned from a project checkout actually STARTS in that checkout, so the Edit-Mode branch below fires for the directory the user launched `vaf run` in.
+*   **Safety guard:** `is_unsafe_project_dir(path)` rejects the user's home directory itself, the standard user dirs (Documents, Desktop, ... - their subdirectories are fine), `~/.vaf` and the VAF program tree as work directories. Applied to every path source below; unsafe paths fall through to `_generate_project_directory`. Sub-agent terminals historically spawned with CWD=$HOME on Linux/macOS (terminal emulators do not inherit the spawner's cwd), where `~/.vaf` (and a stray `~/.git`) would otherwise make home look like a project root - the guard stays for exactly that shape. Since the VAF_PARENT_CWD handoff (`Platform.open_new_terminal` stamps the caller's cwd, the sub-agent entry adopts it via `Platform.adopt_parent_cwd()`), a coder spawned from a project checkout actually STARTS in that checkout, so the Edit-Mode branch below fires for the directory the user launched `vaf run` in.
 *   **Logic:** Decides whether to work in the current directory or create a new one.
     1.  **Explicit:** If `provided_path` is set (and safe) -> Use it.
     2.  **Edit Mode:** If CWD is a project root (`.git`, `.vaf`, etc.), safe, AND task is NOT "create new" -> **Use CWD**.
@@ -86,8 +86,8 @@ return an actionable error string instead of a traceback.
 *   **Role:** Helper for Scaffold Mode (creates new folders).
 *   **Logic:**
     1.  Scans `task` string for keywords to choose the folder prefix:
-        -   **"Webseite"** prefix (the folder prefix the code emits): `website`, `webseite`, `homepage`, `landing page`, `.html`, `index.html`, `html datei`, `html file` — HTML keywords are checked **first** to avoid false matches (e.g. a `<script>` tag in an HTML task description must not be classified as a Script project).
-        -   **"Script"** prefix: only narrow matches like `python script`, `bash script`, `.py script` — bare `script` is intentionally excluded.
+        -   **"Webseite"** prefix (the folder prefix the code emits): `website`, `webseite`, `homepage`, `landing page`, `.html`, `index.html`, `html datei`, `html file` - HTML keywords are checked **first** to avoid false matches (e.g. a `<script>` tag in an HTML task description must not be classified as a Script project).
+        -   **"Script"** prefix: only narrow matches like `python script`, `bash script`, `.py script` - bare `script` is intentionally excluded.
         -   **"App"**, **"Tool"**, **"API"** etc. for other common types.
     2.  Extracts semantic keywords (removing stop words like "the", "create").
     3.  Sanitizes the name using Regex to be OS-safe (removes `/ \ : * ?`).
@@ -98,7 +98,7 @@ return an actionable error string instead of a traceback.
 
 ### `_ensure_git_repo(base_dir)`
 *   **Logic:**
-    1.  Refuses unsafe locations (`is_unsafe_project_dir`) — a `.git` in e.g. the home directory would make it look like a project root forever after. Also refuses any `base_dir` that is not an existing directory (a file path would raise `NotADirectoryError` inside subprocess, which the git error handling does not catch).
+    1.  Refuses unsafe locations (`is_unsafe_project_dir`) - a `.git` in e.g. the home directory would make it look like a project root forever after. Also refuses any `base_dir` that is not an existing directory (a file path would raise `NotADirectoryError` inside subprocess, which the git error handling does not catch).
     2.  Checks for `.git` folder.
     3.  If missing, runs `git init`.
     4.  Writes a default `.gitignore` (Python/Node/IDE patterns).
@@ -111,14 +111,14 @@ return an actionable error string instead of a traceback.
 This is the massive entry point method.
 
 ### A0. History/Rollback Delegation Fast Path
-The coder owns each project's version history (built up by the final commit on every run, see section 6). The Main Agent has no git tools of its own for projects — it talks to the coder instead:
+The coder owns each project's version history (built up by the final commit on every run, see section 6). The Main Agent has no git tools of its own for projects - it talks to the coder instead:
 
-*   `coding_agent(task="history", project_path=...)` — the coder answers directly with the formatted version list (commit id, date, description, changed files).
-*   `coding_agent(task="rollback to <id>", project_path=...)` — the coder restores that version.
+*   `coding_agent(task="history", project_path=...)` - the coder answers directly with the formatted version list (commit id, date, description, changed files).
+*   `coding_agent(task="rollback to <id>", project_path=...)` - the coder restores that version.
 
-`_detect_history_rollback_intent()` (`vaf/tools/project_git.py`) classifies these tasks. Creation verbs always win ("Create a page about the history of Rome" runs the normal loop). A rollback request that names a concrete commit id matches REGARDLESS of task length — the main agent often wraps the delegation in long explanatory text, so matching regardless of length keeps a wrapped rollback request routed straight to the rollback path rather than into the agentic loop. History requests and rollbacks without an id stay conservative (max 200 chars). Matching tasks return immediately: no agentic loop, no terminal spawn, no LLM call. A rollback request without a version id returns the history plus the instruction to ask the user.
+`_detect_history_rollback_intent()` (`vaf/tools/project_git.py`) classifies these tasks. Creation verbs always win ("Create a page about the history of Rome" runs the normal loop). A rollback request that names a concrete commit id matches REGARDLESS of task length - the main agent often wraps the delegation in long explanatory text, so matching regardless of length keeps a wrapped rollback request routed straight to the rollback path rather than into the agentic loop. History requests and rollbacks without an id stay conservative (max 200 chars). Matching tasks return immediately: no agentic loop, no terminal spawn, no LLM call. A rollback request without a version id returns the history plus the instruction to ask the user.
 
-Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit — history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
+Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit - history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
 
 Inside the agentic loop the same two tools are registered as base_dir-wrapped local tools (`project_history`, `project_rollback`), so the coder can also restore a known-good state at its own discretion after breaking something.
 
@@ -156,11 +156,11 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
 *   **TUI Start:** Two independent questions. `simple_mode` (plain lines instead of a panel) is on when `VAF_IN_WORKFLOW_TERMINAL` is set OR a full-screen app owns the terminal. Whether a real `rich.Live` runs at all is decided by `UI.live()`, not here - it yields a no-op stand-in while the screen belongs to someone else, and a 12 FPS `Live` otherwise.
 *   **API Mode Detection (`_is_api_mode`):**
     *   The coder talks plain OpenAI wire format over raw HTTP, so it resolves its endpoint from `coder_api_providers()` (module level), which is built from the central provider registry (`vaf/core/provider_registry.py`) and therefore covers every API provider by construction - OpenAI, Anthropic (OpenAI-compat URL), DeepSeek, OpenRouter, Google (OpenAI-compat URL), Veyllo (base URL from config `veyllo_base_url`, resolved at call time).
-    *   **Sync guard:** the map MUST cover every provider in `config.PROVIDER_MODELS` — enforced by `tests/test_coder_provider_map.py`. An API provider missing from the map returns a clear "coder configuration error" instead of falling through to the local branch, which would otherwise route an API provider's work to a local model.
-    *   **IF API mode:** Templates are **skipped entirely** — capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
+    *   **Sync guard:** the map MUST cover every provider in `config.PROVIDER_MODELS` - enforced by `tests/test_coder_provider_map.py`. An API provider missing from the map returns a clear "coder configuration error" instead of falling through to the local branch, which would otherwise route an API provider's work to a local model.
+    *   **IF API mode:** Templates are **skipped entirely** - capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
     *   **IF local model (`provider == "local"` only):** Template selection logic runs as normal; the `:8080` health check applies only here.
 *   **Template Logic (local models only):**
-    *   **Edit-mode guard:** templates are skipped entirely when `base_dir` already contains code files (html/css/js/py/...). `TemplateManager.generate_files()` writes into `base_dir` and would overwrite the user's work — a follow-up task whose text merely mentions "Website" must never replace a finished site with placeholder scaffolding. Existing projects always go through normal planning, where the fresh task context injects the existing file list for editing. Telemetry event: `template_skipped_existing_project`.
+    *   **Edit-mode guard:** templates are skipped entirely when `base_dir` already contains code files (html/css/js/py/...). `TemplateManager.generate_files()` writes into `base_dir` and would overwrite the user's work - a follow-up task whose text merely mentions "Website" must never replace a finished site with placeholder scaffolding. Existing projects always go through normal planning, where the fresh task context injects the existing file list for editing. Telemetry event: `template_skipped_existing_project`.
     *   Checks task keywords for template type ("website", "html", etc.) with an LLM-based fallback detector. HTML-specific keywords (`index.html`, `.html`, `html datei`) are included to prevent misclassification.
     *   If a matching template exists, copies files to `base_dir`.
     *   Sets `template_files` list for later reference (soft guidance, not enforcement).
@@ -168,10 +168,10 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     *   Generates the **Supervisor System Prompt**.
     *   **Crucial Instruction:** "Your FIRST action MUST be to call `set_todos`".
     *   **Hidden Tools:** Explicitly hides `task_done` from the prompt text to force planning.
-    *   **Template language:** Framed as **guidance** ("recommended workflow", "good baseline") — not as hard rules. The agent is free to deviate from template structure if the task calls for it.
+    *   **Template language:** Framed as **guidance** ("recommended workflow", "good baseline") - not as hard rules. The agent is free to deviate from template structure if the task calls for it.
     *   **Task planning rules (injected into system prompt):**
         -   Single-file deliverable → exactly 1 task. Multi-file → one task per output file.
-        -   No planning tasks (e.g. "Design the layout") — every task must produce at least one `write_file` call.
+        -   No planning tasks (e.g. "Design the layout") - every task must produce at least one `write_file` call.
         -   No meta-files (PLAN.md, STRUCTURE.md, etc.) written to the project directory.
 
 ### C. Hierarchical Context Setup (Lines ~2200-2400)
@@ -182,7 +182,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     *   If task state exists -> Resumes it.
     *   If new -> Creates **FRESH** `ContextManager` (8k/16k tokens) via `create_fresh_context_for_task()`.
     *   **Completed-Task Glue:** `_build_completed_info()` summarises previously finished tasks and injects them into the new system prompt (prevents "Context Amnesia" without polluting the window).
-    *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` and injects a file list into the task system prompt. Infrastructure entries are excluded: hidden files (`.`-prefix), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). When no code files exist, the note reads: *"The project directory is empty — call `write_file` to create the first file."*
+    *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` and injects a file list into the task system prompt. Infrastructure entries are excluded: hidden files (`.`-prefix), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). When no code files exist, the note reads: *"The project directory is empty - call `write_file` to create the first file."*
 
 ### Critical: Context Switch + Tool Result Ordering
 
@@ -228,13 +228,13 @@ A task that stays on the same index for more than 15 loops is never blindly mark
 
 1.  **Goal verification** via `_verify_task_goal(task_title, task_files, base_dir, linter_active, llm_verify)`:
     *   Deterministic first: if the task wrote files (`task_file_map[idx]`), they must exist, contain no template placeholders and no linter error may be active.
-    *   Without file evidence (the goal may already be implemented by an earlier task), one bounded LLM check runs (non-streaming, temperature 0, 1000 tokens, 90s timeout): "Is this goal already fully implemented? YES/NO plus one line of evidence" against the main deliverable (`_pick_main_deliverable`). Reasoning models may spend their whole budget thinking and leave `content` empty — the call falls back to `reasoning_content`, and the verdict parser takes the LAST standalone YES/NO in the text (a chain of thought ends with its conclusion). Any error or ambiguity counts as NOT verified.
+    *   Without file evidence (the goal may already be implemented by an earlier task), one bounded LLM check runs (non-streaming, temperature 0, 1000 tokens, 90s timeout): "Is this goal already fully implemented? YES/NO plus one line of evidence" against the main deliverable (`_pick_main_deliverable`). Reasoning models may spend their whole budget thinking and leave `content` empty - the call falls back to `reasoning_content`, and the verdict parser takes the LAST standalone YES/NO in the text (a chain of thought ends with its conclusion). Any error or ambiguity counts as NOT verified.
 2.  **Verified:** task completes with result "Auto-completed after stuck detection - goal verified: ...".
-3.  **Not verified, retry budget free:** one immediate retry — the task resets to `pending`, the failed task context is dropped (`context_states.pop`), a fresh context is created and a system hint describes the failed attempt. The loop budget restarts.
+3.  **Not verified, retry budget free:** one immediate retry - the task resets to `pending`, the failed task context is dropped (`context_states.pop`), a fresh context is created and a system hint describes the failed attempt. The loop budget restarts.
 4.  **Retry exhausted:** the task is marked **failed** (`TaskManager.fail_current_task`) with the reason. The run continues with the remaining tasks.
 5.  **Final retry round:** at every all-done exit point, `_maybe_start_final_retry()` runs once per run: failed tasks are reset to pending and re-attempted with enriched context (completed-task summaries, project file list, failure history). Tasks failing again stay failed.
 
-`TaskManager.is_all_done()` uses terminal semantics (completed, failed or skipped) so failed tasks cannot keep the loop alive; `is_all_completed()` distinguishes the strict success case. The final summary reports failed tasks explicitly and signals `[VAF_CODING_AGENT_STATUS: PARTIAL]` — a stuck task never produces a silent fake COMPLETE.
+`TaskManager.is_all_done()` uses terminal semantics (completed, failed or skipped) so failed tasks cannot keep the loop alive; `is_all_completed()` distinguishes the strict success case. The final summary reports failed tasks explicitly and signals `[VAF_CODING_AGENT_STATUS: PARTIAL]` - a stuck task never produces a silent fake COMPLETE.
 
 The inactivity auto-complete (idle with files present) runs the same deterministic verification before completing; unverifiable tasks stay open and escalate into the stuck flow above.
 
@@ -245,9 +245,9 @@ The inactivity auto-complete (idle with files present) runs the same determinist
 ### `set_todos`
 *   **Single-File Rule (code-enforced):** `_detect_single_file_deliverable(task)` checks the original task for explicit single-file phrasings (German and English, e.g. "einzelne HTML-Datei", "single html file", "everything in one file"). If the model submits more than one task for a single-file deliverable:
     *   First violation: **REJECT** with the instruction to submit exactly one task.
-    *   Second violation: **AUTO-COERCE** — the supervisor replaces the plan with exactly one task derived from the original task text. No planning loop is possible.
+    *   Second violation: **AUTO-COERCE** - the supervisor replaces the plan with exactly one task derived from the original task text. No planning loop is possible.
     *   The auto-generated TODO path applies the same rule (exactly one auto task for single-file deliverables).
-*   **Title normalization (data-model invariant):** todo items must be plain strings, but models (esp. DeepSeek) sometimes send dicts like `{"text": "...", "status": "pending"}`. Titles are coerced to text at the data-model boundary — `coerce_task_title()` + `Task.__post_init__` (`vaf/core/persistence.py`) — so BOTH a fresh `set_todos` call and loading/resuming a previously-persisted plan (`ProjectState.from_dict`) get a string title. A raw dict otherwise crashes any downstream `title.lower()` / `title[:N]`; on Python 3.12+, where slices became hashable, `dict[:50]` raises `KeyError: slice(None, 50, None)` rather than a TypeError. A malformed `tasks.json` self-heals on the next save; `coder._todo_item_text` delegates to the same helper.
+*   **Title normalization (data-model invariant):** todo items must be plain strings, but models (esp. DeepSeek) sometimes send dicts like `{"text": "...", "status": "pending"}`. Titles are coerced to text at the data-model boundary - `coerce_task_title()` + `Task.__post_init__` (`vaf/core/persistence.py`) - so BOTH a fresh `set_todos` call and loading/resuming a previously-persisted plan (`ProjectState.from_dict`) get a string title. A raw dict otherwise crashes any downstream `title.lower()` / `title[:N]`; on Python 3.12+, where slices became hashable, `dict[:50]` raises `KeyError: slice(None, 50, None)` rather than a TypeError. A malformed `tasks.json` self-heals on the next save; `coder._todo_item_text` delegates to the same helper.
 *   **Validation:** Checks if `tasks` list is valid.
 *   **Phase Check:**
     *   **IF** called during execution phase: **BLOCK** ("Cannot modify TODOs during execution").
@@ -269,7 +269,7 @@ The inactivity auto-complete (idle with files present) runs the same determinist
     *   Calculates diff between old and new content.
     *   Updates TUI Code Preview.
 *   **Execution:** Calls `filesystem.write_file`.
-*   **History Content Strip:** After a successful write, the `content` argument in the matching assistant tool-call history entry is replaced with `[content omitted — N bytes written to disk]`.
+*   **History Content Strip:** After a successful write, the `content` argument in the matching assistant tool-call history entry is replaced with `[content omitted - N bytes written to disk]`.
 *   **Post-Action Linting:**
     *   Calls `_run_linter_for_files`.
     *   **IF Errors:** Sets `current_state.linter_errors_active = True`.
@@ -291,7 +291,7 @@ outcome, and only a run that truly changed nothing keeps the failure message.
     *   **Action:** Force agent to retry loop.
 *   **Gate 2: "Unresolved Placeholders"**
     *   **IF** any written file still contains `{{PLACEHOLDER}}` markers:
-    *   **BLOCK:** Task is not truly done — agent must replace all placeholders.
+    *   **BLOCK:** Task is not truly done - agent must replace all placeholders.
     *   Template *structure* changes do not block `task_done`. Only unfilled placeholders do.
 *   **Gate 3: "Linter Errors"**
     *   **IF** `has_recent_linter_errors` is True:
@@ -321,10 +321,10 @@ outcome, and only a run that truly changed nothing keeps the failure message.
 *   **Context:** Returns output (stdout/result) to the LLM history.
 *   **File-Write Guard:** Before execution, the submitted code is scanned for file-write patterns: `open(..., 'w'/'a')`, `.write(...)` on non-stdout/stderr/StringIO handles, and direct references to `base_dir`. If any pattern matches, the call is **BLOCKED** and the LLM is instructed to use `write_file` instead.
 
-### `bash` — kernel-jailed workspace shell (`vaf.tools.bash` → `vaf.tools.workspace_exec`)
+### `bash` - kernel-jailed workspace shell (`vaf.tools.bash` → `vaf.tools.workspace_exec`)
 *   **Purpose:** The coder needs a real shell for its project (run scripts, `npm`/`pip install`, run the app), but must never be able to touch VAF's own source or itself and break the running system.
 *   **Registration:** `BashTool(base_dir)` is bound to the coder's workspace at registration (like the git tools), so the shell defaults to the project and confinement is scoped to exactly that directory. With no workspace bound it **refuses** rather than fall back to the process cwd.
-*   **Confinement (kernel, not string-filtering):** `run_in_workspace` runs the command inside a **bubblewrap** jail on Linux — the workspace is bind-mounted read-write (edits persist); the system (`/usr`, `/bin`, `/etc`, ...) is read-only; the VAF repo, `~/.vaf`, secrets and the docker socket are **not mounted** (they do not exist for the command); env is `--clearenv`'d (tray API keys never leak) and the network is `--unshare-net`'d (host loopback services like the memory DB are unreachable). Without bubblewrap it falls back to a container with only the workspace mounted and `--network none`; with neither it **refuses** (never a raw host shell).
+*   **Confinement (kernel, not string-filtering):** `run_in_workspace` runs the command inside a **bubblewrap** jail on Linux - the workspace is bind-mounted read-write (edits persist); the system (`/usr`, `/bin`, `/etc`, ...) is read-only; the VAF repo, `~/.vaf`, secrets and the docker socket are **not mounted** (they do not exist for the command); env is `--clearenv`'d (tray API keys never leak) and the network is `--unshare-net`'d (host loopback services like the memory DB are unreachable). Without bubblewrap it falls back to a container with only the workspace mounted and `--network none`; with neither it **refuses** (never a raw host shell).
 *   **Docker is refused:** the host docker socket is host-root-equivalent and cannot be safely policed by inspecting the command string, so `bash` refuses any `docker` invocation up front. Host/docker tasks are the *main agent's* `host_bash` (below), under explicit confirmation.
 *   **Blocklist:** a cheap `is_command_safe` blocklist (fork bomb, `rm -rf /`, `mkfs`, `curl|bash`, ...) is defense-in-depth; the real safety is the jail.
 
@@ -339,9 +339,9 @@ outcome, and only a run that truly changed nothing keeps the failure message.
 
 Two always-run, deterministic phases wrap the planning/execution loop. They are guardrails (like the guided/template rails): fixed stages that lead even a weak model, rather than prompt hints it can ignore. Both are gated `not skip_template` (skipped in CONTENT_ONLY).
 
-*   **ORIENT (before planning) — `_build_orientation_summary(base_dir)`:** a bounded, pure-Python project scan (no LLM). It lists the existing file inventory (in-place-pruned `os.walk`, depth/file caps) and the heads of existing docs, then injects that summary into the planner's `system_prompt` via the `orientation_summary` variable in the `<context>` block. This supplies the existing-project file context through `existing_files_info`, so the planner sees the real files and edit tasks start grounded in the project rather than producing no changes. A fresh/empty project yields a short no-op notice. Deterministic by construction: the inventory is baked into the planner's first request, and the scan cannot loop.
-*   **DOCUMENT (after the task loop, before `_final_commit`) — `self._run_document_phase(...)`:** creates or updates the README to reflect this run's real changes.
-    *   **Change detection:** `_detect_run_changes(base_dir, run_start_sha)` diffs the working tree against `_run_start_sha` (HEAD captured right after `_ensure_git_repo`; the git-empty-tree when there is no baseline) plus untracked files — `git diff --diff-filter=ACMR` + `git ls-files --others`. If only docs changed, it is a no-op.
+*   **ORIENT (before planning) - `_build_orientation_summary(base_dir)`:** a bounded, pure-Python project scan (no LLM). It lists the existing file inventory (in-place-pruned `os.walk`, depth/file caps) and the heads of existing docs, then injects that summary into the planner's `system_prompt` via the `orientation_summary` variable in the `<context>` block. This supplies the existing-project file context through `existing_files_info`, so the planner sees the real files and edit tasks start grounded in the project rather than producing no changes. A fresh/empty project yields a short no-op notice. Deterministic by construction: the inventory is baked into the planner's first request, and the scan cannot loop.
+*   **DOCUMENT (after the task loop, before `_final_commit`) - `self._run_document_phase(...)`:** creates or updates the README to reflect this run's real changes.
+    *   **Change detection:** `_detect_run_changes(base_dir, run_start_sha)` diffs the working tree against `_run_start_sha` (HEAD captured right after `_ensure_git_repo`; the git-empty-tree when there is no baseline) plus untracked files - `git diff --diff-filter=ACMR` + `git ls-files --others`. If only docs changed, it is a no-op.
     *   **Single-shot, not a loop:** the model is asked **once** (`self.query_llm`) for the README content; Python then writes it. The model has **no tools** in this phase, so it cannot derail or touch source.
     *   **Positive allowlist:** writes only a top-level README (exact `readme` stem + doc extension via `_is_readme_name`) or `docs/**`; the target is symlink- and containment-checked (`_doc_target_is_safe`) so the write can never follow a link out of the project.
     *   **Non-destructive:** create-mode without an LLM answer writes a minimal deterministic README; update-mode never overwrites a good README with a stub or a materially shorter/truncated regeneration (kept-existing guard). Leaked `<think>` reasoning and wrapping code fences are stripped only when unambiguous.
@@ -360,8 +360,8 @@ Two always-run, deterministic phases wrap the planning/execution loop. They are 
 
 During a run the coder feeds the WebUI's VS-Code style SubAgent window through two emit closures in `run()`:
 
-*   **`_emit_coder_state()`** — full project state: file tree (`_build_file_tree`, per-file status W/A/M), git state (`_build_git_state`: branch, dirty count, recent commits), the REAL task list from the TaskManager with live per-task status, loop count, task progress and linter flag. Sent at run start, every loop iteration, after each `write_file`, on task completion/failure and after the final commit. Published through `StatePublisher("coder_state", dedupe=True)`: duplicate payloads are not resent, and there is deliberately no time floor, because the payload itself is the change signal and a window could swallow the terminal emit. Event type: `coder_state`.
-*   **`_emit_live_code()`** — the partial file content while the model is still streaming a `write_file` call (hooked into the same stream parser that drives the terminal code preview). Sent as a minimal `subagent_update` with only `file` + `code`; published through `StatePublisher("subagent_update", min_interval=0.35)`, tail-capped at 6 KB at the call site, plus one **forced** full-content post when `write_file` dispatches. `force` bypasses the clock and never a duplicate check; this publisher has none. This drives the live-typing editor pane.
+*   **`_emit_coder_state()`** - full project state: file tree (`_build_file_tree`, per-file status W/A/M), git state (`_build_git_state`: branch, dirty count, recent commits), the REAL task list from the TaskManager with live per-task status, loop count, task progress and linter flag. Sent at run start, every loop iteration, after each `write_file`, on task completion/failure and after the final commit. Published through `StatePublisher("coder_state", dedupe=True)`: duplicate payloads are not resent, and there is deliberately no time floor, because the payload itself is the change signal and a window could swallow the terminal emit. Event type: `coder_state`.
+*   **`_emit_live_code()`** - the partial file content while the model is still streaming a `write_file` call (hooked into the same stream parser that drives the terminal code preview). Sent as a minimal `subagent_update` with only `file` + `code`; published through `StatePublisher("subagent_update", min_interval=0.35)`, tail-capped at 6 KB at the call site, plus one **forced** full-content post when `write_file` dispatches. `force` bypasses the clock and never a duplicate check; this publisher has none. This drives the live-typing editor pane.
 
 Both resolve the session id through `vaf.core.progress.resolve_ui_session_id()` (environment `VAF_SESSION_ID` first, then the IPC context) **before building the payload**, and stay silent without one. That ordering is load-bearing, not tidy: the state payload shells out to `git` six or more times per call, and a plain CLI run must not pay that for nobody.
 

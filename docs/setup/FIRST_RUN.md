@@ -1,7 +1,7 @@
-# First Run — Setup Wizard
+# First Run - Setup Wizard
 
 The first time you open VAF, no admin account exists yet, so VAF shows a setup wizard
-instead of the login screen. This page walks through it. Installation comes first — see
+instead of the login screen. This page walks through it. Installation comes first - see
 [LINUX_SETUP.md](LINUX_SETUP.md), [MACOS_SETUP.md](MACOS_SETUP.md), or
 [WINDOWS_SETUP.md](WINDOWS_SETUP.md).
 
@@ -14,7 +14,7 @@ instead of the login screen. This page walks through it. Installation comes firs
   [SERVER_MODE.md](SERVER_MODE.md).
 
 The wizard is detected automatically (the backend reports "needs setup" while no admin
-account exists); these bootstrap endpoints are reachable without a login, by design — see
+account exists); these bootstrap endpoints are reachable without a login, by design - see
 [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
 
 ## The steps
@@ -33,31 +33,31 @@ Authy). The wizard confirms you have one before continuing. **Cancel** returns t
 language step.
 
 ### 1. Create admin account
-Choose an admin **username** and a **password** (confirmed). This is the owner account —
+Choose an admin **username** and a **password** (confirmed). This is the owner account -
 it has full access and isolates your data under its own scope.
 
 ### 2. Soul (agent personality)
 A short questionnaire that defines how your agent behaves, in four parts:
 
-- **Core Truths** — values and what it's for;
-- **Boundaries** — rules and limits;
-- **Vibe** — tone and communication style;
-- **Continuity** — how it should carry context forward.
+- **Core Truths** - values and what it's for;
+- **Boundaries** - rules and limits;
+- **Vibe** - tone and communication style;
+- **Continuity** - how it should carry context forward.
 
 Suggestions are offered; every field is editable. The questionnaire UI follows your chosen
-language, but the Soul itself is written in English. This becomes the agent's Soul — see
+language, but the Soul itself is written in English. This becomes the agent's Soul - see
 [SOUL_SYSTEM.md](../memory/SOUL_SYSTEM.md). It is saved to `~/.vaf/users/<admin>/soul.md`
 and can be changed later in Settings.
 
 ### 3. Veyllo API (optional)
-Optionally paste a **Veyllo API key** to use the hosted Veyllo models — handy if your
+Optionally paste a **Veyllo API key** to use the hosted Veyllo models - handy if your
 machine has limited GPU/VRAM. The key is verified live; on success VAF sets Veyllo as the
 default provider (including vision, and speech-to-text when no STT provider was chosen
 yet - it always falls back to the local engine and an explicit later choice overrides it).
 **Skip** to keep the local default model. You can add
 this or other providers later under **Settings → AI & Model**.
 
-> Discord, Telegram, and Email connections are no longer part of first-run setup — add them
+> Discord, Telegram, and Email connections are no longer part of first-run setup - add them
 > anytime under **Settings → Connections** (see [CONNECTIONS.md](../integrations/CONNECTIONS.md)).
 
 ### 4. Two-factor authentication (2FA)
@@ -71,7 +71,7 @@ previous steps (admin account, Soul, any Veyllo key) and logs you in.
 
 The only provider the wizard offers is **Veyllo** (the optional step 3). If you skip it, VAF
 starts with a sensible default (a local model, VRAM-adaptive). To switch to another cloud
-provider or a different model — or to set Veyllo up later — open **Settings → AI & Model**
+provider or a different model - or to set Veyllo up later - open **Settings → AI & Model**
 after login, choose the provider, and paste your API key. The available providers and model
 switching are covered in the main [README](../../README.md) and
 [API_INTEGRATION.md](../llm/API_INTEGRATION.md).
@@ -80,7 +80,7 @@ switching are covered in the main [README](../../README.md) and
 
 - the admin account (with its 2FA secret), in the local users database;
 - a few identity keys in `~/.vaf/config.json` (e.g. the admin scope id and username, and
-  an auto-generated network JWT secret) — plus your Veyllo provider/key settings if you
+  an auto-generated network JWT secret) - plus your Veyllo provider/key settings if you
   entered a key in step 3;
 - your agent's `soul.md` and identity files under `~/.vaf/users/<admin>/`.
 

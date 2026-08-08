@@ -1,6 +1,6 @@
 # VAF on Linux
 
-This document explains how VAF **runs** on Linux — the runtime stack and the
+This document explains how VAF **runs** on Linux - the runtime stack and the
 platform-specific behavior and fixes that are unique to it. For step-by-step
 installation, see [LINUX_SETUP.md](../setup/LINUX_SETUP.md); this page does not
 duplicate the install steps.
@@ -15,7 +15,7 @@ duplicate the install steps.
   that range (no system Python needed). `PyGObject` is pinned to `<3.52` in the venv because 3.52+
   needs `girepository-2.0`, which older distros (e.g. Ubuntu 24.04) do not ship.
 - **Desktop window / web-view backend.** The native window is **pywebview on the
-  Qt / QtWebEngine (Chromium) backend** — it is a Qt window, **not** GTK.
+  Qt / QtWebEngine (Chromium) backend** - it is a Qt window, **not** GTK.
   `requirements.txt` pins `PySide6>=6.7.0` and `qtpy>=2.0.0` for
   `sys_platform == "linux"` (see also the `desktop` extra in
   [pyproject.toml](../../pyproject.toml)). PySide6 (LGPLv3) is chosen over PyQt6 (GPLv3) so
@@ -57,7 +57,7 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
 - **Qt window forced onto X11/XWayland.** Both `vaf/tray.py` and
   `vaf/core/desktop_window.py` call `vaf/core/display_platform.py` `force_x11()`,
   which sets `GDK_BACKEND=x11` (GTK/pystray) and `QT_QPA_PLATFORM=xcb` (Qt
-  WebEngine) — always as a PAIR, since a mismatch is itself a GLX/EGL conflict.
+  WebEngine) - always as a PAIR, since a mismatch is itself a GLX/EGL conflict.
   Native Wayland causes GTK protocol errors and an EGL/GLX conflict that makes
   `QWebEngineProfile` `qFatal()` on startup; with the GPU in-process it can also
   deadlock Chromium's compositor against the Qt scene graph (SIGABRT, incident
@@ -66,7 +66,7 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
     GNOME Wayland sessions export `QT_QPA_PLATFORM=wayland`, and the earlier
     `os.environ.setdefault()` therefore did nothing on exactly the systems the
     guard protects.
-  - It stands down when **XWayland is not actually reachable** — no `DISPLAY`, or a
+  - It stands down when **XWayland is not actually reachable** - no `DISPLAY`, or a
     `DISPLAY` whose local X socket (`/tmp/.X11-unix/X<n>`) does not exist (a stale
     value, a partially imported service environment). Qt's xcb plugin `qFatal()`s on
     a failed X connection, so forcing it there would turn a session that at least
@@ -173,10 +173,10 @@ had been launched from the browser.
 
 ## See also
 
-- [LINUX_SETUP.md](../setup/LINUX_SETUP.md) — Linux install & usage guide
-- [INSTALLATION_GUIDE.md](../setup/INSTALLATION_GUIDE.md) — cross-platform install overview
-- [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md) — the container stack VAF depends on
-- [SYSTEM_TRAY.md](./SYSTEM_TRAY.md) — tray + desktop window + Qt anti-leak notes
-- [STARTUP_SPLASH.md](./STARTUP_SPLASH.md) — the desktop startup splash
-- [run_vaf.sh](../../run_vaf.sh) — the venv launcher
-- [install.sh](../../install.sh) — the Linux/macOS installer
+- [LINUX_SETUP.md](../setup/LINUX_SETUP.md) - Linux install & usage guide
+- [INSTALLATION_GUIDE.md](../setup/INSTALLATION_GUIDE.md) - cross-platform install overview
+- [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md) - the container stack VAF depends on
+- [SYSTEM_TRAY.md](./SYSTEM_TRAY.md) - tray + desktop window + Qt anti-leak notes
+- [STARTUP_SPLASH.md](./STARTUP_SPLASH.md) - the desktop startup splash
+- [run_vaf.sh](../../run_vaf.sh) - the venv launcher
+- [install.sh](../../install.sh) - the Linux/macOS installer

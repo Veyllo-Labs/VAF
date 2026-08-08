@@ -1,21 +1,21 @@
 # Action Tag
 
 The Action Tag is a lightweight, prompt-driven convention that lets the agent
-declare, in natural language, **which tool it is about to use and why** — right
+declare, in natural language, **which tool it is about to use and why** - right
 before it makes the tool call. The declaration is surfaced in the Web UI as its
 own collapsible panel, separate from the reasoning (`<think>`) panel.
 
 **Role.** Today it provides **transparency** (the user sees the agent's stated intent), and it is
 the hook for a planned **declared-vs-actual** check and **runtime learning** (does what the agent
 said it would do match the tool it actually called?). It is **not** the path by which learned tool
-know-how reaches the model — that is router-driven and documented in
+know-how reaches the model - that is router-driven and documented in
 [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) ("Delivery"). The layer stays thin: a prompt instruction, Web
 UI parsing for display, and a cheap backend matcher that is currently debug-only.
 
-> **Status — disabled by default.** The whole `<Action>` system is currently **off** via the config flag
+> **Status - disabled by default.** The whole `<Action>` system is currently **off** via the config flag
 > `action_tag_enabled` (default `false`): it is not needed right now, and small local models (e.g.
 > Qwen / Gemma 4B) tend to emit the `<Action>` block and then *stop* instead of making the tool call.
-> Nothing is removed — while the flag is off the prompt instruction is simply not injected (for **any**
+> Nothing is removed - while the flag is off the prompt instruction is simply not injected (for **any**
 > model, on both the Soul/persona and fallback paths in `build_prompt`), and the parser/UI become no-ops
 > because no `<Action>` is ever emitted. Set `action_tag_enabled: true` to re-enable (the Gemma-4
 > exception below still applies even when enabled). The rest of this document describes the behaviour
@@ -59,7 +59,7 @@ omitted. Emission therefore depends on the model following the instruction and i
 not guaranteed on every tool call of a multi-step run.
 
 **Native function-calling models (Gemma 4).** For a local Gemma-4 model
-(`model_mode == "gemma4"`) the `<Action>` instruction is **not injected** — it is gated off on both
+(`model_mode == "gemma4"`) the `<Action>` instruction is **not injected** - it is gated off on both
 paths in `build_prompt()`. Gemma 4 uses native function-calling and tended to emit the `<Action>`
 declaration and then stop, treating the declaration as the action itself. Because the tag is optional
 (nothing breaks when it is omitted), it is dropped for Gemma 4 so the model calls tools natively; the
@@ -111,11 +111,11 @@ renders when it has content.
 This is a **separate** parser from the Web UI one above. `parseContent` (frontend) only
 extracts the tag text to render it. The backend parser reads the agent's committed
 `<Action>` intent from its own output and matches it against the live tool list. Its purpose is the
-**declared-vs-actual** signal — comparing the tool the agent *said* it would use against the tool it
-*actually* called — which seeds runtime learning. It does **not** drive know-how injection (that is
+**declared-vs-actual** signal - comparing the tool the agent *said* it would use against the tool it
+*actually* called - which seeds runtime learning. It does **not** drive know-how injection (that is
 router-driven; see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery").
 
-Location: `vaf/core/agent.py` — helpers `_extract_action_text()` and
+Location: `vaf/core/agent.py` - helpers `_extract_action_text()` and
 `_match_action_to_tools()`, invoked inside the generation loop right after a generation
 completes (where `full_response` and the detected tool calls are both known).
 
@@ -149,14 +149,14 @@ effectively a "did the agent name the tool literally" detector:
   `web_search`) -> high score, correct top match.
 - **Misses** natural-language or non-English intent descriptions, even when an intended
   tool clearly exists. Observed live: `"Suche nach aktuellen Gruenden fuer den
-  Bitcoin-Preisverfall."` -> `no tool match`, although `web_search` was intended — the
+  Bitcoin-Preisverfall."` -> `no tool match`, although `web_search` was intended - the
   German word "Suche" shares no token with the English name `web_search`. These are
   false negatives, not correct rejections.
 - Secondary matches around 50% are usually shared-token noise (e.g. `web_search`,
   `memory_search`, `search_tools` all contain "search").
 
 This is acceptable for the parser's purpose. For **declared-vs-actual** verification, literal-name
-matching is usually enough — the agent typically names the tool it then calls — so the
+matching is usually enough - the agent typically names the tool it then calls - so the
 natural-language false-negatives matter less now that injection no longer depends on this matcher.
 Logging the actually-called tool next to the declared one (ground truth) is the next step toward the
 runtime-learning signal.
@@ -170,7 +170,7 @@ time for the router-selected tools (`Agent.TOOLS` appends each tool's learned pi
 
 ## Persistence (reload and session switch)
 
-The Action panel survives a page reload and switching to another chat and back —
+The Action panel survives a page reload and switching to another chat and back -
 the same way the Thinking panel does.
 
 - **Server history** stores the full assistant content, including the `<think>`
@@ -209,7 +209,7 @@ always "remembers" what it did, regardless of how the tags are handled.
 
 | File | Role |
 |------|------|
-| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths; gated by `action_tag_enabled` — default off — and additionally off for Gemma 4 even when enabled) |
+| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths; gated by `action_tag_enabled` - default off - and additionally off for Gemma 4 even when enabled) |
 | `web/app/page.tsx` | `parseContent` (tag extraction), `ThinkingDetails`, `ActionDetails`, session-load reconciliation |
 | `vaf/core/agent.py` | Backend Action-Tag parser (`_extract_action_text`, `_match_action_to_tools`, debug match in the generation loop); `<think>` stripped from LLM context; `<Action>` intentionally retained |
 
@@ -226,10 +226,10 @@ always "remembers" what it did, regardless of how the tags are handled.
 
 ## Related Documentation
 
-- [Thinking-Mode.md](Thinking-Mode.md) — background (idle) agent; distinct from the `<think>` reasoning tag described here
-- [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md) — system prompt assembly and context/token handling
-- [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) — tool selection and the `input_examples` description channel
-- [WEB_UI.md](../web-ui/WEB_UI.md) — Web UI structure and message rendering
+- [Thinking-Mode.md](Thinking-Mode.md) - background (idle) agent; distinct from the `<think>` reasoning tag described here
+- [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md) - system prompt assembly and context/token handling
+- [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) - tool selection and the `input_examples` description channel
+- [WEB_UI.md](../web-ui/WEB_UI.md) - Web UI structure and message rendering
 
 ---
 

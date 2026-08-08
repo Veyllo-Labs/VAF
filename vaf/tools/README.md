@@ -473,7 +473,7 @@ if not is_trusted_dir(Path.cwd()):
 
 A third-party package can add tools to VAF without touching its source, via the
 `vaf.tools` entry-point group. Any installed package that declares this group is
-discovered at agent startup (a broken package is logged and skipped — it never breaks
+discovered at agent startup (a broken package is logged and skipped - it never breaks
 startup). This is the same mechanism summarised in
 [docs/EMBEDDING.md](../../docs/EMBEDDING.md); here is a full, copy-pasteable package.
 
@@ -501,7 +501,7 @@ build-backend = "setuptools.build_meta"
 name = "vaf-weather"
 version = "0.1.0"
 dependencies = []          # add "requests" etc. if your tool needs them
-# Do NOT depend on "vaf" here — the host app already provides it.
+# Do NOT depend on "vaf" here - the host app already provides it.
 
 [project.entry-points."vaf.tools"]
 get_weather = "vaf_weather.tools:WeatherTool"
@@ -550,7 +550,7 @@ class WeatherTool(BaseTool):
         return f"It is sunny in {city}, 22°C."
 ```
 
-`run()` always returns a **string** — never raise; return an `"Error: ..."` string on
+`run()` always returns a **string** - never raise; return an `"Error: ..."` string on
 failure so the agent can react.
 
 `self.log(message)` writes one line to `tools_<date>.log` in the VAF log directory, with
@@ -588,7 +588,7 @@ pytest                  # run the tool's own tests
 
 ### Verify discovery
 
-After `pip install`, start VAF and confirm the tool is loaded — e.g. the model can call
+After `pip install`, start VAF and confirm the tool is loaded - e.g. the model can call
 `list_tools` / `search_tools` and see `get_weather`, or check programmatically that it
 landed in the agent's tool registry:
 

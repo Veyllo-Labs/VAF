@@ -17,7 +17,7 @@ The same base system prompt is used (Soul, current time, session context, channe
 1. **Front Office – Role and Rules** (bilingual DE/EN based on `user_language`)
    A comprehensive block that covers:
    - **Direct communication**: The agent's reply goes DIRECTLY to the contact (via WhatsApp/Telegram). The agent must write as if speaking to the contact face-to-face.
-   - **No meta-reporting**: Explicitly forbidden to write messages like "I told Alice..." or "I have informed the contact..." — the contact would see these and be confused.
+   - **No meta-reporting**: Explicitly forbidden to write messages like "I told Alice..." or "I have informed the contact..." - the contact would see these and be confused.
    - **Language**: Reply in the contact's language (detected from their message or `preferred_language`), not the owner's language.
    - **Boundaries**: The agent is a digital assistant and cannot perform physical tasks. It must politely explain capabilities.
    - **Context isolation**: Each contact conversation is isolated. The agent must not reference or share information from other contacts' conversations.

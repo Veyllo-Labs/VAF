@@ -1,6 +1,6 @@
 # Embedding VAF as a Library
 
-VAF can be used as a headless agent **framework** — a foundation you build your
+VAF can be used as a headless agent **framework** - a foundation you build your
 own application on, instead of writing the agent loop, tool dispatch, context
 management and multi-provider LLM plumbing yourself. This page is the developer
 contract for that use.
@@ -23,7 +23,7 @@ is also what `install.sh` uses:
 `git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF && pip install -e .`)
 
 This pulls the core runtime and the LLM provider SDKs (OpenAI, Anthropic,
-Google) — but **not** the web server, desktop UI, embeddings stack, or chat
+Google), but **not** the web server, desktop UI, embeddings stack, or chat
 bridges. Add those only if you need them, via extras:
 
 | Extra | Adds | For |
@@ -65,7 +65,7 @@ print(answer)
 versions of this page's snippets live in [examples/](../examples/), including a
 complete pip-installable custom-tool package.
 
-The same code works with a local GGUF model — it is provider-agnostic:
+The same code works with a local GGUF model - it is provider-agnostic:
 
 ```python
 agent = Agent(config={"provider": "local"})   # downloads/starts a local model
@@ -92,7 +92,7 @@ is always the cleaned final answer.
 
 ### Stateful conversations
 
-One `Agent` instance keeps one conversation — repeated `run()` calls continue
+One `Agent` instance keeps one conversation - repeated `run()` calls continue
 the same history. Create a new `Agent` for an independent conversation.
 
 ### One-shot completions
@@ -235,16 +235,16 @@ power_agent = Agent(config={
 
 ## Configuration
 
-`config=` is a dict merged on top of `~/.vaf/config.json` for this instance only
-— nothing is written to disk, so each `Agent` can carry its own settings. Common
+`config=` is a dict merged on top of `~/.vaf/config.json` for this instance only -
+nothing is written to disk, so each `Agent` can carry its own settings. Common
 keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 
 | Key | Default | Meaning |
 |---|---|---|
 | `provider` | `local` | `local`, `veyllo`, `openai`, `anthropic`, `google`, `deepseek`, `openrouter` |
 | `model` | `auto` | local GGUF filename / repo, or an API model name |
-| `api_key_<provider>` | — | API key, e.g. `api_key_deepseek` |
-| `api_model_<provider>` | — | model per provider, e.g. `api_model_openai` |
+| `api_key_<provider>` | - | API key, e.g. `api_key_deepseek` |
+| `api_model_<provider>` | - | model per provider, e.g. `api_model_openai` |
 | `n_ctx` | `32768` | context window (min 32768 for tool use) |
 | `temperature` | `0.7` | sampling temperature |
 
@@ -315,10 +315,10 @@ not an option for your application - that is the report that would move the line
 
 ### A complete example, with error handling
 
-The engine is built **lazily** on the first `run()` (or `.core`) call — so
+The engine is built **lazily** on the first `run()` (or `.core`) call, so
 configuration and connection problems surface there, not at `Agent(...)`. `run()`
 returns the final answer as a string. Most misconfigurations and unreachable-provider
-errors **raise** — so wrap the call. Some *handled* failures (e.g. the API returning
+errors **raise**, so wrap the call. Some *handled* failures (e.g. the API returning
 empty responses repeatedly) are caught internally and come back as a short status
 string instead of raising:
 
@@ -335,11 +335,11 @@ try:
     answer = agent.run("In one sentence, what is Python?")
     print(answer)
 except ValueError as e:
-    # configuration problem — e.g. a missing/empty API key for the chosen
+    # configuration problem - e.g. a missing/empty API key for the chosen
     # provider (when no local fallback applies)
     print("config error:", e)
 except Exception as e:
-    # runtime/provider failure — unreachable endpoint, network timeout,
+    # runtime/provider failure - unreachable endpoint, network timeout,
     # unknown model, ...
     print("run failed:", e)
 ```
@@ -351,12 +351,12 @@ Notes:
   around the first `.core` access).
 - **Gated tools never hang or raise.** Under the embedded default
   `VAF_NONINTERACTIVE=1`, a tool behind the confirmation gate returns an error
-  *string* in its result instead of blocking on a human — the run continues and
+  *string* in its result instead of blocking on a human - the run continues and
   the final answer explains what was refused. Grant specific tools via the trust
   mechanisms (below) to let them run unattended.
 - **Handled failures may return a string, not raise.** After exhausting its
   internal retries (e.g. a provider returning empty responses), `run()` returns a
-  short status string — currently prefixed `[SYSTEM_LOG_ONLY]` — rather than
+  short status string - currently prefixed `[SYSTEM_LOG_ONLY]` - rather than
   raising. If you must distinguish a real answer from such a handled failure,
   check the returned string for that marker.
 - **Streaming + errors.** An exception during a streamed run can arrive after
@@ -651,8 +651,8 @@ Key declarative rules the runtime enforces:
   marks internal plumbing tools and explicitly **bypasses** it; `read`/`write`
   run without confirmation (except a legacy by-name gate on the risky
   built-ins `move_file`, `bash`, `run_command`, `python_exec`).
-- `side_effect_class` — surfaced to the model so it knows what is reversible.
-- `admin_only`, `channel_restrictions`, `coder_only` — visibility/scoping.
+- `side_effect_class` - surfaced to the model so it knows what is reversible.
+- `admin_only`, `channel_restrictions`, `coder_only` - visibility/scoping.
 
 ---
 
@@ -906,7 +906,7 @@ get_weather = "vaf_weather.tools:WeatherTool"
 
 Each entry point must resolve to a `BaseTool` subclass. After
 `pip install vaf-weather`, the tool is discovered automatically at agent startup
-(a broken package logs an error and is skipped — it never breaks startup).
+(a broken package logs an error and is skipped - it never breaks startup).
 
 ---
 

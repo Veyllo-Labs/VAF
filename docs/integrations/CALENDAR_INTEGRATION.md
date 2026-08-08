@@ -46,7 +46,7 @@ All tools receive `user_scope_id` and `username` from the agent (injected by the
 ## Web UI (Settings → Connections)
 
 - **Calendar cards**: Google Calendar and Microsoft Outlook appear in the **Calendar** category. "Connected" state is determined by the calendar status API and by a **fallback**: if the status API has not been called or fails, the UI also treats the calendar as connected when the same provider (Gmail/Outlook) appears in the email accounts list from `GET /api/email/accounts`. Refreshing the connections panel (e.g. after closing the Email or Calendar setup wizard) triggers a refetch of both email accounts and calendar status.
-- **Calendar Dashboard**: When a calendar is connected, clicking the settings (gear) icon on the Google Calendar or Microsoft Outlook card opens the **Calendar Dashboard** — a large modal similar to Mail and Cloud dashboards:
+- **Calendar Dashboard**: When a calendar is connected, clicking the settings (gear) icon on the Google Calendar or Microsoft Outlook card opens the **Calendar Dashboard** - a large modal similar to Mail and Cloud dashboards:
   - **Left sidebar**: List of connected calendar-capable accounts (Gmail/Outlook from email config), each with a link to open **Google Calendar** or **Outlook Calendar** in the browser. Option to add another account via Email.
   - **Main area**: Upcoming events from `GET /api/calendar/events` with a selectable range (next 7, 14, 30, or 60 days). Each event shows summary, start/end, optional description snippet, and a link to open the event in the provider’s calendar. Refresh button to reload events.
 - **Calendar Setup Wizard**: If the calendar is not yet connected, the Connect button opens the Calendar Setup Wizard (intro + "Sign in with Google" / "Sign in with Microsoft"), which uses the Email OAuth flow. After signing in, the user can refresh status; closing the wizard or the Email "Manage your accounts" modal refreshes the connections panel so the calendar shows as connected when applicable.
@@ -62,8 +62,8 @@ The Tool Router in `vaf/core/agent.py` includes calendar heuristics so the agent
 
 ## Implementation notes
 
-- **Backend**: `vaf/api/calendar_routes.py` — calendar status and events endpoints. The dependency `_get_current_user(request: Request)` must declare `Request` so FastAPI injects it; otherwise the events endpoint returns 422 "Field required".
-- **Frontend**: `web/components/connections/CalendarDashboard.tsx` — dashboard modal; `ConnectionsPanel.tsx` — calendar cards and open-dashboard/open-wizard behavior; i18n keys under `settings.calendar` (dashboard titles, links, range labels, etc.).
+- **Backend**: `vaf/api/calendar_routes.py` - calendar status and events endpoints. The dependency `_get_current_user(request: Request)` must declare `Request` so FastAPI injects it; otherwise the events endpoint returns 422 "Field required".
+- **Frontend**: `web/components/connections/CalendarDashboard.tsx` - dashboard modal; `ConnectionsPanel.tsx` - calendar cards and open-dashboard/open-wizard behavior; i18n keys under `settings.calendar` (dashboard titles, links, range labels, etc.).
 
 ## Related
 

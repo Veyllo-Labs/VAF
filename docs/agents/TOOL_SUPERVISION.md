@@ -5,7 +5,7 @@ state: **a single tool, sub-agent, or workflow step must never be able to freeze
 the Stop button must always work.** A blocking call cannot be allowed to hang the worker, and a
 sub-agent that dies or goes silent must be detected and reaped.
 
-There is no single `Supervisor` class — the supervision is a set of cooperating pieces. This
+There is no single `Supervisor` class - the supervision is a set of cooperating pieces. This
 document maps them so the behavior is understandable and maintainable as one system.
 
 ## Two kinds of supervised work
@@ -31,15 +31,15 @@ forever. `run_bounded(fn, *, timeout, stop_check, poll)`:
 Python caveat: a thread cannot be force-killed, so on timeout/stop the worker is freed but the
 underlying thread is *abandoned* (it keeps running until it finishes on its own). The backend stays
 responsive regardless. Long pure-Python tools should therefore check the stop flag at safe points
-and return early — see "Cooperative cancel" below.
+and return early - see "Cooperative cancel" below.
 
 The per-call budget is chosen per agent by `agent_timeout_seconds(tool_name)`: a filesystem agent
 is not forced to wait the full research budget. A small set of tools manage their own lifecycle and
 are deliberately **not** wrapped (`SELF_SUPERVISED_TOOLS`): `browser_agent` (its own stop monitor +
 `max_steps`), the workflow orchestrators `create_agent_workflow` / `execute_workflow` (the engine
 already bounds each step, so bounding them again would double-bound), `python_sandbox` (it runs
-a stop-aware poll loop with its own deadline that kills the Docker exec the moment Stop is requested
-— being abandoned by `run_bounded` would race that kill against the stop flag being cleared), and
+a stop-aware poll loop with its own deadline that kills the Docker exec the moment Stop is requested -
+being abandoned by `run_bounded` would race that kill against the stop flag being cleared), and
 `coding_agent` (a large edit legitimately takes many minutes; its loop polls `should_stop` each
 iteration and commits on every exit path, so a flat timeout would abandon it mid-edit and leave the
 file half-written).
@@ -94,9 +94,9 @@ so any waiter unblocks.
 The Stop button cancels everything for a session through two cooperating calls
 (`vaf/core/web_server.py`):
 
-1. `TaskQueue.request_stop(session_id)` — sets a stop flag that the in-process bounded waits and the
+1. `TaskQueue.request_stop(session_id)` - sets a stop flag that the in-process bounded waits and the
    engine's subprocess wait both poll, so in-flight work aborts within roughly the poll interval.
-2. `Platform.stop_webui_subagent_processes(session_id)` — kill-tree of that session's child
+2. `Platform.stop_webui_subagent_processes(session_id)` - kill-tree of that session's child
    processes.
 
 Queued (not yet running) tasks for the session are dropped with
@@ -107,9 +107,9 @@ Queued (not yet running) tasks for the session are dropped with
 The currently-running subprocess units are exposed read-only and can be killed individually
 (`vaf/api/supervisor_routes.py`):
 
-- `GET /api/supervisor/status` — live units from the IPC active queue: agent type, runtime,
+- `GET /api/supervisor/status` - live units from the IPC active queue: agent type, runtime,
   heartbeat age, and whether a unit is stale (no heartbeat for longer than the liveness window).
-- `POST /api/supervisor/cancel {task_id}` — kill one unit's process tree and fail its IPC task.
+- `POST /api/supervisor/cancel {task_id}` - kill one unit's process tree and fail its IPC task.
 
 Both endpoints are caller-scoped (unit payloads carry user-authored task text, and a task id is
 enough to cancel a unit, so the unfiltered listing was a cross-user leak): an admin - including
@@ -120,7 +120,7 @@ owned by their own scope; a foreign or unowned `?session` yields an empty list r
 because the web tool bubble polls generically. Sessions without a recorded scope count as
 admin-only, matching the WebSocket ownership policy. Guarded by `tests/test_supervisor_scoping.py`.
 
-The WebUI shows this **inline in the sub-agent's own tool bubble** — gated on a live supervised unit
+The WebUI shows this **inline in the sub-agent's own tool bubble** - gated on a live supervised unit
 (matched by task id), so it stays visible while the delegated subprocess runs even though the tool
 call itself already returned. A sub-agent that has no tool bubble (a **workflow step**) instead
 surfaces its heartbeat and runtime as lines in the **Workflow Runtime terminal**, emitted by the
@@ -132,14 +132,14 @@ Requests are processed by worker threads pulling from a single shared `TaskQueue
 (`vaf/core/task_queue.py`):
 
 - **Per-session serialization.** The queue tracks in-flight sessions (`_session_inflight`) and never
-  hands the same session to two workers at once — a session's turns run strictly in order.
+  hands the same session to two workers at once - a session's turns run strictly in order.
 - **Fairness.** With `queue_policy: weighted_fair`, interactive / automation / background task
   classes are scheduled with weighted fairness; the default `legacy` policy is a single priority heap.
 - **Pool.** `vaf/core/headless_runner.py` runs up to the **effective** worker count: the configured
-  `parallel_main_workers` clamped per provider — API providers to `max_parallel_api_workers` (default 5),
+  `parallel_main_workers` clamped per provider - API providers to `max_parallel_api_workers` (default 5),
   `provider=local` to `max_parallel_local_workers` (default 2, further clamped to the llama-server
   `--parallel` slots) to avoid VRAM exhaustion. Default is 1 (serialized). With more than one worker,
-  **different** sessions are processed concurrently while each session stays serialized — the per-session
+  **different** sessions are processed concurrently while each session stays serialized - the per-session
   lock holds in **both** policies, so `weighted_fair` only adds lane fairness across task classes (recommended
   alongside `parallel_main_workers > 1`).
 
@@ -147,9 +147,9 @@ Stop requests are per-session (`request_stop` / `should_stop` / `clear_stop`), s
 session never affects another.
 
 Known limitations with more than one worker (only worker #1 owns the web-interface registration):
-editing a **custom tool** in Settings hot-reloads worker #1 only — workers 2..N keep the old tool
+editing a **custom tool** in Settings hot-reloads worker #1 only - workers 2..N keep the old tool
 definition until the next restart; and the "session active" hint on reconnect reflects worker #1's last
-task (cosmetic — live status comes from `manager.latest_state`, and Stop is per-session).
+task (cosmetic - live status comes from `manager.latest_state`, and Stop is per-session).
 
 ### Concurrency and session isolation
 
@@ -167,7 +167,7 @@ because:
   read without a context; it was a tenant selector where the last writer won, and it is gone. A lane
   that owns no session says so - the automation scheduler declares `None` before it dispatches
   anything - and a lane that was never told resolves nothing rather than borrowing. `run_bounded` runs each in-process tool inside a
-  copy of the caller's context, so the session id propagates into the tool's worker thread — and an
+  copy of the caller's context, so the session id propagates into the tool's worker thread, and an
   *abandoned* (timed-out/stopped) thread keeps its own session, so its late writes are tagged
   correctly rather than with whatever a later turn is doing.
 - **Sub-agent spawns carry context explicitly.** The spawn sites pass session/task/agent context to
@@ -207,7 +207,7 @@ reached only from inside `is_safe_path`.
 | File | Role |
 |---|---|
 | [vaf/core/bounded_run.py](../../vaf/core/bounded_run.py) | bounded, stop-aware in-process execution + per-agent timeouts |
-| [vaf/workflows/engine.py](../../vaf/workflows/engine.py) | `_await_subagent` — bounded IPC wait + liveness + kill for subprocess steps |
+| [vaf/workflows/engine.py](../../vaf/workflows/engine.py) | `_await_subagent` - bounded IPC wait + liveness + kill for subprocess steps |
 | [vaf/core/platform.py](../../vaf/core/platform.py) | spawned-child registry; `stop_webui_subagent_processes` / `_by_task` kill-tree |
 | [vaf/core/subagent_ipc.py](../../vaf/core/subagent_ipc.py) | IPC queue, heartbeats, `check_zombies`, active-task status |
 | [vaf/api/supervisor_routes.py](../../vaf/api/supervisor_routes.py) | watchdog status + per-unit cancel API |

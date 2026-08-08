@@ -2,7 +2,7 @@
 
 VAF is a powerful AI automation framework designed for **local and private network use**. Because it gives an LLM (Large Language Model) the ability to interact with your filesystem, execute code, and access your connected accounts, it carries significant security risks if misconfigured.
 
-> **Status: early alpha.** VAF is under active development — expect breaking changes, rough edges, and incomplete hardening. Use it for **private / internal** purposes only. Do **not** expose the login, Web UI, or API to the public internet, and do not rely on it for production or with data you cannot afford to lose. The "no public web hosting" rule below is not optional.
+> **Status: early alpha.** VAF is under active development - expect breaking changes, rough edges, and incomplete hardening. Use it for **private / internal** purposes only. Do **not** expose the login, Web UI, or API to the public internet, and do not rely on it for production or with data you cannot afford to lose. The "no public web hosting" rule below is not optional.
 
 ---
 
@@ -32,16 +32,16 @@ VAF is not designed to be a public-facing web application. Even with network mod
 
 This file is intentionally brief. The specific risks, mitigations, and isolation guarantees are documented in depth here:
 
-- **Sandboxing & code execution** — how `bash`/`python`/sub-agents are isolated in Docker mode, and what is *not* sandboxed otherwise: [docs/security/SANDBOXING.md](docs/security/SANDBOXING.md), [docs/security/SANDBOX_MODULES.md](docs/security/SANDBOX_MODULES.md)
-- **Multi-user & network-mode isolation** — `user_scope_id` scoping, credential redaction over the API, and the login portal: [docs/security/USER_ISOLATION.md](docs/security/USER_ISOLATION.md), [docs/setup/NETWORK_FEATURES.md](docs/setup/NETWORK_FEATURES.md), [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md)
-- **Tool trust-gating & permission levels** — how risky tools require explicit confirmation (relevant to prompt-injection): [docs/agents/TOOL_SUPERVISION.md](docs/agents/TOOL_SUPERVISION.md)
-- **Browser agent** — headless Chromium risks, Docker network isolation, and channel restrictions: [docs/agents/BROWSER_AGENT.md](docs/agents/BROWSER_AGENT.md)
-- **Connected accounts & credentials** — OS keyring / encrypted fallback, OAuth, and the email IMAP/SMTP SSRF / private-host guard: [docs/integrations/CONNECTIONS.md](docs/integrations/CONNECTIONS.md), [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md)
+- **Sandboxing & code execution** - how `bash`/`python`/sub-agents are isolated in Docker mode, and what is *not* sandboxed otherwise: [docs/security/SANDBOXING.md](docs/security/SANDBOXING.md), [docs/security/SANDBOX_MODULES.md](docs/security/SANDBOX_MODULES.md)
+- **Multi-user & network-mode isolation** - `user_scope_id` scoping, credential redaction over the API, and the login portal: [docs/security/USER_ISOLATION.md](docs/security/USER_ISOLATION.md), [docs/setup/NETWORK_FEATURES.md](docs/setup/NETWORK_FEATURES.md), [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md)
+- **Tool trust-gating & permission levels** - how risky tools require explicit confirmation (relevant to prompt-injection): [docs/agents/TOOL_SUPERVISION.md](docs/agents/TOOL_SUPERVISION.md)
+- **Browser agent** - headless Chromium risks, Docker network isolation, and channel restrictions: [docs/agents/BROWSER_AGENT.md](docs/agents/BROWSER_AGENT.md)
+- **Connected accounts & credentials** - OS keyring / encrypted fallback, OAuth, and the email IMAP/SMTP SSRF / private-host guard: [docs/integrations/CONNECTIONS.md](docs/integrations/CONNECTIONS.md), [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md)
 
 
 ## Supported Versions
 
-VAF is in **early alpha**. Security fixes are applied only to the **latest release** and the **`main` branch** — older alpha builds are not patched. Always update to the most recent version before reporting a vulnerability.
+VAF is in **early alpha**. Security fixes are applied only to the **latest release** and the **`main` branch** - older alpha builds are not patched. Always update to the most recent version before reporting a vulnerability.
 
 | Version | Supported |
 | --- | --- |

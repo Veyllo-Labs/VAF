@@ -8,7 +8,7 @@ This document defines how user identity works across all layers of the VAF stack
 
 ## Core Principle
 
-**`user_scope_id` (UUID) is the single source of truth for user identity and data isolation.** Every piece of user-owned data must be associated with a `user_scope_id`. The `username` string is a human-readable label for display and filesystem paths only — never for authorization or data scoping decisions.
+**`user_scope_id` (UUID) is the single source of truth for user identity and data isolation.** Every piece of user-owned data must be associated with a `user_scope_id`. The `username` string is a human-readable label for display and filesystem paths only - never for authorization or data scoping decisions.
 
 ---
 
@@ -151,8 +151,8 @@ request.state.user = {
 **Flow order:** the token is extracted **before** the IP check, so an authenticated client is identified regardless of whether its peer IP looks like loopback. 2FA enforcement lives **inside** the valid access-token branch: when `local_network_require_2fa` is set and the token carries `requires_2fa_setup`, the request is rejected with `403 "2FA setup required before accessing resources"` before any identity is attached. A token that is present but invalid/expired rejects a network client with `401`, but a localhost client falls through to the tokenless localhost path instead of being hard-locked (a stale desktop cookie does not lock the local user out).
 
 **Rules:**
-- All downstream code reads `request.state.user` — never re-parses the JWT.
-- A presented valid access JWT is honored regardless of the peer IP. The integrated HTTPS proxy forwards LAN clients to the loopback-bound backend, so a "localhost" peer may actually be a remote user — a valid token therefore always sets `request.state.user` to the real identity, including for a LAN user proxied over loopback. Only a **tokenless** localhost request leaves `request.state.user` unset (internal loopback IPC and the single-user desktop, which carry no user-data identity).
+- All downstream code reads `request.state.user` - never re-parses the JWT.
+- A presented valid access JWT is honored regardless of the peer IP. The integrated HTTPS proxy forwards LAN clients to the loopback-bound backend, so a "localhost" peer may actually be a remote user - a valid token therefore always sets `request.state.user` to the real identity, including for a LAN user proxied over loopback. Only a **tokenless** localhost request leaves `request.state.user` unset (internal loopback IPC and the single-user desktop, which carry no user-data identity).
 - When `request.state.user` is unset, routes resolve the floor per mode: in genuine single-user / local mode they fall back to `local_admin_scope_id`; in server mode user-scoped reads (RAG, sessions) fail closed (`None`, no admin fallback) rather than leaking another user's data.
 - Never trust `username` from the request body or query params for scoping. Always use `request.state.user`.
 
@@ -163,7 +163,7 @@ request.state.user = {
 WebSocket connections extract identity from the JWT or use local admin defaults:
 
 ```python
-# web_server.py — WebSocket connect
+# web_server.py - WebSocket connect
 metadata = {
     "user_scope_id": user_context.get("user_scope_id"),
     "username": user_context.get("username"),
@@ -172,7 +172,7 @@ task_queue.add(session_id=sid, input_text=text, metadata=metadata)
 ```
 
 ```python
-# headless_runner.py — Before agent.chat_step()
+# headless_runner.py - Before agent.chat_step()
 identity = identity_from_metadata(meta)
 bind_identity(agent, identity)
 ```
@@ -209,7 +209,7 @@ The agent injects identity into tool arguments before calling `tool.run()`:
 if name in ("memory_save", "memory_search"):
     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
 
-# Browser tool → user_scope_id (UUID) — keys the per-user browser session store
+# Browser tool → user_scope_id (UUID) - keys the per-user browser session store
 if name == "browser_agent":
     tool_args["user_scope_id"] = self._current_user_scope_id
 
@@ -362,23 +362,23 @@ Best practice: Prefer storing under `email_config_by_scope[user_scope_id]`; the 
 
 ## Migration Plan
 
-### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking) — Done
+### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking) - Done
 
 All functions that previously accepted only `username` now also accept `user_scope_id: Optional[str] = None`. Legacy `username` parameter is preserved for backward compatibility.
 
 **Migrated files:**
-- `vaf/tools/mail_utils.py` — `store_scope_from_kwargs()`, `cred_scope_from_kwargs()`
-- `vaf/core/email_sync_store.py` — All CRUD functions accept `user_scope_id`
-- `vaf/core/whatsapp_message_store.py` — `_db_path()`, `append_message()`, etc.
-- `vaf/core/contacts_store.py` — All CRUD + lookup functions accept `user_scope_id`
-- `vaf/core/credential_store.py` — `_credential_key()`, get/set/delete functions
-- `vaf/core/email_accounts.py` — account-config SSOT: `get_email_config()`, `get_account()`, `list_mail_accounts()` (re-exported by `email_transport.py`, which is now only a compatibility shim)
-- `vaf/mail/store.py` — one SQLite store per scope (`scopes/<uuid>/mail.db`); `vaf/mail/service.py` raises without a scope
-- `vaf/api/email_routes.py` — All endpoints extract `user_scope_id` from `_get_current_user()`
-- `vaf/api/contact_routes.py` — All CRUD endpoints pass `user_scope_id`
-- `vaf/core/oauth_pkce.py` — `get_valid_access_token()` passes scope to credential operations
+- `vaf/tools/mail_utils.py` - `store_scope_from_kwargs()`, `cred_scope_from_kwargs()`
+- `vaf/core/email_sync_store.py` - All CRUD functions accept `user_scope_id`
+- `vaf/core/whatsapp_message_store.py` - `_db_path()`, `append_message()`, etc.
+- `vaf/core/contacts_store.py` - All CRUD + lookup functions accept `user_scope_id`
+- `vaf/core/credential_store.py` - `_credential_key()`, get/set/delete functions
+- `vaf/core/email_accounts.py` - account-config SSOT: `get_email_config()`, `get_account()`, `list_mail_accounts()` (re-exported by `email_transport.py`, which is now only a compatibility shim)
+- `vaf/mail/store.py` - one SQLite store per scope (`scopes/<uuid>/mail.db`); `vaf/mail/service.py` raises without a scope
+- `vaf/api/email_routes.py` - All endpoints extract `user_scope_id` from `_get_current_user()`
+- `vaf/api/contact_routes.py` - All CRUD endpoints pass `user_scope_id`
+- `vaf/core/oauth_pkce.py` - `get_valid_access_token()` passes scope to credential operations
 
-### Phase 2: Add `email_config_by_scope` Config Key — Done
+### Phase 2: Add `email_config_by_scope` Config Key - Done
 
 ```json
 {
@@ -392,11 +392,11 @@ All functions that previously accepted only `username` now also accept `user_sco
 
 Lookup priority (implemented in `email_accounts.get_email_config()` and `mail_utils.list_accounts_with_labels_for_user()`):
 
-1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
-2. `email_config_by_user[username]` — legacy per-user
-3. `email_config` — legacy global/admin fallback
+1. `email_config_by_scope[user_scope_id]` - preferred, UUID-based
+2. `email_config_by_user[username]` - legacy per-user
+3. `email_config` - legacy global/admin fallback
 
-### Phase 3: Migrate Filesystem Paths — Done
+### Phase 3: Migrate Filesystem Paths - Done
 
 ```
 ~/.vaf/scopes/<user_scope_id>/       # New scope-based paths (preferred)
@@ -414,7 +414,7 @@ Migration script: `scripts/migrate_users_to_scopes.py`
 - Migrates `email_config_by_user` → `email_config_by_scope`
 - Supports `--dry-run` and `--config-only` flags
 
-### Phase 4: Migrate Credential Store Keys — Done
+### Phase 4: Migrate Credential Store Keys - Done
 
 ```python
 # Legacy key format (still supported as fallback)
@@ -429,7 +429,7 @@ Migration script: `scripts/migrate_users_to_scopes.py`
 
 Implemented in `credential_store._credential_key()`. Both formats are supported; scope-based keys take priority when `user_scope_id` is provided.
 
-### Phase 5: Remove Username-Based Scoping — TODO
+### Phase 5: Remove Username-Based Scoping - TODO
 
 Once all data is keyed by `user_scope_id`:
 - Remove `_local_admin()` string comparison functions
@@ -437,7 +437,7 @@ Once all data is keyed by `user_scope_id`:
 - Remove `store_username_from_kwargs` / `cred_username_from_kwargs` (replaced by scope-based equivalents)
 - Simplify all `_get_email_config()` functions to single-path lookup
 
-### Phase 6: Enforce Role-Based Authorization — TODO
+### Phase 6: Enforce Role-Based Authorization - TODO
 
 Replace all `if username == local_admin_username` checks with:
 ```python
@@ -461,8 +461,8 @@ When building a new feature that handles user data:
 - [ ] **Filter queries** by `user_scope_id` (never by `username`)
 - [ ] **Include `user_scope_id` in cache keys** if caching user data
 - [ ] **Use `username` only** for filesystem paths and display text
-- [ ] **Never compare `username` to `"admin"`** for authorization — use `role`
-- [ ] **Never compare `username` to `local_admin_username`** for data scoping — use `user_scope_id == local_admin_scope_id`
+- [ ] **Never compare `username` to `"admin"`** for authorization - use `role`
+- [ ] **Never compare `username` to `local_admin_username`** for data scoping - use `user_scope_id == local_admin_scope_id`
 - [ ] **Handle `user_scope_id = None`** gracefully (means local/unauthenticated mode)
 - [ ] **Add `user_scope_id` column** to any new database table holding user data
 - [ ] **Add RLS policy** mirroring the fail-closed `memories` pattern (`user_scope_id = NULLIF(GUC,'')::uuid` in USING + WITH CHECK, plus ENABLE and FORCE ROW LEVEL SECURITY), and GRANT DML on the new table to `vaf_app`; for child tables without their own scope column, isolate by JOINing `memories`
@@ -545,6 +545,6 @@ User B (scope: bbb-..., username: bob)
 
 ## Related Documentation
 
-- [USER_ISOLATION.md](../security/USER_ISOLATION.md) — Multi-tenant security architecture (current state)
-- [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md) — Auth middleware and JWT details
-- [USER_IDENTITY.md](../memory/USER_IDENTITY.md) — User profile and preferences system
+- [USER_ISOLATION.md](../security/USER_ISOLATION.md) - Multi-tenant security architecture (current state)
+- [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md) - Auth middleware and JWT details
+- [USER_IDENTITY.md](../memory/USER_IDENTITY.md) - User profile and preferences system

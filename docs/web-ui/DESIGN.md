@@ -10,7 +10,7 @@ This document outlines the design tokens and component styles used in the Veyllo
   `#181818` **dark mode** ships on top via a folding palette swap (toggle in
   Settings → Interface). Full per-theme color references:
   [LIGHTMODE.md](LIGHTMODE.md) and [DARKMODE.md](DARKMODE.md). Light mode stays
-  byte-identical — express dark values as `dark:` overrides only, never by editing the
+  byte-identical - express dark values as `dark:` overrides only, never by editing the
   base class.
 - **Minimal Color Palette**: Primarily grays with subtle accents
 - **No Dark/Zinc Colors**: Never use `zinc`, `slate` for backgrounds in the main UI

@@ -4,26 +4,26 @@ The research agent (`vaf/tools/research_agent.py`, tool name `research_agent`) p
 
 ## Pipeline (per run)
 
-1. **Title** — `_generate_title()`: short instruction-free topics are used verbatim (no LLM call); otherwise one LLM call with reasoning-leak protection (think-block stripping, "Title:" extraction, rejection of chain-of-thought and few-shot echoes, fallback to the raw topic).
-2. **Plan** — `_generate_plan()` produces `SectionSpec`s (titles, query suffixes); target words per section come from `min_words_target`.
-3. **Query profile** — once per run: required/exclusion concepts and fallback queries.
+1. **Title** - `_generate_title()`: short instruction-free topics are used verbatim (no LLM call); otherwise one LLM call with reasoning-leak protection (think-block stripping, "Title:" extraction, rejection of chain-of-thought and few-shot echoes, fallback to the raw topic).
+2. **Plan** - `_generate_plan()` produces `SectionSpec`s (titles, query suffixes); target words per section come from `min_words_target`.
+3. **Query profile** - once per run: required/exclusion concepts and fallback queries.
 4. **Per section:**
    - `_augment_queries()` builds up to 4 short search queries. `_compress_query()` reduces prompt-style topics to a handful of keywords (a 117-char topic sentence as the only query once produced 0 hits across all sections). LLM failures fall back to deterministic keyword queries; placeholder echoes ("Query 1") are rejected.
    - `_search_parallel()` runs the queries concurrently, deduplicates by href, then keyword gate, quality filter (score tiers 7 → 4 → 1 with warnings), graceful-degradation fallback queries and an LLM relevance filter.
-   - `_summarize_section_html()` writes the section (2200 tokens, retry at 1800). Every output passes `_sanitize_section_output()`: think blocks stripped, text cut to the first HTML tag, missing `<h2>` added, pure chain-of-thought rejected so the retry path runs — a run once filled all sections with "Thinking Process: ...".
+   - `_summarize_section_html()` writes the section (2200 tokens, retry at 1800). Every output passes `_sanitize_section_output()`: think blocks stripped, text cut to the first HTML tag, missing `<h2>` added, pure chain-of-thought rejected so the retry path runs - a run once filled all sections with "Thinking Process: ...".
    - Empty/short sections trigger a deep-search retry and an append-expand pass within the section time budget.
-5. **Finalize** — assemble HTML/MD, save into the chat workspace (`resolve_agent_output_dir`), open in the Document Editor, clear checkpoints.
+5. **Finalize** - assemble HTML/MD, save into the chat workspace (`resolve_agent_output_dir`), open in the Document Editor, clear checkpoints.
 
 ## Robustness
 
 - **Checkpoints/Resume:** finished sections and collected sources are checkpointed; an aborted run resumes instead of restarting.
-- **Timeouts:** per web search, per section LLM call, per section, and an overall run timeout — a stalled stage finalizes the report with what exists.
+- **Timeouts:** per web search, per section LLM call, per section, and an overall run timeout - a stalled stage finalizes the report with what exists.
 - **Search outage detection:** provider failures (DDG rate limit, missing API keys, network) are collected via `get_search_provider_errors()` (`vaf/tools/search.py`). A section with zero raw results reports "SEARCH UNAVAILABLE - <reason>" and writes an honest placeholder ("Suchdienst nicht erreichbar ... Brave/Google-API-Schluessel konfigurieren") instead of pretending there were no hits. Telemetry event: `section_search_outage`.
 - **Internal knowledge fallback:** when every web provider fails or finds nothing, the search chain falls back to VAF's long-term memory (see `docs/llm/API_INTEGRATION.md`). Memory hits arrive as `memory://` results labeled "Internes Wissen" and are never presented as web sources.
 - **Reasoning models:** all helper calls tolerate Qwen-style reasoning output (generous token budgets, `reasoning_content` fallback, verdict/JSON parsing from the END of the text).
-- **Streaming section writer (local provider):** sections stream from the local llama server with an IDLE timeout instead of a fixed total timeout (`_stream_section_completion`) — the model may think as long as tokens keep arriving; reasoning deltas count as liveness but are never collected, and aborting closes the response so the server slot is freed for the retry. SSE lines are decoded explicitly as UTF-8 (llama-server declares no charset; the requests default of ISO-8859-1 turned every umlaut into mojibake). Live word-count progress feeds the WebUI outline during writing.
+- **Streaming section writer (local provider):** sections stream from the local llama server with an IDLE timeout instead of a fixed total timeout (`_stream_section_completion`) - the model may think as long as tokens keep arriving; reasoning deltas count as liveness but are never collected, and aborting closes the response so the server slot is freed for the retry. SSE lines are decoded explicitly as UTF-8 (llama-server declares no charset; the requests default of ISO-8859-1 turned every umlaut into mojibake). Live word-count progress feeds the WebUI outline during writing.
 - **Numbered citations:** sections cite with `[n]` markers against ONE global numbered source list (the prompt hands the model the section's sources with their global numbers; sidebar, report file and markers share the same numbering). Per-section source paragraphs/URL lists the model still writes are stripped deterministically (`_strip_section_source_blocks`); the report appends the global list as an ordered list. The WebUI renders `[n]` as superscript citation chips.
-- **Section normalization:** loose text after a heading is wrapped in `<p>` (`_wrap_loose_section_text`) and runaway headings — an unclosed `<h2>` or body text packed into the heading — are clamped back to a clean title (`_clamp_runaway_heading`), so sections never render entirely in heading style.
+- **Section normalization:** loose text after a heading is wrapped in `<p>` (`_wrap_loose_section_text`) and runaway headings - an unclosed `<h2>` or body text packed into the heading - are clamped back to a clean title (`_clamp_runaway_heading`), so sections never render entirely in heading style.
 
 ## WebUI live view
 

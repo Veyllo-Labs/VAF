@@ -1,8 +1,8 @@
 # Desktop Startup Splash (Loading Screen)
 
 When the VAF desktop app launches, the native window now opens on a small,
-self-contained **splash / loading screen** — a sleeping agent on a screen that
-powers up — and only switches to the real Web UI once the frontend is actually
+self-contained **splash / loading screen** - a sleeping agent on a screen that
+powers up, and only switches to the real Web UI once the frontend is actually
 serving. This replaces the old behaviour where the window briefly showed
 whatever happened to be on `http://127.0.0.1:3000`.
 
@@ -21,22 +21,22 @@ _dw.init(_startup_url, title="VAF")
 
 Two things then go wrong at the moment the window opens:
 
-1. **The frontend usually isn't listening yet** — it takes a moment (or, on a
+1. **The frontend usually isn't listening yet** - it takes a moment (or, on a
    first run, minutes: `npm install`, `next build`, model download) before
    `:3000` answers.
 2. **The frontend may not even be on `:3000`.** `FrontendManager` picks the
    first *free* port starting at 3000. If another process already holds 3000,
    VAF's frontend lands on 3001 (etc.), but the window still opened on
-   `http://127.0.0.1:3000` — i.e. on **whatever other app owns that port**.
+   `http://127.0.0.1:3000` - i.e. on **whatever other app owns that port**.
 
 The frontend thread only calls `desktop_window.navigate(f"http://127.0.0.1:{port}")`
-with the *resolved* port once it's ready — so until then the window showed the
+with the *resolved* port once it's ready, so until then the window showed the
 hardcoded `:3000` page.
 
 Concrete repro: with the `veyllo-web` marketing-site dev server running on
 `:3000`, launching VAF made the window flash the **veyllo.app landing page**
 before snapping to the real VAF frontend on `:3001`. Nothing in the code opens
-the veyllo website on purpose — it was purely "load `localhost:3000`, and
+the veyllo website on purpose - it was purely "load `localhost:3000`, and
 something else was sitting there."
 
 ## Why a splash (UX rationale)
@@ -50,7 +50,7 @@ something else was sitting there."
   self-owned content until the real frontend URL is known, so no other process
   can leak into VAF's window during boot.
 - The splash covers the **frontend** boot only. On a fresh machine the
-  **database** may still be starting after the UI appears — the login page then
+  **database** may still be starting after the UI appears - the login page then
   shows "Starting the database..." and switches to the first-run setup wizard on
   its own once PostgreSQL is ready.
 
@@ -75,7 +75,7 @@ something else was sitting there."
    `desktop_window.navigate("http://127.0.0.1:<resolved-port>")` and the window
    swaps from the splash to the live Web UI.
 
-There is **no artificial minimum display time** — the splash is visible exactly
+There is **no artificial minimum display time** - the splash is visible exactly
 as long as boot takes. On a warm start that can be a fraction of a second; on a
 first run it stays up for the whole build/download. (Adding a forced minimum was
 considered and rejected: it would delay the app for no functional reason.)
@@ -88,7 +88,7 @@ nap while it wakes up":
 
 - Screen **powers on**: black → light (`bgOn`), the agent blooms in (`stageIn`).
 - The agent **sleeps**: gentle breathing (`bodyNap`) with the eye held shut as a
-  thin slit (`eyeSleep`) — adapted from the canonical `nap` scene in
+  thin slit (`eyeSleep`) - adapted from the canonical `nap` scene in
   `animations/agent_avatar/agent-all-animations.html`, except the eye does **not
   reopen** each cycle (the file's `eyeNap` blinks back to fully open; a loading
   screen should stay asleep).
@@ -105,7 +105,7 @@ centred instead of being dragged by the body's breathing transform.
 
 | File | Change |
 |---|---|
-| `vaf/media/splash.html` | **new** — self-contained splash (inline CSS only, no external assets, no JS) |
+| `vaf/media/splash.html` | **new** - self-contained splash (inline CSS only, no external assets, no JS) |
 | `vaf/core/desktop_window.py` | `init()` gains an optional `html` param; `create_window` uses `html=` when provided |
 | `vaf/tray.py` | loads `splash.html` and passes it to `init(..., html=...)` on startup |
 
@@ -124,6 +124,6 @@ centred instead of being dragged by the body's breathing transform.
 ## Future ideas
 
 - Rotating status text ("Waking the agent…", "Loading model…") if a longer,
-  more informative boot screen is wanted — would require reading boot state into
+  more informative boot screen is wanted - would require reading boot state into
   the splash (currently intentionally text-free per design).
 - Reuse the same splash HTML on the network-restart navigation for consistency.

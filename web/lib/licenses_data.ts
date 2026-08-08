@@ -75,23 +75,23 @@ export const thirdPartyLicenses = [
   { name: 'argon2-cffi', license: 'MIT', url: 'https://github.com/hynek/argon2-cffi' },
   // Networking
   { name: 'websockets', license: 'BSD-3-Clause', url: 'https://github.com/python-websockets/websockets' },
-  // Desktop window (Linux) — Qt WebEngine WebView. PySide6 is LGPL-3.0 (official Qt for Python binding); see LICENSE.
+  // Desktop window (Linux) - Qt WebEngine WebView. PySide6 is LGPL-3.0 (official Qt for Python binding); see LICENSE.
   { name: 'PySide6 (Qt for Python)', license: 'LGPL-3.0', url: 'https://doc.qt.io/qtforpython/' }
 ];
 
-export const vafLicenseText = `VAF — Veyllo Agentic Framework
+export const vafLicenseText = `VAF - Veyllo Agentic Framework
 
 Copyright (c) 2026 Veyllo GmbH
 
 VAF is DUAL-LICENSED. You may use it under EITHER of the following:
 
   1. GNU Affero General Public License, version 3 or later (AGPL-3.0-or-later)
-     — the open source option, free of charge.
-  2. A Commercial License from Veyllo GmbH — for proprietary / SaaS use
+     - the open source option, free of charge.
+  2. A Commercial License from Veyllo GmbH - for proprietary / SaaS use
      without AGPL copyleft. Contact: legal@veyllo.io · https://veyllo.io
 
 ------------------------------------------------------------------------
-1. OPEN SOURCE — GNU AGPL-3.0-or-later
+1. OPEN SOURCE - GNU AGPL-3.0-or-later
 ------------------------------------------------------------------------
 
 You may use, study, modify, and distribute VAF free of charge, provided you
@@ -104,12 +104,12 @@ honor the AGPL:
     offer those users the complete source code of your modified version
     under the AGPL.
 
-The AGPL is NOT "viral" toward your private work: running UNMODIFIED VAF —
-even commercially, even on your own servers — triggers no disclosure
+The AGPL is NOT "viral" toward your private work: running UNMODIFIED VAF -
+even commercially, even on your own servers - triggers no disclosure
 obligation. The full AGPL text ships in the LICENSE file at the project root
 and is published at https://www.gnu.org/licenses/agpl-3.0.html
 
-Additional permission (AGPL Section 7) — Plugins, Tools & Workflows:
+Additional permission (AGPL Section 7) - Plugins, Tools & Workflows:
 You may develop, distribute, and license Plugins, Tools, and Workflows for
 VAF under terms of your own choosing (including proprietary terms), provided
 they interact with VAF only through its documented public interfaces and do
@@ -125,13 +125,13 @@ terms, optional support, warranty, and indemnification). See COMMERCIAL.md
 and LICENSING.md in the project root, or contact legal@veyllo.io.
 
 ------------------------------------------------------------------------
-LIABILITY (GERMANY) — additional term under AGPL Section 7(a)
+LIABILITY (GERMANY) - additional term under AGPL Section 7(a)
 ------------------------------------------------------------------------
 
 For users subject to the laws of Germany, the following supplements
 Sections 15 and 16 of the AGPL:
 
-Die Haftung des Lizenzgebers ist — gleich aus welchem Rechtsgrund — auf
+Die Haftung des Lizenzgebers ist, gleich aus welchem Rechtsgrund, auf
 Vorsatz und grobe Fahrlässigkeit beschränkt. Bei einfacher Fahrlässigkeit
 haftet der Lizenzgeber nur bei Verletzung wesentlicher Vertragspflichten
 (Kardinalpflichten) und begrenzt auf den typischerweise vorhersehbaren

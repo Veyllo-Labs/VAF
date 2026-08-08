@@ -102,7 +102,7 @@ WhatsApp configuration is stored in `~/.vaf/config.json` (or your platform confi
 }
 ```
 
-**Best practice:** Use the same `user_scope_id` as the Web UI for that user. For the local admin, use the value of `local_admin_scope_id` in config (set automatically by bootstrap when the first admin is created, or set manually). The bridge resolves missing `user_scope_id` in whitelist entries via `get_local_admin_scope_id()`, so the local admin's WhatsApp sessions use the same scope as CLI and localhost — one identity across Web, CLI, and WhatsApp.
+**Best practice:** Use the same `user_scope_id` as the Web UI for that user. For the local admin, use the value of `local_admin_scope_id` in config (set automatically by bootstrap when the first admin is created, or set manually). The bridge resolves missing `user_scope_id` in whitelist entries via `get_local_admin_scope_id()`, so the local admin's WhatsApp sessions use the same scope as CLI and localhost - one identity across Web, CLI, and WhatsApp.
 
 Authentication (Baileys session) is stored per user under `~/.vaf/users/<username>/whatsapp/` (or the platform-specific data directory). Do not commit these directories to version control.
 
@@ -167,12 +167,12 @@ The whitelist is the only source for the "admin" label; removing the entry stops
 
 **Symptom:** The agent sent a voice reply but it appeared in WhatsApp as coming from an unknown number, not the known contact.
 
-**Root cause – fake LID in `lid_to_e164`:** WhatsApp sometimes sends messages with a JID like `491701234567@lid` where the numeric part equals the actual phone digits. This is *not* a real privacy LID (a genuine LID looks like `123456789012345@lid` with completely different digits). If such a fake entry ends up in `whatsapp_config.lid_to_e164`, the sender loop resolves the outbound JID to that fake `@lid` and sends there — WhatsApp has no account under that address, so the message appears from "unknown number".
+**Root cause – fake LID in `lid_to_e164`:** WhatsApp sometimes sends messages with a JID like `491701234567@lid` where the numeric part equals the actual phone digits. This is *not* a real privacy LID (a genuine LID looks like `123456789012345@lid` with completely different digits). If such a fake entry ends up in `whatsapp_config.lid_to_e164`, the sender loop resolves the outbound JID to that fake `@lid` and sends there - WhatsApp has no account under that address, so the message appears from "unknown number".
 
 **Fix (applied automatically in bridge code):**
 - The bridge now **rejects** any new `lid_to_e164` entry where the LID digits equal the phone digits (i.e. only genuine LIDs are persisted).
 - Both `VOICE_LID_RESOLVE` and `TEXT_LID_RESOLVE` in the sender loop skip any map entry where `lid_digits == phone_digits`.
-- If you have stale fake entries in config, remove them manually: open `whatsapp_config.lid_to_e164` in your VAF config and delete entries where the key (before `@lid`) has the same digits as the value (E.164 phone number). Example — **remove**: `"491701234567@lid": "+491701234567"`. **Keep**: `"123456789012345@lid": "+491702345678"` (digits differ → genuine LID).
+- If you have stale fake entries in config, remove them manually: open `whatsapp_config.lid_to_e164` in your VAF config and delete entries where the key (before `@lid`) has the same digits as the value (E.164 phone number). Example - **remove**: `"491701234567@lid": "+491701234567"`. **Keep**: `"123456789012345@lid": "+491702345678"` (digits differ → genuine LID).
 
 ### Troubleshooting: Strange number or LID – agent replied to someone I didn't add
 
@@ -203,10 +203,10 @@ The contact must have that E.164 number in whitelist or in Front Office with “
 
 **Symptom:** When a contact (e.g. Alice) sends a voice message, the agent sends 2–3 extra voice messages proactively *to* Alice (via `send_whatsapp(to_phone=...)` tool calls) and then also sends the normal headless reply. The agent's final text reply includes phrases like "I have sent Alice a message via WhatsApp."
 
-**Root cause:** The agent sees the contact's phone number in the front-office contact block and uses the `send_whatsapp` tool to "send the reply" — instead of just writing the reply as plain text (which the headless runner delivers automatically).
+**Root cause:** The agent sees the contact's phone number in the front-office contact block and uses the `send_whatsapp` tool to "send the reply" - instead of just writing the reply as plain text (which the headless runner delivers automatically).
 
 **Fix (applied in code):**
-1. **Prompt guard:** The front-office input now explicitly states: *"CRITICAL: Do NOT call send_whatsapp — your reply text is automatically delivered to the contact. Just write your reply as plain text."*
+1. **Prompt guard:** The front-office input now explicitly states: *"CRITICAL: Do NOT call send_whatsapp - your reply text is automatically delivered to the contact. Just write your reply as plain text."*
 2. **Tool guard:** `send_whatsapp` checks `_agent._front_office_mode` at the top of `run()`. When the agent is handling an inbound contact message (no explicit `to_phone`) and `_front_office_mode` is `True`, the tool returns `[TOOL BLOCKED]` immediately instead of sending.
 3. **Sanitize filter:** `[TOOL BLOCKED]` is in `_INTERNAL_PHRASES` (`vaf/core/outbound_sanitizer.py` - the shared net the send tools and the headless runner both consume) so it is never delivered to the contact even if the agent quotes the blocked message.
 
@@ -308,7 +308,7 @@ Whisper returns the detected language in the STT response. VAF uses it to:
 
 #### Self-chat and LID (Linked ID)
 
-WhatsApp uses **LID** (Linked ID) for some chat identifiers; JIDs may end with `@lid` instead of `@s.whatsapp.net`. LID is used for more than just “saved messages” (self-chat)—it can also identify regular 1:1 contacts. To avoid accepting messages from non-whitelisted contacts:
+WhatsApp uses **LID** (Linked ID) for some chat identifiers; JIDs may end with `@lid` instead of `@s.whatsapp.net`. LID is used for more than just “saved messages” (self-chat) - it can also identify regular 1:1 contacts. To avoid accepting messages from non-whitelisted contacts:
 
 - **Node (wa-bridge.js)**: For any `@lid` JID, the bridge does *not* assume self-chat. It resolves the LID to E.164 via Baileys’ `lidMapping` and only sets `selfChat: true` when the resolved number matches the linked account owner’s number. For `@s.whatsapp.net` chats, self-chat is determined by comparing the numeric part of the JID with the owner’s JID.
 - **Python**: Uses the Node-emitted `selfChat` flag only (must not treat a JID as self-chat solely because it ends with `@lid`). Together with `fromE164` (when present) and the whitelist/contact list, only senders in the allowed set or with `selfChat: true` are accepted; all others are rejected and not forwarded to the agent.
@@ -449,7 +449,7 @@ Best practice: if the bot does not reply, check that you see `[Python] got type=
 ### Voice: STT Fails (Incoming Voice Not Transcribed)
 
 1. **STT service:** Ensure the STT container is running and `speech_stt_docker_url` is correct (default port 5003). Test with the curl command above.
-2. **Node download:** Check Node stderr for `voice downloaded: <path> (<bytes> bytes)`. If missing, Baileys failed to download the audio from WhatsApp. The bridge uses `downloadContentFromMessage(msg.message.audioMessage, ...)` — ensure you are on a compatible Baileys version.
+2. **Node download:** Check Node stderr for `voice downloaded: <path> (<bytes> bytes)`. If missing, Baileys failed to download the audio from WhatsApp. The bridge uses `downloadContentFromMessage(msg.message.audioMessage, ...)` - ensure you are on a compatible Baileys version.
 3. **File path:** Node writes the voice file to a temp directory and sends the absolute path to Python. Python must be able to read that path (same machine). Look for `WhatsApp STT: voice file not found` if the file disappeared before transcription.
 4. **Transcription:** Look for `WhatsApp STT: transcribing <path> (<bytes> bytes) via <url>` to confirm the request was sent. On failure, `WhatsApp STT failed: <status> - <body>` shows the HTTP status and error from the STT service.
 5. **Success:** `WhatsApp voice transcribed: lang=<lang>, text=<preview>` confirms a successful transcription.

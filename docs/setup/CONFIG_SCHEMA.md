@@ -8,9 +8,9 @@ keys by area. Defaults shown here match `Config.DEFAULTS` (291 keys).
 
 There are two ways to supply configuration, and they compose:
 
-1. **On disk** — `~/.vaf/config.json` (in Docker: the `VAF-Config` volume). Written by the
+1. **On disk** - `~/.vaf/config.json` (in Docker: the `VAF-Config` volume). Written by the
    setup wizard, the Settings UI, and the CLI. Loaded by `Config.load()`.
-2. **Programmatically** — when embedding VAF as a library:
+2. **Programmatically** - when embedding VAF as a library:
 
    ```python
    from vaf import Agent
@@ -20,7 +20,7 @@ There are two ways to supply configuration, and they compose:
    The dict is merged on top of the on-disk config for that `Agent` instance only; nothing
    is written to `~/.vaf/config.json`. See [EMBEDDING.md](../EMBEDDING.md).
 
-> **API keys — where they live.** They are no longer written to `config.json` at all: a key
+> **API keys - where they live.** They are no longer written to `config.json` at all: a key
 > set through the product goes into the same envelope-encrypted store that already holds mail,
 > GitHub and cloud credentials. `config.json` is still READ for `api_key_*`, because installs
 > that predate the move still carry a Base64 value there, and such a key is migrated into the
@@ -89,7 +89,7 @@ print(agent.run("In one sentence, what is Python?"))
 |-----|---------|---------|
 | `api_key_veyllo` | `""` | API key for the first-party Veyllo API. |
 | `veyllo_base_url` | `"https://api.veyllo.app/v1"` | Veyllo API base URL (OpenAI-compatible wire protocol); override for staging or self-host. |
-| `vision_mode` | `"description_tool"` | How attached images reach the model. `description_tool` (default): the main model is text-only — an image is run once through the vision backend to a base description that is injected as text, and the model calls the `analyze_image` tool to inspect it on demand (token-efficient; works even with a non-vision main provider). `inline_multimodal`: legacy — send the raw image straight to a multimodal main model. See the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
+| `vision_mode` | `"description_tool"` | How attached images reach the model. `description_tool` (default): the main model is text-only - an image is run once through the vision backend to a base description that is injected as text, and the model calls the `analyze_image` tool to inspect it on demand (token-efficient; works even with a non-vision main provider). `inline_multimodal`: legacy - send the raw image straight to a multimodal main model. See the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
 | `vision_description_max_tokens` | `1024` | Output bound for the one-time base description and for each `analyze_image` call. |
 | `vision_provider` | `""` | Provider used for vision (base description + `analyze_image`). Empty = use the main provider if it is vision-capable, else none. Set an API id (e.g. `google`) to use a different provider for seeing, or `local`: the llama server launches with the model's mmproj projector and sees images itself (no cloud). |
 | `vision_model` | `""` | Model for the vision provider; empty = that provider's default. Unused for `local` (the loaded GGUF sees). |
@@ -98,10 +98,10 @@ print(agent.run("In one sentence, what is Python?"))
 | `voice_agent_model` | `""` | For `local`: a downloaded model filename from `models/`, picked in Settings > Voice (empty = the recommended default in `voice_model.py`, Gemma 4 E4B, fetched on selection). A full GGUF ref `owner/repo/file.gguf` is still accepted (back-compat). For an API provider: model name (empty = provider default). |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |
 | `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
-| `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout or connection drop — for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |
+| `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation - **HTTP 429 (rate limit)**, 5xx, timeout or connection drop - for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |
 | `api_retry_after_max` | `30` | Cap (s) on a honored `Retry-After` header from a 429, so a large/hostile value cannot stall a worker. Admin-only. |
 | `api_timeout_connect` | `20.0` | OpenAI-compatible client connect timeout (s). |
-| `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) — bounds large image uploads. |
+| `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) - bounds large image uploads. |
 | `api_timeout_read` | `600.0` | Read timeout (s); kept generous so long reasoning streams are not cut off. |
 | `api_timeout_pool` | `20.0` | Connection-pool acquire timeout (s). |
 | `anthropic_prompt_cache` | `True` | Anthropic only: send the system prompt as a `cache_control: ephemeral` block so the stable prefix is cached across multi-turn / tool loops (cost saver). Read with an inline default, not part of `DEFAULTS`. See [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
@@ -114,7 +114,7 @@ print(agent.run("In one sentence, what is Python?"))
 
 ## Failover & resilience
 
-Automatic provider failover: if the primary provider is unreachable or errors out **before the first token**, the request is retried down a chain of fallback providers. Once a real token has streamed, no switch happens (it would duplicate output). Off by default — behaviour is unchanged unless `failover_level` is set. Configured in the UI under Settings → Advanced → Failover. All keys are admin-only.
+Automatic provider failover: if the primary provider is unreachable or errors out **before the first token**, the request is retried down a chain of fallback providers. Once a real token has streamed, no switch happens (it would duplicate output). Off by default - behaviour is unchanged unless `failover_level` is set. Configured in the UI under Settings → Advanced → Failover. All keys are admin-only.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -159,7 +159,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `anti_spin_enabled` | `True` | Stop repeated bookkeeping-tool churn without real work. |
 | `anti_spin_max_planning_calls` | `4` | Consecutive plan/intent calls before nudging. |
 | `nonprogress_max_turns` | `6` | Consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, …; not `web_search`/`memory_search`) before a nudge then a forced text answer. Catches a "verify forever" loop; any mutating/producing tool resets it. |
-| `chat_step_wall_clock_seconds` | `3600` | Main-loop wall-clock **backstop** (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count or provider speed. Deliberately generous — never aborts legitimate long work; the no-progress guard + per-tool timeouts stop the common case far earlier. The 75-turn cap is a secondary guard. |
+| `chat_step_wall_clock_seconds` | `3600` | Main-loop wall-clock **backstop** (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count or provider speed. Deliberately generous - never aborts legitimate long work; the no-progress guard + per-tool timeouts stop the common case far earlier. The 75-turn cap is a secondary guard. |
 | `workflow_generation_timeout_seconds` | `30` | create_automation: time-bound the inline LLM workflow pre-generation (fast-fail to robust prompt-based execution). |
 | `result_grounding_enabled` | `True` | Bounce a reply that claims a tool outcome the turn's results don't support. |
 | `result_grounding_max_retries` | `2` | Corrections before proceeding anyway. |
@@ -174,7 +174,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `workflow_identity_injection` | `declared` | Who a workflow's tools think is calling. Seven places construct a `WorkflowEngine`; three always passed an identity (chat user for a temporary workflow, task owner for an automation, the paused record on resume), four passed none - including the main saved-template lane - so a workflow ran as the machine owner whoever started it, and every tool keyed on the caller (memory, messaging, mail, calendar, contacts) followed. `declared` (the default since this release) makes those four pass the real identity and distributes it by each tool's `identity_kwargs`; `legacy` restores the old behaviour, in which the four pass nothing and the rest is distributed by a hardcoded name list. Three values and not a boolean on purpose: `off` is not the old state, and the three lanes that always passed one are unaffected either way. **Only `legacy` and `off` count as a rollback** - any other value, including a typo, means `declared`, because "as before" is now the state in which a workflow acts as the machine owner. Switching to `declared` gives 47 further tools an identity they never had in a workflow (files, GitHub, automations, skills, messenger reads) and takes none away; the reach is pinned by `tests/test_workflow_identity_blast_radius.py`. The switch now governs the WHOLE modern step lane: under `declared`, non-spawn steps dispatch through the shared funnel (hard policy, account tool allowlist, embedder authorizer; confirmation gate off); `legacy`/`off` restore the ENTIRE pre-funnel lane - name-list identity AND absence of per-step policy - and the funnel is not even constructed. The saved-template START gate (per-user workflow list) is NOT behind this switch. The legacy lane retires after the funnel lane has survived one released version with the policy stages on and no rollback report. |
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |
 | `workflow_step_validation_max_retries` | `3` | Retries before accepting the result. |
-| `channel_tools_unrestricted` | `True` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent — `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist (`paired_only` by default) still apply. On by default; set to `False` to restrict channel sessions to non-channel-restricted tools. |
+| `channel_tools_unrestricted` | `True` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent - `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist (`paired_only` by default) still apply. On by default; set to `False` to restrict channel sessions to non-channel-restricted tools. |
 | `skills_rescan_interval_hours` | `5` | Periodic skill re-scan (post-install tamper detection): every N hours the security scanner re-checks all installed skills on disk, updates their manifest scan blocks, and raises a security event on the Overview dashboard when a skill's risk level worsened. `0` disables. |
 
 ## Sub-agents & timeouts
@@ -359,7 +359,7 @@ highlights:
 | `thinking_question_dedup_enabled` | `True` | Semantic (embedding) de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Kill-switch; reuses the existing embedding singleton, fail-open. Tuning keys: `thinking_question_similarity_threshold` (`0.80`), `thinking_question_similarity_runs`/`_max_compare` (`12`), `thinking_getto_max_attempts` (`3`). |
 | `thinking_reply_wait_ttl_hours` | `12` | Safety net: a waiting-for-reply latch older than this is expired at read time, so a stale background question can never claim the user's next message as its "reply" long after the fact (the 10-min skip only runs when a thinking run fires). `0` disables. |
 
-(~24 more `thinking_*` tuning keys exist — see config.py.)
+(~24 more `thinking_*` tuning keys exist - see config.py.)
 
 ## Connections (messaging, email, cloud)
 
@@ -417,4 +417,4 @@ all `*_oauth_*_client_secret`, `cloud_credentials_key`, `cloud_oauth_callback_ba
 ---
 
 For the exhaustive list with inline rationale, read `DEFAULTS` in
-[vaf/core/config.py](../../vaf/core/config.py) directly — it is the single source of truth.
+[vaf/core/config.py](../../vaf/core/config.py) directly - it is the single source of truth.

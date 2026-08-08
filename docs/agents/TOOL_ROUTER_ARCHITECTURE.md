@@ -1,6 +1,6 @@
 # Dynamic Tool Routing Architecture
 
-This document details the **Dynamic Tool Router** and the three **Tool Calling 2.0** features of the Veyllo Agentic Framework (VAF). All features are **provider-agnostic** — they work with OpenAI, Anthropic, Google, local models, and OpenRouter without any provider-specific API extensions.
+This document details the **Dynamic Tool Router** and the three **Tool Calling 2.0** features of the Veyllo Agentic Framework (VAF). All features are **provider-agnostic** - they work with OpenAI, Anthropic, Google, local models, and OpenRouter without any provider-specific API extensions.
 
 ---
 
@@ -17,7 +17,7 @@ Before the Router was implemented, the Agent had to reserve aggressive amounts o
 
 ---
 
-## 2. Tool Calling 2.0 — Three Provider-Agnostic Features
+## 2. Tool Calling 2.0 - Three Provider-Agnostic Features
 
 VAF implements all three concepts from Anthropic's "Advanced Tool Use" research, but in a **provider-agnostic** way so every backend benefits equally.
 
@@ -29,10 +29,10 @@ VAF implements all three concepts from Anthropic's "Advanced Tool Use" research,
 
 ---
 
-## 3. Feature 1 — Tool Use Examples (`input_examples`)
+## 3. Feature 1 - Tool Use Examples (`input_examples`)
 
 ### What it does
-Every tool can optionally declare 1–3 concrete example calls. These are embedded as plain text into the tool's description so **every provider sees them** via the standard description field — no API change needed.
+Every tool can optionally declare 1–3 concrete example calls. These are embedded as plain text into the tool's description so **every provider sees them** via the standard description field - no API change needed.
 
 ### How to add examples to a tool
 
@@ -72,11 +72,11 @@ Examples:
 | `get_contact` | `name="Max"`, `name="Anna Müller"` |
 | `search_tools` | calendar, whatsapp, read file |
 
-To add examples to any other tool, just add the `input_examples` class attribute — no other changes needed.
+To add examples to any other tool, just add the `input_examples` class attribute - no other changes needed.
 
 ---
 
-## 4. Feature 2 — Tool Search (provider-agnostic)
+## 4. Feature 2 - Tool Search (provider-agnostic)
 
 ### Hybrid Router (`_route_tools`)
 
@@ -121,7 +121,7 @@ graph TD
 | "research", "recherche", "analyse" | `research_agent`, `web_search` |
 | "search", "find", "news", "weather" | `web_search` |
 
-### `search_tools` — on-demand discovery tool
+### `search_tools` - on-demand discovery tool
 
 In addition to the router, the model can itself call `search_tools` to discover tools it doesn't know about:
 
@@ -137,11 +137,11 @@ Model: search_tools(query="calendar appointment")
 
 **Scoring:** +2 per query token matching the tool name, +1 per token matching the description. Results capped at 10. The top 3 matches additionally carry a compact call signature (required parameters first, optional ones bracketed; rendered by `format_tool_signature` in `vaf/tools/base.py`) so a discovered tool is callable without guessing parameters. If no matches, shows first 20 tools alphabetically with a "… and N more" trailer (signature-free).
 
-**Format contract:** the post-hook parser is the shared `extract_discovered_tool_names()` in `vaf/tools/search_tools.py` — match lines stay `name: desc`; signature lines sit on their own indented line and their pre-colon part contains `(`, so they can never be mistaken for a tool name. The query echo in the header is capped and the total output self-caps under `execute_tool`'s 2000-char truncation (signature lines are dropped first). Round-trip guard: `tests/test_search_tools_signatures.py`.
+**Format contract:** the post-hook parser is the shared `extract_discovered_tool_names()` in `vaf/tools/search_tools.py` - match lines stay `name: desc`; signature lines sit on their own indented line and their pre-colon part contains `(`, so they can never be mistaken for a tool name. The query echo in the header is capped and the total output self-caps under `execute_tool`'s 2000-char truncation (signature lines are dropped first). Round-trip guard: `tests/test_search_tools_signatures.py`.
 
 **Post-execution hook (`Agent._chat_post_dispatch`, wired into the pipeline as the chat lane's `after_dispatch`):** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 
-**Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list — so the model always has a discovery path.
+**Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list, so the model always has a discovery path.
 
 **Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept** and do not count against the cap. This prevents context pollution when many tools are registered.
 
@@ -152,7 +152,7 @@ Model: search_tools(query="calendar appointment")
 
 Range: 1–100. Raise it if agents report missing tools; lower it to reduce token overhead.
 
-**Reasoning model compatibility:** When the router uses a reasoning model (DeepSeek Reasoner, R1) the tool selection often lands inside `<think>…</think>` blocks rather than in the response content. The parser strips think-tags first, then falls back to scanning the full raw response (including reasoning) for tool name substrings — so routing works correctly regardless of model type.
+**Reasoning model compatibility:** When the router uses a reasoning model (DeepSeek Reasoner, R1) the tool selection often lands inside `<think>…</think>` blocks rather than in the response content. The parser strips think-tags first, then falls back to scanning the full raw response (including reasoning) for tool name substrings, so routing works correctly regardless of model type.
 
 ### `_active_tools` state machine
 
@@ -165,11 +165,11 @@ Range: 1–100. Raise it if agents report missing tools; lower it to reduce toke
 
 ---
 
-## 5. Feature 3 — Programmatic Tool Calling (`with_vaf_tools=True`)
+## 5. Feature 3 - Programmatic Tool Calling (`with_vaf_tools=True`)
 
 ### Concept
 
-The model calls one tool (`python_sandbox`) with a code block that internally calls multiple other VAF tools. Only the **final `print()` output** of the script returns to the model context. Intermediate tool results are consumed entirely inside the running script — they never become chat messages.
+The model calls one tool (`python_sandbox`) with a code block that internally calls multiple other VAF tools. Only the **final `print()` output** of the script returns to the model context. Intermediate tool results are consumed entirely inside the running script - they never become chat messages.
 
 This matches Anthropic's "Programmatic Tool Calling" semantics and works with **every backend**.
 
@@ -180,7 +180,7 @@ python_sandbox(
     code="""
 import vaf_tools
 
-# Call any VAF tool — results stay inside the script
+# Call any VAF tool - results stay inside the script
 weather = vaf_tools.call("web_search", {"query": "Berlin weather"})
 contact = vaf_tools.call("get_contact", {"name": "Max"})
 
@@ -211,17 +211,17 @@ ToolBridgeServer (random port, daemon)  ←── vaf_tools.call("web_search", �
 ```
 
 **Files:**
-- `vaf/core/tool_bridge.py` — `ToolBridgeServer` + `_BridgeHandler` + stub source
-- `vaf/tools/python_sandbox.py` — `with_vaf_tools` parameter + `_run_with_bridge()`
+- `vaf/core/tool_bridge.py` - `ToolBridgeServer` + `_BridgeHandler` + stub source
+- `vaf/tools/python_sandbox.py` - `with_vaf_tools` parameter + `_run_with_bridge()`
 
 ### Security
 
 | Property | Detail |
 |---|---|
-| Token | `secrets.token_hex(16)` per execution — rejected on mismatch (HTTP 403) |
-| Binding | `0.0.0.0` on host, random free port — not exposed beyond local network |
-| Trust gates | All calls go through `agent.execute_tool()` — full VAF gate pipeline applies |
-| Cleanup | `bridge.stop()` in `finally` block — no port leak even on crash |
+| Token | `secrets.token_hex(16)` per execution - rejected on mismatch (HTTP 403) |
+| Binding | `0.0.0.0` on host, random free port - not exposed beyond local network |
+| Trust gates | All calls go through `agent.execute_tool()` - full VAF gate pipeline applies |
+| Cleanup | `bridge.stop()` in `finally` block - no port leak even on crash |
 
 ### Host gateway resolution
 
@@ -267,10 +267,10 @@ User: "What is the weather?"
 
 When **Debug Logs** are enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`), each tool call ATTEMPT is written to `logs/tool_use_YYYY-MM-DD.log` with:
 
-- `tool` — tool name
-- `session_id` — current session ID
-- `user_scope_id` — user-scope UUID used for RAG/memory isolation (may be empty on local/single-user)
-- `args_preview` — sanitized arguments, truncated to 200 chars (heavy fields such as `write_file.content` or `bash.command` appear as length + digest + a bounded excerpt, the same treatment the event stream gets)
+- `tool` - tool name
+- `session_id` - current session ID
+- `user_scope_id` - user-scope UUID used for RAG/memory isolation (may be empty on local/single-user)
+- `args_preview` - sanitized arguments, truncated to 200 chars (heavy fields such as `write_file.content` or `bash.command` appear as length + digest + a bounded excerpt, the same treatment the event stream gets)
 
 Use this to verify which user scope UUID is used for each tool call when debugging local vs multi-user or isolation issues. Log files are dated and cleaned by the garbage collector like other app logs.
 
@@ -289,7 +289,7 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). For the **main agent**, `write`/`dangerous` (except `python_sandbox`) also require a plan in working memory before running — see the plan gate in [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md). |
+| `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). For the **main agent**, `write`/`dangerous` (except `python_sandbox`) also require a plan in working memory before running - see the plan gate in [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md). |
 | `side_effect_class` | `"none"` \| `"reversible"` \| `"irreversible"` | `"none"` | Impact of the tool. Added to the confirmation message when `dangerous`. |
 | `admin_only` | `bool` | `False` | When `True`, the tool is **hard-blocked** for non-admin users in the shared dispatch pipeline (`vaf/core/tool_dispatch.py`), so it applies to every caller and not only to chat. The check uses the caller's role and scope; in a chat turn those are `_current_user_role` and `_current_user_scope_id`, set on the agent before each turn. This is a role-based check - distinct from `channel_restrictions` which is source-based. |
 | `channel_restrictions` | `tuple[str, ...]` | `()` | Sources where the tool is blocked. Common values: `"telegram"`, `"whatsapp"`, `"discord"`, `"channel"` (generic chat). |
@@ -337,7 +337,7 @@ never restricted, a raising registered resolver refuses). Guard:
 **The shared pipeline, in order:**
 
 1. **`admin_only` check** - if `admin_only == True` and the caller is not an admin, the tool is hard-blocked and **nothing is emitted**: no `tool_start`, no `tool_end`. A consumer must never see a blocked tool reported as having run. `is_admin` comes from the caller's role and scope through the shared `is_admin_identity` rule.
-2. **Channel check** — if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role) — **unless** `channel_tools_unrestricted` is set (default on), which grants messaging-channel sessions the same tools as the main agent (channel restrictions **and** the per-call confirmation gate are lifted; the `admin_only` check above still applies).
+2. **Channel check** - if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role) - **unless** `channel_tools_unrestricted` is set (default on), which grants messaging-channel sessions the same tools as the main agent (channel restrictions **and** the per-call confirmation gate are lifted; the `admin_only` check above still applies).
 2a. **The account allowlist** - which tools this ACCOUNT may use, answered by the process-wide resolver the application registered with `set_account_allowlist_resolver` (the harness registers its auth-DB resolver, `vaf/auth/permissions.py`, at `vaf/main.py` import). Scopeless callers and admins are exempt and never reach the resolver; nothing registered means unrestricted; a RAISING registered resolver refuses (fail-closed, the authorizer's polarity - the harness resolver catches its own DB errors and stays fail-open internally). A blocked tool ends with `Security Error: ...` and **emits nothing**. Sits after the hard blocks and BEFORE the authorizer, so an account-level ban cannot be lifted by an `allow()`. Guard: `tests/test_tool_account_allowlist.py`, wiring: `tests/test_account_allowlist_wiring.py`.
 2b. **The application's authorizer** - if the embedder attached one with `set_tool_authorizer`, it is consulted here: after the hard blocks and the account allowlist, so an `allow()` cannot reach a tool policy already refused, and before the gate, so a `deny()` answers at once instead of parking a refused call on a dialog. `deny()` ends the call with `Security Error: ...` and emits nothing at all. `ask()` and `allow()` both reach into step 3 and are described there. See [EMBEDDING.md](../EMBEDDING.md).
 3. **Confirmation gate** - if `permission_level == "dangerous"`, the caller is asked (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line. `permission_level == "system"` bypasses the gate entirely. A standing grant (`policy == "allow"`, or a trusted directory) runs the tool **silently** - no gate event at all. Both halves of that sentence are conditional on there being no authorizer: `req.ask()` gates a tool of ANY permission level and ignores standing grants, while `req.allow()` skips the gate for a `dangerous` tool without writing anything durable. When nobody can answer (headless, or an embedder that passed no asker) the call is refused with a string rather than blocking on a person who is not there.
@@ -375,14 +375,14 @@ class SendMailTool(BaseTool):
     channel_restrictions = ("telegram", "whatsapp")
     admin_only = False
 
-# Dangerous — user must confirm; cannot be undone
+# Dangerous - user must confirm; cannot be undone
 class DeleteFileTool(BaseTool):
     permission_level  = "dangerous"
     side_effect_class = "irreversible"
     channel_restrictions = ("telegram", "whatsapp", "discord")
     admin_only = False
 
-# Admin-only, internal — only available in admin sessions, no confirmation gate
+# Admin-only, internal - only available in admin sessions, no confirmation gate
 class CreateAgentToolTool(BaseTool):
     permission_level  = "system"    # skips confirmation gate
     side_effect_class = "reversible"
@@ -390,17 +390,17 @@ class CreateAgentToolTool(BaseTool):
     admin_only = True               # hard-blocked for regular users
 ```
 
-### `admin_only` vs `channel_restrictions` — key distinction
+### `admin_only` vs `channel_restrictions` - key distinction
 
 | | `channel_restrictions` | `admin_only` |
 |---|---|---|
 | Blocks based on | Chat *source* (telegram, web, …) | User *role* (admin vs user) |
-| Admin affected? | Yes — admins on Telegram are also blocked (unless `channel_tools_unrestricted` is enabled) | No — admins always pass |
+| Admin affected? | Yes - admins on Telegram are also blocked (unless `channel_tools_unrestricted` is enabled) | No - admins always pass |
 | Use case | Prevent tool abuse via messaging bots | Restrict to elevated-trust sessions |
 
 ---
 
-## 10. `coder_only` — Restricting Tools to the Coder Sub-Agent
+## 10. `coder_only` - Restricting Tools to the Coder Sub-Agent
 
 Set `coder_only = True` on any tool that should **only** be available to the Coding Sub-Agent (`coder.py`), not to the Main Agent.
 
@@ -413,9 +413,9 @@ class BashTool(BaseTool):
 
 | Tool | Reason |
 |---|---|
-| `bash` | Raw shell — Main Agent delegates to Coder instead |
-| `codesearch` | Code-aware search — Coder-specific |
-| `linter` | Linting — Coder-specific |
+| `bash` | Raw shell - Main Agent delegates to Coder instead |
+| `codesearch` | Code-aware search - Coder-specific |
+| `linter` | Linting - Coder-specific |
 | `context_tools` | Internal Coder context management |
 
 The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. In addition, a
@@ -428,16 +428,16 @@ separately from `vaf/tools/`.
 
 `_load_tools()` discovers tools from four sources, in order:
 
-1. **In-tree** — a `pkgutil` scan of the `vaf/tools/` package (the built-in tools).
-2. **Custom tools** — user-uploaded tools from the data directory, via `custom_tools_registry` (`_load_custom_tools()`).
-3. **Entry-point tools** — third-party pip packages that register under the `vaf.tools` entry-point group (`_load_entry_point_tools()`); see [EMBEDDING.md](../EMBEDDING.md).
-4. **MCP tools** — servers from `mcp_servers.json`, registered as native tools (`_load_mcp_tools()`); see [MCP_INTEGRATION.md](MCP_INTEGRATION.md).
+1. **In-tree** - a `pkgutil` scan of the `vaf/tools/` package (the built-in tools).
+2. **Custom tools** - user-uploaded tools from the data directory, via `custom_tools_registry` (`_load_custom_tools()`).
+3. **Entry-point tools** - third-party pip packages that register under the `vaf.tools` entry-point group (`_load_entry_point_tools()`); see [EMBEDDING.md](../EMBEDDING.md).
+4. **MCP tools** - servers from `mcp_servers.json`, registered as native tools (`_load_mcp_tools()`); see [MCP_INTEGRATION.md](MCP_INTEGRATION.md).
 
 For how tools fit into the wider framework (the tool contract and the public boundary), see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
 
-## 11. `query_llm()` — Making LLM Calls Inside a Tool
+## 11. `query_llm()` - Making LLM Calls Inside a Tool
 
 `BaseTool` provides a built-in helper for tools that need to call the LLM internally (e.g. to summarize, classify, or generate content as part of their logic):
 
@@ -449,13 +449,13 @@ def run(self, **kwargs) -> str:
 
 ### What `query_llm()` does internally
 
-1. **Provider detection** — reads the active provider (`openai`, `anthropic`, `google`, `local`, …).
-2. **Model resolution** — selects the correct model ID for that provider (e.g. `gpt-4o` vs `claude-sonnet-4-6`).
-3. **API backend** — if `use_api_backend=True`, streams the response and returns the full text.
-4. **Self-healing** — on HTTP 400/404, retries with a fallback model automatically.
-5. **Local server fallback** — if no API key is configured, hits the local OpenAI-compatible endpoint.
+1. **Provider detection** - reads the active provider (`openai`, `anthropic`, `google`, `local`, …).
+2. **Model resolution** - selects the correct model ID for that provider (e.g. `gpt-4o` vs `claude-sonnet-4-6`).
+3. **API backend** - if `use_api_backend=True`, streams the response and returns the full text.
+4. **Self-healing** - on HTTP 400/404, retries with a fallback model automatically.
+5. **Local server fallback** - if no API key is configured, hits the local OpenAI-compatible endpoint.
 
-Use `query_llm()` instead of calling provider SDKs directly — it stays provider-agnostic and inherits the agent's current model configuration automatically.
+Use `query_llm()` instead of calling provider SDKs directly - it stays provider-agnostic and inherits the agent's current model configuration automatically.
 
 ---
 
@@ -466,8 +466,8 @@ Two adjacent systems build on the tool layer described here:
 - **Whare Wananga** ([WHARE_WANANGA.md](../memory/WHARE_WANANGA.md)) learns per-tool `tool_knowledge`.
   The Settings tools list (`tools_list`) now carries three extra per-tool fields, attached
   server-side in `_attach_learned_states`:
-  - `learned_state` — `unlearned` / `learning` / `learned` / `stale`;
-  - `requires_config` + `configured` — whether the tool depends on a connection and whether
+  - `learned_state` - `unlearned` / `learning` / `learned` / `stale`;
+  - `requires_config` + `configured` - whether the tool depends on a connection and whether
     that connection is set up (resolved in `vaf/whare_wananga/preconditions.py` from the
     existing `telegram_config` / `discord_config` / `whatsapp_config` / `email_config`).
 
@@ -477,10 +477,10 @@ Two adjacent systems build on the tool layer described here:
 
   After the router scopes the turn's tools (`_active_tools`), Whare Wananga's **delivery** appends
   each selected tool's learned pitfalls to its schema description (proactive), and re-feeds a failed
-  tool's know-how on error (reactive) — see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery".
+  tool's know-how on error (reactive) - see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery".
   Because `Agent.TOOLS` sits on the hot path of **every** LLM call, the built schema (with the injected
   pitfalls) is **cached** and only rebuilt when the scoping inputs change (active tools, exclusions,
-  context size). It was previously rebuilt — re-running pitfall injection per tool — on every access
+  context size). It was previously rebuilt - re-running pitfall injection per tool - on every access
   (thousands of times per session), which steadily churned memory.
-- **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) — the agent declares the tool it is about
+- **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) - the agent declares the tool it is about
   to use; a backend parser matches that intent against the loaded tool list.

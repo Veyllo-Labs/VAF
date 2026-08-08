@@ -21,7 +21,7 @@ Security is the primary design constraint for VAF's network features. The system
 
 When "Local Network Hosting" is enabled, VAF automatically configures the OS firewall (Windows Firewall, macOS pf, or Linux).
 
-On **Linux**, VAF **prefers firewalld** when it is running. It opens **only the effective proxy port** (e.g. 8443) for the **LAN subnet** via a rich rule (e.g. `source address="192.168.2.0/24" port="8443" protocol="tcp" accept`) in the interface's actual zone — not a blanket world-open. The backend (8001) and frontend (3000) bind `127.0.0.1` and are deliberately **not** opened (they are unreachable from the LAN). Elevation uses **pkexec** in a desktop session (a native polkit password dialog appears when hosting is enabled) and `sudo -n` headless/server (non-interactive, fails fast, never hangs on a TTY). Firewall setup runs off the startup critical path (daemon thread) so it never blocks startup, and is idempotent (no dialog if the rule already exists). `iptables`/`ufw` remain as the fallback when firewalld is not running.
+On **Linux**, VAF **prefers firewalld** when it is running. It opens **only the effective proxy port** (e.g. 8443) for the **LAN subnet** via a rich rule (e.g. `source address="192.168.2.0/24" port="8443" protocol="tcp" accept`) in the interface's actual zone - not a blanket world-open. The backend (8001) and frontend (3000) bind `127.0.0.1` and are deliberately **not** opened (they are unreachable from the LAN). Elevation uses **pkexec** in a desktop session (a native polkit password dialog appears when hosting is enabled) and `sudo -n` headless/server (non-interactive, fails fast, never hangs on a TTY). Firewall setup runs off the startup critical path (daemon thread) so it never blocks startup, and is idempotent (no dialog if the rule already exists). `iptables`/`ufw` remain as the fallback when firewalld is not running.
 
 On other platforms, the firewall is configured to:
 - **Allow**: Traffic from RFC 1918 Private IP ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`).
@@ -63,10 +63,10 @@ Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces 
 After validating the JWT, `AuthMiddleware` attaches the authenticated user's identity to the request in two forms:
 
 **Individual attributes** (legacy, used by some internal utilities):
-- `request.state.user_id` — Subject claim (`sub`) from the JWT
-- `request.state.username` — Authenticated username
-- `request.state.role` — User role (`admin`, `user`, `guest`)
-- `request.state.user_scope_id` — UUID used for data isolation (see [USER_ISOLATION.md](../security/USER_ISOLATION.md))
+- `request.state.user_id` - Subject claim (`sub`) from the JWT
+- `request.state.username` - Authenticated username
+- `request.state.role` - User role (`admin`, `user`, `guest`)
+- `request.state.user_scope_id` - UUID used for data isolation (see [USER_ISOLATION.md](../security/USER_ISOLATION.md))
 
 **Consolidated dict** (used by all API route handlers):
 ```python
@@ -81,7 +81,7 @@ request.state.user = {
 All API route files (`config_routes`, `email_routes`, `cloud_routes`, `whatsapp_routes`, `telegram_routes`, `contact_routes`, `user_persona_routes`, `memory/routes`) read `request.state.user` as a dict to extract the current user's identity. When `request.state.user` is not set, the fallback is **mode-dependent**:
 
 - **Single-user / local mode**: routes fall back to the local-admin defaults (no network exposure, so the local user owns everything).
-- **LAN server mode**: an unauthenticated request is **denied** for memory reads — it resolves to an empty scope and sees **no** memories (fail-closed). The local-admin floor is applied only in genuine single-user/local mode, never to an anonymous network client. The memory scope resolver (`get_current_user_scope` in `vaf/memory/routes.py`) is server-aware and chooses the fallback based on the running mode.
+- **LAN server mode**: an unauthenticated request is **denied** for memory reads - it resolves to an empty scope and sees **no** memories (fail-closed). The local-admin floor is applied only in genuine single-user/local mode, never to an anonymous network client. The memory scope resolver (`get_current_user_scope` in `vaf/memory/routes.py`) is server-aware and chooses the fallback based on the running mode.
 
 ### OAuth Session Binding (Network Mode)
 
@@ -167,7 +167,7 @@ Rejections from the layers above are recorded in an always-on security event log
 1. **Config** (`~/.vaf/config.json` or `VAF_CONFIG_DIR`): The JWT secret used to encrypt TOTP secrets must be kept. If this file is missing or the secret is lost (e.g. new install or different user), the server cannot decrypt existing 2FA data.
 2. **Database** (PostgreSQL, see `memory_db_url`): User accounts and 2FA state (`requires_2fa_setup`, encrypted `totp_secret`) live in the same DB as RAG memory. If the DB is recreated or the data is lost (e.g. Docker without a persistent volume), users will be asked to set up 2FA again (new QR code) after the next login.
 
-**Staying logged in across a DB restart:** validating `/me` (user + active session) queries PostgreSQL, but a backend/Docker restart leaves Postgres briefly unavailable (`the database system is starting up`). To avoid logging users out on that race, `/me` **retries** the DB for a few seconds and, if it is still not ready, **falls back to JWT-only auth** (the already-verified token) instead of returning 401 — so a transient DB restart does not clear your session. Transient PG states (starting up / shutting down / in recovery / too many connections) are treated as retryable. See `auth_routes.py` `_me_user_from_token`.
+**Staying logged in across a DB restart:** validating `/me` (user + active session) queries PostgreSQL, but a backend/Docker restart leaves Postgres briefly unavailable (`the database system is starting up`). To avoid logging users out on that race, `/me` **retries** the DB for a few seconds and, if it is still not ready, **falls back to JWT-only auth** (the already-verified token) instead of returning 401, so a transient DB restart does not clear your session. Transient PG states (starting up / shutting down / in recovery / too many connections) are treated as retryable. See `auth_routes.py` `_me_user_from_token`.
 
 If you see "2FA was reset (e.g. after config or restart)" when entering your code, the encryption key changed (e.g. config was reset). Use "Back to login", sign in again, and set up 2FA with the new QR code.
 
@@ -378,7 +378,7 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 
 ### Live Updates
 
-Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless — nothing is listening on the port).
+Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless - nothing is listening on the port).
 
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless).
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
@@ -435,7 +435,7 @@ Uvicorn + FastAPI (127.0.0.1:8005)
 Route Handler (reads request.state.user for identity & scoping)
 ```
 
-The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the WebSocket it relays. This lets oversized frames pass through untouched — for example a `history_update` that embeds inline base64 images can exceed the default WebSocket frame limit. The effective upper bound is the backend's own `ws_max_size` (configured at roughly 200 MB in `vaf/core/web_server.py`), not the library's 16 MB default. Without this, the relay raised `PayloadTooBig` on the oversized frame and the LAN Web UI reconnect-flapped with a "connection lost" loop.
+The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the WebSocket it relays. This lets oversized frames pass through untouched - for example a `history_update` that embeds inline base64 images can exceed the default WebSocket frame limit. The effective upper bound is the backend's own `ws_max_size` (configured at roughly 200 MB in `vaf/core/web_server.py`), not the library's 16 MB default. Without this, the relay raised `PayloadTooBig` on the oversized frame and the LAN Web UI reconnect-flapped with a "connection lost" loop.
 
 ---
 
@@ -457,7 +457,7 @@ Returns the URL other devices on the LAN should use. When TLS is enabled, the po
 }
 ```
 
-`backend_port` (and `ports.backend`) is informational — the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
+`backend_port` (and `ports.backend`) is informational - the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
 
 **Response (no LAN IP detected):** `{ "host": null, "port": 443, "backend_port": 8001, "ports": { "access": 443, "backend": 8001 }, "url": null }`
 

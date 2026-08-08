@@ -360,11 +360,11 @@ Result: Complete 50-page contract
 
 ### Problem: "Could not create document plan"
 
-**Cause:** A weak or local model returned output that was not valid JSON — truncated by the token limit, with trailing commas, or wrapped in prose.
+**Cause:** A weak or local model returned output that was not valid JSON - truncated by the token limit, with trailing commas, or wrapped in prose.
 
 **Solution:** Plan creation no longer hard-fails. `_create_document_plan` tries three stages in order:
-1. A rich JSON plan, parsed with lenient repair (`_repair_json`) that strips trailing commas and comments and closes any structures left open by a truncation — in the correct nesting order, string-aware.
-2. A coder-style fallback (`_plan_from_section_lines`) that asks only for plain section titles, one per line — far easier for small models than nested JSON; bullets/numbering are stripped.
+1. A rich JSON plan, parsed with lenient repair (`_repair_json`) that strips trailing commas and comments and closes any structures left open by a truncation - in the correct nesting order, string-aware.
+2. A coder-style fallback (`_plan_from_section_lines`) that asks only for plain section titles, one per line - far easier for small models than nested JSON; bullets/numbering are stripped.
 3. A deterministic default (`_default_plan`) keyed on the inferred document type, so a usable document is always produced.
 
 If the resulting sections still look too generic:

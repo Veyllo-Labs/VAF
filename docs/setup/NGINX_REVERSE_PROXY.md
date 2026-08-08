@@ -1,6 +1,6 @@
 # Nginx Reverse Proxy for HTTPS (Network Mode)
 
-**Note:** VAF includes an **integrated HTTPS proxy**. If you enable **Local Network** and **SSL/TLS** in settings and set certificate/key paths, VAF starts the proxy on port 443 (or `local_network_https_port`, e.g. 8443 on Windows). **Nginx is not required**—the integrated proxy is the single HTTPS entry point (localhost and LAN). It forwards `/api` and `/ws` to the internal backend channel and allows all HTTP methods (so login and API calls work). See [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
+**Note:** VAF includes an **integrated HTTPS proxy**. If you enable **Local Network** and **SSL/TLS** in settings and set certificate/key paths, VAF starts the proxy on port 443 (or `local_network_https_port`, e.g. 8443 on Windows). **Nginx is not required** - the integrated proxy is the single HTTPS entry point (localhost and LAN). It forwards `/api` and `/ws` to the internal backend channel and allows all HTTP methods (so login and API calls work). See [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
 
 If you would rather use **Nginx** instead (e.g. for advanced configuration), the following applies.
 

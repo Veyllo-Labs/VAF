@@ -17,17 +17,17 @@ File tools (e.g. `librarian_agent`, `read_file`) block access to the VAF install
 
 ### Isolation model: Docker-level, not Python-level
 
-VAF's sandbox isolation is enforced entirely at the **Docker container level**. There is no Python-level module blocklist — standard-library modules like `subprocess`, `socket`, and `os` are importable inside the container. What prevents abuse is:
+VAF's sandbox isolation is enforced entirely at the **Docker container level**. There is no Python-level module blocklist - standard-library modules like `subprocess`, `socket`, and `os` are importable inside the container. What prevents abuse is:
 
-- **Process namespace isolation** — processes cannot escape the container
-- **Filesystem isolation** — host filesystem is not mounted (code runs in `/tmp/vaf_*` per execution)
-- **Resource limits** — 512 MB memory, 0.5 CPU cores (hard limits via Docker)
-- **No host privilege escalation** — default Docker unprivileged mode
+- **Process namespace isolation** - processes cannot escape the container
+- **Filesystem isolation** - host filesystem is not mounted (code runs in `/tmp/vaf_*` per execution)
+- **Resource limits** - 512 MB memory, 0.5 CPU cores (hard limits via Docker)
+- **No host privilege escalation** - default Docker unprivileged mode
 
 **What is NOT blocked at Python level:**
-- `import subprocess` — works, spawns processes inside the container only
-- `import socket` — works; sandbox has outbound network access (needed for pip and Tool Bridge)
-- `import os` — works; filesystem access is limited to what Docker mounts, not by Python
+- `import subprocess` - works, spawns processes inside the container only
+- `import socket` - works; sandbox has outbound network access (needed for pip and Tool Bridge)
+- `import os` - works; filesystem access is limited to what Docker mounts, not by Python
 
 See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and security details.
 
@@ -50,10 +50,10 @@ VAF automates sandbox startup:
 If Docker is **not installed** or **cannot be started**:
 - Code execution is **BLOCKED** (not degraded to host)
 - You will see: `[SECURITY] Sandbox requires Docker: ...`
-- This is intentional — we do not compromise on security
+- This is intentional - we do not compromise on security
 
 To execute code, you must:
-1. Install a Docker runtime — Docker Desktop (<https://docker.com>), or Docker Engine / Colima / Podman
+1. Install a Docker runtime - Docker Desktop (<https://docker.com>), or Docker Engine / Colima / Podman
 2. Start the runtime so the daemon is reachable (e.g. `colima start`, or open Docker Desktop)
 3. Re-run your code request
 
@@ -77,8 +77,8 @@ docker compose -f docker-compose.memory.yml up -d
 | **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |
 | **Filesystem** | Isolated (no host access). Packages installed via the `packages` parameter are TEMPORARY: pip runs with `--target` into the run's private `_pkgs` dir (plus `--no-cache-dir` so the shared pip cache does not grow), `PYTHONPATH`/`PIP_TARGET` point there for the run - `PIP_TARGET` also redirects code that shells out to pip itself - and the whole directory is deleted with the per-run workspace. Nothing accumulates in the shared container across runs or users. |
 | **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. |
-| **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` — container has no Linux capabilities beyond default isolation. |
-| **Module blocking** | None at Python level — `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
+| **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` - container has no Linux capabilities beyond default isolation. |
+| **Module blocking** | None at Python level - `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
 | **Timeout kill** | A timed-out or user-stopped execution is killed INSIDE the container, scoped to that run only: a pure-sh procfs scan terminates every process whose cwd or cmdline carries the run's unique workspace path (`kill_run_processes_cmd` in `vaf/tools/sandbox.py`). Slim images ship no procps, so the previous `pkill -9 -f python` silently no-opped (a timed-out pip finished a 229MB install into an already-cleaned workspace) - and would have hit every other user's run in the shared container. Guarded by `tests/test_sandbox_hardening.py`. |
 | **Ephemeral fallback** | When the persistent container is unavailable, executions fall back to a per-instance ephemeral container that carries the SAME hardening: `--cap-drop ALL`, `no-new-privileges`, and its own isolated bridge network `vaf-sandbox-ephemeral` (auto-created; a separate name because docker compose refuses to adopt a same-name network it did not create) plus the `host.docker.internal` alias for the Tool Bridge. If the network cannot be provided, the container starts degraded (capabilities still dropped, default bridge) with a loud warning. Never `--network none`: outbound pip and the Tool Bridge are designed features. |
 
@@ -118,7 +118,7 @@ python_sandbox(code="import time; time.sleep(5); print('done')", timeout=60)
 
 ## Programmatic Tool Calling (`with_vaf_tools=True`)
 
-The sandbox supports **Programmatic Tool Calling** — code inside the sandbox can call any VAF tool via an injected `vaf_tools` module. Only the final `print()` output of the script returns to the model context; intermediate tool results are consumed entirely inside the running script and never become chat messages.
+The sandbox supports **Programmatic Tool Calling** - code inside the sandbox can call any VAF tool via an injected `vaf_tools` module. Only the final `print()` output of the script returns to the model context; intermediate tool results are consumed entirely inside the running script and never become chat messages.
 
 This is provider-agnostic and works with every backend (OpenAI, Anthropic, Google, local).
 
@@ -162,17 +162,17 @@ ToolBridgeServer (random port, daemon) ←── vaf_tools.call("web_search", �
 ```
 
 **Files:**
-- `vaf/core/tool_bridge.py` — `ToolBridgeServer`, `_BridgeHandler`, stub source
-- `vaf/tools/python_sandbox.py` — `_build_call_tool_fn()`, `_run_with_bridge()`
+- `vaf/core/tool_bridge.py` - `ToolBridgeServer`, `_BridgeHandler`, stub source
+- `vaf/tools/python_sandbox.py` - `_build_call_tool_fn()`, `_run_with_bridge()`
 
 ### Security properties
 
 | Property | Detail |
 |---|---|
-| Token | `secrets.token_hex(16)` per execution — mismatches rejected (HTTP 403) |
+| Token | `secrets.token_hex(16)` per execution - mismatches rejected (HTTP 403) |
 | Binding | `0.0.0.0` on host, random ephemeral port. Accessible from any interface on the host; relies on the per-execution token for authentication. |
-| Trust gates | All calls go through `agent.execute_tool()` — full VAF gate pipeline applies |
-| Cleanup | `bridge.stop()` in `finally` block — no port leak on crash |
+| Trust gates | All calls go through `agent.execute_tool()` - full VAF gate pipeline applies |
+| Cleanup | `bridge.stop()` in `finally` block - no port leak on crash |
 
 ### Host gateway by OS
 
@@ -180,8 +180,8 @@ The sandbox container connects back to the host via `host.docker.internal` on al
 
 | OS | How it resolves |
 |---|---|
-| Windows | Docker Desktop DNS alias — automatic |
-| macOS | Docker Desktop DNS alias — automatic |
+| Windows | Docker Desktop DNS alias - automatic |
+| macOS | Docker Desktop DNS alias - automatic |
 | Linux | `extra_hosts: ["host.docker.internal:host-gateway"]` in `docker-compose.memory.yml` injects the host IP (Docker 20.10+) |
 
 ---
@@ -229,17 +229,17 @@ Beyond the Python sandbox there are three shell-execution surfaces, each with a 
 confinement model. The guiding rule: **the coder is jailed; the host is the main agent's job,
 under human confirmation.**
 
-### Coder `bash` — kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
+### Coder `bash` - kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
 
-The coding agent's `bash` (`coder_only`) needs a real shell for its project — run scripts,
-`npm`/`pip install`, run the app — but must never be able to touch VAF's own source, secrets,
+The coding agent's `bash` (`coder_only`) needs a real shell for its project - run scripts,
+`npm`/`pip install`, run the app, but must never be able to touch VAF's own source, secrets,
 or itself and break the running system. String-filtering a shell is not real security, so the
 command is confined by the **kernel**:
 
 - **Linux + bubblewrap (`bwrap`):** the command runs on the real host inside a bwrap jail.
   The project workspace is bind-mounted **read-write** (edits persist to the host); system dirs
   (`/usr`, `/bin`, `/etc`, ...) are **read-only**; and the VAF repo, `~/.vaf`, secrets and the
-  docker socket are simply **not mounted** — they do not exist for the command. The environment
+  docker socket are simply **not mounted** - they do not exist for the command. The environment
   is `--clearenv`'d and only non-secret basics (`PATH`, `LANG`, ...) are re-injected, so tray
   API keys never leak. The network is `--unshare-net`'d, so host-loopback services (the memory
   DB on `5432`, the VAF API) are unreachable from the jail.
@@ -264,9 +264,9 @@ pass/fail, instead of guessing. It copies the project (tar-pipe) into a fresh
 under an in-container `timeout -s KILL`, returns the summary, and removes the run directory in a
 `finally`. It is `read`-level (no host side effects).
 
-### `host_bash` — main-agent host shell (`vaf/tools/host_bash.py`)
+### `host_bash` - main-agent host shell (`vaf/tools/host_bash.py`)
 
-Some tasks genuinely need the real host — "check my running docker container", inspect host
+Some tasks genuinely need the real host - "check my running docker container", inspect host
 services, run a host CLI. Those belong to the **main agent**, not the coder, and `host_bash`
 runs **unsandboxed on the host on purpose**. Its safety is two hard controls, not a sandbox:
 

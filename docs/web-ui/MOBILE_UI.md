@@ -1,4 +1,4 @@
-# Mobile UI — Conventions & Patterns
+# Mobile UI - Conventions & Patterns
 
 How the VAF web UI behaves on phones, and the rules to follow when adding or
 changing UI so mobile keeps working without ever touching the desktop view.
@@ -10,14 +10,14 @@ the source of truth and must render **byte-for-byte unchanged**. Every mobile
 adaptation is *additive* and gated so it only applies on small/touch viewports:
 
 - Tailwind responsive variant `max-md:` (matches `< 768px`). This is the primary
-  tool — append `max-md:*` utilities; never remove or change the base classes.
+  tool - append `max-md:*` utilities; never remove or change the base classes.
 - The runtime hook `useIsMobile()` (`web/hooks/useIsMobile.ts`, SSR-safe, breakpoint
-  768px) — for cases that need a JS branch (e.g. rendering different DOM, not just
+  768px) - for cases that need a JS branch (e.g. rendering different DOM, not just
   different styles). It returns `false` during SSR/first paint, then updates.
 - `md:hidden` / `hidden max-md:flex` to show an element on exactly one of the two.
 
 Rule of thumb: if a change is not behind `max-md:` / `isMobile` / a `md:` toggle,
-it changes desktop — that is a regression, not a feature.
+it changes desktop - that is a regression, not a feature.
 
 Breakpoints in use: `md` = 768px is the mobile cutoff almost everywhere. A few
 older screens (e.g. the Memory full page, some dashboards) split at `lg` = 1024px;
@@ -39,7 +39,7 @@ of floating as a centered card.
   (if the body lives inside a `<form>`, the form also needs
   `max-md:flex-1 max-md:flex max-md:flex-col max-md:min-h-0`)
 
-Leave **small confirm / alert / loading dialogs** as centered cards — do not make a
+Leave **small confirm / alert / loading dialogs** as centered cards - do not make a
 "Delete?" two-button dialog full-screen. Only sheet things with substantial content.
 
 ### Off-canvas drawer (a left sidebar / section nav)
@@ -74,7 +74,7 @@ Form-field grids must go single-column on a phone:
 - `grid grid-cols-2` (or 3/4) **without** a `sm:/md:/lg:` prefix → append `max-md:grid-cols-1`
   (a 4-stop selector can use `max-md:grid-cols-2`).
 - Grids that already carry `sm:/md:/lg:grid-cols-*` already collapse below their
-  breakpoint — leave them.
+  breakpoint - leave them.
 
 ### Compact header (app-like)
 
@@ -119,7 +119,7 @@ byte-identical: fluid values must resolve to the same layout at desktop widths.
     with `max-md:[&>*]:pointer-events-auto`.
   - A decorative rail on the screen edge under the thumb (the right-edge prompt-nav
     dots). Hide it on mobile: `max-md:hidden`.
-  - `touch-action: pan-y` is **angle-strict** — a slightly diagonal swipe is rejected.
+  - `touch-action: pan-y` is **angle-strict** - a slightly diagonal swipe is rejected.
     Prefer the default `touch-action: auto` for the chat scroll container; do not set
     `pan-y` unless you specifically need to stop a child's horizontal pan.
 - **`position: fixed` inside a transformed ancestor** is clipped to that ancestor,
@@ -130,13 +130,13 @@ byte-identical: fluid values must resolve to the same layout at desktop widths.
 - **A `flex-1` child won't scroll without `min-h-0`** (and `min-w-0` for horizontal).
   Add it to the scrolling child *and* its flex ancestors.
 - **z-index of the drawer scrim.** The scrim must sit **above** the chat composer
-  overlay (which is `z-40`) but **below** the drawer (`z-50`) — use `z-[45]`, else the
+  overlay (which is `z-40`) but **below** the drawer (`z-50`) - use `z-[45]`, else the
   bright input field pokes through the dimmed background.
 - **ReactFlow graphs on touch.** Pinch/drag work by default, but a dense graph needs
   a wider zoom range so pinch-out shows the whole thing: set `minZoom={0.05}`
   (`maxZoom={4}`). Do **not** tell users to use the +/- buttons; fingers must work.
 - **Avoid negative-margin hacks to widen content** (`-ml-11` to pull an answer under
-  the avatar clipped the avatar). Restructure instead — e.g. render the element as a
+  the avatar clipped the avatar). Restructure instead - e.g. render the element as a
   full-width sibling on mobile via `isMobile`, indented column on desktop.
 
 ## Global foundation (`web/app/globals.css`)
@@ -164,7 +164,7 @@ Already in place; reuse, don't reinvent:
 4. Header with icon + title + actions? **Compact** it so the close button always fits.
 5. Scrollable body? Confirm the scroll works on touch (no overlay/rail/`touch-action`
    eating it) and the scrolling child has `min-h-0`.
-6. Everything new behind `max-md:` / `isMobile` — verify desktop is untouched.
+6. Everything new behind `max-md:` / `isMobile` - verify desktop is untouched.
 
 ## Verify before committing
 
@@ -173,6 +173,6 @@ From `web/`:
 - Types: `node node_modules/typescript/bin/tsc --noEmit` (ignore the pre-existing
   `SoulWizard.test.tsx` noise).
 - Build: `node node_modules/next/dist/bin/next build` (must exit 0). `next lint` was
-  removed in Next 16 — rely on `tsc`.
+  removed in Next 16 - rely on `tsc`.
 - The app serves a prebuilt `.next`; a visible change needs a rebuild **and** an app
   restart to appear. Test on an actual phone against the HTTPS proxy.

@@ -1,6 +1,6 @@
 # Local Network & Secure Access Portal
 
-This document provides a detailed overview of the **Local Network** tab in the settings and the associated **Login Portal**. The core network functionality — LAN hosting via the integrated HTTPS proxy, automatic firewall opening, user management, and the live Network Map — is implemented and live. A few presentational elements (the Server Info cards, parts of the Login Portal) are still illustrative placeholders and are called out as such below.
+This document provides a detailed overview of the **Local Network** tab in the settings and the associated **Login Portal**. The core network functionality - LAN hosting via the integrated HTTPS proxy, automatic firewall opening, user management, and the live Network Map - is implemented and live. A few presentational elements (the Server Info cards, parts of the Login Portal) are still illustrative placeholders and are called out as such below.
 
 ---
 
@@ -13,22 +13,22 @@ The **Local Network** tab is the central command center for managing local netwo
 #### **A. Global Toggle**
 *   **Element:** "Enable Local Network Hosting" Switch.
 *   **Behavior:** Starts/Stops the integrated HTTPS proxy that fronts VAF for the LAN. The Next.js frontend stays bound to `127.0.0.1` (localhost only); LAN devices reach VAF exclusively via the proxy at `https://<LAN-IP>:8443`. The proxy binds the configured `local_network_https_port` (default 443) and automatically falls back to `8443` on any platform (Linux/macOS/Windows) when 443 is privileged/unbindable by a non-root user; the effective bound port is what the UI displays. On Linux the firewall port is opened automatically: VAF prefers `firewalld` and adds a rich rule scoped to the LAN subnet for the effective proxy port (e.g. `8443`), elevating via a `pkexec` polkit password prompt in a desktop session (or `sudo -n` headless); `iptables`/`ufw` are the fallback when firewalld is not running. Disabling hosting truly stops the proxy and the internal plain channel so LAN access closes (the permanent firewall rule remains, harmless, as nothing then listens on the port).
-*   **Access URL for other devices:** The tab shows the full copyable LAN URL — including `https://` and the effective proxy port (e.g. `https://192.168.1.50:8443`) — that other devices open. The backend port (8001) is shown for reference but binds `127.0.0.1` and is unreachable from the LAN. The values come from `GET /api/network/access-url`.
+*   **Access URL for other devices:** The tab shows the full copyable LAN URL - including `https://` and the effective proxy port (e.g. `https://192.168.1.50:8443`) - that other devices open. The backend port (8001) is shown for reference but binds `127.0.0.1` and is unreachable from the LAN. The values come from `GET /api/network/access-url`.
 *   **CLI alternative:** The same behavior can be triggered from the terminal: `vaf server on` (enable hosting + SSL), `vaf server off` (disable), `vaf server status` (show status and network URLs). The Tray observes config changes and restarts backend/frontend automatically.
 
 #### **B. Network Topology Visualization**
 *   **Element:** "Open Network Map" Button & Full-Screen Modal.
-*   **Visualization:** Interactive node graph (`ReactFlow`) with the VAF Host at the centre and one node per remote device that currently has a live connection. The map polls `GET /api/network/connections` (every 4s while the full-screen map modal is open, 15s while the tab is open), de-duplicates by IP (keeping the most recently active connection), and filters out localhost/the host itself — so a device only appears while it is actually connected, and there is no separate offline state on map nodes.
-*   **Device type:** Derived from each connection's User-Agent — `mobile` maps to a Smartphone icon (pink), `tablet` to a Laptop icon (purple), and everything else/desktop/unknown to a Monitor icon (green). Edges from the host to each device are animated blue lines.
+*   **Visualization:** Interactive node graph (`ReactFlow`) with the VAF Host at the centre and one node per remote device that currently has a live connection. The map polls `GET /api/network/connections` (every 4s while the full-screen map modal is open, 15s while the tab is open), de-duplicates by IP (keeping the most recently active connection), and filters out localhost/the host itself, so a device only appears while it is actually connected, and there is no separate offline state on map nodes.
+*   **Device type:** Derived from each connection's User-Agent - `mobile` maps to a Smartphone icon (pink), `tablet` to a Laptop icon (purple), and everything else/desktop/unknown to a Monitor icon (green). Edges from the host to each device are animated blue lines.
 *   **Identity:** Each device node shows the logged-in user's name (their alias, or an em dash if none) above the device's real internal IP in monospace; the central VAF Host node shows `host:port` (or `localhost` when no LAN host is known). The real client IP reaches the backend because the HTTPS proxy forwards it via the `X-Forwarded-For` header.
-*   **Active devices count:** The count on the "Open Network Map" card reports connected remote devices only — it excludes the central host node and floors at 0.
+*   **Active devices count:** The count on the "Open Network Map" card reports connected remote devices only - it excludes the central host node and floors at 0.
 *   **Future Logic:** Per-node bandwidth visualization remains future work.
 
 #### **C. User Management (CRUD)**
 *   **Element:** Searchable data table (columns centered).
 *   **Columns:** Username, Role, Last active, Status, Actions.
 *   The Status column reads **Online / Offline**, not Active/Inactive: it is presence, and the old wording was one dialog away from the account-enabled flag that uses the same two words. A row whose ACCOUNT is deactivated additionally carries a red "Deactivated" badge, so the two states are visible side by side and never substitute for each other.
-*   **Status / Last active are REAL (not the account flag):** a user shows `Active` (green dot) when they currently have a live WebSocket connection; `Last active` shows `now` while online, otherwise the last login time (or `—`). Source: `GET /api/users` returns an `online` field computed from the connection manager's live user scopes (with an admin-scope fallback so the local admin is detected reliably). This is distinct from the `is_active` account-enabled flag.
+*   **Status / Last active are REAL (not the account flag):** a user shows `Active` (green dot) when they currently have a live WebSocket connection; `Last active` shows `now` while online, otherwise the last login time (or a dash if the user never signed in). Source: `GET /api/users` returns an `online` field computed from the connection manager's live user scopes (with an admin-scope fallback so the local admin is detected reliably). This is distinct from the `is_active` account-enabled flag.
 *   **Presence and account state travel as SEPARATE row fields** (`status` = presence for this column, `accountActive` = the `is_active` flag for the edit modal). They were one field once, and that was a live defect: the edit modal was filled from the table row and wrote `is_active = (status === 'active')` back on save, so editing any currently-offline user and saving silently deactivated their account. One shared `loadUsers()` maps the API shape for all four fetch sites (initial, create, update, delete) - three of them used to store the raw response, which dropped the mapped fields after every mutation.
 *   **Lockout guards on `PUT /api/users/{id}`:** you cannot deactivate your own account and cannot remove your own admin role (another admin can do both to you), and nobody can deactivate, demote or DELETE the last ACTIVE admin. Three doors, one function (`refuse_dangerous_user_change`) and one shared counter, because the delete route used to hold its own rule: it counted admin ROWS, so with a deactivated admin row present the last ACTIVE admin could be deleted - leaving an instance where no admin can sign in, which flips it back to "needs setup" and re-opens the unauthenticated bootstrap endpoint to the LAN. Deleting a deactivated admin while an active one remains is still allowed; it was never a repair path. Self is matched by user id and by scope, because the tokenless localhost admin carries no id at all. The id comes from `request.state.user["user_id"]` - the middleware maps the JWT `sub` claim onto that name, and a guard reading `sub` gets None on every request (it did, until a review measured it; a wiring test now drives the helper with the middleware's real dict shape). The UI mirrors the guards: on your own account the deactivate toggle is not offered and the role selector is locked, with a hint saying why. Pinned in `tests/test_user_update_guards.py`.
 *   **Actions:**
@@ -37,9 +37,9 @@ The **Local Network** tab is the central command center for managing local netwo
     *   **Delete User:** Remove access permanently.
 *   **Detail view:** Clicking a user reveals their profile (authorized tools, workflows, Memory DB usage).
 
-##### Create User — Access presets
+##### Create User - Access presets
 
-Instead of ticking ~95 individual tool checkboxes (overwhelming for a non-expert), the Add-User modal offers a single **Access** level. Presets are computed from the LIVE tool/workflow lists, so the admin's own **custom** tools/workflows are covered automatically — the rules match on the tool name, not a fixed list.
+Instead of ticking ~95 individual tool checkboxes (overwhelming for a non-expert), the Add-User modal offers a single **Access** level. Presets are computed from the LIVE tool/workflow lists, so the admin's own **custom** tools/workflows are covered automatically - the rules match on the tool name, not a fixed list.
 
 | Preset | Tools granted | Workflows granted |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ The selected preset writes the resolved tool names and workflow ids into the use
 
 #### **D. Server Info**
 *   **Display:** Status cards for "Container Name", "Port", "Uptime".
-*   **Live LAN status:** While hosting is enabled the tab polls `GET /api/network/status` (every 3s) and shows the real proxy state as a status dot — amber pulsing while the proxy comes up, green once it has actually bound, or red with the bind error if it failed to bind. The "authentication required" and "no public access" lines stay green.
+*   **Live LAN status:** While hosting is enabled the tab polls `GET /api/network/status` (every 3s) and shows the real proxy state as a status dot - amber pulsing while the proxy comes up, green once it has actually bound, or red with the bind error if it failed to bind. The "authentication required" and "no public access" lines stay green.
 *   **Future Logic:** Real Docker container stats (Container Name / Uptime) streamed via IPC.
 
 ---

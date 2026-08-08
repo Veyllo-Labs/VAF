@@ -1,7 +1,7 @@
 # Commercial License / Kommerzielle Lizenz
 
 VAF is dual-licensed (see [LICENSING.md](../../LICENSING.md)). This document describes the
-**commercial license** — the paid alternative to the open source [AGPL-3.0](../../LICENSE) — for
+**commercial license** - the paid alternative to the open source [AGPL-3.0](../../LICENSE) - for
 organizations that cannot or do not want to comply with the AGPL's copyleft obligations.
 
 > Contact: **legal@veyllo.io** · **https://veyllo.io**
@@ -12,7 +12,7 @@ organizations that cannot or do not want to comply with the AGPL's copyleft obli
 
 ### Do you need a commercial license?
 
-You **do not** need one — the free AGPL-3.0 is enough — if you:
+You **do not** need one - the free AGPL-3.0 is enough - if you:
 
 - use VAF internally, for personal use, or for evaluation;
 - run **unmodified** VAF, even commercially and even on your own servers;
@@ -36,7 +36,7 @@ AGPL copyleft:
 
 ### What the commercial license includes
 
-- A **proprietary, non-copyleft** license to use, modify, and distribute VAF — no
+- A **proprietary, non-copyleft** license to use, modify, and distribute VAF - no
   obligation to disclose your source code.
 - The right to offer **VAF-based SaaS** without AGPL Section 13 source-sharing.
 - **Legal certainty**: a clear, negotiated grant instead of interpreting copyleft scope.
@@ -45,14 +45,14 @@ AGPL copyleft:
 - Optional **support, maintenance, and SLA** tiers.
 - Optional access to **commercial / Enterprise-only** add-ons (see Open Core below).
 
-### Open Core — what is free vs. paid
+### Open Core - what is free vs. paid
 
 VAF follows an **Open Core** model:
 
-- **Community Edition (AGPL-3.0)** — the full agent framework: the agent loop, tools,
+- **Community Edition (AGPL-3.0)** - the full agent framework: the agent loop, tools,
   memory, sessions, the web UI, integrations, and the plugin/workflow system. This is a
   complete, genuinely useful product on its own, not a crippled demo.
-- **Commercial / Enterprise** — the commercial license itself (proprietary/SaaS use), plus
+- **Commercial / Enterprise** - the commercial license itself (proprietary/SaaS use), plus
   any Enterprise-only modules Veyllo GmbH offers separately (for example: multi-tenant
   administration, SSO/SAML, audit and compliance features, priority support). Enterprise
   modules are **not** part of the AGPL Community Edition repository.
@@ -74,13 +74,13 @@ deployment, support tier). To get a quote or ask a question:
 
 ### Brauchst du eine kommerzielle Lizenz?
 
-Du brauchst **keine** — die kostenlose AGPL-3.0 genügt — wenn du:
+Du brauchst **keine** - die kostenlose AGPL-3.0 genügt - wenn du:
 
 - VAF intern, privat oder zur Evaluierung nutzt;
 - **unverändertes** VAF betreibst, auch kommerziell und auch auf eigenen Servern;
 - Plugins, Tools oder Workflows auf Basis von VAF erstellst und weitergibst (abgedeckt
   durch die Zusatzgenehmigung nach Abschnitt 7 in [LICENSING.md](../../LICENSING.md));
-- bereit bist, deine Änderungen unter der AGPL offenzulegen — einschließlich des Quellcodes
+- bereit bist, deine Änderungen unter der AGPL offenzulegen - einschließlich des Quellcodes
   einer veränderten Version, die du als Netzwerkdienst anbietest.
 
 Du brauchst eine kommerzielle Lizenz, wenn du eines der folgenden Dinge **ohne**
@@ -99,7 +99,7 @@ AGPL-Copyleft tun willst:
 ### Was die kommerzielle Lizenz beinhaltet
 
 - Eine **proprietäre, copyleft-freie** Lizenz zur Nutzung, Veränderung und Weitergabe von
-  VAF — ohne Pflicht zur Offenlegung deines Quellcodes.
+  VAF - ohne Pflicht zur Offenlegung deines Quellcodes.
 - Das Recht, **VAF-basierte SaaS** ohne Quellcode-Weitergabe nach AGPL Abschnitt 13
   anzubieten.
 - **Rechtssicherheit** durch eine klar verhandelte Lizenz statt Auslegung des
@@ -109,14 +109,14 @@ AGPL-Copyleft tun willst:
 - Optionale **Support-, Wartungs- und SLA-Stufen**.
 - Optionaler Zugang zu **kommerziellen / Enterprise-Modulen** (siehe Open Core).
 
-### Open Core — was kostenlos und was kostenpflichtig ist
+### Open Core - was kostenlos und was kostenpflichtig ist
 
 VAF folgt einem **Open-Core-Modell**:
 
-- **Community Edition (AGPL-3.0)** — das vollständige Agenten-Framework: Agenten-Loop,
+- **Community Edition (AGPL-3.0)** - das vollständige Agenten-Framework: Agenten-Loop,
   Tools, Memory, Sessions, Web-UI, Integrationen sowie das Plugin-/Workflow-System. Ein
-  vollwertiges, wirklich nützliches Produkt — keine beschnittene Demo.
-- **Kommerziell / Enterprise** — die kommerzielle Lizenz selbst (proprietäre/SaaS-Nutzung)
+  vollwertiges, wirklich nützliches Produkt - keine beschnittene Demo.
+- **Kommerziell / Enterprise** - die kommerzielle Lizenz selbst (proprietäre/SaaS-Nutzung)
   sowie etwaige separat von der Veyllo GmbH angebotene Enterprise-Module (z. B.
   Mandantenfähigkeit, SSO/SAML, Audit- und Compliance-Funktionen, Priority-Support).
   Enterprise-Module sind **nicht** Teil des AGPL-Community-Repositories.

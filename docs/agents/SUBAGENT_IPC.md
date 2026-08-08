@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Inter-Process Communication (IPC)** system enables communication between the Main Agent and Sub-Agents (e.g. `librarian_agent`, `research_agent`, `document_agent`) that run as **separate processes**. Results flow back through a file-based task queue. A sub-agent only opens its own *terminal window* in CLI mode — see **Execution modes** below for how it actually runs in the WebUI/desktop app and inside workflows.
+The **Inter-Process Communication (IPC)** system enables communication between the Main Agent and Sub-Agents (e.g. `librarian_agent`, `research_agent`, `document_agent`) that run as **separate processes**. Results flow back through a file-based task queue. A sub-agent only opens its own *terminal window* in CLI mode - see **Execution modes** below for how it actually runs in the WebUI/desktop app and inside workflows.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -36,9 +36,9 @@ document is used in the first two (separate-process) modes:
 
 | Mode | How the sub-agent runs | Blocks the main turn? |
 |------|------------------------|-----------------------|
-| **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No — result picked up via IPC on the next turn (poll; no backend to push to) |
-| **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No — but the result is **pushed back immediately** (see *Result push* below), so the main agent reacts as soon as the sub-agent finishes, not only on your next message |
-| **Inside a workflow** | **in-process** — the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns, so the step runs the sub-agent directly and **waits** for its result | Yes — the step waits (so step N can feed step N+1) |
+| **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No - result picked up via IPC on the next turn (poll; no backend to push to) |
+| **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No, but the result is **pushed back immediately** (see *Result push* below), so the main agent reacts as soon as the sub-agent finishes, not only on your next message |
+| **Inside a workflow** | **in-process** - the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns, so the step runs the sub-agent directly and **waits** for its result | Yes - the step waits (so step N can feed step N+1) |
 
 The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
 Terminal" box is a headless child process; inside a workflow there is no child at all.
@@ -56,7 +56,7 @@ it already runs in the caller's process and cwd.
 **Leak protection for `VAF_IN_SUBAGENT_TERMINAL`:** the flag lives in the long-lived main
 process while a legacy in-process workflow step runs, and `coding_agent`/co. check it to decide
 "run inline" vs "spawn the async child". A step that raised used to skip the restore and leak
-the flag — after which every later `coding_agent` call ran inline INSIDE the chat turn,
+the flag - after which every later `coding_agent` call ran inline INSIDE the chat turn,
 serializing the whole session behind a minutes-long tool call. Two layers now prevent this:
 the engine restores the step env on its exception paths too (`_restore_subagent_step_env`),
 and the headless runner pops a stale flag before every chat turn, logging `[LEAK-GUARD]` so a
@@ -64,7 +64,7 @@ future leak is visible instead of silent.
 
 ### Result push (`<ipc-notification>`)
 
-Writing the result to the queue is only half the story — the main agent still has to *notice*.
+Writing the result to the queue is only half the story - the main agent still has to *notice*.
 Historically it noticed via the headless runner's ~1s idle poll, which fired only when it was
 free and was scoped to its "current" session, so a completion arriving while it was idle (or
 after its current session had moved on) waited for the next user message. Now completion emits an
@@ -75,7 +75,7 @@ active **push**, modelled on the harness `<task-notification>`:
   (`/api/subagent/stream`, via the fire-and-forget `_BRIDGE_POOL`); **in-process** it sets a
   shared `threading.Event` directly.
 - The parent's `receive_subagent_stream` handler calls `notify_result_ready()` on that type (and
-  returns early — it is an internal signal, not a UI broadcast).
+  returns early - it is an internal signal, not a UI broadcast).
 - The headless runner's idle maintenance consumes the event and runs the result check
   **immediately**, draining **every** session's results (routing each by its own `session_id`),
   with the ~1s poll retained as a fallback if a push is ever undeliverable.
@@ -247,11 +247,11 @@ In addition to the IPC queue, Sub-Agents synchronize their status with the **Mai
 **Synchronization Bridge:**
 1. IPC receives result.
 2. Main Agent's `_process_subagent_result` reads result.
-3. **Result validation** — direct sub-agent calls only (see [Context Management](../memory/CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status. (Sub-agents *inside a workflow* use the separate opt-in per-step validation described under [Workflow Integration](#per-step-output-validation-opt-in).)
+3. **Result validation** - direct sub-agent calls only (see [Context Management](../memory/CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status. (Sub-agents *inside a workflow* use the separate opt-in per-step validation described under [Workflow Integration](#per-step-output-validation-opt-in).)
 4. Automatically updates `team_state.json`:
    - `status`: `completed` (or `failed`)
    - `result_summary`: first 500 chars of result
-   - a completion timestamp. The entry then renders in the System Prompt's team section as `done HH:MM` (or `failed HH:MM`) with its live "Doing:" line dropped, so the Main Agent can see the sub-agent has stopped instead of believing it is still running. A finished entry lingers for `TEAM_DONE_PRUNE_TURNS` (3) main-agent turns — counted down once per user turn by `MainPersistenceManager.tick_team_state()` — then it is removed from the team list. A stuck entry that never reports completion is still pruned by the `TEAM_STATE_TTL_SECONDS` wall-clock safety net.
+   - a completion timestamp. The entry then renders in the System Prompt's team section as `done HH:MM` (or `failed HH:MM`) with its live "Doing:" line dropped, so the Main Agent can see the sub-agent has stopped instead of believing it is still running. A finished entry lingers for `TEAM_DONE_PRUNE_TURNS` (3) main-agent turns - counted down once per user turn by `MainPersistenceManager.tick_team_state()` - then it is removed from the team list. A stuck entry that never reports completion is still pruned by the `TEAM_STATE_TTL_SECONDS` wall-clock safety net.
 
 **Clarification Flow:**
 Sub-Agents can now request help instead of failing blindly:
@@ -304,16 +304,16 @@ sub-agent genuinely runs for the session (heartbeat-verified via
 `<subagent_active>` block (keep replies light; do not start heavy work; do not re-delegate;
 hands off the session workspace; the result arrives automatically), a hard guard refuses a
 duplicate same-type spawn, the workflow router is suppressed pre-LLM, and the web UI keeps typing and
-sending unlocked (no banner — the SubAgent window already shows the work). A Stop press while a reply streams stops ONLY the
-generation — killing the sub-agent requires pressing Stop again when nothing is streaming
+sending unlocked (no banner - the SubAgent window already shows the work). A Stop press while a reply streams stops ONLY the
+generation - killing the sub-agent requires pressing Stop again when nothing is streaming
 (explicit `scope: "all"`). Completed results are delivered exclusively by the headless
-runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) —
+runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) -
 a user chat turn no longer consumes them mid-reply. Drain messenger summaries pass the SAME
 outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
 tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and are
 based on `chat_step`'s reasoning-stripped return value, not the raw stream buffer; when
 sanitization empties the summary, a deterministic localized fallback (head + result excerpt)
-is sent instead — never a noise placeholder, never a skipped send (the drain owns delivery).
+is sent instead - never a noise placeholder, never a skipped send (the drain owns delivery).
 The WebUI/session lane is exempt from the new guard: the browser already streamed the
 original text and must not see it retro-edited. On `provider=local` the block and hint
 are simply absent (no new gating of messages): the single llama server would otherwise serve
@@ -719,7 +719,7 @@ still reaches the user in the meantime, because the sub-agent delivers its own r
 
 ### Per-step output validation (opt-in)
 
-A workflow step can opt into an LLM check that its **output actually fulfils the step's goal** —
+A workflow step can opt into an LLM check that its **output actually fulfils the step's goal** -
 distinct from the Main Agent's direct-call validation above (which workflow steps bypass). Set
 `"validate": true` on a content/agent step (`document_agent`, `research_agent`, `coding_agent`,
 `browser_agent`, `document_writer`, `librarian_agent`). After the step runs,
@@ -727,7 +727,7 @@ distinct from the Main Agent's direct-call validation above (which workflow step
 on a mismatch the step re-runs with a correction hint up to `workflow_step_validation_max_retries`
 (default 3) times, then the last version is **accepted** and the workflow continues. It never
 hard-fails on validation, and a validator error is treated as a pass. Unlike the direct-call
-validator there is **no** lenient "saved successfully → accept" fast-path — the content is judged.
+validator there is **no** lenient "saved successfully → accept" fast-path - the content is judged.
 If a workflow has content steps but none set `validate`, `run_temp` enables validation on those
 steps automatically and runs (`skip_validation: true` is the explicit opt-out; the old
 `[VALIDATION CHECK]` bounce cost weak models the whole run). See
@@ -737,7 +737,7 @@ steps automatically and runs (`skip_validation: true` is the explicit opt-out; t
 
 Steps run in **strict sequence** by default. Each step supports three optional control-flow fields:
 
-**`condition`** — skip a step unless the expression is truthy. Supports AND / OR / NOT operators (left-to-right, no parentheses):
+**`condition`** - skip a step unless the expression is truthy. Supports AND / OR / NOT operators (left-to-right, no parentheses):
 
 ```python
 # Simple: run only when research_content is non-empty
@@ -756,9 +756,9 @@ Steps run in **strict sequence** by default. Each step supports three optional c
 "condition": "{a} AND NOT {b} OR {c}"
 ```
 
-**`on_success`** — after a step succeeds, jump to the step whose `output` name matches (or a 0-based index string). Normal sequential flow if omitted.
+**`on_success`** - after a step succeeds, jump to the step whose `output` name matches (or a 0-based index string). Normal sequential flow if omitted.
 
-**`on_failure`** — after a step fails, jump to the named step instead of aborting the workflow. The failed step is reclassified as *skipped* so the workflow is not marked failed overall. Requires no `optional: true`.
+**`on_failure`** - after a step fails, jump to the named step instead of aborting the workflow. The failed step is reclassified as *skipped* so the workflow is not marked failed overall. Requires no `optional: true`.
 
 ```python
 "steps": [

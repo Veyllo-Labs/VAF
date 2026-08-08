@@ -24,8 +24,8 @@ chmod +x install.sh && ./install.sh
 When prompted:
 
 ```
-[1] Desktop  — personal use, local only, system tray (default)
-[2] Server   — always-on service, LAN accessible via HTTPS, starts at boot
+[1] Desktop  - personal use, local only, system tray (default)
+[2] Server   - always-on service, LAN accessible via HTTPS, starts at boot
 
 Choose [1/2, default 1]: 2
 ```
@@ -67,7 +67,7 @@ VAF listens on `https://<LAN-IP>:8443`. To find your LAN IP:
 ip route get 1.1.1.1 | grep -oP 'src \K\S+'
 ```
 
-**TLS certificate:** VAF auto-generates a self-signed certificate on first start (`~/.vaf/ssl/`). Browsers will show a certificate warning on the first visit — this is expected for local networks. Accept the exception once; the certificate is then trusted for that browser.
+**TLS certificate:** VAF auto-generates a self-signed certificate on first start (`~/.vaf/ssl/`). Browsers will show a certificate warning on the first visit - this is expected for local networks. Accept the exception once; the certificate is then trusted for that browser.
 
 **Authentication:** All access (local and LAN) requires login. Credentials are set during the initial setup wizard at `https://<LAN-IP>:8443`.
 
@@ -75,7 +75,7 @@ ip route get 1.1.1.1 | grep -oP 'src \K\S+'
 
 | Port | Purpose |
 |------|---------|
-| 8443 | HTTPS proxy (LAN access, TLS) — effective port; 8443 only when 443 falls back |
+| 8443 | HTTPS proxy (LAN access, TLS) - effective port; 8443 only when 443 falls back |
 | 3000 | Next.js frontend (internal, localhost only) |
 | 8001 | FastAPI backend (internal, localhost only) |
 | 8005 | Internal plain-HTTP backend channel (internal, localhost only) |
@@ -87,9 +87,9 @@ Only the HTTPS proxy access port (8443 after a 443 fallback) is exposed on the n
 
 In server mode, the following config keys are locked and cannot be changed via the Settings UI or the API:
 
-- `local_network_enabled` — always `true`
-- `local_network_tls_enabled` — always `true`
-- `server_mode` — always `true`
+- `local_network_enabled` - always `true`
+- `local_network_tls_enabled` - always `true`
+- `server_mode` - always `true`
 
 Attempts to write these keys via `PATCH /api/config` are silently ignored.
 
@@ -106,14 +106,14 @@ For stronger protection, set a master passphrase so the encryption key is derive
 VAF_MASTER_PASSPHRASE="<a long, unique passphrase>"
 ```
 
-With the passphrase set, the encrypted fallback cannot be opened without it — even by someone who can read the files. Keep it out of `config.json` and shell history; supply it via the service environment. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
+With the passphrase set, the encrypted fallback cannot be opened without it - even by someone who can read the files. Keep it out of `config.json` and shell history; supply it via the service environment. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
 
 ## Memory isolation (Row-Level Security)
 
-The memory database (`vaf_memory`) enforces PostgreSQL Row-Level Security on the `memories` table, so one user cannot read or write another user's memories at the database layer — independent of the application-level scope filter. The application's data connection (`memory_db_url`) uses a non-superuser role (`vaf_app`, `NOSUPERUSER`/`NOBYPASSRLS`); a separate owner connection (`memory_db_owner_url`, role `vaf`) handles DDL, migrations and global stats. The policy is fail-closed: a row is visible/writable only when its `user_scope_id` equals the per-transaction `app.current_user_scope_id` GUC.
+The memory database (`vaf_memory`) enforces PostgreSQL Row-Level Security on the `memories` table, so one user cannot read or write another user's memories at the database layer - independent of the application-level scope filter. The application's data connection (`memory_db_url`) uses a non-superuser role (`vaf_app`, `NOSUPERUSER`/`NOBYPASSRLS`); a separate owner connection (`memory_db_owner_url`, role `vaf`) handles DDL, migrations and global stats. The policy is fail-closed: a row is visible/writable only when its `user_scope_id` equals the per-transaction `app.current_user_scope_id` GUC.
 
-- **Enable / cut over an existing install:** apply `scripts/rls_app_role.sql` (creates the `vaf_app` role + grants), then `scripts/rls_enforce.sql` (fail-closed policy + `ENABLE`/`FORCE`); set `memory_db_url` to the `vaf_app` DSN and `memory_db_owner_url` to the `vaf` DSN, then restart. Fresh installs get the role and policy from `init_db` automatically — only the DSN switch is needed to enforce.
-- **Roll back:** set `memory_db_url` back to the owner (`vaf`) DSN and restart — the superuser bypasses RLS, so all rows are visible again. Optionally run `scripts/rls_disable.sql`. No data is mutated.
+- **Enable / cut over an existing install:** apply `scripts/rls_app_role.sql` (creates the `vaf_app` role + grants), then `scripts/rls_enforce.sql` (fail-closed policy + `ENABLE`/`FORCE`); set `memory_db_url` to the `vaf_app` DSN and `memory_db_owner_url` to the `vaf` DSN, then restart. Fresh installs get the role and policy from `init_db` automatically - only the DSN switch is needed to enforce.
+- **Roll back:** set `memory_db_url` back to the owner (`vaf`) DSN and restart - the superuser bypasses RLS, so all rows are visible again. Optionally run `scripts/rls_disable.sql`. No data is mutated.
 
 See [USER_ISOLATION.md](../security/USER_ISOLATION.md) for the full model.
 
@@ -125,7 +125,7 @@ VAF serves many users from one process, in two layers that behave differently:
   is enqueued onto a shared `TaskQueue` and the connection returns immediately, so other users' I/O and
   token streaming keep flowing while a model call runs.
 - **Execution runs in a worker pool.** Worker threads pull turns from the queue and run them. The default is
-  **one** worker (`parallel_main_workers: 1`), so turns execute strictly one at a time — a long reasoning
+  **one** worker (`parallel_main_workers: 1`), so turns execute strictly one at a time - a long reasoning
   turn by one user blocks the others until it finishes.
 
 To run users concurrently, raise the pool (admin-only keys; restart to apply):
@@ -139,11 +139,11 @@ The requested count is **clamped per provider**, so it is safe to set high:
 
 | Provider | Effective workers | Cap key |
 |----------|-------------------|---------|
-| API (veyllo/openai/anthropic/deepseek/google/openrouter) | `min(requested, max_parallel_api_workers)` — default 5 | `max_parallel_api_workers` |
-| `local` (one shared llama-server) | `min(requested, max_parallel_local_workers, n_parallel slots)` — default 2 | `max_parallel_local_workers` |
+| API (veyllo/openai/anthropic/deepseek/google/openrouter) | `min(requested, max_parallel_api_workers)` - default 5 | `max_parallel_api_workers` |
+| `local` (one shared llama-server) | `min(requested, max_parallel_local_workers, n_parallel slots)` - default 2 | `max_parallel_local_workers` |
 
 `local` is a single llama-server process, so its concurrency is bounded by its `--parallel` decode slots and
-VRAM; the cap prevents oversubscribing the GPU. API providers have no local GPU limit — there the cap exists
+VRAM; the cap prevents oversubscribing the GPU. API providers have no local GPU limit - there the cap exists
 to stay within provider rate limits.
 
 **Isolation under concurrency.** Each worker builds its own `Agent`, and the queue never hands the same
@@ -151,20 +151,20 @@ session to two workers at once. The guarantee is therefore **per session, not pe
 is keyed on the session id alone (`vaf/core/task_queue.py`), so one person's web session and their
 `telegram_...` session can occupy two workers simultaneously, while turns *within* one session always run in
 order. `weighted_fair` additionally schedules the interactive / automation / background task classes fairly.
-The per-session guarantee holds under the `legacy` policy too — `weighted_fair` only adds lane fairness.
+The per-session guarantee holds under the `legacy` policy too - `weighted_fair` only adds lane fairness.
 
 A session leaves the in-flight set when the worker calls `task_done()`, and also when that same worker asks
 for its next task: one worker holds one task, so the request itself says the previous one is finished. That
-second release is what keeps a consumer which never calls `task_done()` from parking its session forever —
+second release is what keeps a consumer which never calls `task_done()` from parking its session forever -
 the stale-reservation sweep cannot cover it, because it only reclaims threads that have actually died.
 
 **Rate limits.** With several workers hitting one provider, transient `429`s are expected. VAF retries them
-for every provider, honoring a `Retry-After` header capped by `api_retry_after_max` — see
+for every provider, honoring a `Retry-After` header capped by `api_retry_after_max` - see
 [API_INTEGRATION.md](../llm/API_INTEGRATION.md).
 
 **Known limitations with more than one worker.** Editing a custom tool in Settings hot-reloads worker #1
 only (the others pick it up on the next restart); the "session active" hint shown on reconnect reflects
-worker #1's last task (cosmetic — live status and Stop are per-session).
+worker #1's last task (cosmetic - live status and Stop are per-session).
 
 Mechanics: [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md#worker-and-queue-model). Config keys:
 [CONFIG_SCHEMA.md](CONFIG_SCHEMA.md).
@@ -182,7 +182,7 @@ systemctl --user disable vaf
 nano ~/.vaf/config.json
 # Set: "server_mode": false, "local_network_enabled": false
 
-# Disable linger (optional — only if you don't want any user services at boot)
+# Disable linger (optional - only if you don't want any user services at boot)
 sudo loginctl disable-linger $USER
 ```
 
@@ -199,7 +199,7 @@ Common causes: Python venv path changed after a `git pull` to a different direct
 - VAF configures the OS firewall itself via `vaf/network/firewall.py`. On Linux it prefers firewalld when it is running and opens **only** port 8443 for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
 - Elevation differs by environment:
   - **Desktop session:** when hosting is enabled VAF prompts automatically through a native polkit/pkexec password dialog and adds the rule for you.
-  - **Headless/server:** VAF uses non-interactive `sudo -n` (it fails fast rather than hanging on a TTY), so the rule is typically not added automatically — run the manual command below.
+  - **Headless/server:** VAF uses non-interactive `sudo -n` (it fails fast rather than hanging on a TTY), so the rule is typically not added automatically - run the manual command below.
 - Manual firewalld command (preferred subnet-scoped rich rule form; replace `<LAN-subnet>` with your network, e.g. `192.168.2.0`):
   ```bash
   sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload

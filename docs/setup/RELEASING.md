@@ -30,7 +30,7 @@ picks the newest **eligible** release. Eligibility defaults to **auto**: a build
 prerelease (e.g. `0.1.0a0`) tracks prereleases, while a stable build tracks stable releases only.
 Override per install with the `update_include_prereleases` config key (`null` = auto, `true` =
 always, `false` = stable-only) or per command with `vaf update --pre` / `--stable`. So during the
-alpha, clients running `0.1.0aN` see and install newer `aN` releases automatically — without
+alpha, clients running `0.1.0aN` see and install newer `aN` releases automatically - without
 waiting for a stable `X.Y.Z`.
 
 ### Recovering or pinning a version
@@ -39,10 +39,10 @@ waiting for a stable `X.Y.Z`.
   mutates anything; if it is interrupted (power loss, killed mid-checkout),
   `vaf update --recover` restores the previous version. If the recovery checkout
   is itself blocked (e.g. by colliding local files), it stops and keeps the
-  breadcrumb so you can resolve the conflict and re-run it — it never reports
+  breadcrumb so you can resolve the conflict and re-run it - it never reports
   success while the tree is in a mixed state.
 - **Pin to a specific release.** `vaf update --tag v<version>` updates to that tag
-  instead of the latest. Pinning to an older release is a downgrade — the updater
+  instead of the latest. Pinning to an older release is a downgrade - the updater
   warns before proceeding.
 - **Preview only.** `vaf update --dry-run` prints the planned steps and the
   rollback anchor without changing anything.
@@ -56,7 +56,7 @@ waiting for a stable `X.Y.Z`.
   or rename a key that an older version still reads (a client may roll back). Add
   migrations in `vaf/core/migrations.py`.
 - DB schema changes follow the same additive rule. A new **column** on an existing
-  model needs no migration — the schema reconcile in `vaf/memory/database.py` adds
+  model needs no migration - the schema reconcile in `vaf/memory/database.py` adds
   any missing column automatically on the next start (and during `vaf update`). A
   non-additive change (a new index, a rename, a backfill) goes in
   `vaf/memory/db_migrations.py` as an idempotent ordered migration. Changing the

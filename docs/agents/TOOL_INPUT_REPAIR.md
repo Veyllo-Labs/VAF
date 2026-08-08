@@ -33,7 +33,7 @@ For one tool call:
 ### Repairs
 
 Applied per property, based on the property's declared type. The order is
-invariant — R2 runs before R4 so a stringified array is parsed, not wrapped.
+invariant - R2 runs before R4 so a stringified array is parsed, not wrapped.
 
 | Id | When | Action |
 |----|------|--------|
@@ -79,7 +79,7 @@ Tool Error: invalid arguments for '<tool>': <detail>
 The `Tool Error:` prefix is intentional: the existing error detection
 (`is_err`) and the Whare Wananga reactive-retry (which re-feeds learned tool
 know-how on failure) recognise tool failures by this prefix. Reusing it means
-the model's self-correction path is unchanged — only the message is now
+the model's self-correction path is unchanged - only the message is now
 localized to the offending field instead of an opaque exception.
 
 ## Telemetry

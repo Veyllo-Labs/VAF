@@ -4,7 +4,7 @@ This document explains how VAF isolates users from each other when running as a 
 
 ## Overview
 
-VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user who authenticates receives a unique `user_scope_id` from the auth database. This ID flows through the entire stack — from the WebSocket handshake down to the database row — ensuring that one user can never access another user's data.
+VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user who authenticates receives a unique `user_scope_id` from the auth database. This ID flows through the entire stack - from the WebSocket handshake down to the database row - ensuring that one user can never access another user's data.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -70,7 +70,7 @@ request.state.user = {
 All API route handlers read `request.state.user` to extract the authenticated user's identity and scope. The WebSocket handler in the gateway accesses the same dict:
 
 ```python
-# In vaf/core/gateway.py — WebSocket handler
+# In vaf/core/gateway.py - WebSocket handler
 user_state = getattr(websocket.state, "user", None)
 if user_state and isinstance(user_state, dict):
     server_user_scope_id = user_state.get("user_scope_id")
@@ -103,7 +103,7 @@ Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core
 
 **Who counts as an admin: `is_admin_identity(role, user_scope_id)`.** Admin is two halves and both are load-bearing. The **role** half covers every admin account: VAF supports more than one admin (user management refuses only to delete the *last* one) and each carries their own scope UUID. The **scope** half covers the machine owner when there is no role claim at all - the tokenless desktop, the CLI and automations resolve to `local_admin_scope_id`. Only one scope can ever be the local admin, so a scope-only check silently demotes every additional admin, and a role-only check locks the owner out. The role is read exclusively from a signature-verified JWT claim (issued from `LocalUser.role` at login) and, for tools, is **assigned** by the dispatcher over whatever the model put in the arguments - never honored as model input. Use this helper rather than rebuilding the comparison: the file gates below were the three places that had rebuilt it scope-only and drifted (guarded by `tests/test_admin_identity_is_role_aware.py`).
 
-**Where the binding happens.** For channel and WebSocket clients the gateway (`run_agent_step` in `vaf/core/gateway.py`) applies this fallback. The interactive CLI (`vaf run` and `vaf prompt`) does **not** pass through the gateway — it calls `Agent.chat_step()` directly — so it binds the local-admin scope and username explicitly at agent creation, via `_make_cli_agent()` in `vaf/cli/cmd/run.py`. Without this the CLI would run under scope `None` (the `"default"` bucket) and diverge from the WebUI admin: a stale `last_interaction` and memory/RAG that cannot see the admin's data. The binding is re-applied on every agent (re)creation, because `Agent.__init__` does not set a scope.
+**Where the binding happens.** For channel and WebSocket clients the gateway (`run_agent_step` in `vaf/core/gateway.py`) applies this fallback. The interactive CLI (`vaf run` and `vaf prompt`) does **not** pass through the gateway - it calls `Agent.chat_step()` directly - so it binds the local-admin scope and username explicitly at agent creation, via `_make_cli_agent()` in `vaf/cli/cmd/run.py`. Without this the CLI would run under scope `None` (the `"default"` bucket) and diverge from the WebUI admin: a stale `last_interaction` and memory/RAG that cannot see the admin's data. The binding is re-applied on every agent (re)creation, because `Agent.__init__` does not set a scope.
 
 ### Hybrid Scoping Strategy (Local Mode Stability)
 
@@ -125,7 +125,7 @@ The memory system is the most data-sensitive component. Every memory operation i
 
 ### Fail-closed scope resolution
 
-Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes — a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well, so a missing or malformed scope yields no results rather than searching across all users.
+Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes - a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well, so a missing or malformed scope yields no results rather than searching across all users.
 
 **Retrieval scope alone is not enough - the UI push must be scoped too.** Retrieved snippets are shown in the web UI's "RAG-Snippets" panel via a WebSocket event. That push was previously a *global* broadcast to every connected client, so a correctly-scoped search under user B's scope (including a background thinking or automation run) surfaced B's snippets in user A's open panel even though B's data at rest stayed correctly isolated. The push is now routed to the owning user's connections only (`push_update_to_user(user_scope_id, ...)`) and dropped when the scope is unknown (fail-closed); the same applies to the `real_context_payload` X-ray, which carries the full prompt including the memory-context block. Real-time events that carry user content must be scoped at the emit site, not only at retrieval.
 
@@ -138,11 +138,11 @@ All memory access methods accept and enforce `user_scope_id`:
 | `get_memory(id)` | Filters by `Memory.user_scope_id == user_scope_id` |
 | `update_memory(id)` | Filters by scope before allowing update |
 | `delete_memory(id)` | Filters by scope before soft-delete |
-| `search_memories()` | Filters query results by scope; an empty scope returns `[]` (fail-closed) in both vector and lexical/hybrid lanes — never "search all" |
+| `search_memories()` | Filters query results by scope; an empty scope returns `[]` (fail-closed) in both vector and lexical/hybrid lanes - never "search all" |
 | `store_memory()` | Stamps `user_scope_id` on new records |
 | `get_all_memories()` | Filters listing by scope |
 
-If a user tries to access a memory ID that belongs to another user, the query returns `None` (not found) — the same response as if the memory doesn't exist. This prevents information leakage through error messages.
+If a user tries to access a memory ID that belongs to another user, the query returns `None` (not found) - the same response as if the memory doesn't exist. This prevents information leakage through error messages.
 
 ### Graph Connections (`vaf/memory/graph.py`)
 
@@ -178,7 +178,7 @@ The `get_current_user_scope` dependency reads the scope from `request.state.user
 Chat sessions in the Web UI are isolated by `user_scope_id`:
 
 - **Session list:** `SessionManager.list(limit, user_scope_id=...)` is called with the connection's user scope (from `manager.get_connection_user(websocket)`). Users only see sessions that have matching `metadata.user_scope_id` or no scope (legacy/local admin). Note: session-list visibility and command authorization apply different rules to legacy (no-scope) sessions. The list still shows a no-scope session to every user, but the ownership gate treats a no-scope session as admin-only when acting on it (subscribe/chat/delete/rename/hide/edit). Scope-less sessions CAN occur on disk: an automation delivering to a messenger contact before that user ever wrote inbound used to create the channel session without a scope (an audit finding; the two outbound-first creators, `_record_outbound` in `messaging_connections.py` and `send_discord.py`, now stamp the owner scope at creation, matching the inbound lane). Sessions created before that fix stay admin-only under this gate.
-- **Session-command ownership:** A single shared ownership gate runs before the first side effect of every Web UI session command — chat (before subscribing to the session stream), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or the local-admin scope). A session with no recorded `user_scope_id` is treated as admin-only for these commands. On denial the server logs and replies with `{"type":"error","message":"Access denied"}` and keeps the connection open.
+- **Session-command ownership:** A single shared ownership gate runs before the first side effect of every Web UI session command - chat (before subscribing to the session stream), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or the local-admin scope). A session with no recorded `user_scope_id` is treated as admin-only for these commands. On denial the server logs and replies with `{"type":"error","message":"Access denied"}` and keeps the connection open.
 - **Owner re-stamp (defense-in-depth):** When a queued chat is processed, the runner stamps `user_scope_id` onto the session only if the session has none yet; it never relabels an already-owned session, so a queued chat cannot take over another user's session behind the gate.
 - **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a shared global ID.
 
@@ -201,7 +201,7 @@ that zero times - they write with a raw `open()` or a container copy into a dire
 themselves. `filesystem.py` calls it fourteen times, which is why `write_file` IS covered. So a
 wrong session id upstream is not caught downstream: the directory decision is the boundary.
 - **Broadcasting:** Updates are sent only to connections subscribed to that session (`broadcast_to_session`); session list refreshes are sent only to that user's connections (`broadcast_to_user`). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md).
-- **Agent context store:** Each chat's working memory — intent, plan, tasks, notes, and team state — is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](../memory/CONTEXT_GLUE.md).
+- **Agent context store:** Each chat's working memory - intent, plan, tasks, notes, and team state - is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](../memory/CONTEXT_GLUE.md).
 
 ## 3. Cache Isolation (Redis)
 
@@ -257,7 +257,7 @@ CREATE POLICY user_isolation_memories ON memories
 | Set to UUID                  | Same UUID           | Yes |
 | Set to UUID                  | Different UUID      | **No** |
 
-**Important**: The GUC is set with `set_config(..., true)` (transaction-scoped) on every memory data path — `get_db(user_scope_id=...)` threads the scope through all callers — so it is scoped to the current transaction and never leaks between concurrent requests sharing the connection pool. After the cutover to the non-superuser `vaf_app` role, an unscoped transaction is denied at the database, not merely filtered in the application; before it, the fail-closed application filter is what denies the unscoped transaction.
+**Important**: The GUC is set with `set_config(..., true)` (transaction-scoped) on every memory data path - `get_db(user_scope_id=...)` threads the scope through all callers - so it is scoped to the current transaction and never leaks between concurrent requests sharing the connection pool. After the cutover to the non-superuser `vaf_app` role, an unscoped transaction is denied at the database, not merely filtered in the application; before it, the fail-closed application filter is what denies the unscoped transaction.
 
 **Note**: the RLS policy is fail-closed by design - a row is visible or writable only when its `user_scope_id` exactly equals the per-transaction GUC; an unset or empty GUC matches nothing (an unscoped transaction sees and writes zero rows), and a row with `user_scope_id IS NULL` is not blanket-visible; RLS is `ENABLE`d and `FORCE`d on `memories`. **But on a default install the application data connection is still the owner role `vaf` (superuser), which bypasses RLS**, so today the fail-closed application-layer scope filter (Section 2) is the active line of defense and the RLS policy is a genuine second line only after the cutover switches `memory_db_url` to the non-superuser `vaf_app` role. Until then, do not rely on RLS as an independent backstop.
 
@@ -281,7 +281,7 @@ The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`,
 
 Each user also has a username-based directory tree. This is the legacy layout, preserved for backward compatibility. New features should prefer scope-based paths above.
 
-Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) — **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed — exposing the admin's data to that user, even though the memory database itself stays correctly scope-isolated.
+Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) - **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed - exposing the admin's data to that user, even though the memory database itself stays correctly scope-isolated.
 
 ```
 ~/.vaf/users/<username>/
@@ -313,12 +313,12 @@ When the Coding Agent creates a new project (website, script, document, etc.), i
 
 - **Authenticated users** (`user_scope_id` present in session metadata): projects are placed under `VAF_Projects/<first-8-chars-of-uuid>/<session_id>/`.
 - **Per-chat isolation:** with a session id, each chat gets its own folder, so projects from different chats never mix. The workflow engine builds its project paths the same way.
-- **All file-creating sub-agents use the chat folder:** `get_session_workspace_dir` / `resolve_agent_output_dir` (`vaf/core/session.py`) is the shared resolver — the document writer and document agent (previously `VAF_Documents/`), the research agent (previously `VAF_Research/`) and the WebUI workspace browser all resolve through it. Without session context the agents fall back to their legacy directories.
+- **All file-creating sub-agents use the chat folder:** `get_session_workspace_dir` / `resolve_agent_output_dir` (`vaf/core/session.py`) is the shared resolver - the document writer and document agent (previously `VAF_Documents/`), the research agent (previously `VAF_Research/`) and the WebUI workspace browser all resolve through it. Without session context the agents fall back to their legacy directories.
 - **Local/admin mode** (no `user_scope_id`): projects go into `VAF_Projects/` (with the `<session_id>/` level when a session id is available).
 
 The prefix is derived from `session.metadata["user_scope_id"]` at project creation time. Existing projects are never moved; only newly created directories use the prefix.
 
-**Unsafe-directory guard:** `is_unsafe_project_dir()` (`vaf/tools/coder.py`) rejects the user's home directory itself, the standard user directories (Documents, Desktop, ...), `~/.vaf` and the VAF program tree as agent work directories — for the CWD heuristic, explicit `project_path` arguments, paths extracted from task text and `git init`. Unsafe paths fall back to the `VAF_Projects` flow. When a passed or extracted path names a FILE (existing file, or a nonexistent path with a known file extension), the coder first splits it into directory + target-file hint (`_split_explicit_path`) and the guard judges the DIRECTORY part — so "create `~/report.html`" falls back to `VAF_Projects` (home itself is unsafe) while keeping `report.html` as the deliverable name. `git init` additionally refuses any path that is not an existing directory.
+**Unsafe-directory guard:** `is_unsafe_project_dir()` (`vaf/tools/coder.py`) rejects the user's home directory itself, the standard user directories (Documents, Desktop, ...), `~/.vaf` and the VAF program tree as agent work directories - for the CWD heuristic, explicit `project_path` arguments, paths extracted from task text and `git init`. Unsafe paths fall back to the `VAF_Projects` flow. When a passed or extracted path names a FILE (existing file, or a nonexistent path with a known file extension), the coder first splits it into directory + target-file hint (`_split_explicit_path`) and the guard judges the DIRECTORY part - so "create `~/report.html`" falls back to `VAF_Projects` (home itself is unsafe) while keeping `report.html` as the deliverable name. `git init` additionally refuses any path that is not an existing directory.
 
 **Workspace window endpoints:** `GET /api/session/workspace`, `POST /api/session/workspace/upload` and the workspace file-delete endpoint (`vaf/core/web_server.py`, all via `_resolve_session_workspace`) enforce session ownership with the SAME policy as the WebSocket gate `_ws_session_owner_ok`: the session's `metadata.user_scope_id` must match the requesting user, and a session with NO recorded scope is **admin-only** (legacy/pre-isolation sessions belong to the local admin, they are never open to every authenticated user), otherwise 403. Admin is detected role-aware via `is_admin_identity` (role `admin` OR the local-admin scope). An earlier version treated scopeless sessions as owned by everyone here; that hole is closed, and `/api/image/describe`'s session check follows the same rule. `GET /api/file` additionally refuses downloads from another user's `VAF_Projects/<uid[:8]>/` subtree (any admin exempt; legacy flat projects unaffected); this check is **fail-closed**: if ownership cannot be verified it denies.
 
@@ -331,7 +331,7 @@ Each chat session has a **stable workspace root** stored in `Session.project_pat
 - `session.project_path` is only set for paths inside `VAF_Projects/` (temp dirs and one-off outputs are excluded).
 - **The anchor is written by ONE shared setter** (`record_created_file`, `vaf/core/session.py`), called from BOTH notification paths: the `/api/workflow/update` HTTP endpoint (subprocess sub-agents) and `notify_file_created`'s in-process branch (main-agent `write_file`, workflow engine). Historically only the HTTP path anchored, so chats whose files were written in-process never got the `[SESSION WORKSPACE]` note; the headless runner additionally derives the workspace deterministically (`get_session_workspace_dir(task.session_id)`) when the anchor is missing but the folder exists.
 - **Session-derived prompt content must key on the session id, never a process-global pointer**: a process-global belongs to whichever lane touched it last, and that needs no non-default configuration - the chat worker, thinking and the automation scheduler are all unconditional threads in one process. There is no such pointer any more (`get_current_session_id()` answers per context; `VAF_SESSION_ID` is the process-boundary channel for spawned children only), but the rule stands for anything that would reintroduce one. `build_prompt(session_id=...)` carries the chat's own id for the "this chat's workspace" line, and `document_writer` receives `_session_id` from the tool dispatcher for its output-dir resolution (a fresh chat's prompt once advertised ANOTHER chat's folder and the model saved the deliverable there).
-- `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session. Unsafe directories (home dir, `~/.vaf`, ...) are never recorded — and never re-injected into prompts — so sessions that stored such a path before the guard existed self-heal (`is_unsafe_project_dir` checks in `web_server.py` and `headless_runner.py`).
+- `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session. Unsafe directories (home dir, `~/.vaf`, ...) are never recorded - and never re-injected into prompts - so sessions that stored such a path before the guard existed self-heal (`is_unsafe_project_dir` checks in `web_server.py` and `headless_runner.py`).
 - The agent receives both values as `[SESSION WORKSPACE]` and `[ACTIVE PROJECT]` context lines at the start of each turn (injected by `vaf/core/headless_runner.py`).
 
 ### Librarian agent (`vaf/tools/librarian.py`, `vaf/tools/filesystem.py`)
@@ -480,7 +480,7 @@ Each `AutomationManager` instance can be created with a `user_scope_id`; tasks a
 
 **Background-run live-emit isolation.** A scheduled automation runs silently and must not surface in another user's live session. With `VAF_IN_AUTOMATION=1`, `_emit_to_web_ui()` is `False` (no status/context/retry emits). Tool start/end updates are not gated by that env, because a concurrent real user's tool updates must keep flowing. Since a background automation agent has no web session of its own, a naive tool emit would fall back to the process-wide "current session" and could surface in whichever user's web session is currently active. To prevent this, a per-agent flag `agent._background_run = True` (set in `run_task`) is checked at both `emit_tool_update` sites so a background run broadcasts no tool bubbles. The flag is per-instance and therefore race-free; gating on the process-wide env would also suppress a concurrent real user's updates.
 
-**Handoff bundle isolation.** When a background automation must ask the user something it cannot decide, it stores its full working history as a *handoff bundle* under `Platform.vaf_dir() / "handoff_bundles" / <user_scope_id> /<id>.json`, keyed by the raw scope id (aligned with `thinking_requests`). The linked tracked request and the bundle are written under the same resolved scope (`user_scope_id or local_admin_scope_id`), so only the **same** user's main agent — finding the request under its own scope — can load the bundle and continue the task; a bundle written for user A is unreadable for user B. See [AUTOMATIONS.md](../platform/AUTOMATIONS.md#silent-background-execution--context-handoff).
+**Handoff bundle isolation.** When a background automation must ask the user something it cannot decide, it stores its full working history as a *handoff bundle* under `Platform.vaf_dir() / "handoff_bundles" / <user_scope_id> /<id>.json`, keyed by the raw scope id (aligned with `thinking_requests`). The linked tracked request and the bundle are written under the same resolved scope (`user_scope_id or local_admin_scope_id`), so only the **same** user's main agent - finding the request under its own scope - can load the bundle and continue the task; a bundle written for user A is unreadable for user B. See [AUTOMATIONS.md](../platform/AUTOMATIONS.md#silent-background-execution--context-handoff).
 
 **Global slot limit:** A given time slot (same HH:MM + frequency, e.g. daily 08:15) may be used by at most **3 users**. If three users already have an automation at that slot, a fourth gets an error: *"Too many other users have already booked this time slot. Please choose another slot at least 15 minutes apart."* This avoids overloading the scheduler at popular times while keeping automations user-specific.
 
@@ -519,7 +519,7 @@ Uses a **whitelist-based routing model**. The bot is shared, but messages are ro
 
 ### Discord
 
-Currently **single-admin only** — one Discord bot per VAF instance. Not multi-tenant.
+Currently **single-admin only** - one Discord bot per VAF instance. Not multi-tenant.
 
 ### Email
 
@@ -530,9 +530,9 @@ Uses **per-user credential keys** in a two-tier store: the OS keyring when avail
 Calendar uses the **same OAuth credentials and the same `user_scope_id`** as Email. There are no separate calendar credential keys. The calendar client (`vaf/core/calendar_client.py`) and calendar tools call `get_valid_access_token(..., user_scope_id=user_scope_id)` and use the same account list from `email_config` / `email_config_by_scope`. All calendar API calls are therefore scoped per user.
 
 Email config lookup follows a three-tier chain:
-1. `email_config_by_scope[user_scope_id]` — preferred, UUID-based
-2. `email_config_by_user[username]` — legacy per-user
-3. `email_config` — legacy global/admin fallback
+1. `email_config_by_scope[user_scope_id]` - preferred, UUID-based
+2. `email_config_by_user[username]` - legacy per-user
+3. `email_config` - legacy global/admin fallback
 
 When the primary lookup returns no accounts (e.g. chat session uses local admin but accounts were added under a JWT scope), the tools fall back to legacy `email_config` and, in single-scope setups, to the single scope in `email_config_by_scope`, so the mail client and agent see the same accounts. The sync store (messages) uses the same idea: the tool tries the primary store, then legacy and single-scope stores, so it reads from the same DB as the mail client.
 
@@ -599,7 +599,7 @@ async def my_new_feature(data: dict, user_scope_id: Optional[UUID] = None):
         select(MyModel).where(MyModel.user_scope_id == user_scope_id)
     )
 
-# Wrong — no scope filtering
+# Wrong - no scope filtering
 async def my_new_feature(data: dict):
     results = await db.execute(select(MyModel))
 ```
@@ -629,7 +629,7 @@ If you add any caching (Redis or in-memory), include `user_scope_id` in the cach
 # Correct
 cache_key = f"my_feature:{user_scope_id}:{item_id}"
 
-# Wrong — shared across users
+# Wrong - shared across users
 cache_key = f"my_feature:{item_id}"
 ```
 
@@ -639,7 +639,7 @@ When creating new tables that hold user data:
 
 1. Add a `user_scope_id` column (UUID, nullable for system/shared data).
 2. Add a fail-closed RLS policy mirroring the current `memories` table pattern, and `FORCE` RLS so the owner does not bypass it.
-3. Grant the non-superuser application role (`vaf_app`) `SELECT, INSERT, UPDATE, DELETE` on the new table — the application data connection runs as `vaf_app`, not the table owner.
+3. Grant the non-superuser application role (`vaf_app`) `SELECT, INSERT, UPDATE, DELETE` on the new table - the application data connection runs as `vaf_app`, not the table owner.
 4. In `get_db(user_scope_id=...)`, the per-transaction GUC `app.current_user_scope_id` is already set globally, so the new table's policy is enforced automatically.
 
 ```sql
@@ -663,7 +663,7 @@ If your feature writes files, place them under the user's directory:
 # Correct
 path = Path.home() / ".vaf" / "users" / username / "my_feature" / filename
 
-# Wrong — shared location
+# Wrong - shared location
 path = Path.home() / ".vaf" / "my_feature" / filename
 ```
 
@@ -684,7 +684,7 @@ When a user tries to access a resource that belongs to another user, return a 40
 
 ### Rule 9: Be careful with background tasks
 
-Scheduled tasks, cron jobs, and background workers must carry `user_scope_id` through the entire execution chain. Don't assume scope from the task registration context — store it explicitly in the task definition.
+Scheduled tasks, cron jobs, and background workers must carry `user_scope_id` through the entire execution chain. Don't assume scope from the task registration context - store it explicitly in the task definition.
 
 ### Rule 10: Test with multiple users
 
@@ -709,8 +709,8 @@ When testing new features, create at least two test users and verify:
 
 ## Related Documentation
 
-- [USER_IDENTITY.md](../memory/USER_IDENTITY.md) — User profile and preferences system
-- [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md) — Memory storage and RAG pipeline
-- [GATEWAY.md](../setup/GATEWAY.md) — WebSocket gateway architecture
-- [CONNECTIONS.md](../integrations/CONNECTIONS.md) — External service connections (WhatsApp, Telegram, etc.)
-- [SANDBOXING.md](SANDBOXING.md) — Docker sandbox for code execution
+- [USER_IDENTITY.md](../memory/USER_IDENTITY.md) - User profile and preferences system
+- [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md) - Memory storage and RAG pipeline
+- [GATEWAY.md](../setup/GATEWAY.md) - WebSocket gateway architecture
+- [CONNECTIONS.md](../integrations/CONNECTIONS.md) - External service connections (WhatsApp, Telegram, etc.)
+- [SANDBOXING.md](SANDBOXING.md) - Docker sandbox for code execution

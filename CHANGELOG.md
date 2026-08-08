@@ -3001,23 +3001,23 @@ fixes found in live testing.
 ### Fixed
 - **`vaf update` now works from any terminal.** The updater was reachable only through a
   shell alias (Linux/macOS, active only in a freshly-sourced interactive shell) and had
-  no `vaf` command at all on Windows — so `vaf update` reported "command not found" and
+  no `vaf` command at all on Windows, so `vaf update` reported "command not found" and
   users could not self-update. The installer now registers a real `vaf` command:
   `~/.local/bin/vaf` on Linux/macOS (on PATH, works in every shell) and a shipped
   `vaf.bat` added to the user PATH on Windows. Until the installer is re-run, the
-  always-available fallback is the shipped run script — `run_vaf.bat update` on Windows,
-  `./run_vaf.sh update` on Linux/macOS — and the in-app "update available" hint now shows
+  always-available fallback is the shipped run script (`run_vaf.bat update` on Windows,
+  `./run_vaf.sh update` on Linux/macOS), and the in-app "update available" hint now shows
   the platform-correct command.
 - **`vaf update` self-heals a non-git install.** An install created from a downloaded ZIP
   (no `.git`) previously failed with "not a git checkout; re-install from git" and could
   never update. `vaf update` now offers to convert such a folder into a git checkout of the
   official repo in place (git init + origin remote, then adopt the release with
   `git reset --hard`) and continues the normal update. Your settings (`~/.vaf`) and build
-  artifacts (venv, `web/.next`, `node_modules`) are left untouched — only tracked source is
+  artifacts (venv, `web/.next`, `node_modules`) are left untouched - only tracked source is
   reset to the release. After that, future updates work normally.
 - **`vaf update` finds VAF's own git when git is not on PATH.** The Windows installer downloads
   portable MinGit but did not persist it to PATH, so `vaf update` (and any git operation) failed
-  with "Git is not installed." on machines without system git — even though a usable git had just
+  with "Git is not installed." on machines without system git - even though a usable git had just
   been fetched. Git operations now resolve VAF's bundled MinGit as a fallback, and the bootstrap
   installer also persists it on the user PATH, so neither VAF nor the user needs a separate git
   install.
@@ -3038,8 +3038,8 @@ fixes found in live testing.
   agent avatar are documented in `docs/web-ui/LIGHTMODE.md` and
   `docs/web-ui/DARKMODE.md`.
 - **The coder window shows what the agent is doing, live.** The VS-Code-style sub-agent window
-  renders a red/green diff of the file being edited directly in the code pane — based on a
-  run-start snapshot, so a previous run's changes are not shown — auto-scrolls to the change, and
+  renders a red/green diff of the file being edited directly in the code pane - based on a
+  run-start snapshot, so a previous run's changes are not shown - auto-scrolls to the change, and
   mirrors files into the editor as the agent reads them, so orientation, review, and documentation
   phases are visibly active instead of looking stuck. A phase indicator (Planning / Building /
   Finalizing) with a live spinner keeps file-less phases clearly ongoing.
@@ -3050,68 +3050,68 @@ fixes found in live testing.
   locate existing code before changing it.
 - **HTML deliverables open as a rendered preview.** Clicking an `.html` file in a sub-agent window
   opens it in the HTML viewer instead of showing raw source.
-- **The Windows installer checks hardware virtualization first — before any WSL2/container
+- **The Windows installer checks hardware virtualization first - before any WSL2/container
   work.** It verifies that a hypervisor is running or Intel VT-x / AMD-V is enabled in the
   firmware (no admin rights needed for the check) and stops with clear BIOS/UEFI instructions
   when virtualization is disabled, instead of failing minutes later with the cryptic WSL error
-  0x80370102. Windows Home is fully supported — only the hypervisor platform is required, not
+  0x80370102. Windows Home is fully supported - only the hypervisor platform is required, not
   the Hyper-V role.
 
 ### Fixed
-- **The coding agent no longer crashes on cloud providers mid-run.** A malformed message history —
-  a status nudge inserted between an assistant's tool calls and their results — made strict
+- **The coding agent no longer crashes on cloud providers mid-run.** A malformed message history -
+  a status nudge inserted between an assistant's tool calls and their results - made strict
   providers (DeepSeek, OpenAI) reject the request with `400 "insufficient tool messages following
   tool_calls"`. The history is now normalized before every request so tool results always
   immediately follow their tool call, for all providers.
 - **A plan whose items the model sends as objects no longer crashes the coder.** Task titles are
   coerced to plain text at the data-model boundary (the description is extracted from
   `{"text": ...}` / `{"task": ...}` shapes), covering both a fresh `set_todos` call and
-  loading or resuming a previously-persisted plan — and self-healing an already-affected
+  loading or resuming a previously-persisted plan, and self-healing an already-affected
   `tasks.json`. A raw object title otherwise crashed downstream `title[:N]` or `title.lower()`
   (on Python 3.12+, `object[:50]` raises `KeyError: slice(None, 50, None)`).
 - **The coding agent is given time to finish a long edit** instead of being cut off by a fixed
   timeout; it runs until genuinely idle.
 - **The coder edits the intended file surgically:** `edit_file` and `write_file` are chosen by
   intent, and an oversized whole-file "edit" is rescued into a full write instead of failing.
-- **The coder console follows the tail reliably** — the live output no longer freezes after a pause.
+- **The coder console follows the tail reliably** - the live output no longer freezes after a pause.
 - **A new coder request plans from scratch** instead of resuming a leftover task list from a
   previous request.
 - **The workspace viewer stays on the workspace you opened,** not the active chat.
 - **A file the agent "saved" no longer silently vanishes.** When the agent used `python_sandbox`
   to write a file to your workspace, the write went to the sandbox's isolated Docker filesystem
-  and was discarded — while the code's own `print("Saved: ...")` made it look successful, so the
+  and was discarded - while the code's own `print("Saved: ...")` made it look successful, so the
   file never appeared. `python_sandbox` now blocks writes aimed at a workspace/host path and
   redirects the agent to `write_file` (which actually persists to the chat workspace); its
   description also states the sandbox filesystem is ephemeral.
 - **The main agent reacts the moment a sub-agent finishes,** instead of only when you next send a
   message. A finished sub-agent (coder, research, document, …) now pushes an internal
-  notification that wakes the main runner immediately — with the previous periodic poll kept as a
-  fallback — and the runner drains every session's result, so a completion is never missed because
+  notification that wakes the main runner immediately - with the previous periodic poll kept as a
+  fallback, and the runner drains every session's result, so a completion is never missed because
   the runner's "current" session had moved on.
 - **You can keep chatting while a sub-agent works (API mode).** The main agent now knows a
   sub-agent is running for your chat and keeps replies light: it will not start heavy new work,
   will not delegate the same task twice (a duplicate spawn is refused outright), and leaves the
   sub-agent's workspace alone; typing and sending stay unlocked the whole time. Safety fixes that make
-  this reliable: a streamed reply is NEVER erased anymore — if it sounds like completion while the
+  this reliable: a streamed reply is NEVER erased anymore - if it sounds like completion while the
   sub-agent still runs, it stays visible and a note keeps the next turn honest; the result is delivered once, by
-  the background runner, with all window/messenger notifications — not mixed into a chat reply;
+  the background runner, with all window/messenger notifications - not mixed into a chat reply;
   a result is never validated against unrelated small talk (no more forced-retry storms);
   chatting can no longer force-expire a long run (the 30-minute hardcoded reaper now honors the
-  configured timeout); and pressing Stop while a reply streams stops only the reply — the
+  configured timeout); and pressing Stop while a reply streams stops only the reply - the
   sub-agent keeps working (stopping it is an explicit second press when nothing is streaming).
   On local mode nothing changes (the adapted behavior is API-only; the single local
   llama server should not serve two inferences at once).
 - **The coding agent works on the Veyllo API.** The coder resolved providers from its own
   hardcoded list that was missing `veyllo`, so switching the provider to Veyllo made every
   coding task fail with "VAF Server unreachable (Port 8080)" (it wrongly fell back to the
-  local-server path) while normal chat worked fine — or, with a leftover local llama-server
+  local-server path) while normal chat worked fine, or, with a leftover local llama-server
   still running, silently generated with the LOCAL model instead of the API. An unknown API
   provider now fails loudly instead of falling back, and a test keeps the coder's provider
   map in sync with the central provider list so this cannot drift again.
 - **Chat messages no longer queue for minutes behind a coding run.** A crashed workflow step
   could leak an internal "run sub-agents in-process" flag into the long-running backend; after
   that, every coding task silently ran inside the chat turn itself instead of as a separate
-  process — the window showed the coder working, but new messages waited in line until it
+  process - the window showed the coder working, but new messages waited in line until it
   finished. The flag is now restored even when a step fails, and the runner additionally clears
   a stale flag before every chat turn.
 
@@ -3131,7 +3131,7 @@ fixes found in live testing.
   points to the right tool, instead of failing silently inside its isolated test sandbox.
 - **Tool calls that a model serializes as XML/text in the message body** are recovered and hidden
   instead of leaking into the visible reply.
-- **"Allow always" for a directory persists again** — the trusted-directory list stays
+- **"Allow always" for a directory persists again** - the trusted-directory list stays
   JSON-serializable.
 - **The coding agent's console shows output immediately.** Removed the typewriter animation that
   made the live console lag behind the real timestamps.
@@ -3144,7 +3144,7 @@ fixes found in live testing.
   verifies its work instead of asserting that "tests pass".
 - **The coding agent's shell is confined to a kernel-jailed workspace.** Coder `bash` now runs
   inside a bubblewrap jail with full access to its project but with VAF's own source, config,
-  secrets and the host docker socket structurally out of reach, and with networking unshared —
+  secrets and the host docker socket structurally out of reach, and with networking unshared -
   a generated build can never reach or overwrite the running system. Host and docker tasks move
   to the main agent's new `host_bash` tool, which runs on the host under an explicit per-command
   confirmation and is blocked on remote messaging channels (Telegram/WhatsApp/Discord) in two
@@ -3152,7 +3152,7 @@ fixes found in live testing.
 - **Deterministic ORIENT and DOCUMENT phases for the coder.** Before planning, an orientation
   scan feeds the existing project's file inventory into the planner, so edit tasks on an existing
   project no longer stall without making a change. After the build, a documentation phase creates
-  or updates the README to reflect the run's real changes (detected via git) — generated projects
+  or updates the README to reflect the run's real changes (detected via git) - generated projects
   are now documented, and an existing README is updated in place rather than overwritten.
 - **Runnable scaffold templates.** Each coder template now ships a small working example (instead
   of an empty TODO) and a matching test that is green out of the box, giving even a small model a
@@ -3170,7 +3170,7 @@ fixes found in live testing.
 ### Fixed
 - **Workflow/automation files stay in the run's chat workspace.** A workflow step that
   wrote a file with a bare relative name resolved it against the backend process working
-  directory (the user's home root), where the file endpoint then refused to serve it —
+  directory (the user's home root), where the file endpoint then refused to serve it -
   clicking the file chip navigated the whole desktop window to a raw `{"detail":"Access
   denied"}` page with no way back. Relative new-artifact paths in `write_file`/`move_file`
   steps now resolve against the shared per-run project directory; explicit absolute/`~`
@@ -3184,7 +3184,7 @@ fixes found in live testing.
   Raw file links are excluded from the desktop same-window link rewrite.
 - **In-app update notes now appear for pre-alpha installs** whose stored acknowledgement
   used the old internal version numbering, and long release notes scroll inside the card.
-- **Security:** refreshed the WhatsApp bridge and web dependency locks — all critical and
+- **Security:** refreshed the WhatsApp bridge and web dependency locks - all critical and
   high advisories resolved (63 of 64 alerts; the last is fixed by a future Next upgrade).
 
 ### Added
@@ -3223,13 +3223,13 @@ fixes found in live testing.
   installed and working). VAF now detects the missing plugin and falls back to the
   legacy binary; real compose errors still surface unchanged.
 - **Local model loads reliably (llama-server startup).** Server readiness now
-  requires `/health` = 200 — llama-server answers 503 while the model is still
+  requires `/health` = 200 - llama-server answers 503 while the model is still
   loading, and accepting any response green-lit servers that died seconds later,
   causing an endless relaunch loop with orphaned processes. Slow cold loads get a
   generous configurable budget (`server_ready_timeout`) instead of being killed
   mid-load. When the backend has no Flash Attention kernel for the model (e.g.
   Qwen3.5 on Apple Metal), the quantized V cache made the server die at context
-  init — VAF now retries once with an f16 V cache and remembers the outcome.
+  init - VAF now retries once with an f16 V cache and remembers the outcome.
   Server output is always captured to `logs/server_last.log` (crashes left zero
   diagnostics before).
 - **macOS: `model: "auto"` now scales with the machine.** Apple Silicon reported
@@ -3239,7 +3239,7 @@ fixes found in live testing.
   4B tier that actually fits.
 - **macOS: microphone/STT works in the desktop window.** The installer adds the
   microphone usage description to the host Python.app (with safe re-signing and
-  rollback), and VAF grants WebKit microphone capture — scoped to the local WebUI
+  rollback), and VAF grants WebKit microphone capture - scoped to the local WebUI
   origin and microphone-only, so pages loaded in-window (OAuth, model-card links)
   can never capture audio. Note: a `brew upgrade python@X.Y` reverts the plist
   patch; re-run `scripts/macos_mic_plist.sh` (the startup log warns about it).
@@ -3255,14 +3255,14 @@ fixes found in live testing.
   framework Python instead of the venv's Python after activating the venv, so every
   dependency showed up as "missing" and startup failed (worse on a Homebrew Python
   3.14 machine, where it hunted for the 3.14 framework binary). It now runs
-  `venv/bin/python` directly — a framework build, so the menu-bar tray still works,
+  `venv/bin/python` directly - a framework build, so the menu-bar tray still works,
   and it sees the installed packages.
 - **macOS: the menu-bar tray icon no longer crashes** (`AssertionError: self.png
   is None`, resulting in no tray icon). The icon PNG was opened lazily and read by
   pystray from its own thread while being rewritten on every call; it is now decoded
   eagerly and written atomically (temp file + rename).
 - **macOS: the onboarding step animation no longer "double-plays"** (jump up, snap
-  back, then slow slide) in the WebKit/WKWebView desktop window — a framer-motion
+  back, then slow slide) in the WebKit/WKWebView desktop window - a framer-motion
   v10 WAAPI commit-timing re-read triggered by a reflow mid-transition. The steps
   now animate on the main thread via an `onUpdate` shim.
 
@@ -3277,7 +3277,7 @@ fixes found in live testing.
   from thinking runs), and `ask_user` carries the running user's real scope so a non-admin's question
   is never delivered to the admin's messenger. `send_whatsapp_reply` now reports real delivery, so a
   down WhatsApp bridge falls back to the Web UI instead of silently dropping the message.
-- **License: relicensed from "MIT + Commons Clause v1.0" to a dual license — GNU
+- **License: relicensed from "MIT + Commons Clause v1.0" to a dual license - GNU
   AGPL-3.0-or-later (open source) plus a separate Commercial License.** `LICENSE` now
   carries the verbatim AGPL-3.0 text; see the new `LICENSING.md` (dual-license explanation,
   EN/DE) and `COMMERCIAL.md` (commercial/Enterprise terms). Building Plugins, Tools, and
@@ -3289,7 +3289,7 @@ fixes found in live testing.
 
 ### Added
 - Vision-as-a-tool for attached images (`vision_mode: "description_tool"`, default):
-  the main model is text-only — an attached image is described once via the vision
+  the main model is text-only - an attached image is described once via the vision
   backend, that description is injected as text, and the new `analyze_image` tool
   re-inspects the image on demand (exact colours, positions, small text, finding an
   object). Token-efficient, works even with a non-vision main provider, and the image

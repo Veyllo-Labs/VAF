@@ -4,7 +4,7 @@ This directory contains utility functions, shared logic, and helper modules used
 
 ## Key Files
 
-- **utils.ts**: General-purpose helpers — `cn` (Tailwind class merging with `clsx` and `tailwind-merge`) plus `getApiBase` / `getWsBase` for resolving the API and WebSocket base URLs.
+- **utils.ts**: General-purpose helpers - `cn` (Tailwind class merging with `clsx` and `tailwind-merge`) plus `getApiBase` / `getWsBase` for resolving the API and WebSocket base URLs.
 - **changelog.ts**: The product changelog data shown in the announcement modal; entries are versioned and ordered newest-first.
 - **cursorStore.ts**: Zustand store for the custom-cursor preference (VAF's dot cursor vs. the system mouse), persisted in `localStorage`.
 - **docxNative.ts**: Type definitions for the native DOCX document model (paragraphs, runs, tables, images, warnings) used by the document editor.
@@ -17,7 +17,7 @@ This directory contains utility functions, shared logic, and helper modules used
 
 ## Usage
 
-Import utilities and stores from this directory to avoid code duplication and keep logic consistent — for example resolving the API base with `getApiBase()` from `utils.ts`, or reading the active locale via `useLocaleStore()` from `localeStore.ts`.
+Import utilities and stores from this directory to avoid code duplication and keep logic consistent - for example resolving the API base with `getApiBase()` from `utils.ts`, or reading the active locale via `useLocaleStore()` from `localeStore.ts`.
 
 ## Conventions
 

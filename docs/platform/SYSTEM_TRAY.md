@@ -1,25 +1,25 @@
 # System Tray & Desktop Window
 
-VAF includes a persistent background service managed by a system tray application and a native desktop window. This allows for instant agent availability, dynamic resource management, and a native desktop experience — without requiring the user to open a browser manually.
+VAF includes a persistent background service managed by a system tray application and a native desktop window. This allows for instant agent availability, dynamic resource management, and a native desktop experience - without requiring the user to open a browser manually.
 
 ## Features
 
 - **Native Desktop Window**: VAF opens in its own dedicated window (no browser tab needed), powered by a `pywebview` WebView.
     - Windows: Edge/WebView2 (Chromium-based)
     - macOS: WKWebView (Safari engine)
-    - Linux: **PySide6 / Qt WebEngine (Chromium)** — VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
+    - Linux: **PySide6 / Qt WebEngine (Chromium)** - VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
 - **Persistent Tray Icon**: A system tray icon on all platforms indicates the server state.
     - **Green / Active**: Server is running, model is loaded into RAM.
     - **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
     - **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
-- **Window Minimize to Tray**: Closing the window hides it — the app stays running in the system tray. Click "Open VAF" to bring the window back.
+- **Window Minimize to Tray**: Closing the window hides it - the app stays running in the system tray. Click "Open VAF" to bring the window back.
 - **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources. **Never while work is in flight**: the idle check also asks whether the machine is currently busy on the user's behalf (a chat turn running or queued, a sub-agent working, an open voice call), and that term is independent of user activity. Its other inputs describe the USER, not the machine - "is a browser attached" and "has the user typed lately" - and on 2026-07-20 a long tool call was unloaded out from under itself because the user had simply been quiet for a while. The probe fails towards KEEPING the model: a needlessly warm model costs VRAM until the next check, a wrong unload destroys work in progress.
 - **WebUI-Aware Idle**: The local model unloads after 15 seconds with no active WebUI WebSocket connections (unless persistence is enabled).
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
 - **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
-- **Hot-Reload Settings**: Changing `n_ctx` (context size) or `gpu_layers` in the Web UI settings automatically restarts the `llama-server` with the new values — no full app restart required.
-- **Provider Switch**: Switching provider triggers backend config reload (`RELOAD_CONFIG`) and updates local/API execution mode. The tray's activity loop also reads the provider live and manages the local model: switching to a cloud/API provider **unloads** the local model immediately (frees RAM/VRAM), switching back to local **(re)loads** it — no waiting for the idle window.
+- **Hot-Reload Settings**: Changing `n_ctx` (context size) or `gpu_layers` in the Web UI settings automatically restarts the `llama-server` with the new values - no full app restart required.
+- **Provider Switch**: Switching provider triggers backend config reload (`RELOAD_CONFIG`) and updates local/API execution mode. The tray's activity loop also reads the provider live and manages the local model: switching to a cloud/API provider **unloads** the local model immediately (frees RAM/VRAM), switching back to local **(re)loads** it - no waiting for the idle window.
 
 ## Usage
 
@@ -84,7 +84,7 @@ The system uses a shared `TrayContext` to manage state between the Uvicorn web s
 
 - **All platforms**: Uses `pystray` for the system tray icon (runs in a background thread via `icon.run_detached()`).
 - **Desktop window**: `pywebview` (`vaf/core/desktop_window.py`) creates a native WebView window that owns the main thread (`webview.start()` blocks). Closing the window hides it; Quit destroys it and exits. Login sessions and localStorage are **persisted** across restarts (`private_mode=False`, storage in `.vaf_webview/`).
-- **Native download/print dialogs** (Qt backend): `_install_download_print_handlers()` wires the embedded QtWebEngine view so WebUI actions get native dialogs — `downloadRequested` opens a save dialog (file downloads and blob exports like Save-as-PDF), `printRequested`/`printRequestedByFrame` open a save-as-PDF dialog and render via `printToPdf()`. The frame variant matters: `window.print()` inside an iframe (Document Editor, research report print) prints the frame's content, not the app shell. pywebview's own download handler is not used — it calls the Qt5-only `download.setPath()`, which does not exist on PySide6/Qt6.
+- **Native download/print dialogs** (Qt backend): `_install_download_print_handlers()` wires the embedded QtWebEngine view so WebUI actions get native dialogs - `downloadRequested` opens a save dialog (file downloads and blob exports like Save-as-PDF), `printRequested`/`printRequestedByFrame` open a save-as-PDF dialog and render via `printToPdf()`. The frame variant matters: `window.print()` inside an iframe (Document Editor, research report print) prints the frame's content, not the app shell. pywebview's own download handler is not used - it calls the Qt5-only `download.setPath()`, which does not exist on PySide6/Qt6.
 - **Thread model**:
   - Main thread → `webview.start()` (pywebview GUI loop)
   - Background threads → pystray tray icon, uvicorn backend, Next.js frontend, agent loop
@@ -111,9 +111,9 @@ sudo pacman -S python-gobject webkit2gtk
 ```
 
 VAF sets the following environment variables automatically on startup:
-- `GDK_BACKEND=x11` — forces GTK (pystray) to use X11/XWayland
-- `QT_QPA_PLATFORM=xcb` — forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
-- `WEBKIT_DISABLE_DMABUF_RENDERER=1` — avoids GBM buffer errors under XWayland
+- `GDK_BACKEND=x11` - forces GTK (pystray) to use X11/XWayland
+- `QT_QPA_PLATFORM=xcb` - forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
+- `WEBKIT_DISABLE_DMABUF_RENDERER=1` - avoids GBM buffer errors under XWayland
 - `__GL_THREADED_OPTIMIZATIONS=0` - NVIDIA hosts only: disables the proprietary
   driver's CPU-offload worker threads for this process. A live incident (2026-07-22)
   aborted the whole tray process from inside the NVIDIA GL library while presenting
@@ -155,15 +155,15 @@ When modifying the tray or adding platform-specific logic, observe these differe
 
 | Aspect | Requirement |
 |--------|-------------|
-| **Tray library** | `pystray` (same as Windows/Linux). `rumps` was removed — it conflicts with pywebview for main-thread ownership. |
-| **Initialization** | pystray runs detached; pywebview owns the main thread. This is exactly why the menu-bar icon fails when VAF is launched as an `.app` bundle — see *Menu-bar tray & bundle launch* below. |
+| **Tray library** | `pystray` (same as Windows/Linux). `rumps` was removed - it conflicts with pywebview for main-thread ownership. |
+| **Initialization** | pystray runs detached; pywebview owns the main thread. This is exactly why the menu-bar icon fails when VAF is launched as an `.app` bundle - see *Menu-bar tray & bundle launch* below. |
 | **Signals** | Handle `SIGTERM`, `SIGINT`, `SIGHUP` for clean shutdown (Dock Quit, Cmd+Q). |
 | **Icon** | 44×44 recommended for Retina; macOS downscales as needed. |
 
 #### Menu-bar tray & bundle launch (Spotlight / Dock)
 
 **`pystray`'s menu-bar icon only appears reliably when VAF is launched from a
-terminal — NOT when launched as an `.app` bundle** (Spotlight / Dock / `open`).
+terminal - NOT when launched as an `.app` bundle** (Spotlight / Dock / `open`).
 Symptom: bundle-launched VAF has a window but no tray icon, so there is no way to
 quit it from the UI.
 
@@ -174,26 +174,26 @@ A detached status item still registers when the process is a plain terminal
 child, but a **bundle**-launched process binds to the `.app`'s NSApplication
 (pywebview's) and the detached icon never shows. Before `d4e8dbd`, VAF was
 browser-only and pystray ran on the main thread via `icon.run()`, so the bundled
-app worked — this is a regression introduced by the desktop window.
+app worked - this is a regression introduced by the desktop window.
 
 The fundamental constraint: **one Python process cannot give the macOS main
 thread to BOTH the native window (pywebview) AND the menu-bar tray (pystray).**
 
-**Fix in use — Terminal hand-off:** `VAF.app` does not run VAF directly. Its
+**Fix in use - Terminal hand-off:** `VAF.app` does not run VAF directly. Its
 launcher (generated by `scripts/create_app_shortcut.py`) hands the run off to
 **Terminal** via `osascript` (`do script "cd <vaf> && ./run_vaf.sh tray"`),
 minimises the Terminal window, and the `.app` exits. VAF then runs in the
 working terminal context → menu-bar tray **+ native window + splash + working
 Quit**, all via Spotlight. Notes:
 - First launch shows a one-time macOS prompt: *"VAF" wants to control "Terminal"*
-  (Automation) — the user must approve it once.
+  (Automation) - the user must approve it once.
 - The minimised Terminal window keeps VAF alive; closing it hard-kills VAF. The
   clean way to quit is the tray **Quit**.
 
 **Alternative (built, not wired into the installer):** the native Swift menu-bar
 app `scripts/macos/VAFTray` (+ `scripts/macos/build_app.sh`) owns the main thread
 for a real `NSStatusBar` tray and runs VAF headless (`VAF_NATIVE_WRAPPER=1`).
-Trade-off: it opens the Web UI in the **browser** — no pywebview window / splash.
+Trade-off: it opens the Web UI in the **browser** - no pywebview window / splash.
 `setup_mac.sh` currently calls `create_app_shortcut.py` (the Terminal hand-off),
 not `build_app.sh`.
 
@@ -201,13 +201,13 @@ not `build_app.sh`.
 
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
-- Desktop window API: `vaf.core.desktop_window` — `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.
+- Desktop window API: `vaf.core.desktop_window` - `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.
 
-## Rendering & Memory (Linux / Qt WebEngine) — Anti-Leak Notes
+## Rendering & Memory (Linux / Qt WebEngine) - Anti-Leak Notes
 
 On Linux the desktop window is **Qt WebEngine (Chromium)** running with the **GPU in-process**.
 In that configuration a continuously *repainting* UI animation leaks GPU tile/texture memory
-into the **renderer** process — the JS heap stays tiny (~10 MB) while the OS RSS of
+into the **renderer** process - the JS heap stays tiny (~10 MB) while the OS RSS of
 `QtWebEngineProcess` climbs unbounded. A May-2026 investigation traced RSS from ~0.9 GB to
 **7 GB** to exactly these causes; the rules below keep it bounded (~1.5 GB, self-reclaiming):
 

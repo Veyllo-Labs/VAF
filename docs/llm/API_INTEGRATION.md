@@ -82,9 +82,9 @@ Each provider has default models, but you can customize:
 
 ### Single source of truth for provider models
 
-The per-provider default model and the static fallback list shown in the dropdown live in one place: `PROVIDER_MODELS` in `vaf/core/config.py`. To change a default or a fallback, edit that dict only — every Python call site reads it (`Config.get_default_model()` / `Config.get_fallback_models()`, `APIBackendManager`, the agent, the browser agent), and the web UI reads it through `GET /api/provider-models`.
+The per-provider default model and the static fallback list shown in the dropdown live in one place: `PROVIDER_MODELS` in `vaf/core/config.py`. To change a default or a fallback, edit that dict only - every Python call site reads it (`Config.get_default_model()` / `Config.get_fallback_models()`, `APIBackendManager`, the agent, the browser agent), and the web UI reads it through `GET /api/provider-models`.
 
-The dropdown is otherwise populated dynamically: when you enter an API key, VAF fetches the provider's live model list (`/v1/models`) and the live list takes precedence. The static fallback is used only when no key is set or the fetch fails (offline, rate limit). `local` is not in `PROVIDER_MODELS` — GGUF models are discovered from disk, not a fixed list.
+The dropdown is otherwise populated dynamically: when you enter an API key, VAF fetches the provider's live model list (`/v1/models`) and the live list takes precedence. The static fallback is used only when no key is set or the fetch fails (offline, rate limit). `local` is not in `PROVIDER_MODELS` - GGUF models are discovered from disk, not a fixed list.
 
 ## Sub-Agent Provider Configuration
 
@@ -131,7 +131,7 @@ The `web_search` tool can use optional search APIs when keys are set. This avoid
 
 **Order of use:** Brave Search API (if key set) → Google Custom Search API (if key and search engine ID set) → scrape Google → DuckDuckGo → **internal knowledge (RAG)**.
 
-The final fallback consults VAF's own long-term memory when every web provider fails (rate limit, missing keys, network down) or genuinely finds nothing — useful for internal topics the web cannot know. Memory hits are labeled honestly: `memory://` hrefs, titles prefixed "Internes Wissen" with the relevance score, `source: internal_knowledge`. Provider failures are also collected (`get_search_provider_errors()` in `vaf/tools/search.py`) so callers like the research agent can report "search unavailable" instead of pretending there were no results.
+The final fallback consults VAF's own long-term memory when every web provider fails (rate limit, missing keys, network down) or genuinely finds nothing - useful for internal topics the web cannot know. Memory hits are labeled honestly: `memory://` hrefs, titles prefixed "Internes Wissen" with the relevance score, `source: internal_knowledge`. Provider failures are also collected (`get_search_provider_errors()` in `vaf/tools/search.py`) so callers like the research agent can report "search unavailable" instead of pretending there were no results.
 
 **Whose memory the fallback reads is the caller's.** `web_search` declares `user_scope_id` in its `identity_kwargs`, so the dispatcher assigns the calling user's scope and it travels down the chain as an argument. The tool does not resolve an identity of its own. It used to: the scope came from `os.environ["VAF_SESSION_ID"]` through that session's metadata, and that variable is process-global - with `parallel_main_workers` above one it could name another user's session at the moment of the fallback, and one person's web search would then answer with another person's memories. Note the shape: a MISSING scope was already safe (`run_memory_search_sync` refuses outright in server mode), so what leaked was a scope that was present, real and wrong. Direct callers that pass no scope get the same refusal as before.
 
@@ -188,36 +188,36 @@ All API providers support **streaming responses** for real-time output.
 
 Providers that support multimodal (image) input:
 
-- **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
-- **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) — converted to `source.base64` format
-- **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) — converted to `Part.from_bytes` (inline_data) parts
-- **OpenRouter** — provider-dependent (model must support vision)
-- **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
+- **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) - `image_url` with data URIs
+- **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) - converted to `source.base64` format
+- **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) - converted to `Part.from_bytes` (inline_data) parts
+- **OpenRouter** - provider-dependent (model must support vision)
+- **DeepSeek** - the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
 - **Local** (`vision_provider = "local"`): VAF's own llama-server is launched with the model's mmproj projector and sees images itself, no cloud. The projector is resolved by `backend.resolve_mmproj_for` (explicit `vision_local_mmproj` ref, else `mmproj-F16.gguf` from the model's known repo); vision activates on the next model (re)start. With an external OpenAI-compatible server (`local_api_url`, e.g. Ollama) the loaded model must support vision itself (e.g. `llava`).
 
-**How it works (default `vision_mode = "description_tool"`):** the main reasoning model is **text-only** — raw image bytes never enter its context. Vision is a separate, on-demand service.
+**How it works (default `vision_mode = "description_tool"`):** the main reasoning model is **text-only** - raw image bytes never enter its context. Vision is a separate, on-demand service.
 
 1. The UI encodes images as base64 data URIs and sends them in the `files` array of the WebSocket `chat` message (`mimeType` starts with `image/`).
-2. `web_server.py` separates image files from document/text files and writes each image as a **file** into the user-siloed chat folder `VAF_Projects/<uid8>/<session_id>/attachments/` (`_persist_attached_images_to_files()` → `get_session_attachments_dir()`). `task.metadata["images"]` then carries `{name, mime_type, path}` — **not** inline base64 — so the session stays lean and the agent has a real file location. (On a write error it falls back to inline `{…, data}` so vision never breaks.)
+2. `web_server.py` separates image files from document/text files and writes each image as a **file** into the user-siloed chat folder `VAF_Projects/<uid8>/<session_id>/attachments/` (`_persist_attached_images_to_files()` → `get_session_attachments_dir()`). `task.metadata["images"]` then carries `{name, mime_type, path}` - **not** inline base64 - so the session stays lean and the agent has a real file location. (On a write error it falls back to inline `{…, data}` so vision never breaks.)
 3. `headless_runner.py` passes the images to `agent.chat_step(images=...)` and persists `{name, mime_type, path, base_description}` to the session in `Message.metadata["images"]`.
 4. On the turn an image first arrives, `agent.chat_step` runs it **once** through the vision backend (`vaf/core/vision_infer.py` → `vision_infer()`, with a neutral comprehensive prompt) and stores the result as `base_description` on the image. This is idempotent and persisted, so it is generated once per image and survives a reload / worker-pool pickup.
 5. `_prepare_messages()` replaces each attached image with a `[VISUAL CONTEXT …]` **text** block built from that base description (`build_visual_context_text()`); no `image_url` block and no base64 reaches the main model.
-6. When the model needs more than the description covers (exact colours, positions, small text, finding an object), it calls the **`analyze_image`** tool, which re-reads the image — live agent history first, then the persisted session — and runs a fresh, targeted `vision_infer()` pass, returning text.
+6. When the model needs more than the description covers (exact colours, positions, small text, finding an object), it calls the **`analyze_image`** tool, which re-reads the image - live agent history first, then the persisted session - and runs a fresh, targeted `vision_infer()` pass, returning text.
 7. Backend selection (`select_vision_backend()`): use `vision_provider`/`vision_model` if set, else the main provider when it is vision-capable, else none. The provider classes convert `image_url` blocks to their own wire format (OpenAI passthrough; `AnthropicProvider._convert_content()` → `source.base64`; `GoogleProvider` → `types.Part.from_bytes`). `vision_provider = "local"` routes to VAF's own llama-server (OpenAI `image_url` data-URI passthrough on `:8080`); `vision_model` is unused there since the loaded GGUF does the seeing, and `_model_supports_vision("local")` probes the running server's `/v1/models` for image support so a projector-less server is not treated as vision-capable.
 
 `vision_infer()` never raises and filters provider error sentinels (`[API Error from …]`) and reasoning `<think>`/control-JSON chunks, so a failed or noisy vision call never becomes a stored description (it returns `None`, leaving the image to be re-described or inspected via `analyze_image` later).
 
-**Legacy mode (`vision_mode = "inline_multimodal"`):** restores the previous behaviour — `_prepare_messages()` builds raw `image_url` content blocks straight for a multimodal main model, with a per-turn vision fallback for non-vision primaries.
+**Legacy mode (`vision_mode = "inline_multimodal"`):** restores the previous behaviour - `_prepare_messages()` builds raw `image_url` content blocks straight for a multimodal main model, with a per-turn vision fallback for non-vision primaries.
 
-**Persistence & storage:** uploaded images are stored as **files** under `VAF_Projects/<uid8>/<session_id>/attachments/` (user-siloed, covered by the `is_safe_path` jail); `Message.metadata["images"]` keeps only `{name, mime_type, path, base_description}`. `vaf/core/vision_infer.py` → `image_to_b64()` is the single byte accessor — it reads the file at `path` (or inline `data` for legacy sessions). Benefits: `session.json` stays small; the agent can reference the image by path (`list_files` / `read_file` / `analyze_image`, and the path appears in the `[VISUAL CONTEXT …]` block and the `[SESSION WORKSPACE]` prompt); the WebUI re-displays the image after a reload by fetching it from `GET /api/file?path=…` (which enforces per-user isolation). Legacy sessions that still hold inline base64 keep working unchanged (no migration). The base description stays in context while its turn is in history; once that turn ages out via compression, `analyze_image` can still re-read the file on demand.
+**Persistence & storage:** uploaded images are stored as **files** under `VAF_Projects/<uid8>/<session_id>/attachments/` (user-siloed, covered by the `is_safe_path` jail); `Message.metadata["images"]` keeps only `{name, mime_type, path, base_description}`. `vaf/core/vision_infer.py` → `image_to_b64()` is the single byte accessor - it reads the file at `path` (or inline `data` for legacy sessions). Benefits: `session.json` stays small; the agent can reference the image by path (`list_files` / `read_file` / `analyze_image`, and the path appears in the `[VISUAL CONTEXT …]` block and the `[SESSION WORKSPACE]` prompt); the WebUI re-displays the image after a reload by fetching it from `GET /api/file?path=…` (which enforces per-user isolation). Legacy sessions that still hold inline base64 keep working unchanged (no migration). The base description stays in context while its turn is in history; once that turn ages out via compression, `analyze_image` can still re-read the file on demand.
 
-**Non-vision main providers:** in `description_tool` mode a non-vision main model (e.g. DeepSeek) still works — the configured `vision_provider` does the seeing and the main model only ever reads text. If no vision backend is available at all, the image is marked as un-analysed and the model is told to ask the user to configure a Vision Model; the vision-capability check lives in `vaf/core/agent.py` and `vaf/core/vision_infer.py` (`_model_supports_vision()`).
+**Non-vision main providers:** in `description_tool` mode a non-vision main model (e.g. DeepSeek) still works - the configured `vision_provider` does the seeing and the main model only ever reads text. If no vision backend is available at all, the image is marked as un-analysed and the model is told to ask the user to configure a Vision Model; the vision-capability check lives in `vaf/core/agent.py` and `vaf/core/vision_infer.py` (`_model_supports_vision()`).
 
-**Image downscaling:** Before an image is sent, oversized images are downscaled — the longest edge is capped (default 2000 px; OpenAI internally caps high-detail at ~2048 px) and the image is re-encoded (JPEG by default; PNGs with transparency stay PNG). This runs in `vaf/core/image_utils.py` → `downscale_image_b64()`, applied inside `vision_infer()` (base description + `analyze_image`) and the legacy `_prepare_messages()` inline path, so every provider benefits. It prevents OpenAI returning **HTTP 500** on full-resolution photos (multi-MB base64 payloads) and lowers token cost; images already within the cap are passed through byte-for-byte. The helper never raises — on any decode error it sends the original. Tunable via `vision_image_max_edge` and `vision_image_jpeg_quality`.
+**Image downscaling:** Before an image is sent, oversized images are downscaled - the longest edge is capped (default 2000 px; OpenAI internally caps high-detail at ~2048 px) and the image is re-encoded (JPEG by default; PNGs with transparency stay PNG). This runs in `vaf/core/image_utils.py` → `downscale_image_b64()`, applied inside `vision_infer()` (base description + `analyze_image`) and the legacy `_prepare_messages()` inline path, so every provider benefits. It prevents OpenAI returning **HTTP 500** on full-resolution photos (multi-MB base64 payloads) and lowers token cost; images already within the cap are passed through byte-for-byte. The helper never raises - on any decode error it sends the original. Tunable via `vision_image_max_edge` and `vision_image_jpeg_quality`.
 
 ### Request Timeouts & Retries (API providers)
 
-The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout, or connection drop — VAF retries the call a few times with backoff. This covers **all** providers (OpenAI/DeepSeek/OpenRouter/local, Anthropic, Google), not just the OpenAI-compatible path. A 429's `Retry-After` header is honored, capped by `api_retry_after_max` (default 30 s) so a large value cannot stall a worker; otherwise the backoff is exponential. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of each SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts`, `api_retry_after_max` and `api_timeout_*`.
+The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation - **HTTP 429 (rate limit)**, 5xx, timeout, or connection drop - VAF retries the call a few times with backoff. This covers **all** providers (OpenAI/DeepSeek/OpenRouter/local, Anthropic, Google), not just the OpenAI-compatible path. A 429's `Retry-After` header is honored, capped by `api_retry_after_max` (default 30 s) so a large value cannot stall a worker; otherwise the backoff is exponential. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of each SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts`, `api_retry_after_max` and `api_timeout_*`.
 
 ### Multi-Tool Wrapper Compatibility
 
@@ -281,7 +281,7 @@ API request timed out for openai
 2. **Owner-only config** - VAF writes `config.json` with `0600` permissions automatically where the OS supports it, so other local users cannot read it. On Windows, ensure only the running user can read `~/.vaf/`.
 3. **For stronger protection**, consider:
    - Environment variables: `export ANTHROPIC_API_KEY="..."`
-   - System keyring for API keys (OAuth and IMAP credentials already use it — see [CONNECTIONS.md](../integrations/CONNECTIONS.md))
+   - System keyring for API keys (OAuth and IMAP credentials already use it - see [CONNECTIONS.md](../integrations/CONNECTIONS.md))
    - Secret management services (AWS Secrets Manager, etc.)
 
 **Verify file permissions (Unix):**
@@ -323,7 +323,7 @@ and adaptive thinking. Two optional config flags (`~/.vaf/config.json`):
 | `anthropic_prompt_cache` | `true` | Caches the system prompt prefix (`cache_control: ephemeral`) to cut cost on multi-turn / tool loops. Note: VAF's system prompt contains volatile parts (date etc.), so the cache hit rate may be limited until the prefix is stable. |
 
 Sampling note: `temperature` is omitted automatically when thinking is active or on models
-that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request would 400.
+that reject sampling params (Opus 4.7/4.8, Fable) - otherwise the request would 400.
 
 **Get API Key:** https://console.anthropic.com/
 
@@ -337,7 +337,7 @@ that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request woul
 
 **Get API Key:** https://platform.deepseek.com/
 
-**Note:** The commercial API (`api.deepseek.com/v1`) is text-only — image input is not supported for any model. Use Anthropic or OpenAI for vision tasks.
+**Note:** The commercial API (`api.deepseek.com/v1`) is text-only - image input is not supported for any model. Use Anthropic or OpenAI for vision tasks.
 
 ### Google AI Studio
 
@@ -356,7 +356,7 @@ config flag (`~/.vaf/config.json`):
 | `google_thinking` | `true` | Surface model reasoning on thinking-capable models (Gemini 2.5/3.x), shown wrapped in `<think>…</think>` like DeepSeek. Set `false` to hide it. |
 
 **Note:** Gemini 1.5 models are retired (return 404) and `gemini-2.0-flash` is being
-shut down — use the 2.5/3.x models above.
+shut down - use the 2.5/3.x models above.
 
 **Get API Key:** https://makersuite.google.com/app/apikey
 
@@ -461,7 +461,7 @@ These endpoints support the Local Network Hosting feature.
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the URL other devices on the LAN should use. The port is the integrated HTTPS proxy's effective bound port — 443 when bindable, otherwise 8443 after the automatic cross-platform fallback (Linux/macOS/Windows); the response always uses `https` (server mode is always TLS). `backend_port` is informational — the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
+Returns the URL other devices on the LAN should use. The port is the integrated HTTPS proxy's effective bound port - 443 when bindable, otherwise 8443 after the automatic cross-platform fallback (Linux/macOS/Windows); the response always uses `https` (server mode is always TLS). `backend_port` is informational - the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
 
 **Response (TLS on):**
 ```json
@@ -496,7 +496,7 @@ Returns a list of currently connected devices for the Network Topology map.
 ### 3. Get Network Status
 **GET** `/api/network/status`
 
-Returns the real runtime state of LAN hosting — whether the integrated HTTPS proxy actually bound and on which port (after any 443->8443 fallback), the resulting LAN URL, and the last bind error if it failed. The Local Network status dot in the UI reads this.
+Returns the real runtime state of LAN hosting - whether the integrated HTTPS proxy actually bound and on which port (after any 443->8443 fallback), the resulting LAN URL, and the last bind error if it failed. The Local Network status dot in the UI reads this.
 
 **Response:**
 ```json
@@ -521,4 +521,4 @@ Tells the caller which WebSocket transport to use; the answer differs per client
 
 - TLS off -> `{ "useWss": false, "port": 8001 }` (plain backend port).
 - TLS on, request carries `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`.
-- TLS on, no such header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` — the internal plain channel, since the desktop's QtWebEngine rejects the proxy's self-signed certificate.
+- TLS on, no such header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` - the internal plain channel, since the desktop's QtWebEngine rejects the proxy's self-signed certificate.

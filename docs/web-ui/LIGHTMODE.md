@@ -1,4 +1,4 @@
-# Light Mode — Color Reference
+# Light Mode - Color Reference
 
 The exact colors the VAF web UI uses in **light mode** (the default), for every
 surface, control, the agent avatar and its animation. Its twin is
@@ -6,7 +6,7 @@ surface, control, the agent avatar and its animation. Its twin is
 design tokens live in [DESIGN.md](DESIGN.md); avatar behavior in
 [AgentAvatar.md](AgentAvatar.md).
 
-Light mode is the original design. Its values are the **stock Tailwind palette** —
+Light mode is the original design. Its values are the **stock Tailwind palette** -
 the `:root` CSS variables in `web/app/globals.css` are byte-identical to Tailwind's
 defaults, so with the theme toggle off the UI renders exactly as it did before dark
 mode existed.
@@ -22,7 +22,7 @@ mode existed.
 The palette is a **folding per-utility swap** (see [DARKMODE.md](DARKMODE.md) for the
 full explanation): `bg-white`, `bg-gray-50..400`, borders and `text-gray-400..900`
 resolve through CSS variables. In light mode those variables hold the **stock
-Tailwind** values, so the swap is a no-op visually — everything below is just
+Tailwind** values, so the swap is a no-op visually - everything below is just
 Tailwind's own palette. Components carry `dark:` overrides for their dark values; in
 light mode only the base (non-`dark:`) classes apply.
 
@@ -86,9 +86,9 @@ The avatar is a rounded square **body** with a white **dot** (eye). See
 | Eye (active) | `#ffffff` |
 | Eye (dim) | `#b0b0b0` |
 | Overlay glyph inks (orbs, rings, halo, check, bang) | `#2a3142` (dark ink on the light surface) |
-| Step dots — active (think/say) | `bg-gray-900` / white with dark border |
-| Step dots — done | `bg-gray-400` |
-| Step dots — pending | `border-gray-400` ring |
+| Step dots - active (think/say) | `bg-gray-900` / white with dark border |
+| Step dots - done | `bg-gray-400` |
+| Step dots - pending | `border-gray-400` ring |
 | Expanded-dot halo | `hsl(var(--background))` = `#ffffff` |
 
 ## Special surfaces
@@ -105,12 +105,12 @@ The avatar is a rounded square **body** with a white **dot** (eye). See
 ## Protected surfaces
 
 Same set as dark mode (document paper, iframes, exports, Monaco, user content, modal
-scrims, status colors) — in light mode they already match the surrounding light UI,
+scrims, status colors) - in light mode they already match the surrounding light UI,
 so no special handling is needed.
 
 ## Adding new UI
 
 - Use plain Tailwind neutrals; they render as the stock values above.
-- Any color fix must keep light mode **byte-identical** — do dark changes as `dark:`
+- Any color fix must keep light mode **byte-identical** - do dark changes as `dark:`
   overrides only, never by editing the base class. A token diff of a dark-mode change
   should show only `dark:` additions (see [DARKMODE.md](DARKMODE.md)).

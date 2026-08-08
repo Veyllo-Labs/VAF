@@ -164,7 +164,7 @@ An earlier `new_prompt` `NameError` on compression without user input has been r
 
 ### Dangling `tool_calls` after compression
 
-`compress()` keeps the last N messages as `recent_messages` and discards the middle section. If this middle section contains a `{role: "tool", tool_call_id: "X"}` response while the corresponding `{role: "assistant", tool_calls: [{id: "X"}]}` message ends up in `recent_messages`, a "dangling tool_call" is created — the API (e.g. DeepSeek) rejects this state with HTTP 400.
+`compress()` keeps the last N messages as `recent_messages` and discards the middle section. If this middle section contains a `{role: "tool", tool_call_id: "X"}` response while the corresponding `{role: "assistant", tool_calls: [{id: "X"}]}` message ends up in `recent_messages`, a "dangling tool_call" is created - the API (e.g. DeepSeek) rejects this state with HTTP 400.
 
 **Fix (since 2026-05-14):** `_prepare_messages()` in `agent.py` runs a cleanup pass before every API call: all `tool_call_id`s in `{role: "tool"}` messages are collected; `tool_calls` entries in `assistant` messages without a matching response are removed. If all calls in a message are dangling, `tool_calls` is removed entirely.
 

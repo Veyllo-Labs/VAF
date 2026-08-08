@@ -80,7 +80,7 @@ agent.load_session_context(task.session_id)
 # ... then process task.input_text (chat) or _handle_command (system command)
 ```
 
-For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools. The `username` and channel ids are re-applied unconditionally, but `user_scope_id` is now re-stamped onto the session only when the session has no scope yet — an already-owned session is never relabeled, so a queued chat cannot take it over (takeover hardening).
+For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools. The `username` and channel ids are re-applied unconditionally, but `user_scope_id` is now re-stamped onto the session only when the session has no scope yet - an already-owned session is never relabeled, so a queued chat cannot take it over (takeover hardening).
 
 For channel-origin tasks, the runtime prompt context is additionally bounded to a recent history window (default: `15`, configurable via `channel_history_window_messages`):
 
@@ -116,7 +116,7 @@ def _push_session_update(self, session_id: str, data: dict):
 ### 5. User isolation (multi-user)
 
 - **Session list:** The backend filters sessions by the connection's `user_scope_id` (`SessionManager.list(..., user_scope_id=...)`). Users only see their own sessions and legacy sessions (no scope).
-- **Session-command ownership:** A single shared gate verifies ownership before the first side effect of every Web UI session command — chat (before subscribing), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or local-admin scope). A session with no recorded scope is treated as admin-only (unlike the session list, which still shows no-scope sessions to all users). On denial the server replies `Access denied` and keeps the connection open.
+- **Session-command ownership:** A single shared gate verifies ownership before the first side effect of every Web UI session command - chat (before subscribing), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or local-admin scope). A session with no recorded scope is treated as admin-only (unlike the session list, which still shows no-scope sessions to all users). On denial the server replies `Access denied` and keeps the connection open.
 - **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a single global `web-default`.
 
 ### 6. Initial Session Bootstrap
@@ -287,7 +287,7 @@ Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
 Besides plain `user`/`assistant` text, each turn also persists what the agent *did*, so it stays aware of its own tool calls and their errors across reloads:
 
 - The `Message` model carries optional `tool_calls` (on assistant messages) and `tool_call_id` + `name` (on `role: "tool"` results). These are written to disk and restored on load, preserving valid `tool_use`/`tool_result` pairs (`load_session_context` keeps the linkage and no longer drops a tool-call assistant message just because its visible text is empty).
-- After the turn-end squash (see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) — *Per-Turn Intermediate-Step Squash*), the raw tool scaffolding is usually replaced by a single `role: "system"` summary that starts with `[Context: …]` and lists each tool's outcome (`OK`/`FAILED` + a short snippet). That summary is persisted and, unlike other operational system messages, is **kept** on reload (it is exempt from the system-message ignore filter).
+- After the turn-end squash (see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) - *Per-Turn Intermediate-Step Squash*), the raw tool scaffolding is usually replaced by a single `role: "system"` summary that starts with `[Context: …]` and lists each tool's outcome (`OK`/`FAILED` + a short snippet). That summary is persisted and, unlike other operational system messages, is **kept** on reload (it is exempt from the system-message ignore filter).
 
 Example of a tool turn as stored:
 
@@ -302,9 +302,9 @@ Example of a tool turn as stored:
 `project_path` is the **stable workspace root** for a chat session. It is set automatically on the first `file_created` event for that session (in `vaf/core/web_server.py`) and never overwritten afterward. This gives the session a permanent home directory even if the user creates multiple projects within the same chat.
 
 Rules:
-- Only set for paths inside `~/Documents/VAF_Projects/` — temporary files and one-off outputs are excluded.
+- Only set for paths inside `~/Documents/VAF_Projects/` - temporary files and one-off outputs are excluded.
 - New projects are created per chat: `VAF_Projects/<uid[:8]>/<session_id>/<ProjectName>` (the session level applies whenever a session id is available).
-- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event — except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; legacy sessions holding such paths are corrected automatically on load).
+- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event - except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; legacy sessions holding such paths are corrected automatically on load).
 - **Image attachments** uploaded in a chat are stored as files under `VAF_Projects/<uid[:8]>/<session_id>/attachments/` (`get_session_attachments_dir()`); `Message.metadata["images"]` holds only `{name, mime_type, path, base_description}`, not inline base64. The agent reads them by path (`analyze_image` / `read_file`); the Web UI serves them via `GET /api/file`. See the vision section in `docs/llm/API_INTEGRATION.md`.
 
 At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:

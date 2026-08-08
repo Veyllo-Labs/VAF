@@ -19,7 +19,7 @@ sequence is:
    worker is still inside `chat_step()` for the first message (either a very long
    stream or a hang).
 3. A second user message is enqueued (`QUEUE_ADD` for the session). The Web UI shows
-   "Queued input for session …". There is no `QUEUE_GET` for this second message — the
+   "Queued input for session …". There is no `QUEUE_GET` for this second message - the
    worker never picks it up.
 4. The idle timeout is reached and the Tray unloads the model ("Idle timeout reached.
    Unloading model (loaded=True)."). llama-server is stopped (`stop_server`), followed

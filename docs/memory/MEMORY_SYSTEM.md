@@ -28,7 +28,7 @@ The memory system is **self-learning**: it improves with use. The more you chat 
 
 #### User isolation (retrieval is per-user and fails closed)
 
-Memory **retrieval** is per-user, not just writes. Both retrieval lanes — the vector lane and the lexical/hybrid lane — filter on `Memory.user_scope_id == user_scope_id` (the caller's scope). The isolation is **fail-closed**: a missing or empty scope returns **no results**, never a "search all" fallback, and an unparseable scope is treated as a deny rather than a wildcard.
+Memory **retrieval** is per-user, not just writes. Both retrieval lanes - the vector lane and the lexical/hybrid lane - filter on `Memory.user_scope_id == user_scope_id` (the caller's scope). The isolation is **fail-closed**: a missing or empty scope returns **no results**, never a "search all" fallback, and an unparseable scope is treated as a deny rather than a wildcard.
 
 Server-vs-local resolution: `run_memory_search_sync` denies (`RAG_DENY` / `SEARCH_DENIED`) for a missing scope in server mode, and floors to the local-admin scope only in single-user/local mode. See [USER_ISOLATION.md](../security/USER_ISOLATION.md) for the full isolation model.
 
@@ -99,7 +99,7 @@ This starts:
 
 ### 2. Enable Memory System
 
-The Memory System is enabled by default. There is no UI toggle — it stays on unless you opt out by setting `memory_enabled: false` in `~/.vaf/config.json`.
+The Memory System is enabled by default. There is no UI toggle - it stays on unless you opt out by setting `memory_enabled: false` in `~/.vaf/config.json`.
 
 ### 3. Access the Memory Graph
 
@@ -108,7 +108,7 @@ The Memory System is enabled by default. There is no UI toggle — it stays on u
 
 ## Configuration
 
-Memory settings live in `~/.vaf/config.json` (the Memory System has no UI toggle — it is on by default):
+Memory settings live in `~/.vaf/config.json` (the Memory System has no UI toggle - it is on by default):
 
 | `config.json` key | Default | Description |
 |---------|---------|-------------|
@@ -174,7 +174,7 @@ Practical guidance:
 - Raise only if lexical-only noise starts dominating fused top-k.
 - Keep `attachment_rag_threshold` and `attachment_rag_lexical_min_score` independent; they are different score scales.
 
-**Why vector mode is the default.** Earlier the attachment vector path could trigger runaway RSS growth under repeated index/search/clear loops, so the bounded lexical "safe mode" was the conservative default. The root cause turned out to be an infinite loop in the text chunker's tail handling (unbounded chunk creation), **not** the embedding model or pgvector — it is fixed in `TextChunker.chunk()` (`vaf/memory/embeddings.py`, with a `reached_end`/`end >= len(text)` break plus a non-increasing-`start` guard). The vector and hierarchical paths were then verified stable (RSS stays flat over long index/search/clear runs), so vector mode is now the default. Set `attachment_rag_safe_mode=true` to force the lexical fallback. Note that the vector path requires the pgvector database (`vaf-memory-db`) to be running, like the rest of the memory system.
+**Why vector mode is the default.** Earlier the attachment vector path could trigger runaway RSS growth under repeated index/search/clear loops, so the bounded lexical "safe mode" was the conservative default. The root cause turned out to be an infinite loop in the text chunker's tail handling (unbounded chunk creation), **not** the embedding model or pgvector - it is fixed in `TextChunker.chunk()` (`vaf/memory/embeddings.py`, with a `reached_end`/`end >= len(text)` break plus a non-increasing-`start` guard). The vector and hierarchical paths were then verified stable (RSS stays flat over long index/search/clear runs), so vector mode is now the default. Set `attachment_rag_safe_mode=true` to force the lexical fallback. Note that the vector path requires the pgvector database (`vaf-memory-db`) to be running, like the rest of the memory system.
 
 ### Hierarchical Attachment Indexing
 
@@ -182,16 +182,16 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 
 **How it works:**
 
-1. **Section detection** — the document is split into sections using markdown headers (`## Title`), page markers, or paragraph breaks. Sections shorter than 500 chars are merged; sections longer than 5 000 chars are split at sentence boundaries. For PDF attachments these Markdown headings are produced by the shared extractor (`vaf/core/pdf_extract.py`), which infers headings from font size and renders tables as Markdown; without it PyPDF2 yields unstructured text and only page-marker sections are found.
-2. **Section summaries (Tier 1)** — one LLM call per section generates a 1-2 sentence summary. Each section is stored as a `Memory` row whose embedding encodes the summary. If the LLM call fails, the first 300 chars of the section are used as a fallback.
-3. **Chunk index (Tier 2)** — the section's full text is chunked normally (512-token chunks, 50-token overlap) and stored as `Chunk` rows linked to the section Memory.
+1. **Section detection** - the document is split into sections using markdown headers (`## Title`), page markers, or paragraph breaks. Sections shorter than 500 chars are merged; sections longer than 5 000 chars are split at sentence boundaries. For PDF attachments these Markdown headings are produced by the shared extractor (`vaf/core/pdf_extract.py`), which infers headings from font size and renders tables as Markdown; without it PyPDF2 yields unstructured text and only page-marker sections are found.
+2. **Section summaries (Tier 1)** - one LLM call per section generates a 1-2 sentence summary. Each section is stored as a `Memory` row whose embedding encodes the summary. If the LLM call fails, the first 300 chars of the section are used as a fallback.
+3. **Chunk index (Tier 2)** - the section's full text is chunked normally (512-token chunks, 50-token overlap) and stored as `Chunk` rows linked to the section Memory.
 
 **Retrieval:**
 - Query is embedded → cosine search over **section embeddings** → top `coarse_k` sections selected
 - Cosine search over **chunks** scoped to those sections only → top-k chunks returned
 - Each result includes `[Section Title]\n<section summary>\n\n<chunk text>` so the LLM gets structural context alongside the raw excerpt
 
-**Fallback chain** — hierarchical mode is silently bypassed and flat chunking is used when:
+**Fallback chain** - hierarchical mode is silently bypassed and flat chunking is used when:
 - `attachment_rag_safe_mode=true` (safe mode always takes precedence)
 - Document length < `attachment_rag_hierarchical_min_chars`
 - Fewer than 2 sections detected (plain prose, no structure)
@@ -208,7 +208,7 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 - **Grounding constraint:** the prompt instructs the model to store **only** facts the user stated explicitly or that are directly evidenced in the excerpt. It must not infer or invent habits, routines, schedules, numbers, or preferences that were not stated, and must not convert an exploratory or philosophical remark into a durable preference. This prevents a thin or speculative remark being written back as a hard "fact" that later retrieval treats as ground truth.
 - **Quality rules (prompt, added after a live review of a learning run):** each fact must be **self-contained** (retrieval returns facts individually, so subjects are named explicitly - "patent US...", never "the patent"); relative time must be converted to **absolute dates** and drifting snapshot facts (finances, funding status, plans) must carry "as of {date}" in the fact text (the prompt now states today's date); short-lived **conversation state and open todos are not memories** ("has not sent the email yet"); long-established basics (name, company) are not re-stored unless changed.
 - **Model-independent gates (`_apply_fact_gates`, between parse and ingest):** length bounds 15-500 chars, junk-marker rejection (NO_REPLY echoes, `<think`, injected-context markers, meta commentary, nested `MEMORY:` lines) and a hard cap of 12 facts per run - a weak model cannot flood the store. Rejections are logged per fact (`COMPACTION_FACT_REJECT` with reason). Additionally, each surviving fact runs a **dedup check** before ingest (chunk-level similarity search, threshold 0.95, same primitive as the auto-capture lane and the same singleton embedding service): near-identical existing facts are skipped and logged as `COMPACTION_DEDUP_SKIP`. Dedup is best-effort and never blocks ingestion on errors.
-- **Reasoning-trace stripping:** before the reply is parsed, `_parse_memory_reply` runs `_strip_think_reply` to remove `<think>…</think>` reasoning blocks (and drop an unclosed `<think>` tail). A reasoning model (e.g. `deepseek-v4-pro`) drafts inside `<think>` first, so without this its raw reasoning — and any `MEMORY:` line it merely drafted *inside* the reasoning — would be persisted verbatim. The write path now matches the query and `learn_document` paths, which already strip reasoning.
+- **Reasoning-trace stripping:** before the reply is parsed, `_parse_memory_reply` runs `_strip_think_reply` to remove `<think>…</think>` reasoning blocks (and drop an unclosed `<think>` tail). A reasoning model (e.g. `deepseek-v4-pro`) drafts inside `<think>` first, so without this its raw reasoning - and any `MEMORY:` line it merely drafted *inside* the reasoning - would be persisted verbatim. The write path now matches the query and `learn_document` paths, which already strip reasoning.
 - **Context:** The conversation excerpt passed to the LLM contains **only user and assistant messages** (no system prompt, no tool calls or tool results). Built from the last N messages in session history, truncated by character limit (~12k chars).
 - **Where:** Logic in `vaf/memory/rag.py` (`run_session_compaction_sync`); triggered from `vaf/core/headless_runner.py` (after each chat, or enqueued as a separate task when using a local LLM so only one LLM call runs at a time). State per session: `~/.vaf/compaction_state.json` (last compaction turn per `session_id`).
 - **Contact chats (Telegram/WhatsApp/Discord):** Compaction is **disabled** for these sessions. Only the main user’s Web UI session is compacted into long-term memory. Contact conversations are never written to RAG (DSGVO-friendly).
@@ -240,7 +240,7 @@ The agent can **learn a document** into long-term memory via the **`learn_docume
 
 - **Input:** File path (required) and optional `document_title` (e.g. "Tora"). Supported formats: PDF, TXT, MD.
 - **One tag per document:** All memories from that run share a single tag derived from the title (e.g. `doc-tora`). In the memory graph, one tag node is linked to many purple document nodes (one per section).
-- **One memory per section (contextual):** The document is extracted to Markdown and split into sections (by headings / page markers / paragraphs). For each section, one **LLM call** produces a contextual summary; that summary becomes the memory **title** — which drives the embedding/retrieval key in `RagPipeline.ingest` — and is prepended to the section text before storage. A single `document_index` root memory holds the document summary, so it is not repeated on every section.
+- **One memory per section (contextual):** The document is extracted to Markdown and split into sections (by headings / page markers / paragraphs). For each section, one **LLM call** produces a contextual summary; that summary becomes the memory **title** - which drives the embedding/retrieval key in `RagPipeline.ingest` - and is prepended to the section text before storage. A single `document_index` root memory holds the document summary, so it is not repeated on every section.
 - **Scoping:** Uses the current user’s `user_scope_id` (same as `memory_save`). **Access** is decided by the shared `is_safe_path` rule, asked inside the per-user jail (`user_jail(..., mode="read")`) - the same rule every other file tool uses. `~/.vaf`, `.ssh`, `.env` and `id_rsa` are refused for everyone including the machine owner, and a non-admin caller sees only their own tree. Until 2026-07-30 this tool carried its own, weaker rule (anything under the home directory, the working directory or the VAF data dir) and never consulted the shared one; that function is deleted.
 - **Config (optional in `config.json`):** `learn_document_max_pages` (default 200) caps how much of the document is read; `learn_max_sections` (default 40) caps how many sections are stored.
 
@@ -248,7 +248,7 @@ Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipel
 
 ## API Reference
 
-**Authentication and scope.** In server mode the memory endpoints derive `user_scope_id` via `get_current_user_scope`, and an unauthenticated request **fails closed** — it returns no results. A valid access JWT is required to see your own memories; the scope is taken from the token, never from the request body. The plain unauthenticated `curl` examples below only return data in single-user/local mode, where the endpoints fall back to the local-admin scope.
+**Authentication and scope.** In server mode the memory endpoints derive `user_scope_id` via `get_current_user_scope`, and an unauthenticated request **fails closed** - it returns no results. A valid access JWT is required to see your own memories; the scope is taken from the token, never from the request body. The plain unauthenticated `curl` examples below only return data in single-user/local mode, where the endpoints fall back to the local-admin scope.
 
 ### Endpoints
 

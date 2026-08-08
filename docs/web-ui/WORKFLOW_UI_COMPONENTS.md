@@ -8,7 +8,7 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 
 1. **WorkflowChatElement** - Inline chat card showing workflow progress
 2. **VAFWorkflowRuntime** - Right panel with workflow steps and terminal output
-3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution; a browser sub-agent's live view is tiled separately — see BrowserLiveTile)
+3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution; a browser sub-agent's live view is tiled separately - see BrowserLiveTile)
 4. **DocumentViewer** - Attachments panel (paperclip): PDF, DOCX, Office, and text display with quote-from-selection
 5. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and optional attachments mode with compact document switcher
 6. **BrowserLiveTile** - Live browser screenshots tiled to the left of the Workflow Runtime window while a browser sub-agent runs inside a workflow
@@ -123,17 +123,17 @@ frame) **tiled to the left of the Workflow Runtime window** (`right: 500px`, the
 `subAgentState.browserFrame/browserUrl`; shown when `workflowPanelOpen && browserFrame && !dismissed`.
 Frames are cleared on `workflow_start` (no stale frame) and `workflow_done` (tile disappears); the
 user can dismiss it (re-armed on the next run). This is the specific "two visual windows side by
-side" case — see [Window Tiling](WINDOW_TILING_DESIGN.md).
+side" case - see [Window Tiling](WINDOW_TILING_DESIGN.md).
 
 ### Watchdog (in the tool bubble + workflow terminal)
 
-Live view of the supervised sub-agent units from `GET /api/supervisor/status` — agent type, runtime,
+Live view of the supervised sub-agent units from `GET /api/supervisor/status` - agent type, runtime,
 heartbeat freshness (green < 10 s / amber / red = stale), and a per-unit **kill** button
 (`POST /api/supervisor/cancel`).
 
 - **Direct sub-agent calls** show the watchdog **inline in their own tool bubble** (`web/components/ToolMessage.tsx`).
   A spawned sub-agent delegates immediately, so the bubble's status flips to "completed" while the
-  subprocess keeps running — therefore the row is gated on a **live supervised unit** (matched by the
+  subprocess keeps running - therefore the row is gated on a **live supervised unit** (matched by the
   task id from the delegation marker), not on the bubble status, and the bubble is kept open while the
   unit is alive.
 - **Workflow-step sub-agents** have no tool bubble, so their heartbeat/runtime is surfaced as **lines
@@ -263,7 +263,7 @@ All panels follow a consistent design:
 
 ## Workflow Creator (Admin)
 
-Admins can create, edit, and delete user-defined workflows directly in the WebUI — no file upload or server restart required.
+Admins can create, edit, and delete user-defined workflows directly in the WebUI - no file upload or server restart required.
 
 ### Entry point
 
@@ -282,14 +282,14 @@ A full-screen overlay modal (z-[80], above code viewer at z-[70]):
 | **Name** | Human-readable display name |
 | **ID** | Lowercase snake_case identifier, auto-generated from name in create mode, read-only in edit mode |
 | **Description** | Short description shown on the workflow card |
-| **Trigger phrases** | Tag-style input — phrases that activate the workflow router |
+| **Trigger phrases** | Tag-style input - phrases that activate the workflow router |
 | **Steps** | Ordered step chain (see below) |
 
 **Step chain:**
 Each step is a card with:
-- **Prompt** textarea — instruction for the agent. Supports `{variable}` substitution from previous step outputs.
-- **Tool** dropdown — which agent tool to call (`coding_agent`, `web_search`, `research_agent`, etc.). Populated from the full live tool list.
-- **Description** (optional) — label shown in workflow progress output.
+- **Prompt** textarea - instruction for the agent. Supports `{variable}` substitution from previous step outputs.
+- **Tool** dropdown - which agent tool to call (`coding_agent`, `web_search`, `research_agent`, etc.). Populated from the full live tool list.
+- **Description** (optional) - label shown in workflow progress output.
 
 Between each step card (and after the last) an **"Add Step"** button inserts a new blank step. Steps can be removed individually (disabled when only one step remains).
 
@@ -311,7 +311,7 @@ The component auto-generates an `output` variable name (`step_1_output`, `step_2
 | `workflow_error` | `{error}` | Validation or permission error |
 | `workflows_list` | `{workflows: [...]}` | Refreshed list (each entry includes `is_custom: bool`) |
 
-All three write operations are **admin-only** — the server checks the session's user role/scope before executing. Built-in workflows (those in `vaf/workflows/workflows/`) cannot be modified or deleted via the WebUI; attempting to do so returns a `workflow_error`.
+All three write operations are **admin-only** - the server checks the session's user role/scope before executing. Built-in workflows (those in `vaf/workflows/workflows/`) cannot be modified or deleted via the WebUI; attempting to do so returns a `workflow_error`.
 
 ### Storage
 

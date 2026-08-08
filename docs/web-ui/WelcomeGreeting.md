@@ -1,4 +1,4 @@
-# Welcome Greeting — Design & Implementation
+# Welcome Greeting - Design & Implementation
 
 ## What it is
 
@@ -21,13 +21,13 @@ Greetings are defined in the i18n message files:
 | `web/messages/en.json` | `main.welcomeGreetings` |
 
 Each file contains an array of strings. Entries that contain `{name}` are
-**personalised variants** — they are only included in the random pool when a
+**personalised variants** - they are only included in the random pool when a
 user name is available. Entries without `{name}` are always eligible.
 
 ### Adding a new greeting
 
-1. Open `web/messages/de.json` — add your German string to `main.welcomeGreetings`
-2. Open `web/messages/en.json` — add the English equivalent at the **same array index**
+1. Open `web/messages/de.json` - add your German string to `main.welcomeGreetings`
+2. Open `web/messages/en.json` - add the English equivalent at the **same array index**
 3. Use `{name}` as placeholder if the greeting should address the user by name
 
 ```json
@@ -46,7 +46,7 @@ user name is available. Entries without `{name}` are always eligible.
 ]
 ```
 
-> The indices do NOT need to match between languages — each locale picks randomly
+> The indices do NOT need to match between languages - each locale picks randomly
 > from its own array. You do not need to keep them in sync.
 
 ---
@@ -68,15 +68,15 @@ variants are excluded and a generic greeting is shown instead.
 
 ---
 
-## Implementation — page.tsx
+## Implementation - page.tsx
 
 **Component:** `TypingTitle` (defined near `AgentAvatar`, around line 606)
 - Takes a `text` prop and types it out character by character (38–60ms/char)
 - Restarts animation whenever `text` changes
 
 **State:**
-- `userName: string | null` — fetched from `/api/user/persona`
-- `welcomeText: string` — randomly selected greeting, computed by `useEffect`
+- `userName: string | null` - fetched from `/api/user/persona`
+- `welcomeText: string` - randomly selected greeting, computed by `useEffect`
 
 **Selection logic:**
 ```tsx
@@ -92,7 +92,7 @@ useEffect(() => {
 ```
 
 The effect runs whenever:
-- The chat becomes empty (`isEmpty` transitions to `true`) — e.g. new chat
+- The chat becomes empty (`isEmpty` transitions to `true`) - e.g. new chat
 - The user name loads for the first time after page load
 
 ---
@@ -102,7 +102,7 @@ The effect runs whenever:
 ```
         [●]          ← AgentAvatar (scale 1.8, idle mode, floating)
 
-  Hey Alice, womit    ← TypingTitle — types out after 50ms delay
+  Hey Alice, womit    ← TypingTitle - types out after 50ms delay
   kann ich helfen?
 
   Starte eine Unterhaltung...  ← static subtitle

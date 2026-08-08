@@ -30,7 +30,7 @@ lockfile versions.
 These are flagged here for visibility. This document is **not a legal opinion**;
 it is engineering documentation to support an informed review.
 
-1. **`html2text` (GPL-3.0) replaced by `markdownify` (MIT) — RESOLVED.** The base
+1. **`html2text` (GPL-3.0) replaced by `markdownify` (MIT) - RESOLVED.** The base
    library previously depended on the GPL-3.0 `html2text` for HTML-to-Markdown
    conversion (used by `webfetch` and the document editor). GPL-3.0 is strong
    copyleft and is incompatible with closed-source/commercial redistribution. It
@@ -38,8 +38,8 @@ it is engineering documentation to support an informed review.
    and the code, so the base install no longer ships any strong-copyleft runtime
    dependency.
 
-2. **`requirements.lock` regenerated to pin PySide6 (LGPL-3.0), not PyQt6 (GPL-3.0)
-   — RESOLVED.** Both `pyproject.toml` (`desktop` extra) and `requirements.txt`
+2. **`requirements.lock` regenerated to pin PySide6 (LGPL-3.0), not PyQt6 (GPL-3.0) -
+   RESOLVED.** Both `pyproject.toml` (`desktop` extra) and `requirements.txt`
    intentionally specify **PySide6** (LGPL-3.0, weak copyleft) for the Linux Qt
    WebEngine window. The lockfile had drifted and still pinned `pyqt6*` (GPL-3.0);
    it has been regenerated from the current `requirements.txt`, so it now pins
@@ -47,7 +47,7 @@ it is engineering documentation to support an informed review.
 
 ---
 
-## Python — runtime dependencies (base library)
+## Python - runtime dependencies (base library)
 
 Source: `pyproject.toml` `[project.dependencies]` (these are installed by `pip install vaf`).
 Also present in `requirements.txt`.
@@ -81,7 +81,7 @@ Also present in `requirements.txt`.
 | qrcode[pil] | >=7.4.0 | BSD |
 | cryptography | >=41.0.0 | Apache-2.0 OR BSD-3-Clause |
 
-## Python — runtime dependencies (optional extras)
+## Python - runtime dependencies (optional extras)
 
 Source: `pyproject.toml` `[project.optional-dependencies]` and `requirements.txt`. Installed via
 `pip install vaf[<extra>]`, `pip install vaf[all]`, or the full
@@ -165,7 +165,7 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 | openpyxl | >=3.1.0 | MIT |
 | python-pptx | >=0.6.21 | MIT |
 
-## Python — build / dev / test tooling
+## Python - build / dev / test tooling
 
 Source: `pyproject.toml` `dev` extra and `requirements.txt` testing section.
 Not required at runtime.
@@ -180,7 +180,7 @@ built-in linter tool at runtime, not only as dev tooling.
 
 ---
 
-## Web UI (Next.js) — `web/package.json`
+## Web UI (Next.js) - `web/package.json`
 
 VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 
@@ -225,7 +225,7 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 
 ---
 
-## WhatsApp bridge (Node) — `vaf/whatsapp_node/package.json`
+## WhatsApp bridge (Node) - `vaf/whatsapp_node/package.json`
 
 Standalone Baileys-based bridge invoked over stdin/stdout JSON IPC.
 
@@ -250,7 +250,7 @@ the license requires.
 
 | Component | Location | License | Copyright |
 |---|---|---|---|
-| langid.py | `vaf/vendor/langid/langid.py` | BSD-2-Clause | Copyright 2011 Marco Lui — https://github.com/saffsd/langid.py |
+| langid.py | `vaf/vendor/langid/langid.py` | BSD-2-Clause | Copyright 2011 Marco Lui - https://github.com/saffsd/langid.py |
 
 ---
 
@@ -281,9 +281,9 @@ weights carry their own license independent of the code that loads them.
 
 | Component | Where | License | Copyright / source |
 |---|---|---|---|
-| whisper-asr-webservice (the container) | image `onerahmet/openai-whisper-asr-webservice`, service `vaf-stt` in `docker-compose.memory.yml` | MIT | Copyright (c) 2022 Ahmet Oner & Besim Alibegovic — https://github.com/ahmetoner/whisper-asr-webservice |
-| openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI — https://github.com/openai/whisper |
-| Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI — "Whisper's code and model weights are released under the MIT License" (upstream README) |
+| whisper-asr-webservice (the container) | image `onerahmet/openai-whisper-asr-webservice`, service `vaf-stt` in `docker-compose.memory.yml` | MIT | Copyright (c) 2022 Ahmet Oner & Besim Alibegovic - https://github.com/ahmetoner/whisper-asr-webservice |
+| openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI - https://github.com/openai/whisper |
+| Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI - "Whisper's code and model weights are released under the MIT License" (upstream README) |
 
 All three are MIT, so shipping and commercial use are unrestricted beyond retaining
 the notices above. The licenses were read from the running container

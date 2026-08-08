@@ -8,11 +8,11 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 |---------|-----------|---------|-------------|
 | PostgreSQL | `vaf-memory-db` | 5432 | Database (pgvector) for Memory/RAG and Auth/User DB |
 | Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
-| Sandbox | `vaf-sandbox` | — | Python sandbox for safe code execution |
+| Sandbox | `vaf-sandbox` | - | Python sandbox for safe code execution |
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
 | TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install; local speech lane only) |
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
-| **Browser** | `vaf-browser` | 9222 | Headed Chromium under Xvfb (CDP, anti-bot hardened) for the `browser_agent` tool — see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
+| **Browser** | `vaf-browser` | 9222 | Headed Chromium under Xvfb (CDP, anti-bot hardened) for the `browser_agent` tool - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
 All services start by default when you run `docker compose up -d`.
 
@@ -47,12 +47,12 @@ CONTAINER ID   IMAGE                      PORTS                          NAMES
 ...            vaf-sandbox                                                vaf-sandbox
 ```
 
-> **Security:** All ports are bound to `127.0.0.1` — reachable only locally, not on the LAN or the internet. If `0.0.0.0` is shown, the ports are open on all network interfaces; in that case check `docker-compose.memory.yml` and make sure every port mapping uses the `127.0.0.1:PORT:PORT` format.
+> **Security:** All ports are bound to `127.0.0.1` - reachable only locally, not on the LAN or the internet. If `0.0.0.0` is shown, the ports are open on all network interfaces; in that case check `docker-compose.memory.yml` and make sure every port mapping uses the `127.0.0.1:PORT:PORT` format.
 >
 > **Network isolation:** Each container joins only the Docker network it needs:
 > - `vaf-network`: postgres, redis, tts, stt, gotenberg
 > - `vaf-sandbox-network`: sandbox (no access to postgres/redis)
-> - `vaf-browser-network`: vaf-browser (no access to postgres/redis — SSRF protection)
+> - `vaf-browser-network`: vaf-browser (no access to postgres/redis - SSRF protection)
 
 ### Stop Services
 
@@ -256,7 +256,7 @@ docker compose -f docker-compose.memory.yml restart tts
 
 A runtime is **required**: VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so it
 is needed to finish setup and sign in. The installer uses whatever engine you already have and otherwise
-sets up a free one for you — no Docker Desktop licence needed:
+sets up a free one for you - no Docker Desktop licence needed:
 
 - **Windows**: auto-installs **Rancher Desktop** (engine `moby`).
 - **macOS**: uses **Docker Desktop** if installed, otherwise **auto-installs and starts Colima** via Homebrew.
@@ -270,7 +270,7 @@ When a runtime is present (or has just been set up), the installer manages the s
    - **Linux**: `sudo systemctl start docker` (or `sudo service docker start`)
    - **Windows**: starts Rancher Desktop (and does **not** restart it if it is already running)
 3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
-4. **Apply Changes — two-phase**: it brings up the core registry-image services first
+4. **Apply Changes - two-phase**: it brings up the core registry-image services first
    (`postgres redis sandbox stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
    database the app needs to boot, then starts those optional services best-effort. `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)

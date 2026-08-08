@@ -175,6 +175,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   clean regardless.
 
 ### Fixed
+- **Clearing the chat while an answer is still arriving now discards that
+  answer.** The reply kept streaming into the freshly emptied conversation,
+  so a paragraph appeared with no question above it - belonging to a history
+  that was deleted a moment later anyway. The terminal app drops it and says
+  so.
 - **Setting a plan in the terminal app works on the first try.** Tools run
   on the terminal app's worker thread, and that thread never learned which
   session it serves - so working-memory writes (plan, notes, tasks) landed

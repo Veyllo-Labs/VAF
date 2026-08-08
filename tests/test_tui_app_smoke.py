@@ -592,10 +592,54 @@ def test_clear_empties_the_transcript_immediately(smoke_app):
             await pilot.pause()
             app._send_user("something to clear")
             assert await _settle(pilot, lambda: bool(app.query(UserMessage)))
+            # Wait out the fake turn FIRST: this test is about clearing, and a
+            # still-streaming reply is a different property (pinned below).
+            # Windows made the difference visible - the reply landed after the
+            # clear there and mounted a fresh bubble into the empty transcript.
+            assert await _settle(pilot, lambda: not bridge.busy)
             app._cmd_clear(())
             await pilot.pause()
             assert not app.query(UserMessage)
             assert app._live_msg is None and app._avatar_host is None
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
+def test_clear_discards_a_reply_that_is_still_streaming(smoke_app):
+    """`clear` throws the conversation away - including the answer still being
+    written for it. Without this the remaining chunks mounted a fresh reply
+    into the emptied transcript: an answer with no visible question above it,
+    belonging to a history `clear_conversation` deletes moments later (the
+    same shape as the voice round's missing "You" bubble). The user is told."""
+    app, bridge = smoke_app.app, smoke_app.bridge
+    bridge.clear_conversation = lambda: None
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app._send_user("something to clear")
+            assert await _settle(pilot, lambda: bool(app.query(UserMessage)))
+            # Mid-turn by construction, not by timing luck (`busy` is a
+            # read-only property over the lane's own flag).
+            bridge._busy = True
+            app._cmd_clear(())
+            await pilot.pause()
+
+            app.feed_agent("orphaned chunk")
+            await pilot.pause()
+            assert not app.query(AgentMessage), (
+                "a discarded reply painted into the emptied transcript")
+            assert app._avatar_host is None
+            from vaf.cli.tui_app.widgets import SystemNote
+            notes = [str(getattr(n, "content", n)) for n in app.query(SystemNote)]
+            assert any("discarded" in t for t in notes), notes
+
+            # The NEXT turn paints normally again.
+            bridge._busy = False
+            app.end_agent_message()
+            app.feed_agent("a fresh reply")
+            assert await _settle(pilot, lambda: bool(app.query(AgentMessage)))
 
     asyncio.run(_drive())
     bridge.shutdown()

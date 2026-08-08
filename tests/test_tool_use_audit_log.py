@@ -193,11 +193,16 @@ def test_a_path_in_the_arguments_no_longer_loses_the_line(log_dir):
     """The failure this replaces: `json.dumps` raises on a Path, the surrounding
     `except Exception: pass` swallows it, and the call is simply absent from the file with
     nothing to say it should have been there. `make_json_serializable` runs first now."""
-    _caller().execute("probe", {"where": Path("/tmp/somewhere")})
+    probe_path = Path("/tmp/somewhere")
+    _caller().execute("probe", {"where": probe_path})
 
     lines = _lines(log_dir)
     assert len(lines) == 1, "a Path argument made the audit line disappear again"
-    assert "/tmp/somewhere" in lines[0]
+    # Compare against the platform's OWN spelling, via the same json.dumps the
+    # writer uses: on Windows str(Path) is backslash-separated and json escapes
+    # each one, so a hardcoded POSIX literal fails there while the product is
+    # doing exactly the right thing (live CI incident, windows-latest 3.12).
+    assert json.dumps(str(probe_path))[1:-1] in lines[0]
 
 
 # ── the format is a contract, because something parses it ────────────────────

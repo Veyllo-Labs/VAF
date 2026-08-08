@@ -127,7 +127,13 @@ sentence that merely starts with a command word (`clear the table for dinner`)
 stays a message: only commands that declare arguments match with any.
 
 Destructive commands (`clear`, `undo`, `restart`) ask first, in a modal that
-does not block. `halt` runs on its own thread rather than the agent lane -
+does not block. `clear` mid-turn also DISCARDS the reply still being written:
+its remaining chunks would otherwise mount a fresh bubble into the emptied
+transcript, with no visible question above it and a history
+`clear_conversation` deletes moments later. The bubble is simply never
+mounted (the streaming path is untouched: `feed()` buffers, the flush is a
+no-op while unmounted, no interval is armed), and a note says the reply was
+discarded. `halt` runs on its own thread rather than the agent lane -
 the lane is exactly what is busy producing the speech being stopped. Beyond
 the explicit command, EVERY submitted input silences running speech before it
 is parsed - the classic loop's unconditional barge-in: TTS is asynchronous

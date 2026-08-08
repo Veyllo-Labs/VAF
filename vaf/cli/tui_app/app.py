@@ -329,6 +329,9 @@ class VafApp(App):
         self._live_msg = None
         self._restart_requested = False
         self._avatar_host = None          # the newest AgentMessage; carries the dot
+        # Set by `clear` while a turn is still streaming: its remaining chunks
+        # belong to a discarded conversation and must not paint (see _cmd_clear).
+        self._muted_turn = False
         self._presence_state = "idle"
         self._open_cards: dict = {}
         self._gate_screen = None
@@ -501,7 +504,12 @@ class VafApp(App):
     def _ensure_live_msg(self) -> AgentMessage:
         if self._live_msg is None:
             self._live_msg = AgentMessage()
-            self._mount_scrolled(self._live_msg)
+            # A turn discarded by `clear` keeps its bubble UNMOUNTED: the
+            # streaming path stays untouched (feed() buffers, _flush() is a
+            # no-op while unmounted, no interval is ever armed), and nothing
+            # paints into the transcript the user just emptied.
+            if not self._muted_turn:
+                self._mount_scrolled(self._live_msg)
         return self._live_msg
 
     def feed_agent(self, text: str) -> None:
@@ -516,6 +524,8 @@ class VafApp(App):
         if self._live_msg is not None:
             self._live_msg.done()
         self._live_msg = None
+        # The discarded turn is over; the next one paints normally again.
+        self._muted_turn = False
 
     def turn_finished(self, tools_ran: bool) -> None:
         self.end_agent_message()
@@ -907,6 +917,15 @@ class VafApp(App):
         self.transcript.clear()
         self._live_msg = None
         self._avatar_host = None
+        # A turn that is STILL STREAMING belongs to the conversation the user
+        # just discarded: without this its remaining chunks mount a fresh reply
+        # into the empty transcript, with no visible question above it and a
+        # history that `clear_conversation` deletes moments later. Same shape as
+        # the voice round's missing "You" bubble - an answer nobody can see the
+        # question for. Chunks are dropped until the next turn starts.
+        self._muted_turn = bool(self._bridge.busy)
+        if self._muted_turn:
+            self.add_system_note("cleared - the reply still running was discarded")
         self._bridge.clear_conversation()
 
     def action_tools(self) -> None:

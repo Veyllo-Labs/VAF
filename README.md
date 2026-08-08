@@ -1,7 +1,7 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/logo.gif"
-       width="880" alt="Veyllo">
-</p>
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/logo.gif"
+     width="880" alt="Veyllo">
 
 # VAF - Veyllo Agentic Framework
 
@@ -12,6 +12,8 @@ An autonomous agent framework built on top of local and cloud LLMs. VAF runs as 
 [![Tools](https://img.shields.io/badge/tools-110%2B-blue)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/TOOLS_CATALOG.md) [![Tests](https://img.shields.io/badge/tests-4000%2B-brightgreen)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![LLM providers](https://img.shields.io/badge/LLM%20providers-6-blueviolet)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/INSTALLATION_GUIDE.md)
 
 [![Local models](https://img.shields.io/badge/local%20models-supported-success)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) [![No telemetry](https://img.shields.io/badge/telemetry-none-brightgreen)](https://github.com/Veyllo-Labs/VAF#what-vaf-sends-and-where) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md)
+
+</div>
 
 **Dual-licensed:** free under the [GNU AGPL-3.0](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE), or a [commercial license](https://github.com/Veyllo-Labs/VAF/blob/main/docs/legal/COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
 

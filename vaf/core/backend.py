@@ -166,7 +166,16 @@ def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bo
             UI.event("Server", f"Swapping local model -> {os.path.basename(model_path)}"
                      + (f" ({reason})" if reason else ""), style="dim")
             mgr = ServerManager(skip_cleanup=True)
-            return bool(mgr.start_server(model_path, skip_provider_gate=skip_provider_gate))
+            # The user's sizing travels with the swap. Without these two the
+            # server came up on start_server's defaults (n_ctx 32768, all GPU
+            # layers), so a configured 131072 window silently shrank whenever
+            # the model changed - `Agent.load_model` passes both, and a swap
+            # must not be the one path that forgets them.
+            from vaf.core.config import Config
+            n_ctx = max(int(Config.get("n_ctx", 32768) or 32768), 32768)
+            n_gpu = Config.get("gpu_layers", 99)
+            return bool(mgr.start_server(model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx,
+                                         skip_provider_gate=skip_provider_gate))
         except Exception as e:
             UI.event("Server", f"Local model swap failed: {e}", style="yellow")
             return False
@@ -240,6 +249,15 @@ def ensure_model_available(model_name, models_dir) -> str:
     name = (model_name or Config.get("model") or "").strip()
     if name.lower() == "auto":
         name = recommended_default_model()
+    # A configured PROJECTOR is not a model, and llama-server dies on it with
+    # "unsupported model architecture: 'clip'". The selection surfaces no
+    # longer offer one, but a config written before that filter existed would
+    # still poison every start - so treat it as "nothing usable configured"
+    # and let the VRAM self-heal below pick a real model, loudly.
+    if name and not is_selectable_model(_resolve_model_ref(name)[1] or name):
+        UI.event("System", f"Configured model '{name}' is a vision projector, not a language "
+                           f"model - falling back to the VRAM-adaptive default.", style="warning")
+        name = recommended_default_model()
 
     # 1) the configured model -- use it if present, else download it when its repo is known
     repo_id, filename = _resolve_model_ref(name)
@@ -264,6 +282,43 @@ def ensure_model_available(model_name, models_dir) -> str:
 
     # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
     return str(models_dir / (filename or auto_file or "model.gguf"))
+
+
+def is_selectable_model(filename: str) -> bool:
+    """True if this `models/` file may be offered as THE language model.
+
+    A `.gguf` in that directory is not automatically a model: VAF's own local
+    vision download writes the multimodal PROJECTOR next to it (see
+    `resolve_mmproj_for` below - auto name `mmproj-<model stem>.gguf`, the
+    upstream repos ship `mmproj-F16.gguf`). A projector carries the `clip`
+    architecture, so llama-server refuses to load it AS a model and exits:
+
+        error loading model: unsupported model architecture: 'clip'
+
+    which is what a user got after picking one from a model list (live
+    incident). Every surface that lets a human choose a model filters through
+    here - the terminal app, the classic settings menu and the web UI all
+    built the same unfiltered `*.gguf` listing.
+
+    Name-based on purpose: reading the GGUF header would open every file on
+    every menu render for a question the filename already answers, for both
+    the VAF-written and the upstream naming. An explicitly configured
+    projector (`vision_local_mmproj`) is excluded by name as well, so a
+    hand-picked filename cannot slip back in.
+    """
+    name = os.path.basename(str(filename or "")).strip()
+    if not name.lower().endswith(".gguf"):
+        return False
+    if name.lower().startswith("mmproj-") or "-mmproj-" in name.lower():
+        return False
+    try:
+        from vaf.core.config import Config
+        ref = (Config.get("vision_local_mmproj", "") or "").strip()
+        if ref and os.path.basename(ref).lower() == name.lower():
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def resolve_mmproj_for(model_path: str) -> str:

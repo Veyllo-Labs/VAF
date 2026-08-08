@@ -234,7 +234,8 @@ shape: [EMBEDDING.md](EMBEDDING.md).
 - `reload_local_model() -> bool` is the weight-swap counterpart: it re-resolves
   `filename`/`model_path` from the live config, makes the ONE llama server hold that
   GGUF (`ensure_local_model` - model-aware, blocking, stops a foreign server by
-  force), recomputes the identity the tool-call parser gates on
+  force, and passes the configured `n_ctx`/`gpu_layers` so a swap cannot reset
+  the user's sizing to the defaults), recomputes the identity the tool-call parser gates on
   (`model_display_name` / `is_gemma_local` / `model_mode`, via
   `_apply_local_model_identity`, the same single source `__init__` uses), rebuilds
   the system prompt through `init_chat()` and RE-ATTACHES the conversation tail, then

@@ -3675,7 +3675,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # print(f"[DEBUG] Looking for models in: {models_dir}")
                     models = []
                     if models_dir.exists():
-                        models = [f.name for f in models_dir.glob("*.gguf")]
+                        from vaf.core.backend import is_selectable_model
+                        models = [f.name for f in models_dir.glob("*.gguf")
+                                  if is_selectable_model(f.name)]
                         # print(f"[DEBUG] Found models: {models}")
                     else:
                         # print(f"[DEBUG] Models directory not found at {models_dir}")
@@ -3831,7 +3833,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir), tqdm_class=tqdm_class)
                                 else:
                                     hf_hub_download(repo_id=repo_id, filename=filename, local_dir=str(models_dir), tqdm_class=tqdm_class)
-                                new_models = [f.name for f in models_dir.glob("*.gguf")]
+                                from vaf.core.backend import is_selectable_model
+                                new_models = [f.name for f in models_dir.glob("*.gguf")
+                                              if is_selectable_model(f.name)]
                                 return True, None, new_models
                             except InterruptedError:
                                 return False, "Download cancelled", []

@@ -872,8 +872,9 @@ class AgentBridge:
         import os
         from vaf.core.config import Config
         try:
+            from vaf.core.backend import is_selectable_model
             files = sorted(f for f in os.listdir(getattr(self.agent, "models_dir", ""))
-                           if f.endswith(".gguf"))
+                           if is_selectable_model(f))
         except Exception:
             files = []
         current = str(Config.get("model") or "")

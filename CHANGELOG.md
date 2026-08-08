@@ -180,6 +180,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   so a paragraph appeared with no question above it - belonging to a history
   that was deleted a moment later anyway. The terminal app drops it and says
   so.
+- **The model list no longer offers the vision helper file as a model.** When
+  local image understanding is set up, VAF downloads a second file next to the
+  model - the "projector" that lets the model see pictures. It ends in `.gguf`
+  like a model, so every model picker (terminal app, classic settings, web UI)
+  listed it as a choice; picking it left the local server unable to start with
+  a cryptic `unsupported model architecture: 'clip'`. Those files are filtered
+  out everywhere now, and a configuration that already points at one falls
+  back to a fitting model with a clear message instead of failing to start.
+- **Switching the local model keeps your context size and GPU setting.** The
+  server was restarted with the defaults instead of your configured values, so
+  a large context window silently shrank whenever the model changed - while
+  the setting still showed the old number.
 - **Setting a plan in the terminal app works on the first try.** Tools run
   on the terminal app's worker thread, and that thread never learned which
   session it serves - so working-memory writes (plan, notes, tasks) landed

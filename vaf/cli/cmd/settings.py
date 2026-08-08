@@ -320,7 +320,8 @@ def select_model_menu():
         UI.console.input("[dim]Press Enter to continue...[/dim]")
         return
 
-    files = [f for f in os.listdir(models_dir) if f.endswith(".gguf")]
+    from vaf.core.backend import is_selectable_model
+    files = [f for f in os.listdir(models_dir) if is_selectable_model(f)]
     if not files:
         UI.error("No models found in models/ directory.")
         UI.console.input("[dim]Press Enter to continue...[/dim]")

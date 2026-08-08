@@ -217,7 +217,10 @@ What it can change is decided by where a key is READ, not by how it looks:
 - **Still pointing at `vaf settings`** - the model download (a long
   cancellable network operation mid-app needs a background-work concept the
   TUI does not have yet). The local model LEFT this list: the "Select Active
-  Model" submenu lists `models/*.gguf` with the active file marked, and a pick
+  Model" submenu lists the selectable `models/*.gguf` (vision projectors are
+  filtered out by `backend.is_selectable_model` - they are `.gguf` files too,
+  and llama-server dies on one with `unsupported model architecture: 'clip'`)
+  with the active file marked, and a pick
   swaps the running agent live through the engine's `reload_local_model` -
   model-aware server swap, parser identity recomputed, conversation kept. The
   swap runs on the agent lane (the new weights block while they load) and

@@ -19,7 +19,7 @@ ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 S = 2                # supersampling factor
 W = 1760 * S         # final 1760 wide (displayed at 880)
 SHOT_W = 1300 * S    # product shot width
-SHOT_TOP = 300 * S   # where the shots start
+SHOT_TOP = 268 * S   # where the shots start
 SHOT_BOTTOM = 54 * S  # breathing room under it
 
 
@@ -138,15 +138,22 @@ def wrap(text, f, max_width):
     return lines
 
 
-# ── copy, mirroring the site's section ───────────────────────────────────────
-centre("SEE IT WORK", font(R_BOLD, 20 * S), 62 * S, (255, 255, 255, 200), tracking=3.2 * S)
-centre("The main agent", font(R_BOLD, 62 * S), 104 * S, (255, 255, 255, 255))
+# ── copy ─────────────────────────────────────────────────────────────────────
+# The banner carries the project title itself, so the README has no separate
+# heading above it to repeat. Sized to the canvas rather than fixed: this title
+# is twice as long as the site section's, and a hard size would either overflow
+# or leave the short one looking lost.
+TITLE = "VAF - Veyllo Agentic Framework"
+title_f = font(R_BOLD, 62 * S)
+while draw.textlength(TITLE, font=title_f) > 1420 * S:
+    title_f = font(R_BOLD, title_f.size - 2 * S)
+centre(TITLE, title_f, 74 * S, (255, 255, 255, 255))
 
 sub = font(R_REG, 25 * S)
 SUBTEXT = ("The open-source AI agent Framework and Harness with persistent memory "
            "and tools for web, code and files. Fully self-sufficient in-house, or "
            "with models from the cloud.")
-y = 196 * S
+y = 168 * S
 for line in wrap(SUBTEXT, sub, 1180 * S):
     centre(line, sub, y, (255, 255, 255, 205))
     y += 36 * S

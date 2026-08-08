@@ -132,6 +132,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the generated source map. VAF only ever runs it over its own stylesheets at
   build time, so no VAF installation was exposed - the update keeps the
   dependency clean regardless.
+- **js-yaml updated (4.3.1).** The YAML parser that the linter uses to read its
+  own configuration resolved ordered maps in quadratic time, so a crafted
+  document could stall the process that parses it. It reaches VAF only as a
+  build-time dependency of ESLint and never sees anything but VAF's own config
+  files, so no VAF installation was exposed - the update keeps the dependency
+  clean regardless.
 
 ### Fixed
 - **Setting a plan in the terminal app works on the first try.** Tools run

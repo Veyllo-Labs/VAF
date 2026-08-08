@@ -10,6 +10,7 @@ native dependency fails to load. These tests pin the honest diagnosis:
 the real reason travels, and unrelated imports cannot fake it.
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,12 +105,18 @@ def test_the_speech_extra_actually_ships_the_local_engine():
     """The Settings option pointed at a package no install command delivered.
     The message now names `pip install "vaf[speech]"`, so the extra has to
     contain it - and the license table has to know about it."""
-    import tomllib
-
-    extras = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
-    speech = extras["project"]["optional-dependencies"]["speech"]
-    assert any(d.startswith("faster-whisper") for d in speech), \
+    # pyproject.toml is the packaging SSOT; text check as the Python 3.10
+    # fallback sans tomllib (same shape as tests/test_installer_python_gate.py).
+    pyproject = (_REPO / "pyproject.toml").read_text(encoding="utf-8")
+    speech_block = re.search(r"^speech = \[(.*?)\]", pyproject, re.S | re.M)
+    assert speech_block, "the speech extra moved - re-point this guard"
+    assert "faster-whisper" in speech_block.group(1), \
         'pip install "vaf[speech]" no longer delivers the local STT engine'
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        speech = tomllib.loads(pyproject)["project"]["optional-dependencies"]["speech"]
+        assert any(d.startswith("faster-whisper") for d in speech)
 
     third_party = (_REPO / "docs" / "legal" / "THIRD_PARTY.md").read_text(encoding="utf-8")
     assert "faster-whisper" in third_party, "AGPL notice: undeclared bundled dependency"

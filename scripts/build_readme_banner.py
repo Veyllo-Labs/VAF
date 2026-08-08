@@ -92,7 +92,8 @@ H = shot_bottom + SHOT_BOTTOM
 DOT_STEP = 26 * S
 DOT_R = 1 * S
 DOT_ALPHA = 26          # the site's resting dot brightness
-GLINT_ALPHA = 96        # peak of the travelling glint
+GLINT_ALPHA = 160       # peak of the travelling glint
+GLINT_GROW = 0.45       # extra dot radius at the glint's core, in canvas px
 GLINT_WIDTH = 0.20      # fraction of the canvas the glint spans
 
 
@@ -110,7 +111,7 @@ def dot_layer(centre_x=None):
     half = GLINT_WIDTH * W / 2
     for y in range(DOT_STEP, H, DOT_STEP):
         for x in range(DOT_STEP, W, DOT_STEP):
-            a = DOT_ALPHA
+            a, r = DOT_ALPHA, DOT_R
             if centre_x is not None:
                 # Wrap the distance so the band re-enters on the left instead of
                 # jumping, and fall off smoothly to avoid a hard edge.
@@ -119,8 +120,11 @@ def dot_layer(centre_x=None):
                 if dist < half:
                     fall = math.cos(dist / half * math.pi / 2) ** 2
                     a = round(DOT_ALPHA + (GLINT_ALPHA - DOT_ALPHA) * fall)
-            d.ellipse((x - DOT_R, y - DOT_R, x + DOT_R, y + DOT_R),
-                      fill=(255, 255, 255, a))
+                    # Brightness alone tops out at white and then has nowhere to
+                    # go; letting the dot swell a little as well is what reads as
+                    # a spark rather than as a lamp being turned up.
+                    r = DOT_R + GLINT_GROW * S * fall
+            d.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 255, a))
     return layer
 
 
@@ -188,7 +192,7 @@ def write_png(bg):
     print(f"written: {ASSETS / 'banner.png'}")
 
 
-def write_gif(frames=26, ms=110, colors=256):
+def write_gif(frames=52, ms=60, colors=256):
     """The still frame with a glint drifting across the dotted background.
 
     Nothing else moves. The earlier version drifted both windows, and at banner
@@ -200,6 +204,12 @@ def write_gif(frames=26, ms=110, colors=256):
     frame as one rectangle of changed pixels: with only a narrow band moving,
     the frames after the first are small, and the budget goes into keeping the
     full 2x resolution rather than into re-encoding two moving screenshots.
+
+    Frame count is what makes it fluid, not frame duration. At 26 frames the
+    band jumped 3.8% of the width per step and stuttered; at 52 it moves 1.9%
+    and reads as a drift. That costs bytes, and there are bytes to spend: the
+    proxy GitHub serves README images through refuses anything past 5 MB, and
+    this sits near half a megabyte.
     """
     seq = []
     for i in range(frames):

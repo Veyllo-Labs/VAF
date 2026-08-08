@@ -1,7 +1,7 @@
 <div align="center">
 
 <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.png"
-     width="880" alt="See it work: the main agent. You ask in plain language, it plans the work and delegates each part to a specialist sub-agent. Below, the same agent in the full-screen terminal app and in the desktop window.">
+     width="880" alt="See it work: the main agent. The open-source AI agent framework and harness with persistent memory and tools for web, code and files - fully self-sufficient in-house, or with models from the cloud. Below it, the desktop window in front and the full-screen terminal app behind.">
 
 *One agent, one session store, one config - in your terminal or in your browser.*
 

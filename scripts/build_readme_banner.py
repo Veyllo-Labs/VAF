@@ -19,33 +19,54 @@ ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 S = 2                # supersampling factor
 W = 1760 * S         # final 1760 wide (displayed at 880)
 SHOT_W = 1300 * S    # product shot width
-SHOT_TOP = 348 * S   # where the shot starts
+SHOT_TOP = 300 * S   # where the shots start
 SHOT_BOTTOM = 54 * S  # breathing room under it
 
 
-def build_composite() -> Image.Image:
-    """Terminal in front, desktop window behind and to the right.
+def _card(img: Image.Image, width: int, radius: int = 13) -> Image.Image:
+    """Scale a screenshot to `width` and round its corners, so it sits on the
+    gradient as a card rather than a pasted rectangle."""
+    scaled = img.resize((width, round(img.height * width / img.width)), Image.LANCZOS)
+    mask = Image.new("L", scaled.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, scaled.width - 1, scaled.height - 1),
+                                           radius=radius, fill=255)
+    scaled.putalpha(mask)
+    return scaled
 
-    The existing hero.png overlaps them so far that the desktop's centred
-    greeting is sliced in half, which reads as a rendering fault rather than a
-    design. Rebuilt from the two source shots with the overlap chosen so the
-    front window's edge falls LEFT of the greeting, leaving both legible.
+
+def build_composite() -> Image.Image:
+    """Desktop window in front and higher, terminal behind and lower.
+
+    Staggered on a diagonal rather than side by side: the terminal keeps its
+    left column visible - the session list and the ASCII banner, the parts that
+    identify it at a glance - while the desktop window stays whole. Each card
+    carries its own shadow; one shadow around the bounding box would sit under
+    the empty corners the stagger creates.
     """
     term = Image.open(str(ASSETS / "terminal.png")).convert("RGBA")
     desk = Image.open(str(ASSETS / "desktop.png")).convert("RGBA")
 
-    h = 900                                     # common height, pre-supersampling
-    term = term.resize((round(term.width * h / term.height), h), Image.LANCZOS)
-    desk = desk.resize((round(desk.width * h / desk.height), h), Image.LANCZOS)
+    card_w = 1120                       # pre-supersampling
+    term = _card(term, card_w)
+    desk = _card(desk, card_w)
 
-    # The greeting sits mid-width in the desktop shot; keep its left edge clear.
-    overlap = round(desk.width * 0.30)
-    total_w = term.width + desk.width - overlap
-    offset_y = 26                               # slight stagger, depth cue
+    term_pos = (0, 148)                 # behind, lower-left
+    # The front edge lands just right of the terminal's session panel. Further
+    # right and a sliver of the ASCII banner shows through, cropped mid-glyph,
+    # which reads as corruption rather than as a window behind another window.
+    desk_pos = (352, 0)                 # in front, upper-right
 
-    canvas = Image.new("RGBA", (total_w, h + offset_y), (0, 0, 0, 0))
-    canvas.paste(desk, (term.width - overlap, 0), desk)
-    canvas.paste(term, (0, offset_y), term)
+    total = (desk_pos[0] + desk.width,
+             max(term_pos[1] + term.height, desk_pos[1] + desk.height))
+    canvas = Image.new("RGBA", total, (0, 0, 0, 0))
+
+    for card, (x, y) in ((term, term_pos), (desk, desk_pos)):
+        shadow = Image.new("RGBA", total, (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            (x + 5, y + 12, x + card.width - 5, y + card.height + 8),
+            radius=13, fill=(6, 14, 45, 165))
+        canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(18)))
+        canvas.paste(card, (x, y), card)
     return canvas
 
 
@@ -101,51 +122,38 @@ def centre(text, f, y, fill, tracking=0):
     draw.text(((W - w) / 2, y), text, font=f, fill=fill)
 
 
+def wrap(text, f, max_width):
+    """Greedy wrap. Measured against the real font rather than a character
+    count, so a copy change cannot silently run past the canvas edge."""
+    lines, line = [], ""
+    for word in text.split():
+        trial = f"{line} {word}".strip()
+        if draw.textlength(trial, font=f) <= max_width or not line:
+            line = trial
+        else:
+            lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    return lines
+
+
 # ── copy, mirroring the site's section ───────────────────────────────────────
 centre("SEE IT WORK", font(R_BOLD, 20 * S), 62 * S, (255, 255, 255, 200), tracking=3.2 * S)
 centre("The main agent", font(R_BOLD, 62 * S), 104 * S, (255, 255, 255, 255))
+
 sub = font(R_REG, 25 * S)
-centre("You ask in plain language. The main agent plans the work",
-       sub, 196 * S, (255, 255, 255, 205))
-centre("and delegates each part to a specialist sub-agent.",
-       sub, 232 * S, (255, 255, 255, 205))
+SUBTEXT = ("The open-source AI agent Framework and Harness with persistent memory "
+           "and tools for web, code and files. Fully self-sufficient in-house, or "
+           "with models from the cloud.")
+y = 196 * S
+for line in wrap(SUBTEXT, sub, 1180 * S):
+    centre(line, sub, y, (255, 255, 255, 205))
+    y += 36 * S
 
-# ── the two surfaces, as the site's Desktop / CLI toggle implies ─────────────
-pill_y, pill_h = 288 * S, 44 * S
-labels = [("Desktop", True), ("CLI", False)]
-pill_f = font(R_MED, 21 * S)
-widths = [draw.textlength(t, font=pill_f) + 42 * S for t, _ in labels]
-x = (W - (sum(widths) + 12 * S)) / 2
-for (text, active), w in zip(labels, widths):
-    box = (x, pill_y, x + w, pill_y + pill_h)
-    if active:
-        draw.rounded_rectangle(box, radius=pill_h / 2, fill=(17, 24, 39, 255))
-        tc = (255, 255, 255, 255)
-    else:
-        draw.rounded_rectangle(box, radius=pill_h / 2, fill=(255, 255, 255, 235))
-        tc = (17, 24, 39, 255)
-    tw = draw.textlength(text, font=pill_f)
-    draw.text((x + (w - tw) / 2, pill_y + 10 * S), text, font=pill_f, fill=tc)
-    x += w + 12 * S
-
-# ── the product shot: rounded corners, soft drop shadow ──────────────────────
+# ── the product shots ────────────────────────────────────────────────────────
 shot = _src.resize((SHOT_W, SHOT_H), Image.LANCZOS)
-
-# Round the corners so the window sits on the gradient like a card rather than
-# a pasted rectangle.
-corner = 14 * S
-mask = Image.new("L", shot.size, 0)
-ImageDraw.Draw(mask).rounded_rectangle((0, 0, shot.width - 1, shot.height - 1),
-                                       radius=corner, fill=255)
-shot.putalpha(mask)
-
-sx, sy = (W - shot.width) // 2, SHOT_TOP
-shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-ImageDraw.Draw(shadow).rounded_rectangle(
-    (sx + 6 * S, sy + 16 * S, sx + shot.width - 6 * S, sy + shot.height + 12 * S),
-    radius=corner, fill=(6, 14, 45, 160))
-img = Image.alpha_composite(img, shadow.filter(ImageFilter.GaussianBlur(24 * S)))
-img.paste(shot, (sx, sy), shot)
+img.paste(shot, ((W - shot.width) // 2, SHOT_TOP), shot)
 
 img.convert("RGB").resize((W // S, H // S), Image.LANCZOS).save(
     str(ASSETS / "banner.png"), optimize=True)

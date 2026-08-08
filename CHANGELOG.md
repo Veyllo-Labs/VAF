@@ -161,6 +161,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an unknown id.
 
 ### Security
+- **DOMPurify updated (3.4.13).** A sanitizer bug could leave a removed
+  element's hidden children able to run scripts in applications that use one
+  specific advanced mode. VAF's interface never uses that mode - the library
+  only arrives through the code editor and the PDF export - so no VAF
+  installation was exposed; the update keeps the dependency clean regardless.
 - **PostCSS updated (8.5.26).** The build toolchain's CSS processor could be
   tricked into reading arbitrary `.map` files when it processes CSS from an
   untrusted source without a known input file, disclosing their contents in

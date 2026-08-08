@@ -52,6 +52,47 @@ def test_provider_badge_matches_the_registry_exactly():
     )
 
 
+def _first_party_source_lines() -> int:
+    """Lines of source we wrote, counted the way the badge means it.
+
+    Deliberately excludes vendored code, build output and generated/lock files:
+    a line count inflated by a dependency lockfile measures nothing about this
+    project. The definition lives here, next to the assertion, so the badge and
+    its guard can never drift apart.
+    """
+    tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                             cwd=ROOT, check=True).stdout.split("\n")
+    code_suffixes = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh", ".ps1", ".css", ".sql"}
+    excluded_dirs = ("vaf/vendor/", "web/public/", "node_modules/", "web/.next/")
+    excluded_files = ("package-lock.json", "requirements.lock", "licenses_data.ts")
+
+    total = 0
+    for rel in tracked:
+        if not rel or rel.startswith(excluded_dirs) or rel.endswith(excluded_files):
+            continue
+        path = ROOT / rel
+        if path.suffix not in code_suffixes or not path.is_file():
+            continue
+        total += path.read_bytes().count(b"\n")
+    return total
+
+
+def test_lines_of_code_badge_floor_still_holds():
+    """No third-party badge backs this one, so we measure it ourselves.
+
+    Checked when this was added: shields.io has no LOC endpoint (it answers
+    "404: badge not found"), tokei.rs no longer responds at all, and
+    ghloc.vercel.app computes on demand without exposing an API a badge could
+    read. The badge is therefore a static floor, and the link points at ghloc so
+    a reader can see the live number for themselves.
+    """
+    claimed_floor_k = _badge_number(r"source-(\d+)k%2B%20lines-")
+    lines = _first_party_source_lines()
+    assert lines >= claimed_floor_k * 1000, (
+        f"README badge claims {claimed_floor_k}k+ source lines, counted {lines:,}."
+    )
+
+
 def test_tools_badge_floor_still_holds():
     claimed_floor = _badge_number(r"tools-(\d+)%2B-")
     tools = {m for m in re.findall(r"^\| `([a-z_]+)`", TOOLS_CATALOG.read_bytes().decode("utf-8"), re.M)}

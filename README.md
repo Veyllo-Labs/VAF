@@ -1,9 +1,19 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.gif"
-     width="880" alt="VAF - Veyllo Agentic Framework. The open-source AI agent framework and harness with persistent memory and tools for web, code and files - fully self-sufficient in-house, or with models from the cloud. Below the title, the desktop window in front and the full-screen terminal app behind it.">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/wordmark-dark-bg.png">
+  <img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/wordmark-light-bg.png" width="210" alt="Veyllo">
+</picture>
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
+
+[Installation](#installation) ·
+[Build on VAF](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) ·
+[Documentation](https://github.com/Veyllo-Labs/VAF/blob/main/docs/README.md) ·
+[Contributing](https://github.com/Veyllo-Labs/VAF/blob/main/.github/CONTRIBUTING.md)
+
+<img src="https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/docs/assets/banner.gif"
+     width="880" alt="VAF - Veyllo Agentic Framework. The open-source AI agent framework and harness with persistent memory and tools for web, code and files - fully self-sufficient in-house, or with models from the cloud. Below the title, the desktop window in front and the full-screen terminal app behind it.">
 
 [![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/Veyllo-Labs/VAF?include_prereleases&label=release&color=green)](https://github.com/Veyllo-Labs/VAF/releases) [![Last commit](https://img.shields.io/github/last-commit/Veyllo-Labs/VAF?color=blue)](https://github.com/Veyllo-Labs/VAF/commits/main) [![Stars](https://img.shields.io/github/stars/Veyllo-Labs/VAF?logo=github&color=yellow)](https://github.com/Veyllo-Labs/VAF/stargazers)
 

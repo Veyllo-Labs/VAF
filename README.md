@@ -390,7 +390,11 @@ VAF is **dual-licensed**:
 
 See **[LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.
 
-**Legal notice:** under Section 7(b) of the AGPL, VAF carries a short legal notice that names its origin and the obligations the AGPL already imposes. Forks must keep it in their source; it never has to be displayed anywhere. The notice adds **no** restriction of its own - it restates the AGPL, and the AGPL still applies in full: run a **modified** VAF as a network service and you owe that service's users your complete source (Section 13). The commercial license is what removes that obligation. See the "Preservation of Legal Notices" section in [LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md).
+**Legal notice:** under Section 7(b) of the AGPL, VAF carries a short legal notice stating its origin and the obligations the AGPL imposes. Forks must keep this notice in their source code; it never has to be displayed to end users.
+
+This notice adds **no** restrictions of its own - it restates the AGPL, and the AGPL still applies in full: if you run a **modified** version of VAF as a network service, you owe that service's users your complete source code (Section 13).
+
+The commercial license is exactly what removes this obligation. See the "Preservation of Legal Notices" section in [LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md).
 
 **Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md).
 

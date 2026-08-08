@@ -942,6 +942,18 @@ use the `session_context(sid)` context manager, which restores the thread's
 context exactly as it was. Skipping this quietly routes session-scoped writes
 into the legacy global store - VAF's own terminal app shipped that bug.
 
+If your front end renders one bubble per exchange, declare the TURN as well
+(`vaf.core.subagent_ipc.set_current_turn_id`, read back with
+`get_current_turn_id`). It is the same per-thread mechanism one level finer,
+and it is what lets an event describe WHICH exchange produced it: VAF's own
+`notify_file_created` stamps it automatically, so a file written from inside a
+tool can be attached to the answer of that turn instead of to whichever answer
+happens to be newest when the event arrives. It crosses a process boundary as
+`VAF_TURN_ID`, exactly like `VAF_SESSION_ID`, so work that finishes after its
+turn (a spawned coder) is still addressed correctly. Skipping it is not an
+error - events simply carry `None` and your UI has to fall back to arrival
+order, which is the bug this exists to remove.
+
 ### More extension points
 
 Beyond tools, the product loads three other user-extensible artifact kinds -

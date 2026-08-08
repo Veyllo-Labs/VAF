@@ -4522,6 +4522,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 attached_images, session_id, user_scope_id
                             )
                             metadata["images"] = attached_images
+                        # The task is queued BEFORE the upload is announced, because the
+                        # announcement needs the turn's identity to say which message the
+                        # image belongs to. Announcing first is what made an uploaded
+                        # image appear under the PREVIOUS answer: at that moment the turn
+                        # it belongs to did not exist yet, and the browser could only
+                        # attach it to the newest answer it already had.
+                        _task = tq.add(session_id=session_id, input_text=content, source="web",
+                                       metadata=metadata)
+                        if attached_images:
                             # Surface the stored file(s) to the Web UI so the chat's workspace box
                             # appears (same notify the agent's file-creating tools use). Uploading an
                             # image now creates a real file in the chat folder, so it should show up
@@ -4530,10 +4539,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 from vaf.core.web_interface import notify_file_created
                                 for _ai in attached_images:
                                     if _ai.get("path"):
-                                        notify_file_created(session_id, _ai["path"], title=_ai.get("name"))
+                                        notify_file_created(session_id, _ai["path"], title=_ai.get("name"),
+                                                            turn_id=getattr(_task, "turn_id", None))
                             except Exception as _nfe:
                                 log("WebServer", f"notify_file_created (image upload) failed: {_nfe}")
-                        tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():
                                 from datetime import datetime as _dt

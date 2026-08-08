@@ -40,6 +40,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   "Local" speech recognition for an engine that no installer delivered.
   It is part of the speech extra from now on: `pip install "vaf[speech]"`,
   and the option says so.
+- **A created file is shown on the answer it came with.** An image you attached,
+  or a file the agent wrote, appeared as a chip under the PREVIOUS answer -
+  every time from the second message on, not just occasionally. The file was
+  announced while its own answer was still being written, and the chat had to
+  guess which message it belonged to. Every answer and every file now says which
+  exchange it belongs to, so the chip waits for its own answer instead of
+  landing on the one before it. The same file is also no longer shown twice, a
+  file produced during a longer agent turn no longer disappears from view, and a
+  coding agent that finishes minutes later still finds the right message.
 
 ## [0.1.0a21] - 2026-08-08
 

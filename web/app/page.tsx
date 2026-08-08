@@ -72,8 +72,57 @@ type Message = {
     initialSteps?: number;
     /** Files created by a coding agent — shown as blue download chips inside this bubble */
     downloadFiles?: { path: string; name: string }[];
+    /**
+     * Which exchange produced this message (backend `turnId`). File events carry
+     * the same id, which is how a created file finds the answer it belongs to.
+     * Absent on messages restored from history and on proactive messages, which
+     * belong to no turn.
+     */
+    turnId?: string;
     /** Code Viewer was open when sent — shown as chip; content is NOT stored here */
     codeViewerFile?: { name: string; path: string; ext: string; lineCount: number };
+};
+
+/**
+ * Which message a created file belongs to.
+ *
+ * With a `turnId` this is an ADDRESS, not a guess: the last assistant message of
+ * that exchange, or `undefined` while that exchange has produced no message yet
+ * (the chip then waits in `createdFiles` until it has). Files are announced from
+ * inside a tool call, so "not yet" is the normal case, and the old rule - the
+ * newest assistant message that happens to exist - resolved to the PREVIOUS
+ * turn's answer for the whole tool phase.
+ *
+ * Without a `turnId` the old rule is kept deliberately: messages from before this
+ * change, and anything emitted outside a turn, have no address, and showing such
+ * a file on the newest answer beats not showing it at all.
+ */
+const chipTargetIndex = (msgs: Message[], turnId?: string): number | undefined => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role !== 'assistant') continue;
+        if (!turnId || msgs[i].turnId === turnId) return i;
+    }
+    return undefined;
+};
+
+/**
+ * Add chips to message `idx`, skipping paths already shown for the SAME turn -
+ * the same file used to be attached twice, once by each writer, and a turn can
+ * own several assistant messages, so "already on this message" is not enough.
+ * The scope is the turn and not the whole chat on purpose: a file written again
+ * in a later exchange (the agent updating one report) is a new result and has
+ * to appear on that answer too.
+ */
+const withChips = (msgs: Message[], idx: number,
+                   chips: { path: string; name: string }[]): Message[] => {
+    const turnId = msgs[idx]?.turnId;
+    const scope = msgs.filter((m, i) => i === idx || (!!turnId && m.turnId === turnId));
+    const shown = new Set(scope.flatMap(m => (m.downloadFiles || []).map(f => f.path)));
+    const toAdd = chips.filter(c => !shown.has(c.path)).map(c => ({ path: c.path, name: c.name }));
+    if (toAdd.length === 0) return msgs;
+    const out = [...msgs];
+    out[idx] = { ...out[idx], downloadFiles: [...(out[idx].downloadFiles || []), ...toAdd] };
+    return out;
 };
 
 type Session = {
@@ -1150,7 +1199,14 @@ function VAFDashboardContent() {
     const stopPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const stopBtnRef = useRef<HTMLButtonElement>(null);
     const [stopBtnPos, setStopBtnPos] = useState<{ x: number; y: number } | null>(null);
-    const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string }[]>([]);
+    // Files announced by the backend that have no message to sit on YET. A file is
+    // usually announced while its answer is still being produced, so this is the
+    // waiting room; `turnId` is the address the chip is waiting for.
+    const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string; turnId?: string }[]>([]);
+    // Same reason as messagesRef: the WebSocket callback is a closure over the
+    // first render, so it needs a ref to see chips that are still waiting.
+    const createdFilesRef = useRef<typeof createdFiles>([]);
+    useEffect(() => { createdFilesRef.current = createdFiles; }, [createdFiles]);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
     const [activeToolMode, setActiveToolMode] = useState<AvatarMode | null>(null); // avatar animation for the running tool (web_search→searching, …)
@@ -2917,7 +2973,9 @@ function VAFDashboardContent() {
                         const forceAppendInner = expectNewInner || expectAfterToolInner || withinUserSendWindowInner;
                         if (last && last.role === 'assistant' && !forceAppendInner) {
                             const newMsgs = [...prev];
-                            newMsgs[newMsgs.length - 1] = { ...last, content: data.content };
+                            // Carry the address forward on every update: this bubble is what
+                            // a file created during this exchange has to find.
+                            newMsgs[newMsgs.length - 1] = { ...last, content: data.content, turnId: data.turnId ?? last.turnId };
                             return newMsgs;
                         }
                         // New turn (user just sent), after tool end, or within user-send window. Append a new assistant bubble.
@@ -2933,7 +2991,11 @@ function VAFDashboardContent() {
                                 if (delta.length > 0) content = delta;
                             }
                         }
-                        return [...prev, { role: 'assistant', content, timestamp: Date.now() }];
+                        // A new bubble also carries the exchange it belongs to, and any
+                        // file already announced for it can move in right away.
+                        const appended: Message[] = [...prev, { role: 'assistant', content, timestamp: Date.now(), turnId: data.turnId }];
+                        const waiting = createdFilesRef.current.filter(f => f.turnId && f.turnId === data.turnId);
+                        return waiting.length > 0 ? withChips(appended, appended.length - 1, waiting) : appended;
                     });
                 }
                 else if (data.type === 'agent_message_append') {
@@ -3105,21 +3167,30 @@ function VAFDashboardContent() {
                             if (lastCh === '?') fireAgentReaction('permission', 3000);
                             else if (lastCh === '!') fireAgentReaction('exclaim', 3000);
                         } catch { /* cosmetic only */ }
-                        // Attach any pending file_created chips to the last assistant message bubble
+                        // The turn is over, so its answer exists: everything still waiting
+                        // for THIS turn can be placed now. Chips waiting for another turn
+                        // stay - the async coder announces its files long after the turn
+                        // that started it has completed, and dropping them here is what
+                        // made them surface on an unrelated later answer.
                         setCreatedFiles(pending => {
-                            if (pending.length > 0) {
+                            // Unaddressed chips (emitted outside any turn) ride along: they
+                            // have nothing better to wait for, and a completed turn is the
+                            // same target the old code would have picked.
+                            const ready = pending.filter(f => !f.turnId || f.turnId === data.turnId);
+                            if (ready.length > 0) {
                                 setMessages(prev => {
-                                    const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
-                                    if (lastAssistantIdx === undefined) return prev;
-                                    const newMsgs = [...prev];
-                                    const existing = newMsgs[lastAssistantIdx].downloadFiles || [];
-                                    const toAdd = pending.filter(f => !existing.some(e => e.path === f.path)).map(f => ({ path: f.path, name: f.name }));
-                                    if (toAdd.length === 0) return prev;
-                                    newMsgs[lastAssistantIdx] = { ...newMsgs[lastAssistantIdx], downloadFiles: [...existing, ...toAdd] };
-                                    return newMsgs;
+                                    let out = prev;
+                                    for (const chip of ready) {
+                                        // Last resort when a turn produced no answer at all:
+                                        // a visible chip on the newest answer beats a chip
+                                        // that waits for a message that will never arrive.
+                                        const idx = chipTargetIndex(out, chip.turnId) ?? chipTargetIndex(out, undefined);
+                                        if (idx !== undefined) out = withChips(out, idx, [chip]);
+                                    }
+                                    return out;
                                 });
                             }
-                            return []; // Clear floating chips
+                            return pending.filter(f => !ready.includes(f));
                         });
                     }
                     // Completion sound: play when model has finished (Web UI only)
@@ -4213,22 +4284,25 @@ function VAFDashboardContent() {
                         if (viewedWorkspaceSidRef.current == null || viewedWorkspaceSidRef.current === activeSessionId) {
                             refreshWorkspace(activeSessionId);
                         }
-                        const newChip = { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid };
+                        const newChip = {
+                            path: data.filePath,
+                            name: data.title || data.filePath.split('/').pop() || 'file',
+                            sessionId: sid,
+                            turnId: data.turnId || undefined,
+                        };
                         setCreatedFiles(prev => {
                             // Avoid duplicates
                             if (prev.some(f => f.path === data.filePath)) return prev;
                             return [...prev, newChip];
                         });
-                        // Also attach immediately to the last assistant message to avoid race
-                        // with message_complete clearing the pending list before this chip arrives.
+                        // Attach right away IF the answer this file belongs to already
+                        // exists. It usually does not - files are announced from inside a
+                        // tool call - and then the chip waits in createdFiles for its turn
+                        // instead of being stapled onto the previous turn's answer.
                         setMessages(prev => {
-                            const lastAssistantIdx = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop()?.i;
-                            if (lastAssistantIdx === undefined) return prev;
-                            const existing = prev[lastAssistantIdx].downloadFiles || [];
-                            if (existing.some(f => f.path === data.filePath)) return prev;
-                            const updated = [...prev];
-                            updated[lastAssistantIdx] = { ...updated[lastAssistantIdx], downloadFiles: [...existing, { path: data.filePath, name: newChip.name }] };
-                            return updated;
+                            const idx = chipTargetIndex(prev, newChip.turnId);
+                            if (idx === undefined) return prev;
+                            return withChips(prev, idx, [newChip]);
                         });
                     }
                 }
@@ -4572,7 +4646,11 @@ function VAFDashboardContent() {
         }]);
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
-        setCreatedFiles([]);
+        // The waiting room is NOT cleared here any more. It used to be, because
+        // chips were placed on arrival and the list was only a leftover; now a
+        // chip waits here for the answer it belongs to, and a coder that is still
+        // running has every right to still be waiting. Entries leave the list when
+        // their turn completes.
         setIsStoppingGeneration(false);
         setLoading(true);
         setIsGenerating(true);
@@ -5967,6 +6045,19 @@ function VAFDashboardContent() {
                                                     const answerMsg = turnTl ? turnTl.answerMsg : msg;
                                                     const parsedSelf = parseContent(msg.content);
                                                     const parsedAns = hasTimeline ? parseContent(answerMsg.content) : parsedSelf;
+                                                    // Chips of the WHOLE turn, not just the anchor's. A grouped turn renders
+                                                    // one bubble but owns several assistant messages, and only the anchor is
+                                                    // drawn - a file bound to the turn's final answer (the correct binding)
+                                                    // was therefore dropped from the DOM entirely.
+                                                    const turnChips = (() => {
+                                                        if (!isBot) return [];
+                                                        const owners = hasTimeline
+                                                            ? [msg, ...turnTl!.actions.map(a => a.msg), answerMsg]
+                                                            : [msg];
+                                                        const seen = new Set<string>();
+                                                        return owners.flatMap(o => o.downloadFiles || [])
+                                                            .filter(f => !seen.has(f.path) && seen.add(f.path));
+                                                    })();
                                                     const thought = parsedSelf.thought;
                                                     const answer = parsedAns.answer;
                                                     const action = parsedAns.action;
@@ -6278,9 +6369,9 @@ function VAFDashboardContent() {
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
                                                             {/* File chips: html → HtmlViewer, code → CodeViewer, others → download */}
-                                                            {isBot && msg.downloadFiles && msg.downloadFiles.length > 0 && (
+                                                            {isBot && turnChips.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2">
-                                                                    {msg.downloadFiles.map((f, fi) => (
+                                                                    {turnChips.map((f, fi) => (
                                                                         isImageFile(f.path) ? (
                                                                             <button
                                                                                 key={fi}

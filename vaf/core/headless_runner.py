@@ -672,6 +672,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 except Exception:
                     pass
 
+                # Same declaration one level finer: which EXCHANGE this run is.
+                # Everything the turn emits carries it, so a file written mid-tool
+                # can be bound to the answer of THIS turn instead of the newest
+                # answer that happens to exist when the event arrives.
+                try:
+                    from vaf.core.subagent_ipc import set_current_turn_id
+                    set_current_turn_id(getattr(task, "turn_id", None))
+                except Exception:
+                    pass
+
                 # Load Session Context
                 try:
                     agent.load_session_context(task.session_id)

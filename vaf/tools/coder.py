@@ -3150,6 +3150,17 @@ Thumbs.db
             _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "coding_agent"}
             if session_id:
                 _sub_env["VAF_SESSION_ID"] = session_id
+            # The turn crosses the fork too. This child finishes minutes after the
+            # turn that started it, and the files it writes still belong to that
+            # exchange - without this they would be announced with no address and
+            # land on whatever answer is newest by then.
+            try:
+                from vaf.core.subagent_ipc import get_current_turn_id
+                _turn_id = get_current_turn_id()
+                if _turn_id:
+                    _sub_env["VAF_TURN_ID"] = _turn_id
+            except Exception:
+                pass
 
             # The caller's identity crosses the boundary as DATA (librarian pattern). A
             # scope UUID and a role string - never a secret; what may enter a child's

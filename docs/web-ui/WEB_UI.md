@@ -308,6 +308,16 @@ The Code Viewer is a Monaco-based (VS Code engine) code editor in the right pane
 
 A dedicated viewer for HTML files (reports, generated web pages). Opens automatically when the agent creates a `.html` or `.htm` file - shown as an **orange chip** in the chat (distinct from violet code chips and blue download chips).
 
+**Which message a chip belongs to.** Every file chip is bound by the `turnId` its
+`file_created` event carries (see [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md)),
+never by arrival order. A file is announced from inside a tool call, so the answer it
+belongs to usually does not exist yet; the chip waits in `createdFiles` until the
+assistant bubble with that id appears, and is placed at the latest when the turn
+completes. A grouped agentic turn renders one bubble but owns several assistant
+messages, so the chips of the WHOLE turn are collected for it - a chip bound to the
+turn's final answer would otherwise never be drawn. Chips are frontend state only:
+they are not part of the stored history and disappear on reload or session switch.
+
 **Features:**
 - **Preview mode** (default): native iframe render with `allow-scripts allow-forms` - JavaScript-heavy reports (Chart.js, D3, etc.) work correctly.
 - **Source mode**: Monaco editor (read-only, HTML syntax highlighting) - toggle with the `Preview / Source` buttons in the header.

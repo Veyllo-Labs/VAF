@@ -1181,6 +1181,15 @@ _session_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
     "vaf_current_session_id", default=_UNSET
 )
 
+# Which TURN this context serves. A session says WHO is talking, a turn says
+# WHICH exchange - and everything a turn produces (an answer, a written file)
+# needs the second one to find its way back to the right message. Without it
+# the browser can only guess "the newest answer that exists right now", and
+# during a tool call that is still the PREVIOUS turn's answer.
+_turn_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "vaf_current_turn_id", default=_UNSET
+)
+
 
 def get_ipc() -> SubAgentIPC:
     """Get the global IPC instance."""
@@ -1209,6 +1218,39 @@ def set_current_session_id(session_id: Optional[str]):
         _session_ctx.set(session_id)
     except Exception:
         pass
+
+
+def set_current_turn_id(turn_id: Optional[str]):
+    """Declare which TURN this context serves. Mirrors `set_current_session_id`.
+
+    Same three choices for the same reasons: per context (a process serves
+    several turns on several threads), `None` is a declaration that this run
+    belongs to no turn, and it sets rather than restores.
+    """
+    try:
+        _turn_ctx.set(turn_id)
+    except Exception:
+        pass
+
+
+def get_current_turn_id() -> Optional[str]:
+    """The turn this run serves, or `None`. Context first, process boundary second.
+
+    The env fallback is the CHILD case and only the child case, exactly like
+    `get_current_session_id`: the async coder runs in a subprocess that
+    finishes long after its turn, and a file it writes still belongs to the
+    turn that started it - `VAF_TURN_ID` is how that survives the fork.
+
+    Never raises. Every caller sits inside a best-effort emit.
+    """
+    try:
+        v = _turn_ctx.get()
+    except Exception:
+        v = _UNSET
+    if v is not _UNSET:
+        return v
+    tid = (os.environ.get("VAF_TURN_ID") or "").strip()
+    return tid or None
 
 
 @contextmanager

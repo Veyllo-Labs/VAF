@@ -5,6 +5,7 @@ import heapq
 import itertools
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
@@ -19,6 +20,13 @@ class AgentTask:
     metadata: Dict[str, Any] = field(default_factory=dict)
     priority: int = 10
     task_class: str = "interactive"
+    # The identity of this exchange, stamped at CREATION and not when the
+    # runner picks the task up: a file can be announced before the turn even
+    # starts (an image attached to the message being sent), and it still
+    # belongs to this turn. Everything the turn emits carries it, so the UI
+    # can bind an answer and the files it produced to each other instead of
+    # guessing from arrival order.
+    turn_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self):
         if not self.created_at:

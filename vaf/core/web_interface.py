@@ -26,6 +26,20 @@ from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 _BRIDGE_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="subagent-bridge")
 
 
+def _current_turn_id() -> Optional[str]:
+    """The turn this emit belongs to, or None. Never raises, never hard-imports.
+
+    Every event that describes what a turn produced carries this, so the UI can
+    bind a file to the answer it came with instead of to whatever answer
+    happens to be newest when the event arrives.
+    """
+    try:
+        from vaf.core.subagent_ipc import get_current_turn_id
+        return get_current_turn_id()
+    except Exception:
+        return None
+
+
 def _post_to_parent(data: dict) -> None:
     """POST one event to the main process's /api/subagent/stream (used from sub-agent subprocesses,
     which have no local WebSocket clients of their own)."""
@@ -343,7 +357,8 @@ class WebInterfaceManager:
         self._push_session_update(session_id, {
             "type": "agent_message_update",
             "role": role,
-            "content": content
+            "content": content,
+            "turnId": _current_turn_id(),
         })
 
     def emit_agent_message_append(self, content: str, session_id: str = None, role: str = "assistant", kind: str = None):
@@ -361,6 +376,7 @@ class WebInterfaceManager:
             "type": "agent_message_append",
             "role": role,
             "content": content,
+            "turnId": _current_turn_id(),
         }
         if kind:
             payload["kind"] = kind
@@ -374,7 +390,8 @@ class WebInterfaceManager:
         """Emit when a message is fully complete (for Auto-TTS trigger)."""
         self._push_session_update(session_id, {
             "type": "message_complete",
-            "content": content
+            "content": content,
+            "turnId": _current_turn_id(),
         })
 
     def emit_tool_update(self, event_type: str, tool_name: str, tool_id: str, data: str = None, session_id: str = None):
@@ -698,11 +715,18 @@ def internal_api_base() -> str:
     return "http://127.0.0.1:8005" if tls_on else "http://127.0.0.1:8001"
 
 
-def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
+def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None,
+                        turn_id: Optional[str] = None) -> None:
     """
     Notify the Web UI that a file was created so it shows a download/open link.
     Works from main process (WebSocket) and from subprocess (HTTP POST fallback).
     Safe when there is no Web session (Telegram, automation): returns immediately.
+
+    `turn_id` addresses the message the file belongs to. It defaults to the turn
+    the caller is running in, and is passed explicitly only where the file is
+    announced BEFORE that turn starts (an image attached to the message being
+    sent). Without it the browser had to guess "the newest answer that exists
+    right now" - which, while a tool is running, is still the PREVIOUS answer.
     """
     if not session_id or not file_path:
         return
@@ -712,6 +736,7 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
         "sessionId": session_id,
         "filePath": resolved,
         "title": title or Path(file_path).name,
+        "turnId": turn_id or _current_turn_id(),
     }
     wi = get_web_interface()
     if getattr(wi, "_server_loop", None):

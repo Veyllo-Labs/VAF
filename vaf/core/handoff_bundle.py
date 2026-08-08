@@ -170,6 +170,9 @@ def create(
     now = _now()
     bundle = {
         "id": str(uuid.uuid4())[:8],
+        # On-disk bundle format tag for future migrations. Readers stay tolerant:
+        # bundles written before the tag carry no 'format' key and must keep loading.
+        "format": "bundle-1-3a8969",
         "source": (source or "automation").strip() or "automation",
         "status": "open",
         "summary": (summary or "").strip()[:4000] or None,

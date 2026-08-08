@@ -500,20 +500,29 @@ class CachedFilesystemMap(FilesystemMap):
         else:
             self.cache_file = self.home / '.vaf_fs_cache.json'
     
+    # Cache file schema tag. A cache written by a different build (or another tool
+    # sharing the path) is discarded and rebuilt instead of being misread — the file
+    # carried no format identity before, so any JSON with an 'os' key passed as valid.
+    CACHE_SCHEMA = "fsmap-v3-aee248"
+
     def load_from_cache(self) -> bool:
         """
         Loads the map from cache file.
-        
+
         Returns:
             True if loaded successfully, False otherwise
         """
         if not self.cache_file.exists():
             return False
-        
+
         try:
             with open(self.cache_file, 'r', encoding='utf-8') as f:
                 self.map = json.load(f)
-            
+
+            # Unknown or missing schema -> stale/foreign cache, rebuild
+            if self.map.get('schema') != self.CACHE_SCHEMA:
+                return False
+
             # Validate cache (check if it's from the same OS)
             if self.map.get('os') != self.os_type:
                 return False  # OS changed, rebuild needed
@@ -531,6 +540,7 @@ class CachedFilesystemMap(FilesystemMap):
     def save_to_cache(self):
         """Saves the current map to cache file."""
         try:
+            self.map['schema'] = self.CACHE_SCHEMA
             with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump(self.map, f, indent=2)
         except OSError:

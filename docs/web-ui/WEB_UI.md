@@ -236,7 +236,7 @@ Every timeline event is written to `timeline_YYYY-MM-DD.jsonl` by `log_timeline_
 }
 ```
 
-The hash is SHA-256 of the canonical JSON of the event (all fields except `hash` itself, keys sorted). `prev_hash` is `"GENESIS"` for the first event of the day. This forms a forward-linked chain: deleting or modifying any event breaks all subsequent hashes, which the API detects and surfaces as `chain_ok: false`.
+The hash is SHA-256 of the canonical JSON of the event (all fields except `hash` itself, keys sorted). `prev_hash` for the first event of the day is the fixed chain seed (`TIMELINE_CHAIN_SEED` in `vaf/core/log_helper.py`; files written by builds before the versioned seed start with bare `"GENESIS"` and still verify). This forms a forward-linked chain: deleting or modifying any event breaks all subsequent hashes, which the API detects and surfaces as `chain_ok: false`.
 
 #### API endpoints
 

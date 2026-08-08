@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from vaf.api.user_routes import require_admin
-from vaf.core.log_helper import get_app_log_dir
+from vaf.core.log_helper import LEGACY_CHAIN_SEED, TIMELINE_CHAIN_SEED, get_app_log_dir
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -89,8 +89,11 @@ _JSONL_DATE_RE = re.compile(r"^timeline_(\d{4}-\d{2}-\d{2})\.jsonl$")
 def _verify_chain(events: List[Dict[str, Any]]) -> bool:
     """Return True if the hash chain across all events is intact."""
     for i, ev in enumerate(events):
-        expected_prev = "GENESIS" if i == 0 else events[i - 1].get("hash", "")
-        if ev.get("prev_hash") != expected_prev:
+        if i == 0:
+            # Files from builds before the versioned seed start with bare GENESIS.
+            if ev.get("prev_hash") not in (TIMELINE_CHAIN_SEED, LEGACY_CHAIN_SEED):
+                return False
+        elif ev.get("prev_hash") != events[i - 1].get("hash", ""):
             return False
         payload = {k: v for k, v in ev.items() if k != "hash"}
         canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))

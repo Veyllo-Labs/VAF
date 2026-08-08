@@ -300,17 +300,25 @@ def append_domain_log_block(domain: str, first_line: str, rest_lines: Optional[L
         pass
 
 
+# Seed the first event of each timeline file links to (there is no prior hash to chain
+# from). Versioned so a chain's origin identifies the format that wrote it; files from
+# builds before the versioned seed start with bare "GENESIS" and must keep verifying
+# (see _verify_chain in vaf/api/logs_routes.py).
+TIMELINE_CHAIN_SEED = "GENESIS:4ad9c39d"
+LEGACY_CHAIN_SEED = "GENESIS"
+
+
 def _timeline_prev_hash(path: Path) -> str:
-    """Return the hash of the last event in the timeline JSONL file, or 'GENESIS' if empty/missing."""
+    """Return the hash of the last event in the timeline JSONL file, or the chain seed if empty/missing."""
     try:
         if not path.exists():
-            return "GENESIS"
+            return TIMELINE_CHAIN_SEED
         with open(path, "rb") as f:
             # Seek to last non-empty line efficiently
             f.seek(0, 2)
             size = f.tell()
             if size == 0:
-                return "GENESIS"
+                return TIMELINE_CHAIN_SEED
             # Walk backwards to find the last newline
             pos = size - 1
             while pos > 0:
@@ -322,11 +330,11 @@ def _timeline_prev_hash(path: Path) -> str:
             f.seek(pos + 1 if pos > 0 else 0)
             last_line = f.read().decode("utf-8", errors="replace").strip()
         if not last_line:
-            return "GENESIS"
+            return TIMELINE_CHAIN_SEED
         obj = json.loads(last_line)
-        return obj.get("hash", "GENESIS")
+        return obj.get("hash", TIMELINE_CHAIN_SEED)
     except Exception:
-        return "GENESIS"
+        return TIMELINE_CHAIN_SEED
 
 
 def _timeline_hash(event_dict: Dict[str, Any]) -> str:

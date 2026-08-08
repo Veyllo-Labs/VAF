@@ -31,6 +31,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   search run rather than reporting a zero nobody counted.
 
 ### Changed
+- **Files VAF writes and reads back now say which format they are in.** Three
+  stores kept no format identity of their own, so a reader had to guess from the
+  keys it happened to find. The filesystem index cache carries a schema tag and a
+  cache without the current tag is rebuilt instead of being read as if it were
+  current - previously any JSON file at that path with a matching `os` key was
+  accepted, including one written by an older build or another tool. Handoff
+  bundles are written with a format tag, and bundles stored before the tag keep
+  loading, so an open handover is not lost across an update. The audit timeline's
+  hash chain starts from a versioned seed; timeline files written earlier start
+  from the old seed and still verify as intact. One visible effect: after the
+  update the filesystem index is rebuilt once on first use.
 - **The tool-use log now covers every lane, not only chat.** `tool_use_*.log`
   records which session and which user scope were behind a tool call - the first
   place to look when isolation looks wrong. It was written from the chat loop

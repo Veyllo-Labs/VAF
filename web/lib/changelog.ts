@@ -31,6 +31,37 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a21',
+    date: '2026-08-08',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'The terminal app grew up: create, rename and delete sessions, switch the local model without losing the conversation, manage automations and browse the tool catalog - all without leaving it. Switching a session now shows that conversation instead of an empty screen.',
+          'Voice input works in the terminal: press l, speak, and the transcript is sent - or lands in the input box first if you turn on "review before send".',
+          'The context limit, the sub-agent timeout, the microphone and an About view moved into the terminal settings, and /export <file> writes the conversation to markdown or json.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Switching the local model could leave VAF unable to start: the model list offered the vision helper file (it also ends in .gguf) as if it were a model. Those files are filtered out now, and a configuration that already points at one falls back to a working model instead of failing.',
+          'Starting VAF from the terminal now brings the services up, so long-term memory works there. When the memory database really is unreachable, the agent says so instead of reporting an empty memory.',
+          'The coding agent works in the folder you started VAF in, and a task that only edits existing files is no longer reported as failed.',
+          'A pip-installed VAF stopped writing its logs into its own install directory, where an update would delete them.',
+          'Asking about the files in one folder no longer answers about a different one.',
+          'Typing anything interrupts the agent while it is speaking, and clearing the chat mid-answer discards that answer instead of leaving it hanging in an empty window.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'DOMPurify, PostCSS and js-yaml updated to their patched releases. None of the issues were reachable in VAF - the update keeps the dependencies clean regardless.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a20',
     date: '2026-08-05',
     sections: [

@@ -11,24 +11,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
-### Fixed
-- **The sub-agent windows are dark in dark mode.** The librarian's file browser
-  came up with bright, near-white panels: its window body, the file area behind
-  the listing and the toolbar above it were painted with fixed colour values,
-  and fixed values do not follow the theme. All sub-agent windows shared those
-  values, so the coder, research, document and browser views were bright in the
-  same places. They are now defined once and follow the theme. Light mode is
-  unchanged.
-- **Asking about files in one folder no longer answers about another one.** The
-  librarian answers simple folder questions from a cached index in about a
-  second. That index decided which folder to report from the file type in your
-  question, not from the folder you named - so "how many PDFs are in Downloads"
-  came back with the count from Documents, fluently and fast enough to look
-  authoritative. Measured on one machine: 33 PDFs in Downloads, answer said 9,
-  which is the Documents figure. The folder you name now decides the answer; a
-  question with no folder gets the counts for every folder instead of a guess;
-  and where the index has no figures at all it stays quiet and lets a real
-  search run rather than reporting a zero nobody counted.
+## [0.1.0a21] - 2026-08-08
 
 ### Added
 - **The README says plainly what VAF sends and where it goes.** A new
@@ -54,51 +37,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   static text: nothing about it is transmitted, and it involves no telemetry of
   any kind.
 
-### Changed
-- **Files VAF writes and reads back now say which format they are in.** Three
-  stores kept no format identity of their own, so a reader had to guess from the
-  keys it happened to find. The filesystem index cache carries a schema tag and a
-  cache without the current tag is rebuilt instead of being read as if it were
-  current - previously any JSON file at that path with a matching `os` key was
-  accepted, including one written by an older build or another tool. Handoff
-  bundles are written with a format tag, and bundles stored before the tag keep
-  loading, so an open handover is not lost across an update. The audit timeline's
-  hash chain starts from a versioned seed; timeline files written earlier start
-  from the old seed and still verify as intact. One visible effect: after the
-  update the filesystem index is rebuilt once on first use.
-- **The tool-use log now covers every lane, not only chat.** `tool_use_*.log`
-  records which session and which user scope were behind a tool call - the first
-  place to look when isolation looks wrong. It was written from the chat loop
-  only, so workflow steps, librarian sub-tools, training samples and tools added
-  by an embedded application never appeared in it. The shared dispatcher writes
-  it now, so all of them do. Two details worth knowing: a call that a permission
-  check refused is logged too (a blocked attempt is exactly what this file is
-  opened for), and the argument preview is sanitized the same way the live event
-  stream already was, so a large field such as a file's contents is summarised by
-  length and digest instead of pasted in whole. The coder's own tool loop does not
-  use the shared dispatcher and is still absent.
-- **A pip-installed VAF no longer writes logs into its own install directory.**
-  The log directory search included the folder above the package, which in a
-  checkout is the repository and in a pip install is site-packages. Installed
-  copies now fall through to the normal application data directory; a checkout is
-  unaffected. Set `VAF_LOG_DIR` to choose explicitly.
-- **Tool-loading diagnostics no longer print underneath the terminal app.** The
-  per-turn tool hot-reload, the custom-tool reload and a failed provider switch
-  wrote their warnings straight to the raw terminal - under the full-screen app
-  that corrupted the display mid-conversation. These messages now travel the
-  same event lane as the rest of VAF's status output: the terminal app shows
-  them as notes, the classic terminal shows the usual styled event line instead
-  of a bare `[WARN] ...`, and the web log receives them too.
-- **`vaf run --web` no longer starts the background service behind your back.**
-  The README has always described this command as the dashboard WITHOUT the tray,
-  and the lane hosts the dashboard itself - but if the background service was not
-  running, the command quietly launched it as a detached process that outlived
-  your session. Now the dashboard lives and dies with your session, as promised.
-  If you relied on `vaf run --web` to bootstrap the persistent service, start it
-  the intended way: `vaf tray`. A service that is already running keeps serving
-  unchanged.
-
-### Added
 - **Tools can write their own log lines: `self.log(...)`.** Every tool - including
   one written by a third party against the public `BaseTool` - can now report what
   it is doing without reaching into VAF's internals. Lines land in `tools_*.log`
@@ -160,26 +98,69 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   panel can only truncate. `session list` opens the panel instead of failing as
   an unknown id.
 
-### Security
-- **DOMPurify updated (3.4.13).** A sanitizer bug could leave a removed
-  element's hidden children able to run scripts in applications that use one
-  specific advanced mode. VAF's interface never uses that mode - the library
-  only arrives through the code editor and the PDF export - so no VAF
-  installation was exposed; the update keeps the dependency clean regardless.
-- **PostCSS updated (8.5.26).** The build toolchain's CSS processor could be
-  tricked into reading arbitrary `.map` files when it processes CSS from an
-  untrusted source without a known input file, disclosing their contents in
-  the generated source map. VAF only ever runs it over its own stylesheets at
-  build time, so no VAF installation was exposed - the update keeps the
-  dependency clean regardless.
-- **js-yaml updated (4.3.1).** The YAML parser that the linter uses to read its
-  own configuration resolved ordered maps in quadratic time, so a crafted
-  document could stall the process that parses it. It reaches VAF only as a
-  build-time dependency of ESLint and never sees anything but VAF's own config
-  files, so no VAF installation was exposed - the update keeps the dependency
-  clean regardless.
+### Changed
+- **Files VAF writes and reads back now say which format they are in.** Three
+  stores kept no format identity of their own, so a reader had to guess from the
+  keys it happened to find. The filesystem index cache carries a schema tag and a
+  cache without the current tag is rebuilt instead of being read as if it were
+  current - previously any JSON file at that path with a matching `os` key was
+  accepted, including one written by an older build or another tool. Handoff
+  bundles are written with a format tag, and bundles stored before the tag keep
+  loading, so an open handover is not lost across an update. The audit timeline's
+  hash chain starts from a versioned seed; timeline files written earlier start
+  from the old seed and still verify as intact. One visible effect: after the
+  update the filesystem index is rebuilt once on first use.
+- **The tool-use log now covers every lane, not only chat.** `tool_use_*.log`
+  records which session and which user scope were behind a tool call - the first
+  place to look when isolation looks wrong. It was written from the chat loop
+  only, so workflow steps, librarian sub-tools, training samples and tools added
+  by an embedded application never appeared in it. The shared dispatcher writes
+  it now, so all of them do. Two details worth knowing: a call that a permission
+  check refused is logged too (a blocked attempt is exactly what this file is
+  opened for), and the argument preview is sanitized the same way the live event
+  stream already was, so a large field such as a file's contents is summarised by
+  length and digest instead of pasted in whole. The coder's own tool loop does not
+  use the shared dispatcher and is still absent.
+- **A pip-installed VAF no longer writes logs into its own install directory.**
+  The log directory search included the folder above the package, which in a
+  checkout is the repository and in a pip install is site-packages. Installed
+  copies now fall through to the normal application data directory; a checkout is
+  unaffected. Set `VAF_LOG_DIR` to choose explicitly.
+- **Tool-loading diagnostics no longer print underneath the terminal app.** The
+  per-turn tool hot-reload, the custom-tool reload and a failed provider switch
+  wrote their warnings straight to the raw terminal - under the full-screen app
+  that corrupted the display mid-conversation. These messages now travel the
+  same event lane as the rest of VAF's status output: the terminal app shows
+  them as notes, the classic terminal shows the usual styled event line instead
+  of a bare `[WARN] ...`, and the web log receives them too.
+- **`vaf run --web` no longer starts the background service behind your back.**
+  The README has always described this command as the dashboard WITHOUT the tray,
+  and the lane hosts the dashboard itself - but if the background service was not
+  running, the command quietly launched it as a detached process that outlived
+  your session. Now the dashboard lives and dies with your session, as promised.
+  If you relied on `vaf run --web` to bootstrap the persistent service, start it
+  the intended way: `vaf tray`. A service that is already running keeps serving
+  unchanged.
 
 ### Fixed
+- **The sub-agent windows are dark in dark mode.** The librarian's file browser
+  came up with bright, near-white panels: its window body, the file area behind
+  the listing and the toolbar above it were painted with fixed colour values,
+  and fixed values do not follow the theme. All sub-agent windows shared those
+  values, so the coder, research, document and browser views were bright in the
+  same places. They are now defined once and follow the theme. Light mode is
+  unchanged.
+- **Asking about files in one folder no longer answers about another one.** The
+  librarian answers simple folder questions from a cached index in about a
+  second. That index decided which folder to report from the file type in your
+  question, not from the folder you named - so "how many PDFs are in Downloads"
+  came back with the count from Documents, fluently and fast enough to look
+  authoritative. Measured on one machine: 33 PDFs in Downloads, answer said 9,
+  which is the Documents figure. The folder you name now decides the answer; a
+  question with no folder gets the counts for every folder instead of a guess;
+  and where the index has no figures at all it stays quiet and lets a real
+  search run rather than reporting a zero nobody counted.
+
 - **Clearing the chat while an answer is still arriving now discards that
   answer.** The reply kept streaming into the freshly emptied conversation,
   so a paragraph appeared with no question above it - belonging to a history
@@ -355,6 +336,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   release minutes after one went live. It now says which it is - rate limit (with
   the time to try again), unreachable, or genuinely no release - and a plain
   permission error is not dressed up as a rate limit.
+
+### Security
+- **DOMPurify updated (3.4.13).** A sanitizer bug could leave a removed
+  element's hidden children able to run scripts in applications that use one
+  specific advanced mode. VAF's interface never uses that mode - the library
+  only arrives through the code editor and the PDF export - so no VAF
+  installation was exposed; the update keeps the dependency clean regardless.
+- **PostCSS updated (8.5.26).** The build toolchain's CSS processor could be
+  tricked into reading arbitrary `.map` files when it processes CSS from an
+  untrusted source without a known input file, disclosing their contents in
+  the generated source map. VAF only ever runs it over its own stylesheets at
+  build time, so no VAF installation was exposed - the update keeps the
+  dependency clean regardless.
+- **js-yaml updated (4.3.1).** The YAML parser that the linter uses to read its
+  own configuration resolved ordered maps in quadratic time, so a crafted
+  document could stall the process that parses it. It reaches VAF only as a
+  build-time dependency of ESLint and never sees anything but VAF's own config
+  files, so no VAF installation was exposed - the update keeps the dependency
+  clean regardless.
 
 ## [0.1.0a20] - 2026-08-05
 

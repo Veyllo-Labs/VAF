@@ -21,23 +21,19 @@ Run with no arguments to write both.
 import math
 from pathlib import Path
 
+import numpy as np
+
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ASSETS = Path(__file__).resolve().parent.parent / "docs" / "assets"
 
-S = 2                 # supersampling factor for the still
+# The background is drawn at 2x and downsampled, which keeps the title and the
+# gradient crisp on HiDPI. The screenshots deliberately skip that path and are
+# composited at 1x - see card().
+S = 2
 W = 1760 * S          # final 1760 wide (displayed at 880)
-SHOT_W = 1300 * S     # width the window pair occupies
-SHOT_TOP = 268 * S
-SHOT_BOTTOM = 54 * S
-
-# Window geometry in design units; scaled once to fit SHOT_W.
-DESIGN_CARD_W = 1120
-DESIGN_TERM_POS = (0, 148)      # behind, lower-left
-# The front edge lands just right of the terminal's session panel. Further right
-# and a sliver of the ASCII banner shows through cropped mid-glyph, which reads
-# as corruption rather than as one window behind another.
-DESIGN_DESK_POS = (352, 0)      # in front, upper-right
+SHOT_TOP = 268 * S    # where the window pair starts
+SHOT_BOTTOM = 54 * S  # breathing room under it
 
 TOP = (0x1E, 0x40, 0xAF)
 BOT = (0x1D, 0x4E, 0xD8)
@@ -58,35 +54,51 @@ def font(path, size):
         return ImageFont.truetype(R_REG, size)
 
 
-def card(img, width, radius):
-    """Scale a screenshot and round its corners, so it sits on the gradient as a
-    card rather than a pasted rectangle."""
-    scaled = img.resize((width, round(img.height * width / img.width)), Image.LANCZOS)
-    mask = Image.new("L", scaled.size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, scaled.width - 1, scaled.height - 1),
+def card(img, radius):
+    """Round a screenshot's corners so it sits on the gradient as a card rather
+    than a pasted rectangle. Deliberately does NOT resize.
+
+    Every resample of a screenshot costs something, and here it cost visibly:
+    the app window's interior is one flat tone with a single-level step across
+    it, invisible at 1:1, and rescaling smeared that step into a faint striped
+    texture. The layout is sized around the screenshots now, not the other way
+    round, so each is composited at its native pixel size and whatever is in the
+    file is exactly what appears.
+    """
+    out = img.copy()
+    mask = Image.new("L", out.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, out.width - 1, out.height - 1),
                                            radius=radius, fill=255)
-    scaled.putalpha(mask)
-    return scaled
+    out.putalpha(mask)
+    return out
 
 
 # ── geometry ─────────────────────────────────────────────────────────────────
 _term_src = Image.open(str(ASSETS / "terminal.png")).convert("RGBA")
 _desk_src = Image.open(str(ASSETS / "desktop.png")).convert("RGBA")
 
-design_w = DESIGN_DESK_POS[0] + DESIGN_CARD_W
-scale = SHOT_W / design_w
-card_w = round(DESIGN_CARD_W * scale)
-radius = round(13 * scale)
+radius = 13
+term = card(_term_src, radius)
+desk = card(_desk_src, radius)
 
-term = card(_term_src, card_w, radius)
-desk = card(_desk_src, card_w, radius)
+# Offsets follow the screenshots' own pixel sizes rather than a design grid,
+# because the layout is now sized around them instead of the other way round.
+#
+# The inset is measured off the TERMINAL, not the front window: it has to land
+# just past the session panel's right edge. Any further and a strip of the ASCII
+# banner shows through cropped mid-glyph, which reads as corruption rather than
+# as one window standing behind another.
+stagger_x = round(term.width * 0.295)      # front window's inset from the left
+stagger_y = round(desk.height * 0.132)     # back window's drop
+pair_w = stagger_x + desk.width
 
-ox, oy = (W - SHOT_W) // 2, SHOT_TOP
-term_at = (ox + round(DESIGN_TERM_POS[0] * scale), oy + round(DESIGN_TERM_POS[1] * scale))
-desk_at = (ox + round(DESIGN_DESK_POS[0] * scale), oy + round(DESIGN_DESK_POS[1] * scale))
+ox = (W // S - pair_w) // 2
+oy = SHOT_TOP // S
+term_at = (ox, oy + stagger_y)
+desk_at = (ox + stagger_x, oy)
 
 shot_bottom = max(term_at[1] + term.height, desk_at[1] + desk.height)
-H = shot_bottom + SHOT_BOTTOM
+H = (shot_bottom + SHOT_BOTTOM // S) * S
 
 
 DOT_STEP = 26 * S
@@ -170,26 +182,82 @@ def build_background(glint_x=None):
     return bg
 
 
-def place(canvas, blur, term_off=(0, 0), desk_off=(0, 0)):
-    """Paste both windows, each with its own shadow. One shadow around the pair's
-    bounding box would sit under the empty corners the stagger creates."""
-    out = canvas
-    for c, (bx, by), (dx, dy) in ((term, term_at, term_off), (desk, desk_at, desk_off)):
-        x, y = bx + dx, by + dy
+def render(glint_x=None):
+    """The finished frame: background downsampled from 2x, windows composited at
+    final size so they are resampled exactly once."""
+    out = build_background(glint_x).convert("RGB").resize(
+        (W // S, H // S), Image.LANCZOS).convert("RGBA")
+    for c, (x, y) in ((term, term_at), (desk, desk_at)):
         shadow = Image.new("RGBA", out.size, (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
-            (x + 5 * S, y + 12 * S, x + c.width - 5 * S, y + c.height + 8 * S),
+            (x + 3, y + 6, x + c.width - 3, y + c.height + 4),
             radius=radius, fill=(6, 14, 45, 165))
-        out = Image.alpha_composite(out, shadow.filter(ImageFilter.GaussianBlur(blur)))
+        out = Image.alpha_composite(out, shadow.filter(ImageFilter.GaussianBlur(9)))
         out.paste(c, (x, y), c)
-    return out
+    return out.convert("RGB")
 
 
-def write_png(bg):
-    img = place(bg.copy(), 18 * S)
-    img.convert("RGB").resize((W // S, H // S), Image.LANCZOS).save(
-        str(ASSETS / "banner.png"), optimize=True)
+def write_png():
+    render().save(str(ASSETS / "banner.png"), optimize=True)
     print(f"written: {ASSETS / 'banner.png'}")
+
+
+def build_palette(sample, colors=256, exact=176):
+    """A palette that carries the picture's dominant colours verbatim.
+
+    Both stock methods split a large flat area across several entries, and the
+    eye reads that as horizontal bands in exactly the places that should be one
+    tone - the interiors of the two app windows. Median cut divides the palette
+    by how much area each colour covers, so the blue gradient claims it and the
+    interiors are left snapping between levels; max coverage spreads entries
+    evenly instead, which fixes the interiors and wrecks the gradient.
+
+    Neither is needed. A flat area is flat because one colour repeats thousands
+    of times, so the fix is to reserve entries for the most FREQUENT colours,
+    exactly as they are: they then map to themselves and cannot band. The
+    remaining entries come from median cut, which is well suited to what is
+    left - edges, text antialiasing, window chrome.
+    """
+    counts = sample.getcolors(maxcolors=1 << 24) or []
+    counts.sort(key=lambda c: -c[0])
+    entries = [c[1][:3] for c in counts[:exact]]
+
+    rest = colors - len(entries)
+    if rest > 0:
+        mc = sample.quantize(colors=rest, method=Image.MEDIANCUT).getpalette()[:rest * 3]
+        entries += [tuple(mc[i * 3:i * 3 + 3]) for i in range(rest)]
+
+    return np.array(entries[:colors], dtype=np.uint8)
+
+
+def map_to_palette(im, pal_rgb):
+    """Map every pixel to its nearest palette entry, computed exactly.
+
+    Pillow's own palette mapping is approximate, and here it is wrong in a way
+    that is plainly visible: with (32,32,32) sitting in the palette, a source
+    pixel of (31,31,31) was mapped to (28,28,28) - three levels away, past the
+    obvious neighbour. That is what striped the app windows' flat interiors,
+    and no choice of palette could have fixed it.
+
+    Distances are computed over the frame's DISTINCT colours rather than its
+    pixels, so this stays cheap: a banner frame has a few tens of thousands of
+    distinct colours against two million pixels.
+    """
+    a = np.asarray(im, dtype=np.int32)
+    h, w, _ = a.shape
+    uniq, inverse = np.unique(a.reshape(-1, 3), axis=0, return_inverse=True)
+
+    nearest = np.empty(len(uniq), dtype=np.uint8)
+    pal = pal_rgb.astype(np.int32)
+    for start in range(0, len(uniq), 4096):        # chunked: the full distance
+        block = uniq[start:start + 4096]           # matrix would be hundreds of MB
+        d = ((block[:, None, :] - pal[None, :, :]) ** 2).sum(axis=2)
+        nearest[start:start + 4096] = d.argmin(axis=1)
+
+    out = Image.fromarray(nearest[inverse].reshape(h, w), mode="P")
+    flat = pal_rgb.flatten().tolist()
+    out.putpalette(flat + [0] * (768 - len(flat)))
+    return out
 
 
 def write_gif(frames=52, ms=60, colors=256):
@@ -214,17 +282,10 @@ def write_gif(frames=52, ms=60, colors=256):
     seq = []
     for i in range(frames):
         x = W * i / frames
-        img = place(build_background(glint_x=x).copy(), 18 * S)
-        seq.append(img.convert("RGB").resize((W // S, H // S), Image.LANCZOS))
+        seq.append(render(glint_x=x))
 
-    palette = seq[0].quantize(colors=colors, method=Image.MEDIANCUT)
-    # No dithering, and that is the whole reason this fits at full resolution.
-    # Floyd-Steinberg diffuses each pixel's error into its neighbours, so one
-    # brighter dot rewrites a trail of pixels behind it and the frame deltas
-    # explode - measured at 2.86 MB dithered against 0.29 MB flat, same frames,
-    # same size. The palette spans a narrow blue and dark greys, so flat
-    # quantisation costs almost nothing here.
-    seq = [f.quantize(palette=palette, dither=Image.NONE) for f in seq]
+    pal_rgb = build_palette(seq[0], colors)
+    seq = [map_to_palette(f, pal_rgb) for f in seq]
     # disposal=1 keeps the previous frame and writes only what changed. Safe
     # because every pixel the glint leaves behind also changes, so it falls
     # inside the diff and gets repainted; verified frame by frame rather than
@@ -237,5 +298,5 @@ def write_gif(frames=52, ms=60, colors=256):
 
 
 if __name__ == "__main__":
-    write_png(build_background())
+    write_png()
     write_gif()

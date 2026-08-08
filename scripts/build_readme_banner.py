@@ -38,8 +38,23 @@ SHOT_BOTTOM = 54 * S  # breathing room under it
 TOP = (0x1E, 0x40, 0xAF)
 BOT = (0x1D, 0x4E, 0xD8)
 
-R_BOLD = "/usr/share/fonts/truetype/Roboto-Bold.ttf"
-R_REG = "/usr/share/fonts/truetype/Roboto-Regular.ttf"
+# Resolved by name, not by path. Pillow searches the platform's font
+# directories, so this works on Linux, macOS and Windows alike; hardcoded
+# absolute paths meant the script only ran on the machine it was written on,
+# which for a script in a public repository is worse than having none - it
+# looks maintainable and is not.
+#
+# Roboto is what the committed banner was rendered with, and the assets only
+# reproduce byte for byte where it is installed. The rest of the list keeps the
+# script usable elsewhere, at the cost of a substituted typeface; the run says
+# which one it picked so a surprising result is explainable.
+FONTS = {
+    "bold": ["Roboto-Bold.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf",
+             "Arialbd.ttf", "arialbd.ttf", "seguisb.ttf", "HelveticaNeue.ttc"],
+    "regular": ["Roboto-Regular.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf",
+                "Arial.ttf", "arial.ttf", "segoeui.ttf", "Helvetica.ttc"],
+}
+_reported = set()
 
 TITLE = "VAF - Veyllo Agentic Framework"
 SUBTEXT = ("The open-source AI agent Framework and Harness with persistent memory "
@@ -47,11 +62,22 @@ SUBTEXT = ("The open-source AI agent Framework and Harness with persistent memor
            "with models from the cloud.")
 
 
-def font(path, size):
-    try:
-        return ImageFont.truetype(path, size)
-    except OSError:
-        return ImageFont.truetype(R_REG, size)
+def font(weight, size):
+    """First installed candidate for `weight`, searched by name."""
+    for name in FONTS[weight]:
+        try:
+            f = ImageFont.truetype(name, size)
+        except OSError:
+            continue
+        if weight not in _reported:
+            _reported.add(weight)
+            if name != FONTS[weight][0]:
+                print(f"note: {FONTS[weight][0]} not installed, rendering {weight} "
+                      f"with {name} - the committed assets will not match byte for byte")
+        return f
+    raise SystemExit(
+        f"No usable {weight} font found. Install Roboto (the banner's typeface) or any "
+        f"of: {', '.join(FONTS[weight][1:])}")
 
 
 def card(img, radius):
@@ -159,12 +185,12 @@ def build_background(glint_x=None):
     # Fitted to the canvas rather than set at a fixed size: this title is twice
     # as long as the site section's headline, so a hard size would run into the
     # edges, and a later rename could overflow the image silently.
-    title_f = font(R_BOLD, 62 * S)
+    title_f = font("bold", 62 * S)
     while draw.textlength(TITLE, font=title_f) > 1420 * S:
-        title_f = font(R_BOLD, title_f.size - 2 * S)
+        title_f = font("bold", title_f.size - 2 * S)
     centre(TITLE, title_f, 74 * S, (255, 255, 255, 255))
 
-    sub = font(R_REG, 25 * S)
+    sub = font("regular", 25 * S)
     lines, line = [], ""
     for word in SUBTEXT.split():          # wrap measured against the real font,
         trial = f"{line} {word}".strip()  # so new copy cannot run off the canvas

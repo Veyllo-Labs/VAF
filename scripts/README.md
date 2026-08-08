@@ -23,6 +23,7 @@ This directory contains utility scripts for development, maintenance, and deploy
 | `create_app_shortcut.py` | Creates desktop shortcuts for VAF |
 | `fix_venv.py` | Repairs Windows venv COM registration |
 | `update_icons.py` | Regenerates app and tray icons |
+| `build_readme_banner.py` | Rebuilds the README hero banner (`docs/assets/banner.png` and `banner.gif`) from `terminal.png` and `desktop.png`. Run it after replacing either screenshot; the banner is generated, so editing the images by hand is lost on the next run. Needs Roboto installed to reproduce the committed files byte for byte - without it the script still runs and says which typeface it substituted. Takes a few minutes: the animation renders 52 frames at 2x and maps each to the palette exactly. |
 | `generate_vocab.py` | Dev/build-time tooling that expands the backend Vocabulary Book into many languages via the configured LLM (never called at runtime) |
 
 ## CI / Lint Gates

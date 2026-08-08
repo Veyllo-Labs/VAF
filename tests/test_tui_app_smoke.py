@@ -618,10 +618,15 @@ def test_clear_discards_a_reply_that_is_still_streaming(smoke_app):
     async def _drive():
         async with app.run_test(size=(110, 40)) as pilot:
             await pilot.pause()
-            app._send_user("something to clear")
+            # NO _send_user here: that starts a real fake turn on the lane,
+            # whose end_agent_message un-mutes again - and whether that lands
+            # before or after the probe below is exactly the timing luck this
+            # test must not depend on (it decided the verdict on Windows).
+            # The state is set directly instead: a transcript with something
+            # in it, and a lane that says it is busy (`busy` is a read-only
+            # property over the lane's own flag).
+            app._mount_scrolled(UserMessage("something to clear"))
             assert await _settle(pilot, lambda: bool(app.query(UserMessage)))
-            # Mid-turn by construction, not by timing luck (`busy` is a
-            # read-only property over the lane's own flag).
             bridge._busy = True
             app._cmd_clear(())
             await pilot.pause()

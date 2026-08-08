@@ -70,7 +70,14 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
         p = args.get(_arg)
         if not (isinstance(p, str) and p.strip()):
             continue
-        if os.path.isabs(os.path.expanduser(p)):
+        _expanded = os.path.expanduser(p)
+        # A leading separator is checked SEPARATELY, because `ntpath.isabs`
+        # stopped recognising a driveless rooted path ("/etc/x") in Python
+        # 3.13 - it now requires a drive or a UNC prefix. Without this a user
+        # who names an explicit rooted target on Windows/3.13 gets it silently
+        # joined onto the workflow's project directory instead. Portable back
+        # to 3.10 (`os.path.splitroot` is 3.12+, so it cannot be used here).
+        if os.path.isabs(_expanded) or _expanded[:1] in ("/", "\\"):
             continue  # explicit absolute/~ target
         if p.split("/", 1)[0].split("\\", 1)[0].lower() in _WORKFLOW_FOLDER_ALIASES:
             continue  # tool resolves the folder alias itself

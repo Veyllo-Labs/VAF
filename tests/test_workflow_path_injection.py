@@ -84,3 +84,24 @@ def test_injection_is_idempotent():
     once = args["path"]
     _inject_workflow_paths("write_file", args, PROJ)
     assert args["path"] == once
+
+
+def test_a_rooted_path_without_a_drive_survives_on_every_python(monkeypatch):
+    """Python 3.13 changed `ntpath.isabs`: a driveless rooted path like
+    "/etc/x" is no longer absolute there (3.10-3.12 said it was). The guard
+    read that answer alone, so on a Windows 3.13 runner an explicitly rooted
+    target would be silently joined onto the workflow's project directory -
+    the exact rewrite the guard exists to prevent. Simulated by swapping the
+    module's os.path for ntpath, which is what the check faces on Windows."""
+    import ntpath
+
+    import vaf.workflows.engine as engine
+
+    monkeypatch.setattr(engine.os, "path", ntpath)
+    # `path` is write_file's rel-path argument - the wrong name would sail
+    # past the guard entirely and prove nothing (it did, first try).
+    assert "path" in engine._WORKFLOW_REL_PATH_ARGS["write_file"]
+    args = {"path": "/etc/hosts-copy.txt"}
+    engine._inject_workflow_paths("write_file", args, "C:\\projects\\wf")
+    assert args["path"] == "/etc/hosts-copy.txt", (
+        "a rooted target was rewritten onto the project dir")

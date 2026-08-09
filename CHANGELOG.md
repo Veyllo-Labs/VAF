@@ -48,6 +48,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stored "knowledge" full of dot leaders and wasted one model call each. They
   are now detected and skipped in both the learning and the attachment
   indexing lane, and the completion message names how many were skipped.
+- **Clicking a tag now lists its memories where you can use them.** The tag's
+  memories appear in the Memory Search panel as a result list and stay there
+  while you click through them, instead of vanishing the moment you opened the
+  first one. A new search, another tag or the clear button replaces the list.
+  Memory tag chips open the same list, which also makes tags usable on a phone,
+  where the graph is hidden.
 - **The memory graph shows ALL memories again.** It used to load only the 100
   most recently changed entries, so learning a large document pushed every
   older memory out of sight. The graph now renders the whole store of the

@@ -127,6 +127,38 @@ interface MemoryState {
     typeFilter: string | null;
     tagFilter: string | null;
     searchQuery: string;
+
+    // Tag result set: the memories of a clicked tag, presented in the search
+    // panel like a search result. Deliberately NOT derived from selectedNodeId:
+    // clicking a memory in the list moves the selection, and the list has to
+    // survive that so the user can walk through the tag's memories one by one.
+    activeTagNodeId: string | null;
+    activeTagLabel: string;
+}
+
+/** Memory type -> badge label. Rendered by the search panel AND by the tag
+ *  delete list, so a private copy would degrade one of them to the raw key. */
+export const TYPE_LABELS: Record<string, string> = {
+    note: 'Note', document: 'Document', code: 'Code',
+    conversation: 'Conversation', knowledge: 'Knowledge', document_index: 'Document Index',
+};
+
+/** Memories linked to a tag node, from the graph payload already in the store.
+ *  One implementation, two consumers (search panel list + tag details). */
+export function connectedMemoriesForTag(
+    nodes: MemoryNode[],
+    edges: MemoryEdge[],
+    tagNodeId: string | null,
+): Array<{ id: string; label: string; type?: string }> {
+    if (!tagNodeId) return [];
+    const connected = new Set<string>();
+    edges.forEach((edge) => {
+        if (edge.source === tagNodeId) connected.add(edge.target);
+        if (edge.target === tagNodeId) connected.add(edge.source);
+    });
+    return nodes
+        .filter((n) => n.type === 'memoryNode' && connected.has(n.id))
+        .map((n) => ({ id: n.id, label: n.data.label, type: n.data.type }));
 }
 
 interface MemoryActions {
@@ -134,7 +166,7 @@ interface MemoryActions {
     fetchGraph: (limit?: number) => Promise<void>;
     setNodes: (nodes: MemoryNode[]) => void;
     setEdges: (edges: MemoryEdge[]) => void;
-    highlightNodes: (nodeIds: string[]) => void;
+    highlightNodes: (nodeIds: string[], trackAsSources?: boolean) => void;
     clearHighlights: () => void;
     
     // Memory CRUD
@@ -173,6 +205,10 @@ interface MemoryActions {
     setTypeFilter: (type: string | null) => void;
     setTagFilter: (tag: string | null) => void;
     setSearchQuery: (query: string) => void;
+
+    // Tag result set (see the state comment)
+    showTagResults: (tagNodeId: string, label: string) => void;
+    clearTagResults: () => void;
     
     // Error handling
     setError: (error: string | null) => void;
@@ -203,7 +239,9 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     typeFilter: null,
     tagFilter: null,
     searchQuery: '',
-    
+    activeTagNodeId: null,
+    activeTagLabel: '',
+
     // Graph actions
     // limit 0 = ALL memories of the scope. The old 100-node recency window
     // hid every older memory once a learned document filled it; the Sigma
@@ -228,10 +266,13 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     setNodes: (nodes) => set({ nodes }),
     setEdges: (edges) => set({ edges }),
     
-    highlightNodes: (nodeIds) => {
+    // trackAsSources=false paints the highlight WITHOUT writing ragSources:
+    // fetchGraph turns that array into an &highlight= URL parameter, and a
+    // hub tag with hundreds of members would put hundreds of UUIDs in the URL.
+    highlightNodes: (nodeIds, trackAsSources = true) => {
         const { nodes } = get();
         const highlightSet = new Set(nodeIds);
-        
+
         const updatedNodes = nodes.map(node => ({
             ...node,
             data: {
@@ -239,8 +280,10 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
                 isHighlighted: highlightSet.has(node.id)
             }
         }));
-        
-        set({ nodes: updatedNodes, ragSources: nodeIds });
+
+        set(trackAsSources
+            ? { nodes: updatedNodes, ragSources: nodeIds }
+            : { nodes: updatedNodes });
     },
     
     clearHighlights: () => {
@@ -571,15 +614,38 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         get().clearHighlights();
     },
 
+    // A tag result and a search result are the SAME slot in the UI, so each
+    // replaces the other: that is what makes "the list stays until I search or
+    // click another tag" true.
+    showTagResults: (tagNodeId, label) => {
+        set({
+            activeTagNodeId: tagNodeId,
+            activeTagLabel: label,
+            ragResult: null,
+            ragSources: [],
+            streamingAnswer: '',
+        });
+        const ids = connectedMemoriesForTag(get().nodes, get().edges, tagNodeId).map(m => m.id);
+        get().highlightNodes(ids, false);
+    },
+
+    clearTagResults: () => {
+        set({ activeTagNodeId: null, activeTagLabel: '' });
+        get().clearHighlights();
+    },
+
     // Simple search (no LLM, just find and highlight memories)
     searchMemories: async (query, k = 10) => {
         if (!query.trim()) {
             get().clearHighlights();
-            set({ ragSources: [], ragResult: null });
+            set({ ragSources: [], ragResult: null, activeTagNodeId: null, activeTagLabel: '' });
             return [];
         }
 
-        set({ isQuerying: true, error: null, ragQuery: query });
+        set({
+            isQuerying: true, error: null, ragQuery: query,
+            activeTagNodeId: null, activeTagLabel: '',
+        });
 
         try {
             const response = await fetch(`${getMemoryApiBase()}/api/memory/search`, {

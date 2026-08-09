@@ -16,7 +16,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { useMemoryStore, Memory } from './stores/memoryStore';
+import { connectedMemoriesForTag, useMemoryStore, Memory, TYPE_LABELS } from './stores/memoryStore';
 import {
     X, Edit2, Trash2, Save, Tag, Calendar, Link2,
     ChevronDown, ChevronUp, FileText, AlertTriangle, Hash, CheckSquare, Square
@@ -29,23 +29,18 @@ interface MemoryDetailPanelProps {
     onToggleExpand?: (expanded: boolean) => void;
 }
 
-const TYPE_LABELS: Record<string, string> = {
-    note: 'Notes', document: 'Documents', code: 'Code',
-    conversation: 'Conversations', knowledge: 'Knowledge', document_index: 'Document Index',
-};
-
 // Tag Details Component
 function TagDetailsView({
     tagNode,
     connectedMemories,
-    onMemoryClick,
+    onShowInSearch,
     onDeleteMemories,
     onRemoveTagFromMemories,
     isLoading,
 }: {
     tagNode: { id: string; data: { label: string; tag: string; memoryCount: number } };
     connectedMemories: Array<{ id: string; label: string; type?: string }>;
-    onMemoryClick: (memoryId: string) => void;
+    onShowInSearch: () => void;
     onDeleteMemories: (ids: string[]) => Promise<void>;
     onRemoveTagFromMemories: (ids: string[], tag: string) => Promise<void>;
     isLoading: boolean;
@@ -103,7 +98,7 @@ function TagDetailsView({
                     </p>
                 </div>
                 <p className="text-xs text-gray-500">
-                    Deselected memories are kept — their tag <span className="font-mono">#{tagNode.data.tag}</span> will be removed.
+                    Deselected memories are kept - their tag <span className="font-mono">#{tagNode.data.tag}</span> will be removed.
                 </p>
 
                 {/* Select all */}
@@ -188,38 +183,26 @@ function TagDetailsView({
                 </div>
             </div>
 
-            {/* Connected Memories List */}
-            <div>
-                <label className="block text-xs font-medium text-gray-500 mb-2">
-                    <Link2 className="w-3 h-3 inline mr-1" />
-                    Connected Memories
-                </label>
-                <div className="max-h-[200px] overflow-y-auto space-y-1">
-                    {connectedMemories.length > 0 ? (
-                        connectedMemories.map((memory) => (
-                            <button
-                                key={memory.id}
-                                onClick={() => onMemoryClick(memory.id)}
-                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
-                            >
-                                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                <span className="text-sm text-gray-700 truncate">{memory.label}</span>
-                                {memory.type && (
-                                    <span className="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-500 rounded ml-auto">
-                                        {TYPE_LABELS[memory.type] ?? memory.type}
-                                    </span>
-                                )}
-                            </button>
-                        ))
-                    ) : (
-                        <p className="text-xs text-gray-400 text-center py-4">No connected memories</p>
-                    )}
-                </div>
-            </div>
+            {/* The memories themselves live in the Memory Search panel above:
+                one list, big enough to click through, and it survives the
+                selection changes that clicking an entry causes. */}
+            <button
+                type="button"
+                onClick={onShowInSearch}
+                disabled={connectedMemories.length === 0}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+                <Link2 className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                <span className="text-sm text-gray-700">
+                    {connectedMemories.length > 0
+                        ? 'Show these memories in Memory Search'
+                        : 'No connected memories'}
+                </span>
+            </button>
 
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
                 <p className="text-xs text-purple-700">
-                    <span className="font-medium">Tip:</span> Drag from a memory node to this tag to add the tag to that memory.
+                    <span className="font-medium">Tip:</span> Use Link Tags in the header to connect this tag with another one.
                 </p>
             </div>
         </div>
@@ -239,7 +222,9 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
         deleteByDocTag,
         removeTagFromMemory,
         isLoading,
-        error
+        error,
+        showTagResults,
+        clearTagResults,
     } = useMemoryStore();
 
     const [isEditing, setIsEditing] = useState(false);
@@ -268,30 +253,12 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
 
     const isTagSelected = !!(selectedNode && (selectedNode.type === 'tagNode' || selectedNode.data?.isTagNode));
 
-    // Get connected memories for tag node
-    const connectedMemories = useMemo(() => {
-        if (!isTagSelected || !selectedNodeId) return [];
-
-        // Find all edges connected to this tag
-        const connectedNodeIds = new Set<string>();
-        edges.forEach(edge => {
-            if (edge.source === selectedNodeId) {
-                connectedNodeIds.add(edge.target);
-            }
-            if (edge.target === selectedNodeId) {
-                connectedNodeIds.add(edge.source);
-            }
-        });
-
-        // Get node info for connected memories
-        return nodes
-            .filter(n => n.type === 'memoryNode' && connectedNodeIds.has(n.id))
-            .map(n => ({
-                id: n.id,
-                label: n.data.label,
-                type: n.data.type,
-            }));
-    }, [isTagSelected, selectedNodeId, edges, nodes]);
+    // Same derivation the search panel uses for its tag result list:
+    // one implementation, two consumers.
+    const connectedMemories = useMemo(
+        () => (isTagSelected ? connectedMemoriesForTag(nodes, edges, selectedNodeId) : []),
+        [isTagSelected, selectedNodeId, edges, nodes],
+    );
 
     const toggleExpand = () => {
         const next = !expanded;
@@ -311,12 +278,6 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
             onToggleExpand?.(true);
         }
     }, [selectedMemory]);
-
-    // Handle click on connected memory from tag view
-    const handleMemoryClick = (memoryId: string) => {
-        setSelectedNodeId(memoryId);
-        selectMemory(memoryId);
-    };
 
     const handleSave = async () => {
         if (!selectedMemory) return;
@@ -387,10 +348,14 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                         <TagDetailsView
                             tagNode={selectedNode as any}
                             connectedMemories={connectedMemories}
-                            onMemoryClick={handleMemoryClick}
+                            onShowInSearch={() => selectedNodeId && showTagResults(
+                                selectedNodeId, String((selectedNode as any)?.data?.label || ''))}
                             isLoading={isLoading}
                             onDeleteMemories={async (ids) => {
                                 for (const id of ids) await deleteMemory(id, false);
+                                // The tag is gone with its last memory: a pinned
+                                // list would keep naming it with zero entries.
+                                clearTagResults();
                             }}
                             onRemoveTagFromMemories={async (ids, tag) => {
                                 for (const id of ids) await removeTagFromMemory(id, tag);
@@ -516,7 +481,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                         </div>
                     )}
 
-                    {/* IDs (Memory ID and User scope – for verifying RAG scope consistency) */}
+                    {/* IDs (Memory ID and User scope - for verifying RAG scope consistency) */}
                     <div className="grid grid-cols-1 gap-3 pb-3 border-b border-gray-200">
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -533,7 +498,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             <p className="text-xs font-mono text-gray-700 break-all" title={selectedMemory.user_scope_id ?? '(none)'}>
                                 {selectedMemory.user_scope_id && selectedMemory.user_scope_id !== ''
                                     ? selectedMemory.user_scope_id
-                                    : '(none – global scope)'}
+                                    : '(none - global scope)'}
                             </p>
                         </div>
                     </div>
@@ -574,12 +539,21 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                         ) : (
                             <div className="flex flex-wrap gap-1">
                                 {selectedMemory.metadata?.tags?.map((tag, idx) => (
-                                    <span
+                                    // Below lg the graph is hidden, so a chip is
+                                    // the only way to reach a tag's memory list.
+                                    // The id shape mirrors the backend's tag node
+                                    // ids (graph.py: f"tag-{tag.strip().lower()}").
+                                    <button
                                         key={idx}
-                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700"
+                                        type="button"
+                                        onClick={() => showTagResults(
+                                            `tag-${tag.trim().toLowerCase()}`,
+                                            `#${tag.trim().toLowerCase()}`)}
+                                        title={`Show memories tagged #${tag.trim().toLowerCase()}`}
+                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
                                     >
                                         {tag}
-                                    </span>
+                                    </button>
                                 )) || (
                                     <span className="text-xs text-gray-400">No tags</span>
                                 )}

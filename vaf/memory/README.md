@@ -7,7 +7,7 @@ A comprehensive memory graph visualization system with RAG (Retrieval-Augmented 
 - **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
 - **Vector Search**: PostgreSQL with pgvector for fast semantic similarity search
 - **RAG Pipeline**: Chunk, embed, retrieve, and query with AI-powered responses
-- **Graph Visualization**: ReactFlow-based interactive memory graph
+- **Graph Visualization**: Sigma.js (WebGL) interactive memory graph
 - **Auto-Connections**: Automatically connect semantically related memories
 
 ## Quick Start
@@ -86,7 +86,7 @@ Settings are available in:
 │                        Frontend                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │MemoryGraph  │  │RagQueryPanel│  │MemoryDetailPanel    │ │
-│  │ (ReactFlow) │  │ (Streaming) │  │ (View/Edit)         │ │
+│  │ (Sigma.js)  │  │ (Streaming) │  │ (View/Edit)         │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 │                         │                                   │
 │                    Zustand Store                            │

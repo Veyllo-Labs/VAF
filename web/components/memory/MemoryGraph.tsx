@@ -18,7 +18,7 @@
  * tag linking (the Link Tags modal covers that path).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import type Sigma from 'sigma';
@@ -86,11 +86,41 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         isLoading,
         stats,
         fetchGraph,
+        showTagResults,
+        clearTagResults,
+        clearRagResult,
     } = useMemoryStore();
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const sigmaRef = useRef<Sigma | null>(null);
     const graphRef = useRef<Graph | null>(null);
+
+    // Rebuild only when the graph really changed. Keyed on ids AND the
+    // attributes the renderer bakes in (label, type, tag membership), because
+    // the build effect is the only writer of those: without them a renamed
+    // memory keeps its old label on the canvas. Deliberately NOT the array
+    // identity - highlightNodes() replaces the whole node array on every
+    // search, which would re-run ForceAtlas2 and reshuffle the layout. Sorted,
+    // so the updated_at DESC reorder that follows any edit is not a change.
+    const structureKey = useMemo(
+        () => storeNodes
+            .map(n => `${n.id}~${n.data.label}~${n.data.type || ''}~${n.data.memoryCount || 0}`)
+            .sort().join('|')
+            + `::${storeEdges.map(e => e.id).sort().join('|')}`,
+        [storeNodes, storeEdges],
+    );
+
+    // The palette is resolved when the renderer is built, so a theme switch has
+    // to rebuild it - otherwise light labels stay on the dark canvas.
+    const [themeTick, setThemeTick] = useState(0);
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+        const obs = new MutationObserver(() => setThemeTick(t => t + 1));
+        obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        return () => obs.disconnect();
+    }, []);
+    // Highlights ride the reducer, not the graph: restyle without a rebuild.
+    const highlightedRef = useRef<Set<string>>(new Set());
 
     // Reducer inputs live in refs: changing them restyles via refresh() and
     // never rebuilds graph or renderer (the ReactFlow version rebuilt every
@@ -106,7 +136,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
 
     // ── Build graph + renderer when the DATA changes ────────────────────────
     useEffect(() => {
-        if (!containerRef.current || storeNodes.length === 0) return;
+        // Read at effect time instead of from a ref written during render.
+        const { nodes: storeNodesNow, edges: storeEdgesNow } = useMemoryStore.getState();
+        if (!containerRef.current || storeNodesNow.length === 0) return;
         let cancelled = false;
 
         // Theme-aware palette, resolved when the renderer is (re)built: the
@@ -122,7 +154,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         const edgeDim = isDark ? 'rgba(63,63,70,0.15)' : 'rgba(209,213,219,0.12)';
 
         const graph = new Graph();
-        for (const n of storeNodes) {
+        for (const n of storeNodesNow) {
             const isTag = n.type === 'tagNode' || n.data.isTagNode;
             const { x, y } = seededXY(n.id);
             graph.addNode(n.id, {
@@ -131,13 +163,12 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 isTag,
                 memType: n.data.type || 'note',
                 docTag: (n.data as { docTag?: string }).docTag || '',
-                isHighlighted: !!n.data.isHighlighted,
                 memoryCount: n.data.memoryCount || 0,
                 color: isTag ? TAG_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
                 size: 3,
             });
         }
-        for (const e of storeEdges) {
+        for (const e of storeEdgesNow) {
             if (!graph.hasNode(e.source) || !graph.hasNode(e.target)) continue;
             if (graph.hasEdge(e.source, e.target)) continue;
             graph.addEdge(e.source, e.target, {
@@ -183,7 +214,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     }
                     const sel = selectedRef.current;
                     const hov = hoveredRef.current;
-                    if (attrs.isHighlighted) {
+                    if (highlightedRef.current.has(id)) {
                         res.color = HIGHLIGHT_COLOR;
                         res.size = (attrs.size as number) + 2;
                     }
@@ -233,17 +264,28 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 selectedRef.current = node;
                 neighborsRef.current = new Set(graph.neighbors(node));
                 setSelectedNodeId(node);
-                if (!graph.getNodeAttribute(node, 'isTag')) {
+                if (graph.getNodeAttribute(node, 'isTag')) {
+                    // A tag is a result set, not a record: its memories go to
+                    // the search panel and stay there while the user clicks
+                    // through them.
+                    showTagResults(node, String(graph.getNodeAttribute(node, 'label') || ''));
+                } else {
                     selectMemory(node);
                 }
                 onNodeSelect?.(node);
                 renderer.refresh();
             });
             renderer.on('clickStage', () => {
+                // Clicking empty space is the "clean slate" gesture: it drops
+                // the selection AND the pinned result set (tag or search), so
+                // the panel matches what the graph shows. Safe against panning:
+                // sigma suppresses the click once a drag passes its tolerance.
                 selectedRef.current = null;
                 neighborsRef.current = new Set();
                 setSelectedNodeId(null);
                 selectMemory(null);
+                clearTagResults();
+                clearRagResult();
                 onNodeSelect?.(null);
                 renderer.refresh();
             });
@@ -268,7 +310,14 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             graphRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [storeNodes, storeEdges]);
+    }, [structureKey, themeTick]);
+
+    // Highlight set (search hits / a tag's memories): restyle, never rebuild.
+    useEffect(() => {
+        highlightedRef.current = new Set(
+            storeNodes.filter(n => n.data.isHighlighted).map(n => n.id));
+        sigmaRef.current?.refresh();
+    }, [storeNodes]);
 
     // ── Restyle-only inputs ────────────────────────────────────────────────
     useEffect(() => {
@@ -288,7 +337,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             ? new Set(g.neighbors(selectedNodeId))
             : new Set();
         sigmaRef.current?.refresh();
-    }, [selectedNodeId]);
+        // structureKey too: after a rebuild (delete, tag change, refresh) the
+        // old graph's neighbour ids would fade the wrong set.
+    }, [selectedNodeId, structureKey, themeTick]);
 
     const toggleType = useCallback((type: string) => {
         setHiddenTypes((prev) => {

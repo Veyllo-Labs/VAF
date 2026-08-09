@@ -178,7 +178,7 @@ function CreateMemoryModal({
     );
 }
 
-// Tag Links Modal – manage tag connections (A↔B syncs all memories)
+// Tag Links Modal - manage tag connections (A↔B syncs all memories)
 function TagLinksModal({
     isOpen,
     onClose,
@@ -304,7 +304,6 @@ function StatsBadge({ label, value, icon: Icon }: { label: string; value: number
 
 export default function MemoryPage() {
     const {
-        nodes,
         edges,
         stats,
         error,
@@ -327,8 +326,10 @@ export default function MemoryPage() {
     const [showTagConnections, setShowTagConnections] = useState(true);
 
     // When a tag node is selected, expand the detail panel so "Memories with this tag" list is visible
-    const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-    const isTagSelected = selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode;
+    // Tag node ids are always "tag-<tag>" (vaf/memory/graph.py); memory ids are
+    // UUIDs, so the prefix cannot collide - and unlike a nodes lookup it still
+    // holds when a refetch dropped the node.
+    const isTagSelected = !!selectedNodeId?.startsWith('tag-');
     useEffect(() => {
         if (isTagSelected) setDetailsExpanded(true);
     }, [isTagSelected]);
@@ -455,7 +456,7 @@ export default function MemoryPage() {
             {/* Main Content: Graph on the left, Memory Search on the right */}
             <main className="flex-1 w-full p-4 overflow-hidden">
                 <div className="flex flex-col lg:flex-row gap-4 h-full">
-                    {/* Graph – takes the remaining space. Hidden on mobile (< lg): there the
+                    {/* Graph - takes the remaining space. Hidden on mobile (< lg): there the
                         search/detail view is the main view (view + edit), and two stacked h-full
                         columns would overlap or get cut off. */}
                     <div className="flex-1 min-w-0 h-full max-lg:hidden">
@@ -468,7 +469,7 @@ export default function MemoryPage() {
                         />
                     </div>
                     
-                    {/* Right Panel – fixed width, anchored to the right edge */}
+                    {/* Right Panel - fixed width, anchored to the right edge */}
                     <div className="lg:w-[420px] lg:flex-shrink-0 flex flex-col gap-4 h-full overflow-hidden">
                         <RagQueryPanel 
                             className="flex-1 min-h-0"
@@ -480,7 +481,12 @@ export default function MemoryPage() {
                             <MemoryDetailPanel 
                                 className={cn(
                                     "shrink-0 flex flex-col transition-all duration-300",
-                                    detailsExpanded ? "h-[60%]" : "h-[52px]"
+                                    // Tag details are header + stats + one button:
+                                    // they shrink so the tag's memory list above
+                                    // actually gains the room this move is for.
+                                    detailsExpanded
+                                        ? (isTagSelected ? "h-[38%]" : "h-[60%]")
+                                        : "h-[52px]"
                                 )}
                                 onToggleExpand={setDetailsExpanded}
                                 onClose={() => setDetailsExpanded(true)}

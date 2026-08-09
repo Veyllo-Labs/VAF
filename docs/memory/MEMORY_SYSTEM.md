@@ -116,6 +116,18 @@ Memory settings live in `~/.vaf/config.json` (the Memory System has no UI toggle
 | Chunk Size | 512 | Size of text chunks in tokens for RAG retrieval |
 | Auto-Connect Threshold | 0.7 | Cosine similarity threshold (0-1) for auto-connecting memories |
 
+### The /memory right column: a result set above, one record below
+
+The right column holds a RESULT SET on top and the DETAIL of one memory below.
+A result set comes from a search or from a tag: clicking a tag node in the graph
+fills the search panel with the memories carrying that tag, and the list stays
+while the user clicks through its entries, so a selection change never costs the
+list. Only a new search, a different tag, or the panel's clear button replaces
+it. Tag details below then show the tag's stats and its delete action, plus a
+button that pins the list again; the memory tag chips do the same, which is the
+only way to reach a tag's memories below the lg breakpoint, where the graph is
+hidden.
+
 ### Advanced Configuration (config.json)
 
 Additional settings in `~/.vaf/config.json`:
@@ -225,9 +237,11 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 - Applies to memory_save, compaction ingest, and manual tag adds
 
 **Creation:**
-- In the memory graph: drag from one tag node to another
+- Via UI: "Link Tags" button in the memory header, enter two tags and click Link
 - Via API: `POST /api/memory/tag-links` with `{"tag_a": "...", "tag_b": "..."}`
-- Via UI: "Link Tags" button → enter two tags and click Link
+
+The graph renderer has no draw-an-edge gesture: linking runs through the Link
+Tags dialog or the API.
 
 **Storage:** Tag links are stored in `~/.vaf/tag_links.json` (or Docker config dir). No database migration required.
 

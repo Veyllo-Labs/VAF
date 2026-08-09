@@ -13,13 +13,14 @@
  * - Click to select memory for editing/viewing
  */
 
-import React, { useState } from 'react';
-import { useMemoryStore, RagSource } from './stores/memoryStore';
+import React, { useMemo, useState } from 'react';
+import { connectedMemoriesForTag, useMemoryStore, TYPE_LABELS } from './stores/memoryStore';
 import {
     Search, Loader2, X,
-    FileText, ExternalLink, AlertCircle
+    FileText, ExternalLink, AlertCircle, Hash
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
 
 interface RagQueryPanelProps {
     className?: string;
@@ -33,11 +34,24 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
         error,
         searchMemories,
         clearRagResult,
-        highlightNodes,
         selectMemory,
+        nodes,
+        edges,
+        selectedNodeId,
+        activeTagNodeId,
+        activeTagLabel,
+        clearTagResults,
     } = useMemoryStore();
 
     const [localQuery, setLocalQuery] = useState('');
+
+    // A clicked tag fills this panel with its memories. The list is keyed on
+    // the tag, NOT on the current selection, so clicking through its entries
+    // keeps it on screen; only a new search or another tag replaces it.
+    const tagMemories = useMemo(
+        () => connectedMemoriesForTag(nodes, edges, activeTagNodeId),
+        [nodes, edges, activeTagNodeId],
+    );
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -48,17 +62,21 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
 
     const handleClear = () => {
         setLocalQuery('');
-        clearRagResult();
+        if (activeTagNodeId) clearTagResults();
+        else clearRagResult();
     };
 
-    const handleSourceClick = (source: RagSource) => {
-        // Highlight this source in the graph
-        highlightNodes([source.memory_id]);
-        selectMemory(source.memory_id);
-        onSourceClick?.(source.memory_id);
+    // One handler for both list kinds. Deliberately no highlightNodes([id]):
+    // that overwrites ragSources with a single id, collapsing the highlighted
+    // set to the row just opened (and narrowing the next fetchGraph highlight).
+    // selectMemory sets selectedNodeId itself.
+    const handleMemoryClick = (memoryId: string) => {
+        selectMemory(memoryId);
+        onSourceClick?.(memoryId);
     };
 
     const sources = ragResult?.sources || [];
+
 
     return (
         <div className={cn('bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col', className)}>
@@ -102,7 +120,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                             <Search className="w-4 h-4" />
                         )}
                     </button>
-                    {sources.length > 0 && (
+                    {(sources.length > 0 || activeTagNodeId) && (
                         <button
                             type="button"
                             onClick={handleClear}
@@ -133,8 +151,62 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                 </div>
             )}
 
+            {/* Tag result set */}
+            {!isQuerying && activeTagNodeId && (
+                <div className="flex-1 overflow-hidden flex flex-col">
+                    <div className="px-4 py-2 bg-gray-100 border-b border-gray-200 flex items-center gap-2">
+                        <Hash className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
+                        <span className="font-medium text-gray-700 text-sm truncate min-w-0">
+                            {activeTagLabel.replace(/^#/, '')}
+                        </span>
+                        <span className="text-gray-500 text-sm flex-shrink-0">
+                            ({tagMemories.length})
+                        </span>
+                        <button
+                            type="button"
+                            onClick={clearTagResults}
+                            aria-label="Clear tag selection"
+                            title="Clear tag selection"
+                            className="ml-auto p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 flex-shrink-0"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto">
+                        {tagMemories.length > 0 ? tagMemories.map((memory) => (
+                            <button
+                                key={memory.id}
+                                onClick={() => handleMemoryClick(memory.id)}
+                                aria-current={memory.id === selectedNodeId ? 'true' : undefined}
+                                className={cn(
+                                    'w-full px-4 py-3 text-left border-b border-gray-100 last:border-b-0 transition-colors flex items-center gap-3 border-l-2',
+                                    memory.id === selectedNodeId
+                                        ? 'bg-gray-100 dark:bg-[#3a3a3a] border-l-purple-500'
+                                        : 'border-l-transparent hover:bg-gray-100'
+                                )}
+                            >
+                                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                <span className="text-sm text-gray-700 truncate flex-1 min-w-0">
+                                    {memory.label || 'Untitled'}
+                                </span>
+                                {memory.type && (
+                                    <span className="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded flex-shrink-0">
+                                        {TYPE_LABELS[memory.type] ?? memory.type}
+                                    </span>
+                                )}
+                            </button>
+                        )) : (
+                            <p className="text-xs text-gray-400 text-center py-6">
+                                No memories carry this tag
+                            </p>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Results */}
-            {!isQuerying && sources.length > 0 && (
+            {!isQuerying && !activeTagNodeId && sources.length > 0 && (
                 <div className="flex-1 overflow-hidden flex flex-col">
                     <div className="px-4 py-2 bg-gray-100 border-b border-gray-200">
                         <span className="font-medium text-gray-700 text-sm">
@@ -146,8 +218,16 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                         {sources.map((source, idx) => (
                             <button
                                 key={source.chunk_id}
-                                onClick={() => handleSourceClick(source)}
-                                className="w-full px-4 py-3 text-left hover:bg-gray-100 border-b border-gray-100 last:border-b-0 transition-colors"
+                                onClick={() => handleMemoryClick(source.memory_id)}
+                                aria-current={selectedNodeId === source.memory_id ? 'true' : undefined}
+                                className={cn(
+                                    'w-full px-4 py-3 text-left border-b border-gray-100 last:border-b-0 transition-colors border-l-2',
+                                    // A search set lists CHUNKS, so two rows of the
+                                    // same memory can both be marked - truthful.
+                                    selectedNodeId === source.memory_id
+                                        ? 'bg-gray-100 dark:bg-[#3a3a3a] border-l-purple-500'
+                                        : 'border-l-transparent hover:bg-gray-100'
+                                )}
                             >
                                 <div className="flex items-start gap-3">
                                     <div className="flex-shrink-0 w-8 h-8 rounded-xl bg-gray-200 flex items-center justify-center">
@@ -186,7 +266,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
             )}
 
             {/* Empty state */}
-            {!isQuerying && sources.length === 0 && !error && (
+            {!isQuerying && !activeTagNodeId && sources.length === 0 && !error && (
                 <div className="flex-1 flex items-center justify-center p-8">
                     <div className="text-center">
                         <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />

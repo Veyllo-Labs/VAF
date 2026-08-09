@@ -1555,11 +1555,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     }, [isOpen, localConfig.memory_enabled, memoryApiBase]);
 
 
+    const clearMemoryTagResults = useMemoryStore((st) => st.clearTagResults);
     useEffect(() => {
         if (showMemoryModal) {
             void fetchMemoryGraphAll();
+        } else {
+            // The preview shows the graph without the panels that would clear a
+            // pinned tag, so closing it must not leave highlights behind.
+            clearMemoryTagResults();
         }
-    }, [showMemoryModal, fetchMemoryGraphAll]);
+    }, [showMemoryModal, fetchMemoryGraphAll, clearMemoryTagResults]);
 
     // Close the skills editor once the backend confirms a create/update/delete.
     // (A blocked save sends skill_error instead, leaving the editor open with findings.)

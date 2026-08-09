@@ -1265,7 +1265,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 for _td in _truncated_docs:
                                     _td_path = str((_td or {}).get("path") or "")
                                     _td_name = str((_td or {}).get("name") or "unknown")
-                                    if _td_path:
+                                    # Chat uploads are persisted to a real file now; only
+                                    # a failed persist leaves the honest no-path literal,
+                                    # and an unfollowable learn_document(path="Hochgeladen
+                                    # ...") helps nobody.
+                                    if _td_path and not _td_path.startswith("Hochgeladen"):
                                         _warn += f'  → {_td_name}: learn_document(path="{_td_path}")\n'
                                 context_header += _warn
 

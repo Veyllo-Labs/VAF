@@ -4446,7 +4446,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             try:
                                 has_data = any(doc.get("data") for doc in sidebar_docs_payload)
                                 if has_data:
-                                    contents = await process_files_to_sidebar_list(sidebar_docs_payload)
+                                    contents = await process_files_to_sidebar_list(
+                                        sidebar_docs_payload, session_id=session_id,
+                                        user_scope_id=user_scope_id)
                                     if contents:
                                         _slim = [{k: v for k, v in doc.items() if k != "data"} for doc in contents]
                                         try:
@@ -4615,7 +4617,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             })
                         else:
                             log_attachment("PROCESS_START", session=session_id, doc_count=len(documents))
-                            contents = await process_files_to_sidebar_list(documents)
+                            contents = await process_files_to_sidebar_list(
+                                documents, session_id=session_id, user_scope_id=user_scope_id)
                             log_attachment("PROCESS_DONE", session=session_id, results=len(contents),
                                 content_lens=[len(c.get("content","")) for c in contents],
                                 content_types=[
@@ -7864,12 +7867,20 @@ def _spawn_attachment_index(manager, session_id: str, user_scope_id, contents: l
 _MAX_ATTACH_BYTES = 100 * 1024 * 1024
 
 
-async def process_files_to_sidebar_list(files: list) -> list:
+async def process_files_to_sidebar_list(files: list, session_id: str = None,
+                                        user_scope_id: str = None) -> list:
     """
     Process uploaded files and return a list of {name, content, data?, mimeType?, path?} for sidebar_documents.
     Uses same Librarian extraction as process_uploaded_files.
     Passes through data (base64) and mimeType for PDF display.
-    Uploaded files get path="Hochgeladen über Web-UI (kein lokaler Pfad)" so the agent knows there is no local path.
+
+    With a session, each document is PERSISTED to the user-siloed chat
+    attachments folder (the image pattern) and `path` carries the REAL file
+    location - which is what makes `learn_document(path=...)` and the learn
+    button possible for chat attachments; the runner's own truncation advice
+    used to point at a path that literally did not exist. Only when persisting
+    fails (or no session is known) does the honest literal
+    "Hochgeladen über Web-UI (kein lokaler Pfad)" remain - never a fake path.
     """
     import base64
     import tempfile
@@ -7880,6 +7891,15 @@ async def process_files_to_sidebar_list(files: list) -> list:
         return []
 
     from vaf.core.log_helper import log_attachment
+
+    attach_dir = None
+    if session_id:
+        try:
+            from vaf.core.session import get_session_attachments_dir
+            attach_dir = get_session_attachments_dir(session_id, user_scope_id, create=True)
+        except Exception:
+            attach_dir = None
+
     results = []
     for file_obj in files:
         try:
@@ -7947,10 +7967,26 @@ async def process_files_to_sidebar_list(files: list) -> list:
                     content_len=len(content or ""),
                     preview=repr((content or "")[:300]))
 
+                # Persist to the session's attachments dir so the entry carries
+                # a REAL path (image pattern). Failure keeps the honest literal.
+                persisted_path = None
+                if attach_dir is not None:
+                    try:
+                        import re as _re
+                        import time as _time
+                        import uuid as _uuid
+                        _stem = _re.sub(r'[^A-Za-z0-9._-]', '_',
+                                        Path(filename).stem)[:60] or "document"
+                        fpath = attach_dir / f"{int(_time.time())}_{_uuid.uuid4().hex[:8]}_{_stem}{file_ext}"
+                        fpath.write_bytes(decoded_data)
+                        persisted_path = str(fpath)
+                    except Exception as _pe:
+                        log("WebServer", f"attach document to file failed ({filename}): {_pe}")
+
                 entry = {
                     "name": filename,
                     "content": content,
-                    "path": "Hochgeladen über Web-UI (kein lokaler Pfad)",
+                    "path": persisted_path or "Hochgeladen über Web-UI (kein lokaler Pfad)",
                 }
                 if base64_part:
                     entry["data"] = base64_part

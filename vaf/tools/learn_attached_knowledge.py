@@ -90,21 +90,48 @@ class LearnAttachedKnowledgeTool(BaseTool):
         tags: List[str] = [str(t).strip().lower() for t in (kwargs.get("tags") or []) if str(t).strip()]
         tags = list(dict.fromkeys(tags))[:10]
 
-        # Read the FULL attachment content from the session (the librarian-extracted Markdown), not the
-        # per-section attachment-lane rows -- so each attachment is learned as one whole document and
-        # our own section split applies. (In vector mode the lane stores section rows, not full docs.)
+        # PREFERRED: attachments persisted with a REAL file path delegate to the
+        # SAME batched learn job as learn_document. The sidebar `content` is the
+        # librarian's PREVIEW (first 50 pages, capped characters) - structurally
+        # the wrong input for learning a large document; the persisted file is
+        # the whole document, and the job learns all of it with progress,
+        # resume, and honest reporting.
         entries = []
+        _persisted = []
         try:
             from vaf.core.session import SessionManager
             _session = SessionManager().load(session_id)
             _docs = (getattr(_session, "runtime_state", None) or {}).get("sidebar_documents") or []
+            import os as _os
             for _d in _docs[:max_items]:
                 _name = str((_d or {}).get("name") or "Attachment")
+                _path = str((_d or {}).get("path") or "")
                 _content = str((_d or {}).get("content") or "").strip()
-                if _content:
+                if _path and _os.path.isfile(_path):
+                    _persisted.append({"name": _name, "path": _path})
+                elif _content:
                     entries.append({"attachment_name": _name, "content": _content})
         except Exception:
             entries = []
+            _persisted = []
+
+        if _persisted:
+            from vaf.tools.learn_document import LearnDocumentTool
+            replies = []
+            for _pd in _persisted:
+                replies.append(LearnDocumentTool().run(
+                    path=_pd["path"],
+                    document_title=_clean_title(_pd["name"]),
+                    user_scope_id=str(user_scope_id) if user_scope_id else None,
+                    session_id=session_id,
+                    _agent=kwargs.get("_agent"),
+                ))
+            if not entries:
+                return "\n".join(replies)
+            # Pathless remainder: preview-learn below, delegated replies ride along.
+            _delegated_msgs = replies
+        else:
+            _delegated_msgs = []
         if not entries:
             # Fallback to the attachment lane (full docs in safe mode; section rows in vector mode).
             entries = read_session_attachments_sync(session_id=session_id, user_scope_id=user_scope_id, limit=max_items)
@@ -190,10 +217,13 @@ class LearnAttachedKnowledgeTool(BaseTool):
         except Exception as e:
             return f"Error: Failed to transfer attachment knowledge: {e}"
 
+        prefix = ("\n".join(_delegated_msgs) + "\n") if _delegated_msgs else ""
         if created_count <= 0:
-            return "No knowledge memories were created (attachments may be empty or unavailable)."
-        return (
+            return prefix + "No knowledge memories were created (attachments may be empty or unavailable)."
+        return prefix + (
             f"Learned {created_count} knowledge memor"
-            f"{'y' if created_count == 1 else 'ies'} from attachment(s) into long-term memory "
-            f"(split into sections; each stored as a self-contained, contextual memory)."
+            f"{'y' if created_count == 1 else 'ies'} from the attachment PREVIEW "
+            f"(the stored extract, which covers at most the first pages of a large "
+            f"document) - these attachments carry no persisted file; re-attach them "
+            f"to learn them fully."
         )

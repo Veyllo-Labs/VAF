@@ -18,7 +18,7 @@ from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
 from dataclasses import dataclass
-from sqlalchemy import select, and_, or_, func, text, delete, cast
+from sqlalchemy import Integer, select, and_, or_, func, text, delete, cast
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -948,6 +948,53 @@ Always cite which source(s) you used."""
             count += 1
 
         logger.info(f"delete_by_tag tag={tag!r} soft={soft} count={count}")
+        return count
+
+    async def delete_document_sections(
+        self,
+        doc_tag: str,
+        from_section_index: int,
+        user_scope_id: Optional[UUID] = None,
+        soft: bool = True,
+    ) -> int:
+        """
+        Delete the SECTIONS of one learned document from `from_section_index` on.
+
+        Exists for the batched learn job's resume: the ledger records progress
+        AFTER each batch's commit, so a crash between commit and ledger write
+        leaves committed-but-unledgered sections. Ingest has no dedup (every
+        ingest mints a fresh UUID), so re-running that batch would duplicate
+        them - this deletes exactly those orphans (section_index >= the
+        ledger's count) before the batch re-runs, which is what makes resume
+        idempotent rather than merely approximate. The document_index root
+        carries no section_index and is never touched.
+
+        Returns:
+            Count of section memories deleted / marked deleted.
+        """
+        conditions = [
+            Memory.is_deleted == False,  # noqa: E712
+            Memory.meta["doc_tag"].astext == doc_tag,
+            Memory.meta["section_index"].astext.cast(Integer) >= int(from_section_index),
+        ]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
+        result = await self.db.execute(select(Memory).where(and_(*conditions)))
+        memories = result.scalars().all()
+
+        count = 0
+        for memory in memories:
+            if soft:
+                memory.is_deleted = True
+            else:
+                await self.db.delete(memory)
+            count += 1
+
+        logger.info(
+            f"delete_document_sections doc_tag={doc_tag!r} "
+            f"from={from_section_index} soft={soft} count={count}"
+        )
         return count
 
     async def list_memories(

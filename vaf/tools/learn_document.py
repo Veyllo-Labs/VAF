@@ -320,6 +320,8 @@ async def ingest_document_knowledge(
     extra_tags=None,
     attachment_name=None,
     session_id=None,
+    section_offset: int = 0,
+    update_root: bool = True,
 ) -> dict:
     """Section-based, contextual ingestion of one document into long-term memory.
 
@@ -327,6 +329,14 @@ async def ingest_document_knowledge(
     "sections_total": int, "sections_dropped": int} - the last two exist so a
     caller can report a firing learn_max_sections cap as "X of Y" instead of a
     bare success count.
+
+    Batch mode (the learn job feeds one PAGE RANGE per call): `section_offset`
+    keeps `section_index` globally monotonic across batches - it is the resume
+    key `delete_document_sections` cuts on, so per-batch indices restarting at
+    0 would make crash orphans indistinguishable from batch 1. `update_root=False`
+    skips the document_index upsert; the job writes ONE root at finalize,
+    because a per-batch upsert would stamp the LAST batch's count and summary
+    as the document's. Defaults preserve single-call behavior byte-identically.
     """
     from sqlalchemy import select, and_
     from vaf.memory.models import Memory
@@ -374,7 +384,7 @@ async def ingest_document_knowledge(
         sec_title = (sec.get("title") or doc_title).strip()
         context = _contextualize_section_llm(sec_text, sec_title, doc_title, generate_fn)
         contexts.append(context)
-        items.append((sec.get("index", len(items)), sec_title, sec_text, context))
+        items.append((section_offset + sec.get("index", len(items)), sec_title, sec_text, context))
 
     # Doc-level summary + tags from the clean section contexts (applied to every section + the root).
     doc_summary, doc_tags = _summarize_doc_from_contexts(contexts, doc_title, generate_fn)
@@ -406,7 +416,7 @@ async def ingest_document_knowledge(
         ))
 
     # document_index root -- created/updated exactly once (doc_summary lives here, not per section).
-    if created > 0:
+    if created > 0 and update_root:
         conditions = [
             Memory.is_deleted == False,  # noqa: E712
             Memory.meta["type"].as_string() == "document_index",

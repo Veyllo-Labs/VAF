@@ -493,10 +493,38 @@ Three rules that are contract rather than commentary:
   task title and the browser's next goal - model text derived from a user's prompt - so a
   text field here would be a cross-user leak with a long fuse.
 
-Two of the five sub-agents populate the counts (the coder and the document agent). The
-research agent plans as it goes, the librarian has no work unit and the browser agent's
-`max_steps` is a ceiling rather than a plan, so all three report nothing instead of
-inventing a denominator.
+Three of the six sub-agents populate the counts (the coder, the document agent and the
+learn agent - the latter's unit is the BATCH: `set_run_progress(batches_done,
+batches_total)`, which is what the TUI TasksLine shows as `N/M` and the Web UI's
+learning banner renders as a bar). The research agent plans as it goes, the librarian
+has no work unit and the browser agent's `max_steps` is a ceiling rather than a plan,
+so those three report nothing instead of inventing a denominator.
+
+### Spawning (one implementation)
+
+Every spawner goes through `vaf.core.subagent_spawn.spawn_subagent(agent_type, task,
+...)`: IPC task creation, child env as data (never the parent's `os.environ`), one
+platform-escaping implementation, the `[SUBAGENT_ASYNC:<task_id>:<agent_type>]`
+marker, and `cancel_task` on a failed spawn. Agent-specific behavior stays at the
+call site as DATA (extra env like the coder's `VAF_TURN_ID`/`VAF_ALLOWED_TOOLS`,
+extra argv like `--project-path`, or `payload=` for a machine-readable spec that
+must stay off the OS command line). Five tools used to carry this block copy-pasted;
+the sixth consumer (the learn agent) is what proved the primitive's shape.
+
+### The learn agent (batched document learning)
+
+`learn_agent` is the sixth dispatcher branch (`vaf/cli/cmd/subagent.py`): it reads a
+JSON job spec from the IPC payload sidecar (`{path, document_title, doc_tag, resume,
+force_relearn}` - argv cannot carry paths with spaces plus flags reliably) and runs
+`vaf/tools/learn_job.run_learn_job`. Durable per-batch progress lives in a
+**LearnLedger** (`subagent_queue/learn_ledgers/<doc_tag>__<uid8>.json`, one file per
+document and user, single writer, atomic tmp+rename, written AFTER each batch's DB
+commit). Graceful cancel is a flag file under `subagent_queue/learn_cancel/<task_id>`
+polled at batch boundaries - deliberately NOT a field on the task record, which the
+heartbeat rewrites every 3 seconds. A hard kill is already safe: committed batches
+are in the ledger, and the next run resumes after soft-deleting any crash orphans
+past the ledger's cut line. Details: `docs/memory/MEMORY_SYSTEM.md` (Document
+memories).
 
 ### Sub-Agent Methods
 

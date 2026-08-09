@@ -242,9 +242,51 @@ The agent can **learn a document** into long-term memory via the **`learn_docume
 - **One tag per document:** All memories from that run share a single tag derived from the title (e.g. `doc-tora`). In the memory graph, one tag node is linked to many purple document nodes (one per section).
 - **One memory per section (contextual):** The document is extracted to Markdown and split into sections (by headings / page markers / paragraphs). For each section, one **LLM call** produces a contextual summary; that summary becomes the memory **title** - which drives the embedding/retrieval key in `RagPipeline.ingest` - and is prepended to the section text before storage. A single `document_index` root memory holds the document summary, so it is not repeated on every section.
 - **Scoping:** Uses the current user’s `user_scope_id` (same as `memory_save`). **Access** is decided by the shared `is_safe_path` rule, asked inside the per-user jail (`user_jail(..., mode="read")`) - the same rule every other file tool uses. `~/.vaf`, `.ssh`, `.env` and `id_rsa` are refused for everyone including the machine owner, and a non-admin caller sees only their own tree. Until 2026-07-30 this tool carried its own, weaker rule (anything under the home directory, the working directory or the VAF data dir) and never consulted the shared one; that function is deleted.
-- **Config (optional in `config.json`):** `learn_document_max_pages` (default 200) caps how much of the document is read; `learn_max_sections` (default 40) caps how many sections are stored.
 
-Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipeline.ingest()` as other memories with `type=document`, `source=learn_document`, and `tags=[doc-<title>]`. See the memory graph legend: **Document** = purple.
+**Batched background learning.** A full learn is roughly one LLM call per page, so
+large documents can never fit one bounded tool call. With
+`sub_agents_in_separate_terminals` on (the default), `learn_document` spawns a
+`learn_agent` child (via `spawn_subagent`, tracked in the sub-agent IPC queue) and
+returns immediately; the child learns the document in batches of
+`learn_batch_pages` pages (default 10):
+
+- each batch extracts ONLY its page range (`extract_pdf_markdown(first_page=...)`
+  streams and closes pages, so memory stays batch-sized regardless of document
+  size), ingests with a globally monotonic `section_offset`, and **commits in its
+  own transaction** - a crash loses at most one batch;
+- progress rides the child's heartbeat onto the IPC record (`progress_done/total`,
+  rendered by the TUI TasksLine) and reaches the Web UI as `learn_state` frames
+  (batch N of M, the learning banner);
+- the completion message arrives exactly once through the runner drain and carries
+  the real numbers (pages of total, sections, empty page ranges, and - when a cap
+  fired - the config key that fired);
+- a **LearnLedger** (`~/.vaf/subagent_queue/learn_ledgers/<doc_tag>__<uid8>.json`,
+  one file per document and user) records every committed batch. Re-running the
+  tool RESUMES at the first unfinished batch; crash orphans past the ledger's cut
+  line are soft-deleted first (`RagPipeline.delete_document_sections`), which makes
+  resume idempotent - the ingest itself has no dedup. A source file that changed
+  since (checksum mismatch) is refused unless `force_relearn=true`, which
+  soft-deletes the old sections and starts over.
+- with separate terminals OFF, each `learn_document` call learns exactly ONE batch
+  inside the tool budget, saves the progress and says so honestly - repeated calls
+  finish the document; the chat is never frozen by an hours-long in-process run.
+
+- **Config (optional in `config.json`, all admin-only spend keys):**
+  `learn_document_max_pages` (default 0 = the whole document) and
+  `learn_max_sections` (default 0 = all sections) are opt-in caps - when one
+  fires, the reply names it and reports "X of Y" instead of a bare success count;
+  `learn_batch_pages` (default 10) sets the batch size = progress tick = commit
+  unit. Until this round the effective values were a silent 200 pages / 40
+  sections (hard-clamped to 80): 3.9% of a 1000-page book was learned and
+  reported as success.
+
+Implementation: `vaf/tools/learn_document.py` (tool + shared ingestion),
+`vaf/tools/learn_job.py` (batch loop), `vaf/core/learn_ledger.py` (resume state);
+ingestion uses the same `RagPipeline.ingest()` as other memories with
+`type=document`, `source=learn_document`, and `tags=[doc-<title>]`. The
+`document_index` root additionally carries `learned_pages`, `total_pages`,
+`learn_status` (`complete`/`partial`), `source_path`, `content_sha256` and
+`learned_at` after a batched run. See the memory graph legend: **Document** = purple.
 
 ## API Reference
 

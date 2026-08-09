@@ -119,6 +119,7 @@ VAF_LIVE_VIEW_TYPES = frozenset({
     "document_state",
     "librarian_state",
     "browser_state",
+    "learn_state",            # batched document learning: batch N of M for the banner
     "subagent_update",        # the coder's live editor feed; NOT derivable from any name
     "browser_frame_update",
     "browser_step_update",

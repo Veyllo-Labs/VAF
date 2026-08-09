@@ -23,6 +23,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   now released as they are read: same output, byte for byte, at 0.7 GB.
 
 ### Added
+- **Learning a large document finally learns the whole document.** Learning a
+  PDF silently kept the first 200 pages and 40 sections - 4% of a 1000-page
+  book - and reported success. Learning now runs as a background job in
+  batches: the banner shows "batch N of M", the terminal app shows the same
+  numbers, and the finish message reports exactly what was learned (pages of
+  total, sections, pages without text). An interrupted or stopped run
+  continues where it left off instead of starting over or storing duplicates,
+  and a document that changed on disk since is refused with a clear message
+  instead of being silently mixed with the old knowledge. Caps still exist,
+  but only if you set them - and when one fires, the answer names it.
 - **"Read pages 100-120" of a PDF now actually works.** The tip existed, the
   feature did not: every PDF read took the first 50 pages and silently cut the
   rest. Both read lanes accept a page range now, and every PDF answer says

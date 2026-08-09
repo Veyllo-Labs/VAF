@@ -35,150 +35,6 @@ def _normalize_doc_tag(title: str) -> str:
     return f"doc-{s}" if s else "doc-untitled"
 
 
-# Max chars per page/section to send to LLM (avoid token overflow)
-_EXTRACTION_INPUT_MAX_CHARS = 4000
-
-
-def _split_pdf(path: Path, max_pages: int) -> List[Tuple[int, str]]:
-    """Yield (page_num_1based, text) for each PDF page. Skips empty pages."""
-    import PyPDF2
-    from vaf.core.config import Config
-    out = []
-    config = Config.load()
-    with open(path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
-        total = len(reader.pages)
-        limit = min(total, max_pages)
-        for i in range(limit):
-            text = (reader.pages[i].extract_text() or "").strip()
-            if text:
-                if len(text) > _EXTRACTION_INPUT_MAX_CHARS:
-                    text = text[:_EXTRACTION_INPUT_MAX_CHARS] + "\n... [truncated]"
-                out.append((i + 1, text))
-    return out
-
-
-def _split_txt_md(path: Path, max_sections: int) -> List[Tuple[int, str]]:
-    """Split TXT/MD by form feed, or by ##/# headers, or by fixed size. Returns (section_index, text)."""
-    raw = path.read_text(encoding="utf-8", errors="replace")
-    parts = []
-
-    if "\f" in raw:
-        for i, block in enumerate(raw.split("\f")):
-            if i >= max_sections:
-                break
-            text = block.strip()
-            if text:
-                if len(text) > _EXTRACTION_INPUT_MAX_CHARS:
-                    text = text[:_EXTRACTION_INPUT_MAX_CHARS] + "\n... [truncated]"
-                parts.append((i + 1, text))
-    else:
-        # Split by markdown headers: ## or #
-        header_re = re.compile(r"^(?:#{1,6})\s+.+$", re.MULTILINE)
-        matches = list(header_re.finditer(raw))
-        if len(matches) >= 2:
-            for i in range(len(matches)):
-                if i >= max_sections:
-                    break
-                start = matches[i].start()
-                end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
-                text = raw[start:end].strip()
-                if text:
-                    if len(text) > _EXTRACTION_INPUT_MAX_CHARS:
-                        text = text[:_EXTRACTION_INPUT_MAX_CHARS] + "\n... [truncated]"
-                    parts.append((i + 1, text))
-        else:
-            # Fixed-size chunks
-            chunk_size = 3500
-            for i in range(0, len(raw), chunk_size):
-                if len(parts) >= max_sections:
-                    break
-                text = raw[i : i + chunk_size].strip()
-                if text:
-                    if len(text) > _EXTRACTION_INPUT_MAX_CHARS:
-                        text = text[:_EXTRACTION_INPUT_MAX_CHARS] + "\n... [truncated]"
-                    parts.append((len(parts) + 1, text))
-    return parts
-
-
-def _merge_thin_pages(pages: List[Tuple[int, str]], min_chars: int = 80) -> List[Tuple[int, str]]:
-    """Merge consecutive pages with fewer than min_chars of stripped text into the next page."""
-    if not pages:
-        return pages
-    result: List[Tuple[int, str]] = []
-    pending_num: int | None = None
-    pending_text: str = ""
-    for page_num, text in pages:
-        stripped = text.strip()
-        if pending_text:
-            combined = pending_text + "\n\n" + stripped if stripped else pending_text
-            if len(stripped) < min_chars:
-                pending_text = combined
-            else:
-                result.append((pending_num, combined))
-                pending_num = None
-                pending_text = ""
-        else:
-            if len(stripped) < min_chars:
-                pending_num = page_num
-                pending_text = stripped
-            else:
-                result.append((page_num, text))
-    if pending_text:
-        if result:
-            prev_num, prev_text = result[-1]
-            result[-1] = (prev_num, prev_text + "\n\n" + pending_text)
-        else:
-            result.append((pending_num, pending_text))
-    return result
-
-
-_ANALYSIS_PROMPT_TEMPLATE = (
-    "You are a document analysis assistant. Given the pages of a document below, "
-    "produce a JSON object with these keys:\n"
-    '  "doc_summary": a 2-sentence overview of the entire document,\n'
-    '  "doc_tags": a list of 5 to 8 lowercase semantic tags describing the document topics,\n'
-    '  "pages": a list of objects, one per page, each with:\n'
-    '      "page": the page number (integer),\n'
-    '      "title": a descriptive 5-10 word title for that page,\n'
-    '      "content": 1-3 sentences capturing the key facts of that page.\n'
-    "Output ONLY the JSON object. Do not include any explanation or markdown fences.\n\n"
-    "=== Document: {doc_title} ===\n\n"
-    "{pages_block}"
-)
-
-
-def _analyze_document_llm(
-    pages: List[Tuple[int, str]],
-    doc_title: str,
-    generate_fn,
-    preview_chars: int = 400,
-) -> dict:
-    """Make one LLM call to analyze all pages. Returns parsed dict or {} on any failure."""
-    if not pages or generate_fn is None:
-        return {}
-    pages_block_parts = []
-    for page_num, text in pages:
-        preview = text.strip()[:preview_chars]
-        pages_block_parts.append(f"--- Page {page_num} ---\n{preview}")
-    pages_block = "\n\n".join(pages_block_parts)
-    prompt = _ANALYSIS_PROMPT_TEMPLATE.format(doc_title=doc_title, pages_block=pages_block)
-    try:
-        raw = generate_fn(prompt)
-    except Exception:
-        return {}
-    raw = (raw or "").strip()
-    # Strip markdown code fences if present
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
-    try:
-        import json
-        return json.loads(raw)
-    except Exception:
-        return {}
-
-
 def _run_async_in_new_loop(coro):
     """Run a coroutine in a new thread with its own event loop."""
     import asyncio
@@ -202,13 +58,6 @@ def _run_async_in_new_loop(coro):
     if exception[0]:
         raise exception[0]
     return result[0]
-
-
-EXTRACTION_PROMPT_TEMPLATE = """Extract the key facts and knowledge from the following page. Output only the extracted knowledge in one concise paragraph or short bullet list. No preamble or meta-commentary.
-
---- Page ---
-{page_text}
-"""
 
 
 # ── Section-based contextual ingestion (shared by learn_document + learn_attached_knowledge) ──
@@ -477,6 +326,8 @@ class LearnDocumentTool(BaseTool):
         "properties": {
             "path": {"type": "string", "description": "Full path to the document (PDF, .txt, or .md)."},
             "document_title": {"type": "string", "description": "Optional short title for the document (e.g. 'Tora'). Used as tag doc-<title>. If omitted, derived from filename."},
+            "resume": {"type": "boolean", "description": "Continue an interrupted learn of the same document where it stopped (default true). The stored progress is per document and user."},
+            "force_relearn": {"type": "boolean", "description": "Discard the previously learned sections of this document and learn it again from scratch (default false). Required when the file changed since it was learned."},
         },
         "required": ["path"],
     }
@@ -538,16 +389,11 @@ class LearnDocumentTool(BaseTool):
         if not path.is_file():
             return f"Error: Not a file: {path}"
 
-        from vaf.core.config import Config
         from uuid import UUID
 
-        config = Config.load()
-        # 0 = learn the WHOLE document (the deliberate default): a silent 200-page
-        # cap meant 3.9% of a 1000-page book was stored and reported as success.
-        # A positive value is an opt-in spend cap; the extractor turns 0 into
-        # max_pages=None (all pages).
-        max_pages = int(config.get("learn_document_max_pages", 0) or 0)
         suffix = path.suffix.lower()
+        if suffix not in (".pdf", ".txt", ".md"):
+            return f"Error: Unsupported format. Use .pdf, .txt, or .md (got {suffix})."
 
         if document_title is None:
             document_title = _clean_title(path.stem or "document")
@@ -559,28 +405,100 @@ class LearnDocumentTool(BaseTool):
             except (ValueError, TypeError):
                 user_scope_id = None
 
-        # Extract clean markdown (headings/tables); the shared section-based ingestion then handles
-        # sectioning + per-section contextual summaries + storage (one consistent pipeline).
+        import os
+
+        # Function-local: learn_job imports THIS module's ingest helpers the
+        # same way - both directions stay off the module level, so neither
+        # import order can deadlock the pair.
+        from vaf.tools.learn_job import LearnJobSpec, _learn_batches
+
+        # An empty PDF gets its honest diagnosis BEFORE any job is spawned: a
+        # scanned document without OCR should refuse loudly here, not spawn a
+        # child that stores nothing (the generic "empty or unsupported" hid a
+        # missing Tesseract behind a message about the document).
         if suffix == ".pdf":
             try:
-                from vaf.core.pdf_extract import extract_pdf_markdown
-                # max_pages 0 = whole document -> extractor None
-                content_markdown = (extract_pdf_markdown(path, max_pages=(max_pages or None)) or {}).get("markdown", "")
+                from vaf.core.pdf_extract import extract_pdf_markdown, _content_chars
+                probe = extract_pdf_markdown(path, max_pages=3, ocr_fallback=True)
             except ImportError:
                 return "Error: PDF support not installed. Run: pip install pdfplumber PyPDF2"
             except Exception as e:
                 return f"Error reading PDF: {e}"
-        elif suffix in (".txt", ".md"):
+            if _content_chars(probe.get("markdown") or "") == 0:
+                reason = (probe.get("ocr_unavailable_reason") or "").strip()
+                if reason:
+                    return (
+                        f"Error: No text could be extracted from {path.name}. The PDF "
+                        f"appears to be scanned (no text layer) and OCR is unavailable: "
+                        f"{reason} Install: pip install pdf2image pytesseract, plus the "
+                        f"poppler and Tesseract system packages, then retry."
+                    )
+                if int(probe.get("total_pages") or 0) <= 3:
+                    # The probe covered the whole document and OCR ran empty.
+                    return (
+                        f"Error: No text could be extracted from {path.name}. "
+                        f"OCR ran but found no readable text."
+                    )
+                # Only the first pages are blank (cover sheets): the job decides.
+
+        spec = LearnJobSpec(
+            path=str(path),
+            document_title=document_title,
+            doc_tag=doc_tag,
+            resume=bool(kwargs.get("resume", True)),
+            force_relearn=bool(kwargs.get("force_relearn", False)),
+        )
+
+        # ── Async default: the batched job in a child process ───────────────
+        # A full learn is ~1 LLM call per page - it can never fit one bounded
+        # tool call. The child has no tool budget, reports progress via the
+        # heartbeat + learn_state, and its result arrives exactly once through
+        # the runner drain.
+        in_child = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
+        from vaf.core.config import Config
+        if not in_child and Config.get("sub_agents_in_separate_terminals", False):
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            from vaf.core.subagent_spawn import spawn_subagent
+
+            session_id = get_current_session_id()
+            # ONE learn job per session: the tool name is not the agent_type,
+            # so the generic SUBAGENT_TOOLS duplicate guard does not cover this.
             try:
-                content_markdown = path.read_text(encoding="utf-8", errors="replace")
-            except Exception as e:
-                return f"Error reading file: {e}"
-        else:
-            return f"Error: Unsupported format. Use .pdf, .txt, or .md (got {suffix})."
+                if session_id and get_ipc().has_live_task("learn_agent", session_id):
+                    return ("A document is already being learned for this session. "
+                            "Wait for it to finish (the progress banner shows the batch), "
+                            "or stop it first.")
+            except Exception:
+                pass
 
-        if not (content_markdown or "").strip():
-            return "Error: No text could be extracted from the document (empty or unsupported)."
+            _sub_env = {}
+            if user_scope_id:
+                _sub_env["VAF_USER_SCOPE_ID"] = str(user_scope_id)
+            _role = kwargs.get("user_role") or os.environ.get("VAF_USER_ROLE")
+            if _role:
+                _sub_env["VAF_USER_ROLE"] = str(_role)
 
+            spawned = spawn_subagent(
+                "learn_agent",
+                f"Learn document: {document_title}",
+                include_task_arg=False,
+                payload=spec.to_json(),
+                extra_env=_sub_env,
+                marker_note=(f"Learning \"{document_title}\" into long-term memory "
+                             f"batch by batch. Progress shows in the banner; the "
+                             f"result arrives as a message when done."),
+            )
+            if spawned:
+                return spawned.marker
+            # Spawn failed (task already cancelled) -> honest sync fallback below.
+
+        # ── Sync fallback: ONE batch per call, inside the tool budget ───────
+        # Deliberately NOT in SELF_SUPERVISED_TOOLS: an hour-long in-process
+        # learn on the single worker is exactly the chat freeze the background
+        # job exists to avoid. One batch fits the budget (on slow local models
+        # the parse+10 LLM calls can still exceed it - the honest TIMEOUT then
+        # names itself); the ledger keeps the progress, so repeated calls
+        # genuinely finish a document.
         # Prefer dedicated extraction method if present, else compaction.
         if hasattr(agent, "_generate_for_document_extraction"):
             generate = agent._generate_for_document_extraction
@@ -588,28 +506,25 @@ class LearnDocumentTool(BaseTool):
             def generate(prompt: str) -> str:
                 return agent._generate_for_compaction(prompt)
 
-        result: dict = {}
+        from vaf.core.bounded_run import cancel_requested
 
-        async def _do_ingest() -> None:
-            from vaf.memory.database import get_db
-            async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
-                result.update(await ingest_document_knowledge(
-                    db,
-                    content_markdown=content_markdown,
-                    doc_title=document_title,
-                    doc_tag=doc_tag,
-                    source="learn_document",
-                    mem_type="document",
-                    generate_fn=generate,
-                    user_scope_id=user_scope_id,
-                ))
-
-        try:
-            _run_async_in_new_loop(_do_ingest())
-        except Exception as e:
-            return f"Error: Failed to learn document: {e}"
-
-        created = int(result.get("created", 0))
-        if created <= 0:
-            return "No knowledge memories were created (document may be empty or unreadable)."
-        return f'Stored {created} knowledge section(s) from "{document_title}" under tag {doc_tag}.'
+        outcome = _learn_batches(
+            spec,
+            generate_fn=generate,
+            user_scope_id=user_scope_id,
+            session_id=kwargs.get("session_id"),
+            cancel_cb=cancel_requested,
+            max_batches=1,
+        )
+        if outcome.status in ("refused", "failed"):
+            return outcome.message() if outcome.status == "failed" else f"Error: {outcome.error}"
+        if outcome.status == "partial":
+            return (
+                f'Learned batch {outcome.batches_done} of {outcome.batches_total} of '
+                f'"{document_title}" and saved the progress ({outcome.sections_stored} '
+                f"section(s) so far). Background learning is off "
+                f"(sub_agents_in_separate_terminals=false), so each call learns one "
+                f"batch - call learn_document again to continue, or enable separate "
+                f"terminals to finish in one run."
+            )
+        return outcome.message()

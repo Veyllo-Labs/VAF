@@ -52,7 +52,20 @@ def ingested():
 
 
 def _learn(path, ingested, **kwargs):
-    result = LearnDocumentTool().run(path=str(path), _agent=MagicMock(), **kwargs)
+    # Force the SYNC lane: with separate terminals on (the shipped default) an
+    # allowed path would SPAWN a real learn_agent child out of the test run -
+    # a terminal window, a queue record and, with the DB up, a real ingest.
+    # These tests probe the ACCESS decision and the ingest wiring, nothing else.
+    from vaf.core.config import Config
+    real_get = Config.get
+
+    def _no_spawn(key, default=None):
+        if key == "sub_agents_in_separate_terminals":
+            return False
+        return real_get(key, default)
+
+    with patch.object(Config, "get", classmethod(lambda cls, k, d=None: _no_spawn(k, d))):
+        result = LearnDocumentTool().run(path=str(path), _agent=MagicMock(), **kwargs)
     return result, ingested
 
 

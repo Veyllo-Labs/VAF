@@ -2240,6 +2240,12 @@ function VAFDashboardContent() {
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
     const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
     const memoryLearningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Batched document learning (learn_state frames): batch N of M for the banner
+    // and the per-document button states. Keys are ints/strings by contract.
+    const [learnState, setLearnState] = useState<{
+        docName: string; docTag?: string; batch: number; batchesTotal: number;
+        phase: 'learning' | 'done' | 'stopped' | 'capped' | 'failed' | 'refused' | string;
+    } | null>(null);
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -3624,6 +3630,21 @@ function VAFDashboardContent() {
                             currentFolder: data.currentFolder ?? prev.librarian?.currentFolder ?? null,
                         },
                     }));
+                }
+                else if (data.type === 'learn_state') {
+                    // Batched document learning: batch N of M. Drives the learning
+                    // banner and the per-document learn button. Terminal phases
+                    // (done/stopped/capped/failed) keep the last frame visible so the
+                    // outcome is readable; the completion chat message carries the
+                    // full numbers.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    setLearnState({
+                        docName: String(data.docName ?? ''),
+                        docTag: data.docTag ? String(data.docTag) : undefined,
+                        batch: typeof data.batch === 'number' ? data.batch : 0,
+                        batchesTotal: typeof data.batchesTotal === 'number' ? data.batchesTotal : 0,
+                        phase: String(data.phase ?? 'learning'),
+                    });
                 }
                 else if (data.type === 'browser_state') {
                     // Live structured state from the browser agent: task, step, action plan,

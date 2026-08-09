@@ -483,6 +483,14 @@ class WebInterfaceManager:
         itself stays on the separate browser_frame_update stream."""
         self.emit_agent_state("browser_state", state, session_id=session_id)
 
+    def emit_learn_state(self, state: dict, session_id: str = None):
+        """Emit the batched document-learn progress (docName, batch, batchesTotal,
+        phase) for the learning banner. Frame keys are ints and plain strings ONLY -
+        and never SubAgentStreamUpdate's typed field names: its `progress` is
+        Optional[int], and a "3/100" string there is a silent ValidationError that
+        kills the whole bridge stream of the run."""
+        self.emit_agent_state("learn_state", state, session_id=session_id)
+
     def emit_coder_code(self, file: str, code: str, session_id: str = None):
         """Emit the code currently being written (live editor feed).
 

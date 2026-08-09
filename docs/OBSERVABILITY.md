@@ -180,8 +180,13 @@ Known limitations, so you do not go looking for events that do not exist:
   work. Progress travels on the sub-agent IPC task record instead
   (`progress_done` / `progress_total`, counts and never a percentage), which is
   internal and polled per session by VAF's own terminal app - see
-  [agents/SUBAGENT_IPC.md](agents/SUBAGENT_IPC.md). Two of the five sub-agents
-  populate it; the other three have no denominator to report.
+  [agents/SUBAGENT_IPC.md](agents/SUBAGENT_IPC.md). Three of the six sub-agents
+  populate it (coder, document, learn); the other three have no denominator to
+  report. The learn agent introduces NO new event types on this surface: its
+  batch progress rides the IPC counts and the Web UI's `learn_state` frames
+  (a live-view wire type, not an engine event), and its LLM calls go through
+  `completion.complete` - covered by the same "in-process lanes emit no llm
+  events" limitation above.
 
 Changes to the event schema are announced in [CHANGELOG.md](../CHANGELOG.md)
 per the backward-compatibility rules in [RELEASING.md](setup/RELEASING.md).

@@ -198,6 +198,19 @@ def run_subagent(
             result = tool.run(task=effective_task)
             _safe_print(result)
 
+        elif agent_type == "learn_agent":
+            # Batched document learning. The machine-readable job spec (JSON)
+            # travels as the IPC payload sidecar - argv cannot carry paths with
+            # spaces plus flags reliably; --task holds only the human summary.
+            # Everything else is inherited: VAF_IN_SUBAGENT_TERMINAL arms
+            # set_run_progress, the heartbeat stamps (done,total) onto the IPC
+            # record every 3s (the TUI TasksLine renders it), complete_task
+            # below delivers the result exactly once via the runner drain.
+            from vaf.tools.learn_job import run_learn_job
+            spec = (ipc.get_task_payload(task_id) if (task_id and ipc) else None) or task
+            result = run_learn_job(spec)
+            _safe_print(result)
+
         else:
             try:
                 UI.error(f"Unknown sub-agent type: {agent_type}")

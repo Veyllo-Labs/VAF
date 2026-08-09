@@ -297,7 +297,7 @@ set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update, memory
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -353,6 +353,9 @@ app.add_typer(ww.app, name="ww", help="Whare Wananga tool self-learning (train /
 
 # Security diagnostics
 app.add_typer(security.app, name="security", help="Run security diagnostics")
+
+# Memory store maintenance (rekey after an encryption-key rotation)
+app.add_typer(memory.app, name="memory", help="Memory store maintenance")
 
 # Sub-Agent execution (internal use - for separate terminal windows)
 app.add_typer(subagent.app, name="subagent", help="Run sub-agents in separate terminals")

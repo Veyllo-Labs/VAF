@@ -54,8 +54,14 @@ async def reembed_all():
         # Re-embed each chunk
         for i, chunk in enumerate(chunks):
             try:
-                # Generate new embedding
-                new_embedding = await embedding_service.embed(chunk.text, prefix="passage")
+                # chunk.text is encrypted at rest (enc:gcm: field format) -
+                # embedding the ciphertext would corrupt the vector space.
+                from vaf.memory.crypto import decrypt_field
+                plain = decrypt_field(chunk.text)
+                if plain == "[Decryption failed]":
+                    print(f"  Skipping chunk {chunk.id}: not decryptable with the current key")
+                    continue
+                new_embedding = await embedding_service.embed(plain, prefix="passage")
                 chunk.embedding = new_embedding
 
                 if (i + 1) % 10 == 0:

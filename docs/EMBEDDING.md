@@ -623,7 +623,8 @@ class WeatherTool(BaseTool):
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in
 your tool's name and the current session id, and it inherits everything the
 rest of VAF's logging has: the `VAF_LOG_DIR` redirect, the
-`debug_logs_enabled` switch, dated files, and garbage collection. It never
+`debug_logs_enabled` switch (on by default), dated files, and garbage
+collection. It never
 raises, so a broken log line cannot fail a tool call. Do not import
 `vaf.core.log_helper` - that is internal and offers no stability promise.
 
@@ -999,6 +1000,8 @@ Stable public surface (safe to build on):
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains
   exported for tools that need the boundary around something other than a whole `run()`.
+  Entering the write-mode jail needs no pre-provisioned per-user directories - the
+  boundary is computed, not created, so a fresh tenant costs nothing to confine.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;
@@ -1013,7 +1016,8 @@ Stable public surface (safe to build on):
 - `vaf.extract_pdf_markdown(path, max_pages=None, ocr_fallback=True, *,
   first_page=1, cancel=None)` - PDF to Markdown with honest coverage facts.
   The result dict is the contract: `markdown`, `total_pages`, `pages_read`,
-  `first_page`, `truncated`, `used_ocr`, `method`, `ocr_unavailable_reason`
+  `first_page`, `truncated`, `used_ocr`, `method` (one of `pdfplumber`,
+  `pypdf2`, `ocr`), `ocr_unavailable_reason`
   (and `num_pages` as a backward-compat alias of `total_pages`). Pages are
   streamed - memory stays flat over any document size - and page markers carry
   absolute numbers, so a slice read cites correctly. `max_pages=None` reads
@@ -1029,3 +1033,15 @@ Everything else under `vaf.core.*` is internal and may change between releases.
 `vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver` and
 `vaf.extract_pdf_markdown` are the deliberate exceptions: they live in `vaf.core`
 but are re-exported on the façade, and the façade names are the ones to import.
+
+### Breaking-change tests you can run in your own CI
+
+The stability list above is executable: [tests/contract/](../tests/contract/)
+pins it as an offline pytest suite - no network, no API keys, no Docker -
+designed to be vendored. Copy that directory out of the VAF tag you build
+against into your own CI, and run it against every VAF version you consider
+upgrading to; a failure means that version breaks the surface this page
+promises, before it reaches your integration. Run standalone, the suite
+isolates itself from your real home and config directories first. The how-to
+(and the maintainers' update policy that keeps the suite current as this
+surface grows) lives in [tests/contract/README.md](../tests/contract/README.md).

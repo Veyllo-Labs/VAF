@@ -11,6 +11,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Breaking-change contract tests embedders can run in their own CI.** The
+  stable embedding surface documented in EMBEDDING.md ("What is and isn't
+  stable") is now pinned by an offline, self-contained pytest suite under
+  `tests/contract/` - one file per contract module (facade exports, `Agent`,
+  `CoreAgent`, `BaseTool`/`user_jail`, `ToolCaller`/`ToolRequest`, the account
+  allowlist resolver, `vaf.markers`, `extract_pdf_markdown`, the session/turn
+  context API, and the `vaf.tools` entry-point group). Vendor the directory
+  from the tag you build against and run it against any newer VAF release: a
+  failure means that release breaks the promised surface. The suite isolates
+  itself from your real home and config directories when run standalone; see
+  `tests/contract/README.md`.
+
 ### Fixed
 - **Your memory encryption key can no longer be silently replaced.** The
   config file is written by several processes at once, and a reader that

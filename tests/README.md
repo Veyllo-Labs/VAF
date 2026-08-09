@@ -16,6 +16,13 @@ The suite contains dozens of `test_*.py` files following the `test_*.py` naming 
 
 Note: `list_tools_cli.py` is a helper script (it prints the CLI tool menu), not a test, so `pytest` does not collect it.
 
+One subdirectory is special: [contract/](contract/) pins the public embedding
+surface (docs/EMBEDDING.md, "What is and isn't stable") as breaking-change
+tests. It runs as part of the normal suite here, but it is written to be
+vendored by embedders and run standalone against a pip-installed vaf - so its
+files must not import the repo conftest or reference repo paths at runtime.
+See [contract/README.md](contract/README.md) before adding tests there.
+
 ## Running Tests
 
 VAF uses `pytest` as its primary testing framework.

@@ -4875,6 +4875,11 @@ function VAFDashboardContent() {
             setDocumentViewerState(prev => {
                 const newList = [...prev.documents, ...newDocs];
                 if (ws && currentSessionId) {
+                    // Optimistic: extraction runs BEFORE the server's
+                    // attachment_indexing event, and that window was silent -
+                    // the user saw nothing between attaching and the banner.
+                    // The real events overwrite this the moment they arrive.
+                    setAttachmentIndexStatus(prev2 => ({ ...prev2, [currentSessionId]: 'indexing' }));
                     ws.send(JSON.stringify({
                         type: 'set_sidebar_documents',
                         sessionId: currentSessionId,

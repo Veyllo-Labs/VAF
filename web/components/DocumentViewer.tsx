@@ -847,7 +847,9 @@ export default function DocumentViewer({
                                                         ? <Loader2 size={12} className="animate-spin text-violet-600" />
                                                         : learnStates?.[doc.name] === 'learned'
                                                             ? <Check size={12} className="text-emerald-600" />
-                                                            : <GraduationCap size={12} />}
+                                                            : indexStatus === 'indexing'
+                                                                ? <Loader2 size={12} className="animate-spin text-amber-500/70" />
+                                                                : <GraduationCap size={12} />}
                                                 </button>
                                             )}
                                             <button
@@ -1104,7 +1106,9 @@ export default function DocumentViewer({
                                                         ? <Loader2 size={14} className="animate-spin text-violet-600" />
                                                         : learnStates?.[doc.name] === 'learned'
                                                             ? <Check size={14} className="text-emerald-600" />
-                                                            : <GraduationCap size={14} />}
+                                                            : indexStatus === 'indexing'
+                                                                ? <Loader2 size={14} className="animate-spin text-amber-500/70" />
+                                                                : <GraduationCap size={14} />}
                                                 </button>
                                             )}
                                             <button

@@ -442,7 +442,10 @@ def run_learn_job(spec_json: str) -> str:
     session_id = resolve_ui_session_id() or None
     flag = cancel_flag_path(task_id) if task_id else None
     publisher = StatePublisher("learn_state", min_interval=0.5, dedupe=True)
-    doc_name = Path(spec.path).name
+    # The DISPLAY title, never the persisted basename: the on-disk name carries
+    # a timestamp+uuid uniqueness prefix that means nothing to the user (live
+    # feedback: the banner read "1786...c6b8..._Study.pdf").
+    doc_name = (spec.document_title or "").strip() or Path(spec.path).name
 
     def _cancel() -> bool:
         return bool(flag is not None and flag.exists())

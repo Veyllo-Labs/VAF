@@ -304,20 +304,11 @@ You have access to this filesystem map for fast navigation:
             # Continue with normal execution below
             pass
         elif Config.get("sub_agents_in_separate_terminals", False):
-            # Start in new terminal window with IPC tracking
-            import shlex
-            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-            
-            # Create task in IPC system
-            ipc = get_ipc()
-            task_id = ipc.create_task("librarian_agent", task_description=task)
-            
-            # Pass session/task context to the sub-agent via the CHILD env only (not the parent's
-            # process-global os.environ), so concurrent workers don't clobber each other's session.
-            session_id = get_current_session_id()
-            _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "librarian_agent"}
-            if session_id:
-                _sub_env["VAF_SESSION_ID"] = session_id
+            # Spawn IPC-tracked child via the ONE spawn primitive; what stays
+            # HERE is this agent's identity data, not spawn mechanics.
+            from vaf.core.subagent_spawn import spawn_subagent
+
+            _sub_env = {}
             # Carry the user scope AND role into the child so its librarian jail (is_safe_path) reaches
             # the same verdict there. Both or neither: passing the scope alone would jail an admin in
             # the terminal lane that runs unjailed in-process.
@@ -328,40 +319,10 @@ You have access to this filesystem map for fast navigation:
             if _role_for_child:
                 _sub_env["VAF_USER_ROLE"] = str(_role_for_child)
 
-            # Pass provider configuration to sub-agent (Best Practice: Inherit or override)
-            _sub_provider = subagent_provider_override()
-            if _sub_provider:
-                _sub_env["VAF_PROVIDER"] = _sub_provider
-            
-            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'librarian_agent', '--task', task, '--task-id', task_id]
-            
-            if Platform.is_windows():
-                # Windows: properly escape for cmd /k
-                escaped_parts = []
-                for part in cmd_parts:
-                    if ' ' in part or '"' in part:
-                        escaped = part.replace('"', '\\"')
-                        escaped_parts.append(f'"{escaped}"')
-                    else:
-                        escaped_parts.append(part)
-                cmd = ' '.join(escaped_parts)
-                title = f"VAF Librarian Agent [{task_id}]"
-            else:
-                # Unix: use shell quoting
-                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-                title = f"VAF Librarian Agent [{task_id}]"
-            
-            if Platform.open_new_terminal(cmd, title=title, extra_env=_sub_env):
-                # Mark task as running
-                ipc.mark_task_running(task_id)
-                
-                UI.event("Sub-Agent", f"Librarian Agent started in new terminal [Task: {task_id}]", style="bold cyan")
-                # Return special marker for main agent to recognize async task
-                return f"[SUBAGENT_ASYNC:{task_id}:librarian_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
-            else:
-                # Fallback: run normally if terminal opening fails
-                UI.warning("Failed to open new terminal, running in current window")
-                ipc.cancel_task(task_id)
+            spawned = spawn_subagent("librarian_agent", task, extra_env=_sub_env)
+            if spawned:
+                return spawned.marker
+            # Fallback: run normally if terminal opening fails (task already cancelled).
         
         # ═══════════════════════════════════════════════════════════════════════
         # FAST PATH: Try to handle simple tasks DIRECTLY (no LLM needed)

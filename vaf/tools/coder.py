@@ -3133,23 +3133,12 @@ Thumbs.db
             # Continue with normal execution below
             pass
         elif Config.get("sub_agents_in_separate_terminals", False):
-            # Start in new terminal window with IPC tracking
+            # Spawn IPC-tracked child via the ONE spawn primitive; what stays
+            # HERE is this agent's identity data, not spawn mechanics.
+            from vaf.core.subagent_spawn import spawn_subagent
+
             project_path = kwargs.get('project_path', '')
-            
-            # Build command with proper escaping
-            import shlex
-            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-            
-            # Create task in IPC system
-            ipc = get_ipc()
-            task_id = ipc.create_task("coding_agent", task_description=task)
-            
-            # Pass session/task context to the sub-agent via the CHILD env only (not the parent's
-            # process-global os.environ), so concurrent workers don't clobber each other's session.
-            session_id = get_current_session_id()
-            _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "coding_agent"}
-            if session_id:
-                _sub_env["VAF_SESSION_ID"] = session_id
+            _sub_env = {}
             # The turn crosses the fork too. This child finishes minutes after the
             # turn that started it, and the files it writes still belong to that
             # exchange - without this they would be announced with no address and
@@ -3177,46 +3166,14 @@ Thumbs.db
                 # what the funnel already decided.
                 _sub_env["VAF_ALLOWED_TOOLS"] = ",".join(sorted(caller_allowed))
 
-            # Pass provider configuration to sub-agent
-            _sub_provider = subagent_provider_override()
-            if _sub_provider:
-                _sub_env["VAF_PROVIDER"] = _sub_provider
-            
-            # CRITICAL FIX: Use current python executable instead of 'vaf' command
-            # This ensures we use the exact same code/environment as the main process
-            import sys
-            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'coding_agent', '--task', task, '--task-id', task_id]
-            if project_path:
-                cmd_parts.extend(['--project-path', project_path])
-            
-            if Platform.is_windows():
-                # Windows: properly escape for cmd /k
-                # Use double quotes for the entire command and escape inner quotes
-                escaped_parts = []
-                for part in cmd_parts:
-                    if ' ' in part or '"' in part:
-                        escaped_part = part.replace('"', '\\"')
-                        escaped_parts.append(f'"{escaped_part}"')
-                    else:
-                        escaped_parts.append(part)
-                cmd = ' '.join(escaped_parts)
-                title = f"VAF Coding Agent [{task_id}]"
-            else:
-                # Unix: use shell quoting
-                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-                title = f"VAF Coding Agent [{task_id}]"
-            
-            if Platform.open_new_terminal(cmd, title=title, extra_env=_sub_env):
-                # Mark task as running
-                ipc.mark_task_running(task_id)
-                
-                UI.event("Sub-Agent", f"Coding Agent started in new terminal [Task: {task_id}]", style="bold cyan")
-                # Return special marker for main agent to recognize async task
-                return f"[SUBAGENT_ASYNC:{task_id}:coding_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
-            else:
-                # Fallback: run normally if terminal opening fails
-                UI.warning("Failed to open new terminal, running in current window")
-                ipc.cancel_task(task_id)
+            spawned = spawn_subagent(
+                "coding_agent", task,
+                args=(("--project-path", project_path) if project_path else ()),
+                extra_env=_sub_env,
+            )
+            if spawned:
+                return spawned.marker
+            # Fallback: run normally if terminal opening fails (task already cancelled).
         
         # ═══════════════════════════════════════════════════════════════════
         # PREVENT MULTIPLE INSTANCES - Stop previous instance if running

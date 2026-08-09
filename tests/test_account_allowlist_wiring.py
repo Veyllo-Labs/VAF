@@ -63,8 +63,17 @@ def test_importing_vaf_main_registers_the_harness_resolver():
 
 def test_subagent_children_are_spawned_through_vaf_main():
     """The child lane inherits the registration only because every spawner goes through
-    `-m vaf.main`. A spawner that switches to a different entry module would start
-    children with an EMPTY registry - scoped tenants unrestricted inside that child."""
+    `-m vaf.main`. That argv lives in ONE place now - vaf/core/subagent_spawn.py - so
+    the proof splits in two: the primitive builds the vaf.main entry, and every
+    spawner file uses the primitive instead of a private terminal spawn (a private
+    spawn with a different entry module would start children with an EMPTY
+    registry - scoped tenants unrestricted inside that child)."""
+    spawn_src = (ROOT / "vaf/core/subagent_spawn.py").read_bytes().decode("utf-8", errors="replace")
+    assert '"-m", "vaf.main"' in spawn_src or "'-m', 'vaf.main'" in spawn_src, (
+        "the spawn primitive no longer enters through `-m vaf.main` - children start "
+        "without the account-allowlist registration; register the resolver in the new "
+        "entry module and update the module docstring's composition proof"
+    )
     spawners = (
         "vaf/tools/coder.py",
         "vaf/tools/librarian.py",
@@ -75,11 +84,16 @@ def test_subagent_children_are_spawned_through_vaf_main():
     missing = []
     for rel in spawners:
         src = (ROOT / rel).read_bytes().decode("utf-8", errors="replace")
-        if "'-m', 'vaf.main'" not in src and '"-m", "vaf.main"' not in src:
+        uses_primitive = "spawn_subagent" in src
+        legacy_inline = "'-m', 'vaf.main'" in src or '"-m", "vaf.main"' in src
+        if not (uses_primitive or legacy_inline):
             missing.append(rel)
+        elif "open_new_terminal" in src and not legacy_inline:
+            # A file that opens terminals itself while claiming the primitive is
+            # a bypass, not a conversion.
+            missing.append(rel + " (private open_new_terminal)")
     assert not missing, (
-        f"subagent spawners no longer go through `-m vaf.main`: {missing} - their "
-        f"children start without the account-allowlist registration; either keep the "
-        f"spawn shape or register the resolver in the new entry module and update the "
-        f"module docstring's composition proof"
+        f"subagent spawners bypass the vaf.main entry: {missing} - their "
+        f"children start without the account-allowlist registration; spawn through "
+        f"vaf.core.subagent_spawn.spawn_subagent or update the composition proof"
     )

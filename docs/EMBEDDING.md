@@ -873,7 +873,12 @@ unrestricted. The coder filters blocked tools out of the schema its model sees
 and refuses hallucinated names at dispatch, on both sides of the boundary - so
 "block the coder entirely" stops being the only expressible opinion about what
 runs inside it. If you spawn VAF child processes yourself, set the variable in
-the CHILD's environment only, never process-globally in a multi-tenant parent.
+the CHILD's environment only, never process-globally in a multi-tenant parent -
+VAF's own spawners all go through one implementation
+(`vaf.core.subagent_spawn.spawn_subagent`) that takes agent-specific env as
+data and never touches the parent's `os.environ`; it is currently internal (a
+named boundary: no embedder demand measured yet), but it is the pattern to
+copy.
 
 Runnable demonstration: part 6 of
 [examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).

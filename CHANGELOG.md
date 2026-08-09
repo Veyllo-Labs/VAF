@@ -23,6 +23,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   now released as they are read: same output, byte for byte, at 0.7 GB.
 
 ### Added
+- **A learn button on every attached document.** Once a chat attachment
+  finishes indexing, a button on its row starts learning it into long-term
+  memory - no chat command needed. Attached documents are stored as real files
+  now, which is also what makes "learn this attachment" work at all: the old
+  advice pointed at a path that did not exist. A banner shows the batch
+  progress with a cancel, and the button reflects the state (learning /
+  learned).
 - **Learning a large document finally learns the whole document.** Learning a
   PDF silently kept the first 200 pages and 40 sections - 4% of a 1000-page
   book - and reported success. Learning now runs as a background job in
@@ -38,6 +45,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rest. Both read lanes accept a page range now, and every PDF answer says
   honestly which pages of how many it covers and how to continue - instead of
   a bare "(truncated)".
+- **Large uploads no longer kill the connection silently.** On the desktop
+  and LAN paths, attaching a file above roughly 12 MB dropped the WebSocket
+  mid-upload with nothing but the reconnect banner - the 200 MB frame ceiling
+  existed on one server entry point only. Every server the app starts now
+  shares the same ceiling, and attachments above 100 MB per file are refused
+  up front with a message naming the file and the limit.
 - **A local model that can see images finally does.** Local vision only
   worked if you had explicitly set the vision provider to "local" - leaving
   it on its default meant the local server started without the image

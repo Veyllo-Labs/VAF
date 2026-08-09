@@ -107,11 +107,91 @@ def extract_xml_tool_call(content: str, valid_names=None) -> Optional[Dict[str, 
     return None
 
 
+def _wire_json_span(content: str):
+    """(start, end) of the bare {"tool_calls": [...]} object in content, or None."""
+    if not content or '"tool_calls"' not in content:
+        return None
+    start = content.find("{", 0, content.find('"tool_calls"'))
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(content)):
+        ch = content[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return (start, i + 1)
+    return None
+
+
+def extract_wire_json_tool_calls(content: str, valid_names=None):
+    """Recover tool calls a model leaked as a BARE OpenAI-wire JSON object in
+    its text: ``{"tool_calls": [{"id": ..., "function": {"name", "arguments"},
+    "type": "function"}]}`` (first live sighting: Veyllo echoing the wire
+    format as content - the turn ended as think-only, the UI hid the raw JSON,
+    and the user saw an agent that "thought but never answered").
+
+    Returns a list of OpenAI-style tool_call dicts, or []. A provider-issued
+    id in the leak is PRESERVED - Veyllo's stateful backend accepts only its
+    own ids on replay, so re-minting would break the follow-up exchange; only
+    a missing id gets a synthetic one. When ``valid_names`` is given, every
+    recovered name must be known - one foreign name refuses the WHOLE leak
+    (half-executing a hallucinated batch is worse than executing none of it).
+    """
+    span = _wire_json_span(content)
+    if not span:
+        return []
+    start, end = span
+    try:
+        data = json.loads(content[start:end])
+    except Exception:
+        return []
+    calls = data.get("tool_calls")
+    if not isinstance(calls, list) or not calls:
+        return []
+    out = []
+    for c in calls:
+        fn = (c or {}).get("function") or {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            return []
+        if valid_names is not None and name not in valid_names:
+            return []
+        args = fn.get("arguments")
+        if isinstance(args, dict):
+            args = json.dumps(args)
+        leaked_id = str((c or {}).get("id") or "").strip()
+        out.append({
+            "id": leaked_id or f"call_synth_{int(time.time())}_{os.urandom(2).hex()}",
+            "type": "function",
+            "function": {"name": name, "arguments": str(args or "{}")},
+        })
+    return out
+
+
 _TOOL_CALLS_WRAP_RE = re.compile(r"</?tool_calls\b[^>]*>")
 
 
 def strip_tool_call_markup(content: str) -> str:
     """Remove leaked XML/DSML tool-call markup from displayable/persisted assistant text.
+
+    Also removes a bare OpenAI-wire ``{"tool_calls": [...]}`` object (the leak
+    extract_wire_json_tool_calls recovers): once the call is executed, the raw
+    JSON in the text is noise the user must never see.
 
     When a tool call is recovered from content (extract_xml_tool_call), the raw
     ``<invoke>…</invoke>`` / ``<tool_use>…</tool_use>`` / ``<｜｜DSML｜｜tool_calls>…`` markup is
@@ -122,10 +202,14 @@ def strip_tool_call_markup(content: str) -> str:
     """
     if not content or ("invoke name=" not in content
                        and "tool_use name=" not in content
-                       and "DSML" not in content):
+                       and "DSML" not in content
+                       and '"tool_calls"' not in content):
         return content
     text = _DSML_TOKEN_RE.sub("", content).replace("｜", "")
     text = _INVOKE_RE.sub("", text)
     text = _TOOL_USE_RE.sub("", text)
     text = _TOOL_CALLS_WRAP_RE.sub("", text)
+    span = _wire_json_span(text)
+    if span:
+        text = text[:span[0]] + text[span[1]:]
     return text.strip()

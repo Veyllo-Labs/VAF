@@ -9259,6 +9259,18 @@ class Agent:
                     if _xml_tc:
                         tool_calls_detected.append(_xml_tc)
 
+                # 7. Bare OpenAI-wire JSON leaked as content:
+                # {"tool_calls": [{"id": ..., "function": {...}}]}. First live
+                # sighting: Veyllo echoed the wire format as text - the turn
+                # ended think-only, the UI hid the raw JSON, and the user saw an
+                # agent that "thought but never answered". Provider-issued ids
+                # are PRESERVED (the stateful backend accepts only its own ids
+                # on replay); one unknown tool name refuses the whole leak.
+                if not tool_calls_detected:
+                    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+                    for _wire_tc in extract_wire_json_tool_calls(text_to_search, self.tools):
+                        tool_calls_detected.append(_wire_tc)
+
             try:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
             except Exception:

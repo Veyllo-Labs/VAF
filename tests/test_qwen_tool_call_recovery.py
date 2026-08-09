@@ -248,3 +248,94 @@ def test_large_adversarial_input_completes_quickly_no_backtracking_blowup():
     result = _parse_qwen_tool_calls(adversarial, TOOLS)
     assert time.monotonic() - t0 < 2.0
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Dialect: bare OpenAI-wire JSON leaked as content (Veyllo, first live run)
+# ---------------------------------------------------------------------------
+
+def _wire_leak(name="read_file", call_id="call_00_ABC", args=None):
+    import json
+    return "<think>reading now</think>\n\n" + json.dumps({"tool_calls": [{
+        "id": call_id, "type": "function",
+        "function": {"name": name,
+                     "arguments": json.dumps(args or {"path": "/x.pdf", "first_page": 59})},
+    }]})
+
+
+def test_wire_json_leak_is_recovered_with_its_original_id():
+    """The turn ended think-only: the model echoed the OpenAI wire format as
+    TEXT, nothing executed, the UI hid the raw JSON. The recovered call must
+    keep the provider-issued id - the stateful backend accepts only its own
+    ids on replay, so re-minting breaks the follow-up exchange."""
+    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+
+    out = extract_wire_json_tool_calls(_wire_leak(), {"read_file"})
+    assert len(out) == 1
+    assert out[0]["id"] == "call_00_ABC", "the leaked provider id was re-minted"
+    assert out[0]["function"]["name"] == "read_file"
+    import json
+    assert json.loads(out[0]["function"]["arguments"])["first_page"] == 59
+
+
+def test_wire_json_leak_with_unknown_tool_refuses_everything():
+    """Half-executing a hallucinated batch is worse than executing none."""
+    import json
+    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+
+    two = "<think>x</think>" + json.dumps({"tool_calls": [
+        {"id": "a", "type": "function",
+         "function": {"name": "read_file", "arguments": "{}"}},
+        {"id": "b", "type": "function",
+         "function": {"name": "totally_made_up", "arguments": "{}"}},
+    ]})
+    assert extract_wire_json_tool_calls(two, {"read_file"}) == []
+
+
+def test_wire_json_in_prose_is_not_a_leak():
+    """A user pasting an API example into chat must not trigger execution of
+    JSON that merely LOOKS like the wire format but carries no callable name."""
+    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+
+    prose = 'The API returns {"tool_calls": []} when no tool is used.'
+    assert extract_wire_json_tool_calls(prose, {"read_file"}) == []
+    assert extract_wire_json_tool_calls("no braces here", {"read_file"}) == []
+
+
+def test_strip_removes_the_wire_json_but_keeps_the_text():
+    from vaf.core.tool_call_recovery import strip_tool_call_markup
+
+    leaked = _wire_leak()
+    cleaned = strip_tool_call_markup(leaked)
+    assert '"tool_calls"' not in cleaned
+    assert "<think>reading now</think>" in cleaned
+
+
+def test_missing_id_gets_a_synthetic_one():
+    import json
+    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+
+    leak = json.dumps({"tool_calls": [{"type": "function",
+                                       "function": {"name": "read_file", "arguments": "{}"}}]})
+    out = extract_wire_json_tool_calls(leak, {"read_file"})
+    assert out and out[0]["id"].startswith("call_synth_")
+
+
+def test_the_agent_fallback_chain_consults_the_wire_dialect():
+    """Wiring pin: the extractor is worthless if the agent's no-structured-
+    tool-calls fallback never asks it."""
+    import inspect
+
+    import vaf.core.agent as agent_mod
+
+    src = inspect.getsource(agent_mod)
+    i = src.index("extract_xml_tool_call(text_to_search")
+    window = src[i:i + 1600]
+    j = window.find("extract_wire_json_tool_calls(text_to_search")
+    assert j != -1, \
+        "the wire-JSON leak lane is unwired - a leaked turn ends think-only again"
+    # Presence is not reachability: the lane must sit behind the real guard,
+    # not a disabled one (an `if False:` keeps every line of source intact).
+    guard = window[max(0, j - 300):j]
+    assert "if not tool_calls_detected:" in guard and "if False" not in guard, \
+        "the wire-JSON lane exists in source but can never run"

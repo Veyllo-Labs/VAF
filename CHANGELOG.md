@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The agent no longer "thinks without answering".** Some API models
+  intermittently emit their tool call as plain text instead of through the
+  tool channel; the turn then ended with a visible thought and nothing else,
+  because nothing was executed and the raw text was hidden. This leaked shape
+  is now recognized and executed like a normal tool call - keeping the
+  provider's own call id, which the follow-up request requires.
 - **Scanned PDFs no longer poison the memory.** A scanned document of four or
   more pages never triggered the OCR fallback, because the check mistook the
   extractor's own page markers for text - so learning such a document stored

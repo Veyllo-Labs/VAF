@@ -1891,6 +1891,10 @@ function VAFDashboardContent() {
     // Attachment indexing status per session (for the Document Viewer header indicator + banner).
     const [attachmentIndexStatus, setAttachmentIndexStatus] = useState<Record<string, 'indexing' | 'ready' | 'error'>>({});
     const [attachmentIndexCount, setAttachmentIndexCount] = useState<Record<string, number>>({});
+    // DURABLE "indexing finished this session" - the transient status above
+    // auto-clears after 4s (header back to neutral), which re-locked the learn
+    // button right after it turned gold (first live run).
+    const [attachmentIndexedDone, setAttachmentIndexedDone] = useState<Record<string, boolean>>({});
     const activeAttachmentIndexStatus = currentSessionId ? attachmentIndexStatus[currentSessionId] : undefined;
     const activeAttachmentIndexCount = currentSessionId ? attachmentIndexCount[currentSessionId] : undefined;
     // True while the LLM is indexing attached documents — blocks prompting + closing the
@@ -2902,6 +2906,9 @@ function VAFDashboardContent() {
                                 data.type === 'attachment_indexing' ? 'indexing'
                                     : data.type === 'attachment_indexed' ? 'ready' : 'error';
                             setAttachmentIndexStatus(prev => ({ ...prev, [sid]: status }));
+                            // Durable half for the learn button: ready survives the
+                            // 4s header auto-clear; a NEW indexing round un-readies.
+                            setAttachmentIndexedDone(prev => ({ ...prev, [sid]: status === 'ready' }));
                             if (status === 'indexing' && typeof data.count === 'number') {
                                 setAttachmentIndexCount(prev => ({ ...prev, [sid]: data.count }));
                             }
@@ -7215,6 +7222,7 @@ function VAFDashboardContent() {
                                         }
                                     }}
                                     learnStates={learnDocStates}
+                                    learnReady={!!(currentSessionId && attachmentIndexedDone[currentSessionId])}
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor

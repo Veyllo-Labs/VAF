@@ -454,8 +454,13 @@ def test_frontend_wires_button_banner_and_cancel():
     assert "learnStates={learnDocStates}" in page, "the viewer no longer gets button states"
     viewer = Path("web/components/DocumentViewer.tsx").read_text(encoding="utf-8")
     assert "onLearnDocument" in viewer
-    assert viewer.count("indexStatus !== 'ready'") >= 2, \
+    assert viewer.count("!(learnReady || indexStatus === 'ready')") >= 2, \
         "the learn button is clickable before indexing is done (both rows must gate)"
+    # The DURABLE flag, not the transient header status: that one auto-clears
+    # after 4s and re-locked the button right after it unlocked (live run).
+    assert "attachmentIndexedDone" in page, \
+        "the button keys on the transient index status again - it locks after 4s"
+    assert "learnReady={" in page
 
 
 def test_learn_status_route_is_declared_before_the_catchall():

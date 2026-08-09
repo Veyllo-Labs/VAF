@@ -67,6 +67,10 @@ export type DocumentViewerProps = {
     onLearnDocument?: (name: string) => void;
     /** Per-document learn state (keyed by name), driven by learn_state frames. */
     learnStates?: Record<string, 'learning' | 'learned' | 'error' | undefined>;
+    /** DURABLE "indexing finished this session": the transient indexStatus
+     *  auto-clears after seconds (header back to neutral), which re-locked the
+     *  button right after it unlocked. */
+    learnReady?: boolean;
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.html,.htm';
@@ -497,6 +501,7 @@ export default function DocumentViewer({
     onRemoveDocument,
     onLearnDocument,
     learnStates,
+    learnReady,
     onInsertSelection,
     insertedSelectionsCount = 0,
     insertedSelections = [],
@@ -836,9 +841,9 @@ export default function DocumentViewer({
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
+                                                        if ((learnReady || indexStatus === 'ready') && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
                                                     }}
-                                                    disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
+                                                    disabled={!(learnReady || indexStatus === 'ready') || learnStates?.[doc.name] === 'learning'}
                                                     className="rounded p-1 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10 hover:scale-125 transition-all disabled:opacity-45 disabled:text-gray-500 disabled:hover:scale-100 disabled:hover:bg-transparent"
                                                     title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
                                                     aria-label={`Learn ${doc.name}`}
@@ -1095,9 +1100,9 @@ export default function DocumentViewer({
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
+                                                        if ((learnReady || indexStatus === 'ready') && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
                                                     }}
-                                                    disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
+                                                    disabled={!(learnReady || indexStatus === 'ready') || learnStates?.[doc.name] === 'learning'}
                                                     className="rounded p-1.5 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10 hover:scale-125 transition-all disabled:opacity-45 disabled:text-gray-500 disabled:hover:scale-100 disabled:hover:bg-transparent"
                                                     title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
                                                     aria-label={`Learn ${doc.name}`}

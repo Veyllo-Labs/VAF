@@ -203,7 +203,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_db_owner_url` | `""` | Owner/superuser DSN for DDL, migrations and global stats. Empty falls back to `memory_db_url`; set it to the owner role (e.g. `vaf`) when `memory_db_url` is the non-superuser app role. |
 | `memory_db_echo` | `False` | SQLAlchemy echo (debug). |
 | `memory_embedding_model` | `all-MiniLM-L6-v2` | Sentence-transformer embedding model. |
-| `memory_encryption_key` | `""` | Managed; memory-at-rest encryption key. |
+| `memory_encryption_key` | `""` | Managed; memory-at-rest encryption key (AES-256-GCM, Base64). Minted once when a cleanly-parsed config genuinely lacks it; an unreadable config refuses key resolution instead of minting a replacement. Protected (a save that omits it keeps the stored value) and redacted for non-admins. Losing it orphans every encrypted memory - back it up; recovery from a key rotation: `vaf memory rekey`. |
 | `memory_auto_capture` | `False` | Auto-store memories from conversation. |
 | `memory_auto_connect_threshold` | `0.7` | Similarity to auto-link memories. |
 | `memory_chunk_size` | `512` | Chunk size (tokens) for indexing. |

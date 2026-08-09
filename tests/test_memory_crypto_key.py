@@ -48,12 +48,65 @@ def test_wrong_length_key_refuses_to_regenerate(monkeypatch):
     assert "memory_encryption_key" not in saved
 
 
-def test_missing_key_generates_once(monkeypatch):
+def test_missing_key_with_no_config_file_mints_once(monkeypatch, tmp_path, caplog):
+    import logging
+    from vaf.core.config import Config
     saved = _with_key(monkeypatch, "")
-    c = MemoryCrypto()
-    assert "memory_encryption_key" in saved  # first-run generation persists
+    monkeypatch.setattr(Config, "CONFIG_FILE", tmp_path / "config.json")
+    with caplog.at_level(logging.WARNING, logger="vaf.memory.crypto"):
+        c = MemoryCrypto()
+    assert "memory_encryption_key" in saved  # genuine first run persists a key
+    assert any("Minted" in r.message for r in caplog.records), "the mint must be loud"
     ct, nonce = c.encrypt("x")
     assert c.decrypt(ct, nonce) == "x"
+
+
+def test_missing_key_with_parseable_config_mints(monkeypatch, tmp_path):
+    """A cleanly-parsed config that genuinely has no key is the documented
+    deliberate reset - minting is allowed."""
+    from vaf.core.config import Config
+    saved = _with_key(monkeypatch, "")
+    p = tmp_path / "config.json"
+    p.write_text('{"provider": "local"}', encoding="utf-8")
+    monkeypatch.setattr(Config, "CONFIG_FILE", p)
+    MemoryCrypto()
+    assert "memory_encryption_key" in saved
+
+
+def test_unparseable_config_refuses_to_mint(monkeypatch, tmp_path):
+    """THE incident pin: a torn config read must never mint a replacement key
+    (a truncated json made Config.load fall back to DEFAULTS, the old code saw
+    "no key" and rotated - orphaning every encrypted row)."""
+    from vaf.core.config import Config
+    saved = _with_key(monkeypatch, "")
+    p = tmp_path / "config.json"
+    p.write_text('{"provider": "loc', encoding="utf-8")  # cut mid-write
+    monkeypatch.setattr(Config, "CONFIG_FILE", p)
+    with pytest.raises(RuntimeError, match="orphan"):
+        MemoryCrypto()
+    assert "memory_encryption_key" not in saved
+
+
+def test_defaults_fallback_read_recovers_the_real_key(monkeypatch, tmp_path):
+    """When the normal read degrades to DEFAULTS ("") but the file actually
+    carries a key, the strict raw read must return THAT key - never mint."""
+    import json as _json
+    from vaf.core.config import Config
+    saved = _with_key(monkeypatch, "")
+    real = secrets.token_bytes(32)
+    p = tmp_path / "config.json"
+    p.write_text(_json.dumps({"memory_encryption_key": base64.b64encode(real).decode()}),
+                 encoding="utf-8")
+    monkeypatch.setattr(Config, "CONFIG_FILE", p)
+    c = MemoryCrypto()
+    assert "memory_encryption_key" not in saved  # nothing minted
+    ct, nonce = c.encrypt("fact")
+    assert c.decrypt(ct, nonce) == "fact"
+
+
+def test_protected_keys_carry_the_memory_encryption_key():
+    from vaf.core.config import Config
+    assert "memory_encryption_key" in Config.PROTECTED_KEYS
 
 
 # ---------------------------------------------------------------------------

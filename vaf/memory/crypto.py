@@ -13,12 +13,17 @@ Provides:
 
 import os
 import base64
+import json
+import logging
 import secrets
+from pathlib import Path
 from typing import Tuple, Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from vaf.core.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryCrypto:
@@ -62,11 +67,9 @@ class MemoryCrypto:
         Recovery is a conscious decision - restore the key from a backup, or
         explicitly clear `memory_encryption_key` in the config to start fresh.
         """
-        encoded_key = Config.get("memory_encryption_key", "")
-
-        if encoded_key:
+        def _decode_or_raise(encoded: str) -> bytes:
             try:
-                key = base64.b64decode(encoded_key, validate=True)
+                key = base64.b64decode(encoded, validate=True)
             except Exception as e:
                 raise RuntimeError(
                     "memory_encryption_key is set but not valid Base64. Refusing to "
@@ -82,9 +85,41 @@ class MemoryCrypto:
                 )
             return key
 
-        # First run: generate and persist a new key
+        encoded_key = Config.get("memory_encryption_key", "")
+        if encoded_key:
+            return _decode_or_raise(encoded_key)
+
+        # The normal read says "no key". NEVER trust that alone: Config.load()
+        # degrades to DEFAULTS on ANY read error, so a torn read during a
+        # concurrent config write looks exactly like a missing key (live
+        # incident: a silently minted replacement orphaned every encrypted
+        # row). Decide on a STRICT raw read of the file instead.
+        cfg_path = Path(Config.CONFIG_FILE)
+        if cfg_path.exists():
+            try:
+                raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                raise RuntimeError(
+                    "config.json exists but could not be parsed while resolving "
+                    "memory_encryption_key. Refusing to mint a replacement key - "
+                    "that would permanently orphan all encrypted memories. Retry "
+                    "after the concurrent config write finishes, or restore "
+                    "config.json from a backup."
+                ) from e
+            stored = str(raw.get("memory_encryption_key") or "")
+            if stored:
+                # The normal read lied (DEFAULTS fallback); use the real key.
+                return _decode_or_raise(stored)
+
+        # Genuine first run (no config file), or a cleanly-parsed config that
+        # really has no key (the documented deliberate reset): mint ONCE, loudly.
         new_key = secrets.token_bytes(self.KEY_SIZE)
         Config.set("memory_encryption_key", base64.b64encode(new_key).decode())
+        logger.warning(
+            "Minted a new memory encryption key and persisted it to %s. Back this "
+            "file up - without the key, encrypted memories are unrecoverable.",
+            Config.CONFIG_FILE,
+        )
         return new_key
     
     def encrypt(self, plaintext: str) -> Tuple[bytes, bytes]:

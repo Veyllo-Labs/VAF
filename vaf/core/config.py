@@ -3,7 +3,9 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import os
 import json
+import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -500,7 +502,7 @@ class Config:
         "resume_compaction_enabled": True,                          # Append deterministic resume block after context compression/checkpoint
         "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # App DATA connection (per-user). At the RLS cutover this becomes the non-superuser role.
         "memory_db_owner_url": "",                                  # Owner/superuser DSN for DDL/migrations/global stats. Empty -> falls back to memory_db_url (correct before cutover); at cutover set this to the OWNER dsn while memory_db_url switches to the non-super role.
-        "memory_encryption_key": "",                               # AES-256 key (Base64, auto-generated if empty)
+        "memory_encryption_key": "",                               # AES-256 key (Base64). Minted once when a CLEANLY-PARSED config genuinely lacks it; an unreadable config refuses to mint (vaf/memory/crypto.py)
         "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model
         "memory_auto_connect_threshold": 0.7,                      # Cosine similarity threshold for auto-connections
         "memory_chunk_size": 512,                                  # Chunk size in tokens
@@ -665,6 +667,67 @@ class Config:
         """Static fallback model list for an API provider (used when no live fetch)."""
         return list(cls.PROVIDER_MODELS.get(provider, {}).get("fallback", []))
 
+    # ── Config-file write safety ────────────────────────────────────────────
+    # config.json is read and written by several processes at once (server,
+    # tray, subagent children). A plain open("w") leaves a window in which a
+    # concurrent reader sees a truncated file; load() then degrades to
+    # DEFAULTS, and a caller like the memory-crypto key loader sees "no key"
+    # on a LIVE installation (live incident: the memory encryption key was
+    # silently re-minted and every already-encrypted row orphaned).
+    # tmp+fsync+os.replace makes every read see either the old or the new
+    # complete file; the file lock closes the read-modify-write lost-update
+    # race between processes (precedent: vaf/core/secure_store.py).
+
+    _filelock = None  # lazy singleton; filelock is reentrant per (instance, thread)
+
+    @classmethod
+    @contextmanager
+    def _locked(cls):
+        """Cross-process lock for config read-modify-write spans. set() ->
+        save() nests cleanly (reentrant). Degrades to unlocked on timeout or
+        when filelock is unavailable - a late write beats no write."""
+        lk = None
+        try:
+            if cls._filelock is None:
+                from filelock import FileLock
+                cls.APP_DIR.mkdir(parents=True, exist_ok=True)
+                cls._filelock = FileLock(str(cls.CONFIG_FILE) + ".lock")
+            lk = cls._filelock
+            lk.acquire(timeout=10)
+        except Exception:
+            lk = None
+        try:
+            yield
+        finally:
+            if lk is not None:
+                try:
+                    lk.release()
+                except Exception:
+                    pass
+
+    @classmethod
+    def _write_config_file(cls, data: dict) -> None:
+        """Atomic write: mkstemp in the SAME directory as the target (0600
+        from birth, and os.replace stays on one filesystem - atomic on POSIX
+        and Windows). Readers never see a partial file; secrets never sit
+        world-readable before hardening."""
+        target_dir = Path(cls.CONFIG_FILE).parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(data, indent=4).encode("utf-8")
+        fd, tmp = tempfile.mkstemp(dir=str(target_dir), prefix=".config-", suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, cls.CONFIG_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
     @classmethod
     def load(cls) -> dict:
         if not cls.CONFIG_FILE.exists():
@@ -688,8 +751,7 @@ class Config:
                         try:
                             _raw, _ = _mig.run_config_migrations(dict(data), _stored_ver)
                             _raw["config_format_version"] = _mig.CONFIG_FORMAT_VERSION
-                            with open(cls.CONFIG_FILE, "w") as _mf:
-                                json.dump(_raw, _mf, indent=4)
+                            cls._write_config_file(_raw)
                         except Exception:
                             pass
             except Exception:
@@ -718,8 +780,7 @@ class Config:
                         _raw = _json.load(_f)
                     if _raw.get("api_model_deepseek") == _ds_saved:
                         _raw["api_model_deepseek"] = _DS_MIGRATIONS[_ds_saved]
-                        with open(cls.CONFIG_FILE, "w") as _f:
-                            _json.dump(_raw, _f, indent=4)
+                        cls._write_config_file(_raw)
                 except Exception:
                     pass
             # Hard lock for hosting mode (server appliance deployments):
@@ -748,6 +809,9 @@ class Config:
         "cloud_credentials_key",
         "secure_store_kek",
         "mail_store_encryption_key",
+        # Losing this one orphans every encrypted memory row (live incident:
+        # a save without it plus the silent first-run mint rotated the key).
+        "memory_encryption_key",
     ]
 
     # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
@@ -1088,9 +1152,13 @@ class Config:
 
     @classmethod
     def set(cls, key: str, value):
-        config = cls.load()
-        config[key] = value
-        cls.save(config)
+        # Locked read-modify-write: without it, two processes saving at once
+        # lose one of the two updates (server + tray + subagent children all
+        # write this file).
+        with cls._locked():
+            config = cls.load()
+            config[key] = value
+            cls.save(config)
     
     @classmethod
     def set_api_key(cls, provider: str, api_key: str):
@@ -1235,32 +1303,34 @@ class Config:
         if not cls.APP_DIR.exists():
             cls.APP_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Load existing to detect changes
-        existing_config = cls.load()
+        # Locked read-modify-write + atomic replace: see the block comment at
+        # _locked/_write_config_file for the incident this prevents.
+        with cls._locked():
+            # Load existing to detect changes
+            existing_config = cls.load()
 
-        # Preserve protected keys from existing config
-        for key in cls.PROTECTED_KEYS:
-            if key in existing_config and key not in config:
-                config[key] = existing_config[key]
+            # Preserve protected keys from existing config
+            for key in cls.PROTECTED_KEYS:
+                if key in existing_config and key not in config:
+                    config[key] = existing_config[key]
 
-        # Central seed point for the Veyllo-key -> default-STT rule (see the method
-        # docstring). Runs here so EVERY write path is covered - web REST/WS, the CLI
-        # provider menu, and any future key-writer - and no path can consume the
-        # absent->present transition without seeding.
-        cls.apply_veyllo_stt_default(existing_config, config)
+            # Central seed point for the Veyllo-key -> default-STT rule (see the method
+            # docstring). Runs here so EVERY write path is covered - web REST/WS, the CLI
+            # provider menu, and any future key-writer - and no path can consume the
+            # absent->present transition without seeding.
+            cls.apply_veyllo_stt_default(existing_config, config)
 
-        # Hosting lock: keep Local Network Hosting enabled if lock is active.
-        force_network = bool(
-            config.get("local_network_force_enabled", existing_config.get("local_network_force_enabled", False))
-        )
-        if force_network:
-            config["local_network_enabled"] = True
-        # Security invariant: it must not be possible to persist network mode with TLS disabled.
-        if bool(config.get("local_network_enabled", False)):
-            config["local_network_tls_enabled"] = True
+            # Hosting lock: keep Local Network Hosting enabled if lock is active.
+            force_network = bool(
+                config.get("local_network_force_enabled", existing_config.get("local_network_force_enabled", False))
+            )
+            if force_network:
+                config["local_network_enabled"] = True
+            # Security invariant: it must not be possible to persist network mode with TLS disabled.
+            if bool(config.get("local_network_enabled", False)):
+                config["local_network_tls_enabled"] = True
 
-        with open(cls.CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
+            cls._write_config_file(config)
 
         # config.json holds secrets (KEK, JWT secret, base64 API keys): owner-only.
         # Lazy import avoids a circular dependency (secure_store imports Config).

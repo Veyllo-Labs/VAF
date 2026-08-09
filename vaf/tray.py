@@ -417,7 +417,7 @@ def start_uvicorn(wait_for_db: bool = True):
         ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
         ssl_key = (Config.get("local_network_ssl_key") or "").strip()
         # Mask the /ws?token=<jwt> query param out of uvicorn's access log.
-        from vaf.core.log_helper import redacted_uvicorn_log_config
+        from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
         _log_cfg = redacted_uvicorn_log_config()
         if tls_enabled and ssl_cert and ssl_key:
             import os
@@ -427,15 +427,18 @@ def start_uvicorn(wait_for_db: bool = True):
                 config = uvicorn.Config(
                     app, host=host, port=8001, log_level="info", use_colors=False,
                     log_config=_log_cfg,
-                    ssl_certfile=ssl_cert, ssl_keyfile=ssl_key
+                    ssl_certfile=ssl_cert, ssl_keyfile=ssl_key,
+                    ws_max_size=WS_MAX_SIZE_BYTES,
                 )
             else:
                 log("Tray", "TLS enabled but cert/key files missing or invalid; starting without TLS")
-                config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg)
+                config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg,
+                                        ws_max_size=WS_MAX_SIZE_BYTES)
         else:
             print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
             log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
-            config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg)
+            config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg,
+                                    ws_max_size=WS_MAX_SIZE_BYTES)
         server = uvicorn.Server(config)
         uvicorn_server = server
 
@@ -465,8 +468,12 @@ def start_uvicorn(wait_for_db: bool = True):
                 try:
                     import asyncio
                     log("Tray", "Starting internal API channel on port 8005...")
+                    # ws_max_size also HERE: the HTTPS proxy relays browser WS
+                    # frames into this channel, so a smaller ceiling on 8005
+                    # would re-cap uploads the front door already accepted.
                     internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False,
-                                                  log_config=redacted_uvicorn_log_config())
+                                                  log_config=redacted_uvicorn_log_config(),
+                                                  ws_max_size=WS_MAX_SIZE_BYTES)
                     internal_srv = uvicorn.Server(internal_cfg)
                     internal_srv.install_signal_handlers = lambda: None
                     internal_api_server = internal_srv  # track so restart/disable can stop it

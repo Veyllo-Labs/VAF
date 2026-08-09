@@ -50,6 +50,15 @@ class RedactTokenFilter(logging.Filter):
         return True
 
 
+# WebSocket frame ceiling for EVERY uvicorn the product starts. base64 attachments
+# inflate by ~4/3, so uvicorn's 16 MB default killed the connection at ~12 MB of
+# raw file - mid-upload, with no message, on the DESKTOP path only: run_server set
+# 200 MB while the tray and the HTTPS proxy built their own uvicorn.Config without
+# it. Shared here next to redacted_uvicorn_log_config (the same "every uvicorn
+# needs it" shape); a pin test walks all uvicorn.Config sites.
+WS_MAX_SIZE_BYTES = 200 * 1024 * 1024
+
+
 def redacted_uvicorn_log_config() -> Dict[str, Any]:
     """uvicorn's default LOGGING_CONFIG with the token-redaction filter wired
     onto the access and default handlers. Passed as uvicorn.Config(log_config=)

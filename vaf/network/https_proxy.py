@@ -219,8 +219,10 @@ async def _forward_websocket(websocket: WebSocket) -> None:
         # so a single frame easily exceeds the websockets client default max_size (1 MB). The default
         # would raise PayloadTooBig on that frame, tear the relay down, and the WebUI would reconnect
         # into an endless flap (auto-loading the same heavy session each time → "connection lost").
-        # The backend is trusted and already bounded by uvicorn's own ws_max_size, so disable the
-        # intermediate limit here.
+        # The backend leg is trusted and bounded by the 8005 channel's ws_max_size
+        # (WS_MAX_SIZE_BYTES - the tray passes it explicitly; for a long time it did
+        # NOT, so this comment claimed a bound that was uvicorn's 16 MB default),
+        # so disable the intermediate limit here.
         async with websockets.connect(backend_uri, additional_headers=extra_headers or None, max_size=None) as backend_ws:
             async def from_backend():
                 try:
@@ -337,6 +339,7 @@ def run_https_proxy(
         app = create_proxy_app()
         # Compatibility: ensure TLS 1.2 clients can connect.
         # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.
+        from vaf.core.log_helper import WS_MAX_SIZE_BYTES
         config = uvicorn.Config(
             app,
             host=host,
@@ -347,6 +350,9 @@ def run_https_proxy(
             ssl_ciphers="DEFAULT",
             log_level="info",
             use_colors=False,
+            # The FRONT door of the LAN path: without this the proxy re-capped
+            # uploads at uvicorn's 16 MB default no matter what the backend allowed.
+            ws_max_size=WS_MAX_SIZE_BYTES,
         )
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None

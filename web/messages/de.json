@@ -139,7 +139,8 @@
     "speakerConfirmSave": "Speichern",
     "speakerConfirmHint": "Deine Antwort ändert nie dein eigenes Stimmprofil.",
     "stopGeneration": "Generierung stoppen",
-    "stoppingGeneration": "Stoppe..."
+    "stoppingGeneration": "Stoppe...",
+    "fileTooLargeToAttach": "Diese Datei ist größer als {limit} MB und kann nicht angehängt werden. Speichere sie auf der Festplatte und bitte mich, sie per Pfad zu lernen oder zu lesen."
   },
   "nav": {
     "settings": "Einstellungen",

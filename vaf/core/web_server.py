@@ -7858,6 +7858,12 @@ def _spawn_attachment_index(manager, session_id: str, user_scope_id, contents: l
     return task
 
 
+# Per-file upload ceiling for chat attachments: 100 MB raw leaves the 200 MB
+# WebSocket frame (WS_MAX_SIZE_BYTES) headroom after base64's ~1.37x inflation.
+# The client gates before encoding with the same number.
+_MAX_ATTACH_BYTES = 100 * 1024 * 1024
+
+
 async def process_files_to_sidebar_list(files: list) -> list:
     """
     Process uploaded files and return a list of {name, content, data?, mimeType?, path?} for sidebar_documents.
@@ -7894,6 +7900,21 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 name=filename, mime=mime_type, ext=file_ext,
                 base64_len=len(base64_part), decoded_bytes=len(decoded_data))
 
+            # Server-side half of the size gate (the client checks before
+            # encoding; a non-VAF client does not). Named limit instead of the
+            # old behavior - nothing at all, until the 200 MB WS frame ceiling
+            # dropped the whole connection with no message.
+            if len(decoded_data) > _MAX_ATTACH_BYTES:
+                results.append({
+                    "name": filename,
+                    "content": (f"[ERROR] {filename} exceeds the "
+                                f"{_MAX_ATTACH_BYTES // (1024 * 1024)} MB upload limit "
+                                f"({len(decoded_data) // (1024 * 1024)} MB). Save it to "
+                                f"disk and learn or read it by path instead."),
+                    "path": "Hochgeladen über Web-UI (kein lokaler Pfad)",
+                })
+                continue
+
             with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
                 temp_path = temp_file.name
@@ -7914,7 +7935,10 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 _ctype = "TEXT"
                 if "[ERROR]" in (content or "")[:80]:
                     _ctype = "ERROR"
-                elif "[Scanned PDF" in (content or "")[:200]:
+                elif ("[No text layer" in (content or "")[:400]
+                      or "[No readable text" in (content or "")[:400]):
+                    # format_pdf_read_result's empty markers (the old hand-rolled
+                    # "[Scanned PDF" string is gone).
                     _ctype = "SCANNED_NO_TEXT"
                 elif "[INFO]" in (content or "")[:80] and "Auto-Chunk" in (content or "")[:200]:
                     _ctype = "CHUNKED"
@@ -8027,18 +8051,20 @@ def run_server(host="127.0.0.1", port=8001):
     # Allow large PDF/file attachments: base64-encoded image-heavy PDFs can easily exceed
     # uvicorn's default ws_max_size (16 MB), causing the server to close the WebSocket
     # connection mid-upload (frontend shows "Verbindung wird wiederhergestellt").
-    ws_max_size = 200 * 1024 * 1024  # 200 MB
+    # Shared constant: the tray and the HTTPS proxy start their own uvicorns and
+    # carried the 16 MB default while this value sat only here.
+    from vaf.core.log_helper import WS_MAX_SIZE_BYTES
 
     if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
         config = uvicorn.Config(
             app=app, host=host, port=port, loop="asyncio", log_level="error",
             ssl_certfile=ssl_cert, ssl_keyfile=ssl_key,
-            ws_max_size=ws_max_size,
+            ws_max_size=WS_MAX_SIZE_BYTES,
         )
         log("WebServer", f"Starting with TLS (HTTPS/WSS) on {host}:{port}")
     else:
         config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error",
-                                ws_max_size=ws_max_size)
+                                ws_max_size=WS_MAX_SIZE_BYTES)
         if tls_enabled:
             log("WebServer", f"WARNING: TLS enabled but no certificates available, running HTTP on {host}:{port}")
     server = uvicorn.Server(config)

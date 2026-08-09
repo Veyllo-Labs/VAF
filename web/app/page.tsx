@@ -4795,7 +4795,22 @@ function VAFDashboardContent() {
         if (imageFiles.length > 0) addImagesAsAttachments(imageFiles);
 
         const nonImageFiles = newFiles.filter(f => !f.type.startsWith('image/'));
+        // Size gate BEFORE base64: encoding inflates by ~1.37x, and the server's
+        // WebSocket frame ceiling is 200 MB - 100 MB per file leaves the frame
+        // headroom. Without this gate the socket simply dropped mid-upload and
+        // the user saw only the reconnect banner.
+        const MAX_ATTACH_BYTES = 100 * 1024 * 1024;
+        const tooBig = nonImageFiles.filter(f => f.size > MAX_ATTACH_BYTES);
+        if (tooBig.length > 0) {
+            const names = tooBig.map(f => `${f.name} (${Math.round(f.size / (1024 * 1024))} MB)`).join(', ');
+            setMessages(prev => [...prev, {
+                role: 'system',
+                content: `⚠️ ${names}: ${tMain('fileTooLargeToAttach', { limit: 100 })}`,
+                timestamp: Date.now(),
+            }]);
+        }
         const filtered = nonImageFiles.filter(f => {
+            if (f.size > MAX_ATTACH_BYTES) return false;
             const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase();
             return acceptedExtensions.has(ext);
         });

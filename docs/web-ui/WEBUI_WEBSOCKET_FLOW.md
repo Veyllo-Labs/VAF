@@ -328,7 +328,7 @@ If the tool card expands but the panel does not open:
 | Messages in wrong order after reload | Timestamp sort mixed client/server times; orphan cache messages misplaced | Removed timestamp sort; added turn-based role sort as safety net |
 | Automation result not shown in WebUI (only created files appear) | Result delivered via streaming `agent_message_update`, which overwrote/dropped the bubble when no live turn was active; the `session_unread` fallback was filtered out by the cross-session guard | Deliver results via `agent_message_append` (always appends a new bubble); allow `session_unread` and `agent_message_append` through the cross-session filter |
 | Chat empty after app start until switching sessions and back | `session_list` auto-select sent `load_session` via the `ws` STATE variable, which the `onmessage` closure captured as `null` on the first connect - the send silently did nothing | Handlers send via `wsSocketRef.current` (set before `onopen`) instead of the captured state |
-| LAN WebUI keeps reconnecting / connection lost on a heavy session | Oversized `history_update` frame (inline base64 images) exceeded the proxy relay's default 1 MB per-frame cap (`PayloadTooBig`), tearing down the relay | Proxy relay connects to the backend with `max_size=None`; backend bounded by uvicorn `ws_max_size` |
+| LAN WebUI keeps reconnecting / connection lost on a heavy session | Oversized `history_update` frame (inline base64 images) exceeded the proxy relay's default 1 MB per-frame cap (`PayloadTooBig`), tearing down the relay | Proxy relay connects to the backend with `max_size=None`; every uvicorn passes `WS_MAX_SIZE_BYTES` (200 MB) explicitly - see WebSocket Frame Sizing below |
 
 ## Message Ordering (history_update)
 
@@ -353,9 +353,14 @@ The proxy WS relay (`vaf/network/https_proxy.py`) connects to the backend with `
 A `history_update` frame can embed inline base64 images, which pushes a single frame past the
 `websockets` library default of 1 MB per frame. Without `max_size=None`, the relay raises
 `PayloadTooBig` and tears down the connection, so a LAN client reconnect-loops with "connection
-lost" on a heavy session. The backend side remains bounded by uvicorn's `ws_max_size`
-(`vaf/core/web_server.py`), so frames are not unbounded - the relay just stops capping below the
-backend's limit.
+lost" on a heavy session. The bound is `WS_MAX_SIZE_BYTES` (200 MB,
+`vaf/core/log_helper.py`), passed explicitly by EVERY uvicorn the product starts:
+`run_server`, both tray lanes (main port and the internal 8005 channel the proxy relays
+into) and the proxy's own front listener; a pin test walks all `uvicorn.Config` sites.
+Until this was shared, only `run_server` set it - the desktop/tray path capped at
+uvicorn's 16 MB default, and an attachment above ~12 MB raw died mid-upload with
+nothing but the reconnect banner. Chat attachments carry an additional named 100 MB
+per-file gate on both sides (client before base64, server after decoding).
 
 ## Key Files
 

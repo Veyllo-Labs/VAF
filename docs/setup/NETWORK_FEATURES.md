@@ -435,7 +435,7 @@ Uvicorn + FastAPI (127.0.0.1:8005)
 Route Handler (reads request.state.user for identity & scoping)
 ```
 
-The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the WebSocket it relays. This lets oversized frames pass through untouched - for example a `history_update` that embeds inline base64 images can exceed the default WebSocket frame limit. The effective upper bound is the backend's own `ws_max_size` (configured at roughly 200 MB in `vaf/core/web_server.py`), not the library's 16 MB default. Without this, the relay raised `PayloadTooBig` on the oversized frame and the LAN Web UI reconnect-flapped with a "connection lost" loop.
+The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the backend leg. The effective bound is `WS_MAX_SIZE_BYTES` (200 MB, `vaf/core/log_helper.py`), which EVERY uvicorn the product starts now passes explicitly: `run_server`, the tray's own `start_uvicorn` (main port AND the internal 8005 channel this proxy relays into), and the proxy's front listener - a pin test walks all `uvicorn.Config` sites. For a long time only `run_server` set it, so the desktop/tray path and the LAN front door silently capped frames at uvicorn's 16 MB default: an upload above ~12 MB raw (base64 inflates by ~4/3) dropped the connection mid-transfer with nothing but the reconnect banner. Attachments are additionally gated at 100 MB per file on BOTH sides (client before encoding, server after decoding) with a named error instead of a dropped socket.
 
 ---
 

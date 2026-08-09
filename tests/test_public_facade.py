@@ -47,7 +47,7 @@ def test_facade_exports_exactly_the_documented_surface():
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
         "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "__version__",
-        "markers", "set_account_allowlist_resolver", "user_jail",
+        "extract_pdf_markdown", "markers", "set_account_allowlist_resolver", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
 
@@ -63,6 +63,10 @@ def test_the_newly_public_names_actually_resolve():
     assert vaf.ToolRequest.__name__ == "ToolRequest"
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
+    # Document extraction: exported because two in-tree consumers hand-rolled
+    # byte-identical truncations over private imports - an embedder has the
+    # same need. Import must stay cheap (stdlib at module level).
+    assert callable(vaf.extract_pdf_markdown)
     assert callable(vaf.set_account_allowlist_resolver)
 
 

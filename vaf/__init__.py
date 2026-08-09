@@ -10,13 +10,14 @@ if TYPE_CHECKING:
     # API to the real classes so `from vaf import Agent` autocompletes and type-checks.
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
+    from .core.pdf_extract import extract_pdf_markdown
     from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
 __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest",
-           "markers", "set_account_allowlist_resolver", "user_jail"]
+           "extract_pdf_markdown", "markers", "set_account_allowlist_resolver", "user_jail"]
 
 
 def __getattr__(name):
@@ -62,6 +63,16 @@ def __getattr__(name):
         # underneath, so the slim base is unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import set_account_allowlist_resolver
         return set_account_allowlist_resolver
+    if name == "extract_pdf_markdown":
+        # PDF -> Markdown with honest coverage facts (pages_read/total_pages/
+        # truncated, absolute page markers, OCR reason). Exported because in-tree
+        # consumers hand-rolled byte-identical truncations twice over private
+        # imports - an embedder building a document lane has the same need and
+        # had no supported way in. Module is stdlib at import time (pdfplumber/
+        # PyPDF2 load on call, `vaf[pdf]` extra), so the slim base is unaffected.
+        # See docs/EMBEDDING.md.
+        from .core.pdf_extract import extract_pdf_markdown
+        return extract_pdf_markdown
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

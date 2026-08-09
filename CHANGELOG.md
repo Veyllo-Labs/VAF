@@ -21,6 +21,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Reading a huge PDF no longer eats gigabytes.** The PDF reader kept every
   page in memory until the end - measured 9 GB for a 1000-page book. Pages are
   now released as they are read: same output, byte for byte, at 0.7 GB.
+
+### Added
+- **"Read pages 100-120" of a PDF now actually works.** The tip existed, the
+  feature did not: every PDF read took the first 50 pages and silently cut the
+  rest. Both read lanes accept a page range now, and every PDF answer says
+  honestly which pages of how many it covers and how to continue - instead of
+  a bare "(truncated)".
 - **A local model that can see images finally does.** Local vision only
   worked if you had explicitly set the vision provider to "local" - leaving
   it on its default meant the local server started without the image

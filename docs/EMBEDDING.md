@@ -1005,9 +1005,22 @@ Stable public surface (safe to build on):
   with the contract its section documents (None/unregistered = unrestricted,
   empty = nothing, exemptions framework-side, raising = refusal, and the
   `VAF_ALLOWED_TOOLS` child-process transport).
+- `vaf.extract_pdf_markdown(path, max_pages=None, ocr_fallback=True, *,
+  first_page=1, cancel=None)` - PDF to Markdown with honest coverage facts.
+  The result dict is the contract: `markdown`, `total_pages`, `pages_read`,
+  `first_page`, `truncated`, `used_ocr`, `method`, `ocr_unavailable_reason`
+  (and `num_pages` as a backward-compat alias of `total_pages`). Pages are
+  streamed - memory stays flat over any document size - and page markers carry
+  absolute numbers, so a slice read cites correctly. `max_pages=None` reads
+  everything; `cancel` is polled once per page (pass your own check from a
+  background job - the default only fires on VAF's in-tool lanes). When a
+  scanned document cannot be OCRed, `ocr_unavailable_reason` names why
+  (missing binary, missing language data, timeout) instead of the result
+  looking like an empty document. Needs the `vaf[pdf]` extra at call time;
+  `import vaf` stays cheap.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
-`vaf.ToolCaller`, `vaf.ToolRequest` and `vaf.set_account_allowlist_resolver` are the
-deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and
-the façade names are the ones to import.
+`vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver` and
+`vaf.extract_pdf_markdown` are the deliberate exceptions: they live in `vaf.core`
+but are re-exported on the façade, and the façade names are the ones to import.

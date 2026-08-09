@@ -12,6 +12,30 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Your memory encryption key can no longer be silently replaced.** The
+  config file is written by several processes at once, and a reader that
+  caught it mid-write saw an empty file, concluded "no key yet" and minted a
+  fresh one - permanently locking every already-encrypted memory. Config
+  writes are now atomic (a reader always sees a complete file), concurrent
+  writers are serialized, a save that omits the key keeps the stored one, and
+  the key loader re-reads the raw file and refuses to mint while the file
+  cannot be parsed. Minting a first-run key is now logged loudly.
+- **A rotated memory key is recoverable: `vaf memory rekey`.** If memories
+  show "[Decryption failed]" because the key changed, the new command
+  re-encrypts every affected row from a config backup that still carries the
+  previous key (dry-run first; rows neither key opens are counted and never
+  touched).
+- **Table-of-contents pages are no longer learned as knowledge.** Learning a
+  document skipped nothing before: the contents/list-of-tables pages became
+  stored "knowledge" full of dot leaders and wasted one model call each. They
+  are now detected and skipped in both the learning and the attachment
+  indexing lane, and the completion message names how many were skipped.
+- **The memory graph shows ALL memories again.** It used to load only the 100
+  most recently changed entries, so learning a large document pushed every
+  older memory out of sight. The graph now renders the whole store of the
+  current user on a WebGL canvas (force-directed layout, node size by
+  connections, labels on zoom, click a legend entry to filter a type) and
+  updates right after a document finishes learning.
 - **The agent no longer "thinks without answering".** Some API models
   intermittently emit their tool call as plain text instead of through the
   tool channel; the turn then ended with a visible thought and nothing else,

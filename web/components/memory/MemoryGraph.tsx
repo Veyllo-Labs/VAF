@@ -4,269 +4,29 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 /**
- * Memory Graph visualization using ReactFlow.
+ * Memory Graph on Sigma.js (WebGL) + graphology ForceAtlas2.
  *
- * Features:
- * - Custom memory nodes with preview
- * - Edge thickness based on connection strength
- * - Node highlighting for RAG sources
- * - Interactive selection and navigation
- * - Position persistence (localStorage)
- * - Connected node highlighting with fade effect
- * - Collision detection for node positioning
+ * The previous ReactFlow renderer rebuilt hundreds of DOM nodes on every
+ * selection and hid everything beyond a 100-node window. This renderer draws
+ * the WHOLE store (limit=0) the way large-graph tools do (Gephi/Obsidian
+ * pattern): force-directed layout, node size by degree, labels appear on
+ * zoom, selection and hover restyle via reducers - the graph itself is never
+ * rebuilt for a click.
+ *
+ * Deliberate boundaries: no drag-persisted positions (the force layout owns
+ * placement, recomputed per load with seeded randomness), and no draw-an-edge
+ * tag linking (the Link Tags modal covers that path).
  */
 
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
-import ReactFlow, {
-    Node,
-    Edge,
-    Background,
-    Controls,
-    MiniMap,
-    useNodesState,
-    useEdgesState,
-    NodeTypes,
-    NodeProps,
-    Handle,
-    Position,
-    MarkerType,
-    Connection,
-    ConnectionLineType,
-    getSmoothStepPath,
-    NodeChange,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import { useMemoryStore, MemoryNode, MemoryEdge } from './stores/memoryStore';
-import { FileText, Tag, Calendar, Link2, RefreshCw, BookOpen } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Graph from 'graphology';
+import forceAtlas2 from 'graphology-layout-forceatlas2';
+import type Sigma from 'sigma';
+import { useMemoryStore } from './stores/memoryStore';
+import { FileText, Maximize2, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Constants for collision detection
-const NODE_WIDTH = 240;
-const NODE_HEIGHT = 120;
-const TAG_NODE_WIDTH = 150;
-const TAG_NODE_HEIGHT = 60;
-const COLLISION_PADDING = 20;
-
-// localStorage key for positions
-const POSITIONS_STORAGE_KEY = 'vaf-memory-graph-positions';
-
-// Helper: Load saved positions from localStorage
-function loadSavedPositions(): Record<string, { x: number; y: number }> {
-    if (typeof window === 'undefined') return {};
-    try {
-        const saved = localStorage.getItem(POSITIONS_STORAGE_KEY);
-        return saved ? JSON.parse(saved) : {};
-    } catch {
-        return {};
-    }
-}
-
-// Helper: Save positions to localStorage
-function savePositions(positions: Record<string, { x: number; y: number }>) {
-    if (typeof window === 'undefined') return;
-    try {
-        localStorage.setItem(POSITIONS_STORAGE_KEY, JSON.stringify(positions));
-    } catch {
-        // Ignore storage errors
-    }
-}
-
-// Helper: Check if two rectangles overlap
-function rectsOverlap(
-    r1: { x: number; y: number; width: number; height: number },
-    r2: { x: number; y: number; width: number; height: number }
-): boolean {
-    return !(
-        r1.x + r1.width + COLLISION_PADDING < r2.x ||
-        r2.x + r2.width + COLLISION_PADDING < r1.x ||
-        r1.y + r1.height + COLLISION_PADDING < r2.y ||
-        r2.y + r2.height + COLLISION_PADDING < r1.y
-    );
-}
-
-// Helper: Multi-cluster sunflower — one flower per memory type.
-// Tags are placed as an aura around their primary cluster, or between clusters for cross-references.
-function applyMultiClusterLayout(nodes: Node[], storeEdges: MemoryEdge[]): Node[] {
-    const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-    const INNER_SCALE = 200;
-    const TAG_AURA_GAP = 160; // distance from cluster edge to tag ring
-
-    const memNodes = nodes.filter(n => n.type !== 'tagNode');
-    const tagNodes = nodes.filter(n => n.type === 'tagNode');
-
-    // Group memory nodes by type in legend order
-    const TYPE_ORDER = ['note', 'document', 'code', 'conversation', 'memory_flush', 'knowledge', 'document_index'];
-    const typeGroups = new Map<string, Node[]>();
-    for (const node of memNodes) {
-        const t = (node.data.type as string) ?? 'note';
-        if (!typeGroups.has(t)) typeGroups.set(t, []);
-        typeGroups.get(t)!.push(node);
-    }
-    const groups: [string, Node[]][] = [
-        ...TYPE_ORDER.filter(t => typeGroups.has(t)).map(t => [t, typeGroups.get(t)!] as [string, Node[]]),
-        ...[...typeGroups.entries()].filter(([t]) => !TYPE_ORDER.includes(t)),
-    ];
-
-    const numGroups = groups.length;
-    if (numGroups === 0) return nodes;
-
-    const maxNodes = Math.max(...groups.map(([, ns]) => ns.length));
-    const clusterR = INNER_SCALE * Math.sqrt(maxNodes + 1) + 120;
-    const metaRadius = numGroups === 1 ? 0 : clusterR * 1.8;
-
-    const tagKey = (n: Node) =>
-        ((n.data.tags as string[] | undefined) ?? []).slice().sort().join('|');
-
-    const result: Node[] = [];
-    const clusterCenters = new Map<string, { x: number; y: number }>();
-
-    // Place memory nodes in their type-cluster
-    groups.forEach(([type, typeNodes], gi) => {
-        const clusterAngle = (gi / numGroups) * 2 * Math.PI - Math.PI / 2;
-        const cx = metaRadius * Math.cos(clusterAngle);
-        const cy = metaRadius * Math.sin(clusterAngle);
-        clusterCenters.set(type, { x: cx, y: cy });
-
-        [...typeNodes]
-            .sort((a, b) => tagKey(a).localeCompare(tagKey(b)))
-            .forEach((node, i) => {
-                const r = i === 0 ? 0 : INNER_SCALE * Math.sqrt(i);
-                const angle = i * GOLDEN_ANGLE;
-                result.push({ ...node, position: { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) } });
-            });
-    });
-
-    // Build nodeId → memoryType map for edge-based tag routing
-    const nodeTypeMap = new Map(memNodes.map(n => [n.id, (n.data.type as string) ?? 'note']));
-
-    // For each tag: collect which memory types it connects to
-    const tagToTypes = new Map<string, Set<string>>();
-    for (const edge of storeEdges) {
-        for (const [tagId, otherId] of [[edge.source, edge.target], [edge.target, edge.source]] as [string, string][]) {
-            if (!tagId.startsWith('tag-')) continue;
-            const memType = nodeTypeMap.get(otherId);
-            if (!memType) continue;
-            if (!tagToTypes.has(tagId)) tagToTypes.set(tagId, new Set());
-            tagToTypes.get(tagId)!.add(memType);
-        }
-    }
-
-    // Counters per cluster for golden-angle distribution in aura ring
-    const auraCount = new Map<string, number>();
-    // Counters per cross-cluster key to spread overlapping cross tags
-    const crossCount = new Map<string, number>();
-
-    tagNodes.forEach((tagNode, fi) => {
-        const types = tagToTypes.get(tagNode.id) ?? new Set<string>();
-
-        if (types.size === 0) {
-            // Unconnected tag → outermost ring
-            const outerR = metaRadius + clusterR + TAG_AURA_GAP + 200;
-            const angle = (fi / Math.max(tagNodes.length, 1)) * 2 * Math.PI;
-            result.push({ ...tagNode, position: { x: outerR * Math.cos(angle), y: outerR * Math.sin(angle) } });
-            return;
-        }
-
-        if (types.size === 1) {
-            // Single-cluster tag → aura ring around that cluster
-            const [primaryType] = types;
-            const center = clusterCenters.get(primaryType) ?? { x: 0, y: 0 };
-            const idx = auraCount.get(primaryType) ?? 0;
-            auraCount.set(primaryType, idx + 1);
-            const r = clusterR + TAG_AURA_GAP;
-            const angle = idx * GOLDEN_ANGLE;
-            result.push({ ...tagNode, position: { x: center.x + r * Math.cos(angle), y: center.y + r * Math.sin(angle) } });
-        } else {
-            // Cross-cluster tag → centroid between the involved cluster centers
-            let cx = 0, cy = 0;
-            for (const t of types) {
-                const c = clusterCenters.get(t) ?? { x: 0, y: 0 };
-                cx += c.x; cy += c.y;
-            }
-            cx /= types.size; cy /= types.size;
-
-            const crossKey = [...types].sort().join('|');
-            const idx = crossCount.get(crossKey) ?? 0;
-            crossCount.set(crossKey, idx + 1);
-            // Spread multiple cross-tags in a small ring around the centroid
-            const spreadR = 80 + idx * 60;
-            const spreadAngle = idx * GOLDEN_ANGLE;
-            result.push({
-                ...tagNode,
-                position: { x: cx + spreadR * Math.cos(spreadAngle), y: cy + spreadR * Math.sin(spreadAngle) },
-            });
-        }
-    });
-
-    return result;
-}
-
-// Helper: Apply collision detection to prevent overlapping
-function applyCollisionDetection(nodes: Node[]): Node[] {
-    if (nodes.length > 50) return nodes;
-    const result = [...nodes];
-    const maxIterations = 50;
-
-    for (let iter = 0; iter < maxIterations; iter++) {
-        let hasCollision = false;
-
-        for (let i = 0; i < result.length; i++) {
-            const nodeA = result[i];
-            const widthA = nodeA.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
-            const heightA = nodeA.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
-
-            for (let j = i + 1; j < result.length; j++) {
-                const nodeB = result[j];
-                const widthB = nodeB.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
-                const heightB = nodeB.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
-
-                const rectA = { x: nodeA.position.x, y: nodeA.position.y, width: widthA, height: heightA };
-                const rectB = { x: nodeB.position.x, y: nodeB.position.y, width: widthB, height: heightB };
-
-                if (rectsOverlap(rectA, rectB)) {
-                    hasCollision = true;
-
-                    // Calculate push direction
-                    const centerAX = rectA.x + rectA.width / 2;
-                    const centerAY = rectA.y + rectA.height / 2;
-                    const centerBX = rectB.x + rectB.width / 2;
-                    const centerBY = rectB.y + rectB.height / 2;
-
-                    const dx = centerBX - centerAX;
-                    const dy = centerBY - centerAY;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                    // Push apart
-                    const pushForce = 30;
-                    const pushX = (dx / dist) * pushForce;
-                    const pushY = (dy / dist) * pushForce;
-
-                    result[i] = {
-                        ...result[i],
-                        position: {
-                            x: result[i].position.x - pushX,
-                            y: result[i].position.y - pushY
-                        }
-                    };
-                    result[j] = {
-                        ...result[j],
-                        position: {
-                            x: result[j].position.x + pushX,
-                            y: result[j].position.y + pushY
-                        }
-                    };
-                }
-            }
-        }
-
-        if (!hasCollision) break;
-    }
-
-    return result;
-}
-
-// Type-to-stroke-color map (matches node border colors)
-const TYPE_STROKE_COLORS: Record<string, string> = {
+const TYPE_COLORS: Record<string, string> = {
     note: '#60a5fa',
     conversation: '#fb923c',
     memory_flush: '#fb923c',
@@ -275,259 +35,41 @@ const TYPE_STROKE_COLORS: Record<string, string> = {
     knowledge: '#14b8a6',
     document_index: '#f59e0b',
 };
-const DEFAULT_STROKE = '#9ca3af';
+const DEFAULT_COLOR = '#9ca3af';
+const TAG_COLOR = '#8b5cf6';
+const FADED_COLOR = '#d1d5db';
+const HIGHLIGHT_COLOR = '#f97316';
 
-// Custom ConnectionLine: stroke color matches source memory type (orange memory → orange line)
-function MemoryConnectionLine(props: {
-    fromNode?: { data?: { type?: string; isTagNode?: boolean } };
-    fromX: number;
-    fromY: number;
-    toX: number;
-    toY: number;
-    fromPosition: Position;
-    toPosition: Position;
-}) {
-    const { fromNode, fromX, fromY, toX, toY, fromPosition, toPosition } = props;
-    const memoryType = fromNode?.data?.isTagNode ? null : (fromNode?.data?.type ?? 'default');
-    const stroke = memoryType ? (TYPE_STROKE_COLORS[memoryType] ?? DEFAULT_STROKE) : '#8b5cf6';
-    const [path] = getSmoothStepPath({ sourceX: fromX, sourceY: fromY, targetX: toX, targetY: toY, sourcePosition: fromPosition, targetPosition: toPosition });
-    return (
-        <g>
-            <path fill="none" stroke={stroke} strokeWidth={2} d={path} />
-            <circle cx={toX} cy={toY} fill="#fff" r={3} stroke={stroke} strokeWidth={2} />
-        </g>
-    );
+const LEGEND: Array<{ type: string; label: string; color: string }> = [
+    { type: 'note', label: 'Note', color: TYPE_COLORS.note },
+    { type: 'conversation', label: 'Conversation', color: TYPE_COLORS.conversation },
+    { type: 'document', label: 'Document', color: TYPE_COLORS.document },
+    { type: 'code', label: 'Code', color: TYPE_COLORS.code },
+    { type: 'knowledge', label: 'Knowledge', color: TYPE_COLORS.knowledge },
+    { type: 'other', label: 'Other', color: DEFAULT_COLOR },
+];
+const KNOWN_TYPES = new Set(Object.keys(TYPE_COLORS));
+
+// Deterministic per-node start positions: the layout is reproducible across
+// loads without persisting anything.
+function seededXY(id: string): { x: number; y: number } {
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) {
+        h ^= id.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    const a = ((h >>> 0) % 10000) / 10000;
+    const b = (Math.imul(h, 48271) >>> 0) % 10000 / 10000;
+    return { x: (a - 0.5) * 100, y: (b - 0.5) * 100 };
 }
 
-// Custom Memory Node Component
-const MemoryNodeComponent = React.memo(({ data, selected }: NodeProps) => {
-    const typeColors: Record<string, string> = {
-        note: 'border-blue-400 bg-blue-50',           // memory_save, auto_capture
-        document: 'border-purple-400 bg-purple-50',
-        code: 'border-green-400 bg-green-50',
-        conversation: 'border-orange-400 bg-orange-50',  // compaction (15 msgs)
-        memory_flush: 'border-orange-400 bg-orange-50',  // legacy compaction – same as conversation
-        knowledge: 'border-teal-400 bg-teal-50',         // learned durable knowledge
-        document_index: 'border-amber-500 bg-amber-50',  // book root node (learn_document)
-        default: 'border-gray-400 bg-gray-50'
-    };
+function legendKey(memType: string | undefined): string {
+    if (!memType) return 'other';
+    if (memType === 'memory_flush') return 'conversation';
+    if (memType === 'document_index') return 'document';
+    return KNOWN_TYPES.has(memType) ? memType : 'other';
+}
 
-    const typeColor = typeColors[data.type] || typeColors.default;
-    const isFaded = data.isFaded;
-
-    return (
-        <div
-            className={cn(
-                'min-w-[200px] max-w-[280px] rounded-xl border-2 shadow-sm transition-all duration-300',
-                typeColor,
-                selected && 'ring-2 ring-gray-400 shadow-md',
-                data.isHighlighted && 'ring-2 ring-yellow-500 shadow-lg scale-105 z-10'
-            )}
-            style={{ opacity: isFaded ? 0.4 : 1 }}
-        >
-            {/* Top/Bottom: memory ↔ tag (add tag to memory) */}
-            <Handle
-                type="target"
-                position={Position.Top}
-                id="top"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Top}
-                id="top-src"
-                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="target"
-                position={Position.Bottom}
-                id="bottom"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Bottom}
-                id="bottom-src"
-                className="w-2 h-2 bg-purple-400 border border-white opacity-30 hover:opacity-100"
-            />
-
-            {/* Header */}
-            <div className="px-3 py-2 border-b border-gray-200 bg-white/50 rounded-t-xl">
-                <div className="flex items-center gap-2">
-                    {data.type === 'document_index'
-                        ? <BookOpen className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                        : <FileText className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                    }
-                    <span className="font-medium text-sm text-gray-800 truncate">
-                        {data.label}
-                    </span>
-                </div>
-
-                {/* Relevance badge */}
-                {data.relevance > 0 && (
-                    <div className="mt-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                            {Math.round(data.relevance * 100)}% match
-                        </span>
-                    </div>
-                )}
-            </div>
-
-            {/* Body */}
-            <div className="px-3 py-2">
-                {/* Preview text */}
-                {data.preview && (
-                    <p className="text-xs text-gray-600 line-clamp-2 mb-2">
-                        {data.preview}
-                    </p>
-                )}
-
-                {/* Tags */}
-                {data.tags && data.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-2">
-                        {data.tags.slice(0, 3).map((tag: string, idx: number) => (
-                            <span
-                                key={idx}
-                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-gray-200 text-gray-700"
-                            >
-                                <Tag className="w-2.5 h-2.5" />
-                                {tag}
-                            </span>
-                        ))}
-                        {data.tags.length > 3 && (
-                            <span className="text-[10px] text-gray-500">
-                                +{data.tags.length - 3}
-                            </span>
-                        )}
-                    </div>
-                )}
-
-                {/* Footer meta */}
-                <div className="flex items-center justify-between text-[10px] text-gray-500">
-                    <div className="flex items-center gap-1">
-                        {data.type === 'document_index' ? (
-                            <>
-                                <BookOpen className="w-3 h-3" />
-                                <span>{data.pageCount ?? data.chunkCount} pages</span>
-                            </>
-                        ) : (
-                            <>
-                                <Link2 className="w-3 h-3" />
-                                <span>{data.chunkCount} chunks</span>
-                            </>
-                        )}
-                    </div>
-                    {data.createdAt && (
-                        <div className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3" />
-                            <span>{new Date(data.createdAt).toLocaleDateString()}</span>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}, (prev, next) =>
-    prev.selected === next.selected &&
-    prev.data.isFaded === next.data.isFaded &&
-    prev.data.isHighlighted === next.data.isHighlighted &&
-    prev.data.label === next.data.label &&
-    prev.data.relevance === next.data.relevance
-);
-
-// Custom Tag Master Node Component - Rectangular style matching popup design
-const TagNodeComponent = React.memo(({ data, selected }: NodeProps) => {
-    const isFaded = data.isFaded;
-
-    return (
-        <div
-            className={cn(
-                'min-w-[120px] max-w-[180px] rounded-xl border-2 shadow-sm transition-all duration-300',
-                'border-gray-300 bg-gray-50',
-                selected && 'ring-2 ring-purple-400 shadow-md',
-                data.isHighlighted && 'ring-2 ring-purple-500 shadow-lg scale-105 z-10'
-            )}
-            style={{ opacity: isFaded ? 0.4 : 1 }}
-        >
-            {/* All 4 sides: memory ↔ tag (add tag to memory) – for clearer connections */}
-            <Handle
-                type="target"
-                position={Position.Top}
-                id="top"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Top}
-                id="top-src"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="target"
-                position={Position.Bottom}
-                id="bottom"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Bottom}
-                id="bottom-src"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="target"
-                position={Position.Left}
-                id="left"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Left}
-                id="left-src"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="target"
-                position={Position.Right}
-                id="right"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-            <Handle
-                type="source"
-                position={Position.Right}
-                id="right-src"
-                className="w-2 h-2 bg-gray-400 border border-white opacity-30 hover:opacity-100"
-            />
-
-            {/* Tag content - matching popup style */}
-            <div className="px-3 py-2">
-                <div className="flex items-center gap-2">
-                    <Tag className="w-4 h-4 text-purple-500 flex-shrink-0" />
-                    <span className="font-medium text-sm text-gray-800 truncate">
-                        {data.label}
-                    </span>
-                </div>
-                <div className="text-[10px] text-gray-500 mt-1">
-                    {data.memoryCount || 0} memories
-                </div>
-            </div>
-        </div>
-    );
-}, (prev, next) =>
-    prev.selected === next.selected &&
-    prev.data.isFaded === next.data.isFaded &&
-    prev.data.isHighlighted === next.data.isHighlighted &&
-    prev.data.label === next.data.label &&
-    prev.data.memoryCount === next.data.memoryCount
-);
-
-// Node types for ReactFlow
-const nodeTypes: NodeTypes = {
-    memoryNode: MemoryNodeComponent,
-    tagNode: TagNodeComponent,
-};
-
-// Props for MemoryGraph component
 interface MemoryGraphProps {
     className?: string;
     onNodeSelect?: (nodeId: string | null) => void;
@@ -544,266 +86,215 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         isLoading,
         stats,
         fetchGraph,
-        addTagToMemory,
     } = useMemoryStore();
 
-    // Toast state for connection feedback
-    const [connectionToast, setConnectionToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({
-        show: false,
-        message: '',
-        type: 'success'
-    });
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const sigmaRef = useRef<Sigma | null>(null);
+    const graphRef = useRef<Graph | null>(null);
 
-    // Track saved positions
-    const savedPositionsRef = useRef<Record<string, { x: number; y: number }>>(loadSavedPositions());
+    // Reducer inputs live in refs: changing them restyles via refresh() and
+    // never rebuilds graph or renderer (the ReactFlow version rebuilt every
+    // node object per click - the click latency the rewrite removes).
+    const selectedRef = useRef<string | null>(null);
+    const neighborsRef = useRef<Set<string>>(new Set());
+    const hoveredRef = useRef<string | null>(null);
+    const hoverNeighborsRef = useRef<Set<string>>(new Set());
+    const showTagEdgesRef = useRef<boolean>(showTagConnections);
+    const hiddenTypesRef = useRef<Set<string>>(new Set());
 
-    // Get connected node IDs for highlighting
-    const connectedNodeIds = useMemo(() => {
-        if (!selectedNodeId) return new Set<string>();
+    const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
 
-        const connected = new Set<string>();
-        connected.add(selectedNodeId);
+    // ── Build graph + renderer when the DATA changes ────────────────────────
+    useEffect(() => {
+        if (!containerRef.current || storeNodes.length === 0) return;
+        let cancelled = false;
 
-        // Find all edges connected to selected node
-        storeEdges.forEach(edge => {
-            if (edge.source === selectedNodeId) {
-                connected.add(edge.target);
-            }
-            if (edge.target === selectedNodeId) {
-                connected.add(edge.source);
-            }
+        const graph = new Graph();
+        for (const n of storeNodes) {
+            const isTag = n.type === 'tagNode' || n.data.isTagNode;
+            const { x, y } = seededXY(n.id);
+            graph.addNode(n.id, {
+                x, y,
+                label: isTag ? n.data.label : (n.data.label || 'Untitled').slice(0, 60),
+                isTag,
+                memType: n.data.type || 'note',
+                docTag: (n.data as { docTag?: string }).docTag || '',
+                isHighlighted: !!n.data.isHighlighted,
+                memoryCount: n.data.memoryCount || 0,
+                color: isTag ? TAG_COLOR : (TYPE_COLORS[n.data.type || ''] || DEFAULT_COLOR),
+                size: 3,
+            });
+        }
+        for (const e of storeEdges) {
+            if (!graph.hasNode(e.source) || !graph.hasNode(e.target)) continue;
+            if (graph.hasEdge(e.source, e.target)) continue;
+            graph.addEdge(e.source, e.target, {
+                kind: e.data?.connectionType || 'semantic',
+                weight: e.data?.strength || 0.5,
+            });
+        }
+        // Node size from structure: degree for memories, membership for tags.
+        graph.forEachNode((id, attrs) => {
+            const deg = graph.degree(id);
+            graph.setNodeAttribute(id, 'size', attrs.isTag
+                ? Math.min(14, 4 + Math.sqrt(attrs.memoryCount || deg) * 1.6)
+                : Math.min(12, 3 + Math.sqrt(deg) * 1.2));
         });
 
-        // If a tag is selected, also include all memories connected to that tag
-        const selectedNode = storeNodes.find(n => n.id === selectedNodeId);
-        const isTagNode = selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode;
+        const settings = forceAtlas2.inferSettings(graph);
+        forceAtlas2.assign(graph, {
+            iterations: Math.min(500, 120 + graph.order),
+            settings: { ...settings, scalingRatio: 8, slowDown: 5 },
+        });
+        graphRef.current = graph;
 
-        if (isTagNode) {
-            // Tag connections - edges go from memory (source) to tag (target)
-            storeEdges.forEach(edge => {
-                if (edge.target === selectedNodeId) {
-                    connected.add(edge.source); // Add the memory
-                }
-                if (edge.source === selectedNodeId) {
-                    connected.add(edge.target); // Add the memory
-                }
-            });
-        }
-
-        // If a memory is selected, include its connected tags and other memories via those tags
-        if (!isTagNode && selectedNode) {
-            // Get connected tags
-            const connectedTags = new Set<string>();
-            storeEdges.forEach(edge => {
-                if (edge.source === selectedNodeId && edge.target.startsWith('tag-')) {
-                    connectedTags.add(edge.target);
-                    connected.add(edge.target);
-                }
-                if (edge.target === selectedNodeId && edge.source.startsWith('tag-')) {
-                    connectedTags.add(edge.source);
-                    connected.add(edge.source);
-                }
-            });
-
-            // Get all memories connected to those tags
-            connectedTags.forEach(tagId => {
-                storeEdges.forEach(edge => {
-                    if (edge.target === tagId) {
-                        connected.add(edge.source);
+        (async () => {
+            // Sigma touches window/WebGL - import stays out of the SSR pass.
+            const { default: SigmaCtor } = await import('sigma');
+            if (cancelled || !containerRef.current) return;
+            sigmaRef.current?.kill();
+            const renderer = new SigmaCtor(graph, containerRef.current, {
+                renderLabels: true,
+                labelRenderedSizeThreshold: 7,
+                labelFont: 'Inter, system-ui, sans-serif',
+                labelSize: 11,
+                labelColor: { color: '#4b5563' },
+                defaultEdgeType: 'line',
+                minCameraRatio: 0.03,
+                maxCameraRatio: 6,
+                nodeReducer: (id, attrs) => {
+                    const res: Record<string, unknown> = { ...attrs };
+                    if (!attrs.isTag && hiddenTypesRef.current.has(legendKey(attrs.memType as string))) {
+                        res.hidden = true;
+                        return res;
                     }
-                    if (edge.source === tagId) {
-                        connected.add(edge.target);
+                    const sel = selectedRef.current;
+                    const hov = hoveredRef.current;
+                    if (attrs.isHighlighted) {
+                        res.color = HIGHLIGHT_COLOR;
+                        res.size = (attrs.size as number) + 2;
                     }
-                });
-            });
-        }
-
-        return connected;
-    }, [selectedNodeId, storeEdges, storeNodes]);
-
-    // Convert store nodes to ReactFlow format with saved positions and collision detection
-    const initialNodes: Node[] = useMemo(() => {
-        let nodes = storeNodes.map(node => {
-            // Use saved position if available
-            const savedPos = savedPositionsRef.current[node.id];
-            const position = savedPos || node.position;
-
-            const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
-            const isHighlightedFromSelection = selectedNodeId !== null && connectedNodeIds.has(node.id);
-            const isHighlighted = isHighlightedFromSelection || (selectedNodeId === null && !!node.data.isHighlighted);
-
-            return {
-                id: node.id,
-                type: node.type,
-                position,
-                data: {
-                    ...node.data,
-                    isFaded,
-                    isHighlighted,
+                    if (sel) {
+                        if (id === sel) {
+                            res.size = (res.size as number) + 3;
+                            res.zIndex = 2;
+                        } else if (!neighborsRef.current.has(id)) {
+                            res.color = FADED_COLOR;
+                            res.label = '';
+                        }
+                    } else if (hov) {
+                        if (id === hov) {
+                            res.size = (res.size as number) + 2;
+                            res.zIndex = 2;
+                        } else if (!hoverNeighborsRef.current.has(id)) {
+                            res.color = FADED_COLOR;
+                        }
+                    }
+                    return res;
                 },
-                selected: node.id === selectedNodeId,
-            };
-        });
-
-        // Apply layout only if no saved positions exist
-        const hasSavedPositions = Object.keys(savedPositionsRef.current).length > 0;
-        if (!hasSavedPositions && nodes.length > 0) {
-            nodes = nodes.length <= 12
-                ? applyCollisionDetection(nodes) as typeof nodes
-                : applyMultiClusterLayout(nodes, storeEdges) as typeof nodes;
-        }
-
-        return nodes;
-    }, [storeNodes, selectedNodeId, connectedNodeIds]);
-
-    // Convert store edges to ReactFlow format. Only Memory↔Tag; no Memory↔Memory.
-    const initialEdges: Edge[] = useMemo(() => {
-        if (!showTagConnections) return [];
-
-        // Pre-build O(1) lookup to avoid O(n) find() inside the map
-        const nodeTypeById = new Map(storeNodes.map(n => [n.id, n.data?.type ?? 'default']));
-
-        return storeEdges
-            .filter(edge => edge.data.connectionType === 'tag')
-            .map(edge => {
-                const memoryType = nodeTypeById.get(edge.source) ?? 'default';
-                const strokeColor = TYPE_STROKE_COLORS[memoryType] ?? DEFAULT_STROKE;
-
-                // Fade edges that are not connected to selected node
-                const isFaded = selectedNodeId !== null &&
-                    !connectedNodeIds.has(edge.source) &&
-                    !connectedNodeIds.has(edge.target);
-
-                const isTagEdge = edge.data.connectionType === 'tag';
-
-                return {
-                    id: edge.id,
-                    source: edge.source,
-                    target: edge.target,
-                    type: 'straight',
-                    animated: false,
-                    style: {
-                        strokeWidth: edge.style.strokeWidth,
-                        opacity: isFaded ? 0.15 : edge.style.opacity,
-                        stroke: strokeColor,
-                        strokeDasharray: undefined,
-                    },
-                    markerEnd: !isTagEdge ? {
-                        type: MarkerType.ArrowClosed,
-                        width: 15,
-                        height: 15,
-                    } : undefined,
-                    label: edge.data.label || undefined,
-                    labelStyle: {
-                        fontSize: 10,
-                        fill: strokeColor,
-                        fontWeight: isTagEdge ? 500 : 400,
-                    },
-                };
+                edgeReducer: (id, attrs) => {
+                    const res: Record<string, unknown> = { ...attrs };
+                    const g = graphRef.current;
+                    if (attrs.kind === 'tag' && !showTagEdgesRef.current) {
+                        res.hidden = true;
+                        return res;
+                    }
+                    res.color = attrs.kind === 'tag' ? 'rgba(139,92,246,0.16)' : 'rgba(107,114,128,0.28)';
+                    res.size = attrs.kind === 'tag' ? 0.6 : 1;
+                    const focus = selectedRef.current || hoveredRef.current;
+                    if (focus && g) {
+                        const [s, t] = g.extremities(id);
+                        if (s === focus || t === focus) {
+                            res.color = attrs.kind === 'tag' ? 'rgba(139,92,246,0.55)' : 'rgba(75,85,99,0.7)';
+                            res.size = (res.size as number) + 0.6;
+                            res.zIndex = 1;
+                        } else {
+                            res.color = 'rgba(209,213,219,0.12)';
+                        }
+                    }
+                    return res;
+                },
             });
-    }, [storeEdges, storeNodes, showTagConnections, selectedNodeId, connectedNodeIds]);
 
-    const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-    const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+            renderer.on('clickNode', ({ node }) => {
+                selectedRef.current = node;
+                neighborsRef.current = new Set(graph.neighbors(node));
+                setSelectedNodeId(node);
+                if (!graph.getNodeAttribute(node, 'isTag')) {
+                    selectMemory(node);
+                }
+                onNodeSelect?.(node);
+                renderer.refresh();
+            });
+            renderer.on('clickStage', () => {
+                selectedRef.current = null;
+                neighborsRef.current = new Set();
+                setSelectedNodeId(null);
+                selectMemory(null);
+                onNodeSelect?.(null);
+                renderer.refresh();
+            });
+            renderer.on('enterNode', ({ node }) => {
+                hoveredRef.current = node;
+                hoverNeighborsRef.current = new Set(graph.neighbors(node));
+                renderer.refresh();
+            });
+            renderer.on('leaveNode', () => {
+                hoveredRef.current = null;
+                hoverNeighborsRef.current = new Set();
+                renderer.refresh();
+            });
 
-    // Update when store nodes change or selection changes
+            sigmaRef.current = renderer;
+        })();
+
+        return () => {
+            cancelled = true;
+            sigmaRef.current?.kill();
+            sigmaRef.current = null;
+            graphRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [storeNodes, storeEdges]);
+
+    // ── Restyle-only inputs ────────────────────────────────────────────────
     useEffect(() => {
-        setNodes(initialNodes);
-    }, [initialNodes, setNodes]);
+        showTagEdgesRef.current = showTagConnections;
+        sigmaRef.current?.refresh();
+    }, [showTagConnections]);
 
     useEffect(() => {
-        setEdges(initialEdges);
-    }, [initialEdges, setEdges]);
+        hiddenTypesRef.current = hiddenTypes;
+        sigmaRef.current?.refresh();
+    }, [hiddenTypes]);
 
-    // Handle node position changes and save to localStorage
-    const handleNodesChange = useCallback((changes: NodeChange[]) => {
-        onNodesChange(changes);
+    useEffect(() => {
+        selectedRef.current = selectedNodeId;
+        const g = graphRef.current;
+        neighborsRef.current = selectedNodeId && g?.hasNode(selectedNodeId)
+            ? new Set(g.neighbors(selectedNodeId))
+            : new Set();
+        sigmaRef.current?.refresh();
+    }, [selectedNodeId]);
 
-        // Save positions when nodes are dragged
-        changes.forEach(change => {
-            if (change.type === 'position' && change.position && change.dragging === false) {
-                savedPositionsRef.current[change.id] = change.position;
-                savePositions(savedPositionsRef.current);
-            }
+    const toggleType = useCallback((type: string) => {
+        setHiddenTypes((prev) => {
+            const next = new Set(prev);
+            if (next.has(type)) next.delete(type);
+            else next.add(type);
+            return next;
         });
-    }, [onNodesChange]);
+    }, []);
 
-    // Handle node selection
-    const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-        setSelectedNodeId(node.id);
-        // Only select memory if it's a memory node, not a tag node
-        if (node.type === 'memoryNode') {
-            selectMemory(node.id);
-        } else {
-            // For tag nodes, set selected but don't try to fetch memory details
-            selectMemory(null);
-        }
-        onNodeSelect?.(node.id);
-    }, [setSelectedNodeId, selectMemory, onNodeSelect]);
+    const zoom = useCallback((dir: 'in' | 'out' | 'fit') => {
+        const cam = sigmaRef.current?.getCamera();
+        if (!cam) return;
+        if (dir === 'fit') cam.animatedReset({ duration: 300 });
+        else if (dir === 'in') cam.animatedZoom({ duration: 200 });
+        else cam.animatedUnzoom({ duration: 200 });
+    }, []);
 
-    // Handle background click (deselect)
-    const onPaneClick = useCallback(() => {
-        setSelectedNodeId(null);
-        selectMemory(null);
-        onNodeSelect?.(null);
-    }, [setSelectedNodeId, selectMemory, onNodeSelect]);
-
-    // Only memory ↔ tag. Must be before early returns (Rules of Hooks).
-    const isValidConnection = useCallback(
-        (conn: Connection) => {
-            if (!conn.source || !conn.target) return false;
-            const src = storeNodes.find((n) => n.id === conn.source);
-            const tgt = storeNodes.find((n) => n.id === conn.target);
-            if (!src || !tgt) return false;
-            const srcIsTag = src.type === "tagNode" || src.data?.isTagNode;
-            const tgtIsTag = tgt.type === "tagNode" || tgt.data?.isTagNode;
-            if (srcIsTag === tgtIsTag) return false;
-            const memTagHandles = ["top", "top-src", "bottom", "bottom-src"];
-            const tagAllHandles = ["top", "top-src", "bottom", "bottom-src", "left", "left-src", "right", "right-src"];
-            const srcHandle = conn.sourceHandle ?? "";
-            const tgtHandle = conn.targetHandle ?? "";
-            if (srcIsTag) {
-                return tagAllHandles.includes(srcHandle) && memTagHandles.includes(tgtHandle);
-            }
-            return memTagHandles.includes(srcHandle) && tagAllHandles.includes(tgtHandle);
-        },
-        [storeNodes]
-    );
-
-    // Handle connection between memory and tag node (drag to connect)
-    const onConnect = useCallback(async (connection: Connection) => {
-        const { source, target } = connection;
-        if (!source || !target) return;
-
-        // Find source and target nodes to determine types
-        const sourceNode = storeNodes.find(n => n.id === source);
-        const targetNode = storeNodes.find(n => n.id === target);
-
-        if (!sourceNode || !targetNode) {
-            return;
-        }
-
-        // Memory-to-tag: add tag to memory
-        const isMemoryToTag = sourceNode.type === 'memoryNode' && targetNode.type === 'tagNode';
-        const isTagToMemory = sourceNode.type === 'tagNode' && targetNode.type === 'memoryNode';
-        if (isMemoryToTag || isTagToMemory) {
-            const memoryId = isMemoryToTag ? source : target;
-            const tagNode = isMemoryToTag ? targetNode : sourceNode;
-            const tag = tagNode.data.tag;
-
-            if (tag) {
-                const success = await addTagToMemory(memoryId, tag);
-                setConnectionToast({
-                    show: true,
-                    message: success ? `Added tag #${tag} to memory` : 'Failed to add tag',
-                    type: success ? 'success' : 'error'
-                });
-                setTimeout(() => setConnectionToast(prev => ({ ...prev, show: false })), 2000);
-            }
-        }
-    }, [storeNodes, addTagToMemory]);
-
-    if (isLoading && nodes.length === 0) {
+    if (isLoading && storeNodes.length === 0) {
         return (
             <div className={cn('flex items-center justify-center bg-gray-50 rounded-xl', className)}>
                 <div className="text-center">
@@ -814,7 +305,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         );
     }
 
-    if (nodes.length === 0) {
+    if (storeNodes.length === 0) {
         const graphFailed = (stats?.memories ?? 0) > 0;
         return (
             <div className={cn('flex items-center justify-center bg-gray-50 rounded-xl', className)}>
@@ -833,14 +324,14 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                                 className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
-                                Refresh
+                                Retry
                             </button>
                         </>
                     ) : (
                         <>
                             <h3 className="text-lg font-medium text-gray-700 mb-1">No memories yet</h3>
                             <p className="text-sm text-gray-500">
-                                Create your first memory to see the graph
+                                Memories appear here as you chat or add them manually.
                             </p>
                         </>
                     )}
@@ -850,83 +341,56 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
     }
 
     return (
-        <div className={cn('rounded-xl overflow-hidden border border-gray-200 relative', className)}>
-            <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={handleNodesChange}
-                onEdgesChange={onEdgesChange}
-                onNodeClick={onNodeClick}
-                onPaneClick={onPaneClick}
-                onConnect={onConnect}
-                isValidConnection={isValidConnection}
-                nodeTypes={nodeTypes}
-                fitView
-                fitViewOptions={{ padding: 0.2 }}
-                minZoom={0.1}
-                maxZoom={2}
-                connectionLineComponent={MemoryConnectionLine}
-                connectionLineType={ConnectionLineType.SmoothStep}
-                defaultEdgeOptions={{
-                    type: 'smoothstep',
-                }}
-            >
-                <Background color="#e5e7eb" gap={nodes.length > 50 ? 60 : 20} />
-                <Controls className="bg-white rounded-lg shadow-lg" />
-                <MiniMap
-                    nodeColor={(node) => node.type === 'tagNode' ? '#8b5cf6' : '#9ca3af'}
-                    maskColor="rgba(0, 0, 0, 0.1)"
-                    className="bg-white rounded-lg shadow-lg"
-                />
-            </ReactFlow>
+        <div className={cn('relative bg-gray-50 rounded-xl overflow-hidden', className)}>
+            <div ref={containerRef} className="absolute inset-0" />
 
-            {/* Connection Toast Notification */}
-            {connectionToast.show && (
-                <div className={cn(
-                    'absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg',
-                    'text-sm font-medium transition-all duration-300 z-50',
-                    connectionToast.type === 'success'
-                        ? 'bg-green-500 text-white'
-                        : 'bg-red-500 text-white'
-                )}>
-                    {connectionToast.message}
-                </div>
-            )}
+            {/* Zoom controls */}
+            <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1 bg-white/90 border border-gray-200 rounded-lg p-1 shadow-sm">
+                <button type="button" onClick={() => zoom('in')} title="Zoom in"
+                        className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
+                    <ZoomIn className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => zoom('out')} title="Zoom out"
+                        className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
+                    <ZoomOut className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => zoom('fit')} title="Fit view"
+                        className="p-1.5 rounded hover:bg-gray-100 text-gray-600">
+                    <Maximize2 className="w-4 h-4" />
+                </button>
+            </div>
 
-            {/* Connection Hint + Legend */}
-            <div className="absolute top-2 left-2 flex flex-col gap-2 z-10">
-                <div className="px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500">
-                    <span className="font-medium text-purple-600">Tip:</span> Memory ↔ Tag. Tag: all 4 sides for connections.
-                </div>
-                <div className="px-3 py-2 bg-white/90 rounded-lg shadow text-xs text-gray-500 max-w-[280px]">
-                    <div className="font-medium text-gray-600 mb-1.5">Legend</div>
-                    <div className="grid grid-cols-1 gap-1 text-[11px]">
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-blue-400 bg-blue-50 flex-shrink-0" />
-                            <span>Note – manually saved (memory_save)</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-orange-400 bg-orange-50 flex-shrink-0" />
-                            <span>Conversation – from chat (15 msg compaction)</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-purple-400 bg-purple-50 flex-shrink-0" />
-                            <span>Document</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-green-400 bg-green-50 flex-shrink-0" />
-                            <span>Code</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-teal-400 bg-teal-50 flex-shrink-0" />
-                            <span>Knowledge</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded border border-gray-400 bg-gray-50 flex-shrink-0" />
-                            <span>Other</span>
-                        </div>
+            {/* Legend - click a type to hide/show it */}
+            <div className="absolute top-3 left-3 z-10 bg-white/90 border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Legend</p>
+                <div className="space-y-1">
+                    {LEGEND.map((item) => (
+                        <button
+                            key={item.type}
+                            type="button"
+                            onClick={() => toggleType(item.type)}
+                            title={hiddenTypes.has(item.type) ? `Show ${item.label}` : `Hide ${item.label}`}
+                            className={cn(
+                                'flex items-center gap-2 text-xs text-gray-600 w-full text-left rounded px-1 py-0.5 hover:bg-gray-100',
+                                hiddenTypes.has(item.type) && 'opacity-35 line-through'
+                            )}
+                        >
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                            {item.label}
+                        </button>
+                    ))}
+                    <div className="flex items-center gap-2 text-xs text-gray-600 px-1 py-0.5">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: TAG_COLOR }} />
+                        Tag
                     </div>
                 </div>
+            </div>
+
+            {/* Node count - the honest scale of what is on screen */}
+            <div className="absolute bottom-3 right-3 z-10 bg-white/90 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm">
+                <p className="text-[11px] text-gray-500">
+                    {storeNodes.filter((n) => n.type !== 'tagNode' && !n.data.isTagNode).length} memories
+                </p>
             </div>
         </div>
     );

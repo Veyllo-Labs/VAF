@@ -205,7 +205,10 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
     searchQuery: '',
     
     // Graph actions
-    fetchGraph: async (limit = 100) => {
+    // limit 0 = ALL memories of the scope. The old 100-node recency window
+    // hid every older memory once a learned document filled it; the Sigma
+    // renderer is built for the full store.
+    fetchGraph: async (limit = 0) => {
         set({ isLoading: true, error: null });
         try {
             const { ragSources } = get();

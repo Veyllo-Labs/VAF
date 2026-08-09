@@ -8,7 +8,7 @@ The Memory System provides persistent memory storage with content encrypted at r
 - **Vector Search**: PostgreSQL with pgvector extension for semantic similarity search
 - **Redis Caching**: Fast caching for embeddings, RAG queries, and graph data
 - **RAG pipeline**: Retrieval and answer generation with source citations
-- **Graph Visualization**: Interactive ReactFlow-based memory graph
+- **Graph Visualization**: Interactive WebGL memory graph (Sigma.js, force-directed) that renders the WHOLE store of the current user
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
@@ -45,7 +45,7 @@ See [Session Compaction (background)](#session-compaction-background) and the `m
 │  │                    WEB UI (/memory)                     │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌───────────────┐    │    │
 │  │  │ Memory Graph│  │ RAG Query   │  │ Memory Detail │    │    │
-│  │  │ (ReactFlow) │  │   Panel     │  │    Panel      │    │    │
+│  │  │ (Sigma.js)  │  │   Panel     │  │    Panel      │    │    │
 │  │  └─────────────┘  └─────────────┘  └───────────────┘    │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                              │                                  │
@@ -125,7 +125,6 @@ Additional settings in `~/.vaf/config.json`:
     "memory_enabled": true,
     "memory_rag_refine_query": true,
     "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",
-    "memory_encryption_key": "",
     "memory_embedding_model": "all-MiniLM-L6-v2",
     "memory_auto_connect_threshold": 0.7,
     "memory_chunk_size": 512,
@@ -390,11 +389,18 @@ Memory TEXT is encrypted at rest using AES-256-GCM - both the parent content
 decrypted on read; a startup migration encrypts legacy plaintext rows). The
 user-profile prompt cache on disk is encrypted the same way.
 
-- **Key Generation**: 32-byte random key, auto-generated on first use
+- **Key Generation**: 32-byte random key, minted once on a genuine first run
+  (no `config.json` yet, or a cleanly-parsed config that really has no key)
+  and logged loudly when it happens
 - **Storage**: Key stored Base64-encoded in config (consider using system keyring for production)
 - **Key safety**: a PRESENT but corrupt/wrong-length key is a hard startup
   error and is never silently replaced - a silent regenerate would
-  permanently orphan every encrypted row. Back the key up separately.
+  permanently orphan every encrypted row. The same applies to an UNREADABLE
+  config: the key loader re-reads the raw file and refuses to mint while the
+  file cannot be parsed (a torn read during a concurrent config write must
+  never look like "no key"). Config saves that omit the key keep the stored
+  value (`PROTECTED_KEYS`), and config writes are atomic (tmp + rename).
+  Back the key up separately.
 - **Nonce**: Unique 12-byte nonce per encryption
 - **Unencrypted by necessity**: embedding vectors (similarity search operates
   on them), tags, dates, and titles (no longer content-derived by default;
@@ -417,14 +423,23 @@ question ("Kannst du dich noch an Kai erinnern?") diluted its one signal
 word to 1/7 of the score while a bare "Kai" query scored 1.0. A query
 consisting only of function words keeps its tokens (never emptied).
 
-### Key Rotation
+### Key Rotation / Recovery (`vaf memory rekey`)
 
-To rotate the encryption key:
+When the key was rotated (deliberately, or a backup restored an older
+config), rows written under the previous key stay intact but unreadable.
+`vaf memory rekey` re-encrypts them with the CURRENT key:
 
-1. Export all memories (decrypted)
-2. Generate new key: `python -c "from vaf.memory.crypto import MemoryCrypto; print(MemoryCrypto.generate_key())"`
-3. Update `memory_encryption_key` in config
-4. Re-import memories
+```bash
+vaf memory rekey --old-key-file /path/to/config-backup.json --dry-run
+vaf memory rekey --old-key-file /path/to/config-backup.json
+```
+
+The old key is read from the backup file and never printed. Rows already
+readable with the current key are skipped (idempotent); rows neither key
+opens are counted and left untouched. The command needs the memory DB
+container running and connects via `memory_db_owner_url` (the RLS-restricted
+app role cannot see the whole store). Take a `pg_dump` first for a rollback
+path.
 
 ## Redis Caching
 
@@ -565,9 +580,11 @@ The embedding model is downloaded on first use (~90MB). Subsequent loads use the
 ### Decryption Failed
 
 If you see "[Decryption failed]" for memory content:
-- The encryption key may have changed
-- Memory data may be corrupted
-- Check `memory_encryption_key` in config
+- The encryption key changed (e.g. a config backup was restored): recover
+  with `vaf memory rekey --old-key-file <backup-config.json>` - see
+  "Key Rotation / Recovery" above. Run `--dry-run` first.
+- Memory data may be corrupted (unreadable rows are counted by the rekey
+  dry-run and never overwritten)
 
 ### Attachment-RAG Memory Spike (Resolved Root Cause)
 
@@ -611,4 +628,8 @@ This incident showed that component-level stability can still fail in compositio
 Typical performance:
 - Memory creation: ~500ms (including chunking, embedding, storage)
 - RAG query: ~1-2s (embedding + search + LLM)
-- Graph load (100 nodes): ~200ms
+- Graph load: default `limit=0` returns ALL memories of the scope; the
+  WebGL renderer (Sigma.js + ForceAtlas2) is sized for thousands of
+  nodes - selection and hover restyle via reducers without rebuilding
+  the graph. `limit>0` still returns a most-recently-updated window
+  (the Settings preview uses 100).

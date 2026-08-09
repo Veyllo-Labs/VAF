@@ -35,7 +35,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   older memory out of sight. The graph now renders the whole store of the
   current user on a WebGL canvas (force-directed layout, node size by
   connections, labels on zoom, click a legend entry to filter a type) and
-  updates right after a document finishes learning.
+  updates right after a document finishes learning. The Settings preview
+  shows the same renderer (the old boxed copy could freeze on large stores),
+  and labels adapt to dark mode.
 - **The agent no longer "thinks without answering".** Some API models
   intermittently emit their tool call as plain text instead of through the
   tool channel; the turn then ended with a visible thought and nothing else,

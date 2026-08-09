@@ -109,6 +109,18 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         if (!containerRef.current || storeNodes.length === 0) return;
         let cancelled = false;
 
+        // Theme-aware palette, resolved when the renderer is (re)built: the
+        // default gray labels were unreadable on the dark background.
+        const isDark = typeof document !== 'undefined'
+            && document.documentElement.classList.contains('dark');
+        const faded = isDark ? '#3f3f46' : FADED_COLOR;
+        const labelCol = isDark ? '#d4d4d8' : '#4b5563';
+        const edgeTag = isDark ? 'rgba(167,139,250,0.25)' : 'rgba(139,92,246,0.16)';
+        const edgeSem = isDark ? 'rgba(161,161,170,0.30)' : 'rgba(107,114,128,0.28)';
+        const edgeTagHot = isDark ? 'rgba(196,181,253,0.75)' : 'rgba(139,92,246,0.55)';
+        const edgeSemHot = isDark ? 'rgba(212,212,216,0.80)' : 'rgba(75,85,99,0.7)';
+        const edgeDim = isDark ? 'rgba(63,63,70,0.15)' : 'rgba(209,213,219,0.12)';
+
         const graph = new Graph();
         for (const n of storeNodes) {
             const isTag = n.type === 'tagNode' || n.data.isTagNode;
@@ -157,8 +169,9 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                 renderLabels: true,
                 labelRenderedSizeThreshold: 7,
                 labelFont: 'Inter, system-ui, sans-serif',
-                labelSize: 11,
-                labelColor: { color: '#4b5563' },
+                labelSize: 12,
+                labelWeight: '500',
+                labelColor: { color: labelCol },
                 defaultEdgeType: 'line',
                 minCameraRatio: 0.03,
                 maxCameraRatio: 6,
@@ -179,7 +192,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                             res.size = (res.size as number) + 3;
                             res.zIndex = 2;
                         } else if (!neighborsRef.current.has(id)) {
-                            res.color = FADED_COLOR;
+                            res.color = faded;
                             res.label = '';
                         }
                     } else if (hov) {
@@ -187,7 +200,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                             res.size = (res.size as number) + 2;
                             res.zIndex = 2;
                         } else if (!hoverNeighborsRef.current.has(id)) {
-                            res.color = FADED_COLOR;
+                            res.color = faded;
                         }
                     }
                     return res;
@@ -199,17 +212,17 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                         res.hidden = true;
                         return res;
                     }
-                    res.color = attrs.kind === 'tag' ? 'rgba(139,92,246,0.16)' : 'rgba(107,114,128,0.28)';
+                    res.color = attrs.kind === 'tag' ? edgeTag : edgeSem;
                     res.size = attrs.kind === 'tag' ? 0.6 : 1;
                     const focus = selectedRef.current || hoveredRef.current;
                     if (focus && g) {
                         const [s, t] = g.extremities(id);
                         if (s === focus || t === focus) {
-                            res.color = attrs.kind === 'tag' ? 'rgba(139,92,246,0.55)' : 'rgba(75,85,99,0.7)';
+                            res.color = attrs.kind === 'tag' ? edgeTagHot : edgeSemHot;
                             res.size = (res.size as number) + 0.6;
                             res.zIndex = 1;
                         } else {
-                            res.color = 'rgba(209,213,219,0.12)';
+                            res.color = edgeDim;
                         }
                     }
                     return res;

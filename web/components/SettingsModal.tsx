@@ -19,6 +19,8 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
+import MemoryGraph from './memory/MemoryGraph';
+import { useMemoryStore } from './memory/stores/memoryStore';
 import { SpeakerTest } from './SpeakerTest';
 import CustomToolEditor from './settings/CustomToolEditor';
 import McpServerEditor from './settings/McpServerEditor';
@@ -39,82 +41,6 @@ const ReactFlowFallback = () => {
     );
 };
 
-// Constants for collision detection
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 100;
-const TAG_NODE_WIDTH = 150;
-const TAG_NODE_HEIGHT = 60;
-const COLLISION_PADDING = 25;
-
-// Helper: Check if two rectangles overlap
-function rectsOverlap(
-    r1: { x: number; y: number; width: number; height: number },
-    r2: { x: number; y: number; width: number; height: number }
-): boolean {
-    return !(
-        r1.x + r1.width + COLLISION_PADDING < r2.x ||
-        r2.x + r2.width + COLLISION_PADDING < r1.x ||
-        r1.y + r1.height + COLLISION_PADDING < r2.y ||
-        r2.y + r2.height + COLLISION_PADDING < r1.y
-    );
-}
-
-// Helper: Apply collision detection to prevent overlapping nodes
-function applyCollisionDetection(nodes: any[]): any[] {
-    const result = nodes.map(n => ({ ...n, position: { ...n.position } }));
-    const maxIterations = 50;
-
-    for (let iter = 0; iter < maxIterations; iter++) {
-        let hasCollision = false;
-
-        for (let i = 0; i < result.length; i++) {
-            const nodeA = result[i];
-            const widthA = nodeA.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
-            const heightA = nodeA.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
-
-            for (let j = i + 1; j < result.length; j++) {
-                const nodeB = result[j];
-                const widthB = nodeB.type === 'tagNode' ? TAG_NODE_WIDTH : NODE_WIDTH;
-                const heightB = nodeB.type === 'tagNode' ? TAG_NODE_HEIGHT : NODE_HEIGHT;
-
-                const rectA = { x: nodeA.position.x, y: nodeA.position.y, width: widthA, height: heightA };
-                const rectB = { x: nodeB.position.x, y: nodeB.position.y, width: widthB, height: heightB };
-
-                if (rectsOverlap(rectA, rectB)) {
-                    hasCollision = true;
-
-                    // Calculate push direction
-                    const centerAX = rectA.x + rectA.width / 2;
-                    const centerAY = rectA.y + rectA.height / 2;
-                    const centerBX = rectB.x + rectB.width / 2;
-                    const centerBY = rectB.y + rectB.height / 2;
-
-                    const dx = centerBX - centerAX;
-                    const dy = centerBY - centerAY;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                    // Push apart
-                    const pushForce = 35;
-                    const pushX = (dx / dist) * pushForce;
-                    const pushY = (dy / dist) * pushForce;
-
-                    result[i].position = {
-                        x: result[i].position.x - pushX,
-                        y: result[i].position.y - pushY
-                    };
-                    result[j].position = {
-                        x: result[j].position.x + pushX,
-                        y: result[j].position.y + pushY
-                    };
-                }
-            }
-        }
-
-        if (!hasCollision) break;
-    }
-
-    return result;
-}
 import {
     X, Globe, Cpu, Volume2, Monitor, Shield, Save, RotateCcw,
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
@@ -1117,65 +1043,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     
     // Memory System State
     const [memoryStats, setMemoryStats] = useState<{ memories: number; chunks: number; connections: number; db_connected: boolean } | null>(null);
-    const [memoryNodes, setMemoryNodes] = useState<any[]>([]);
-    const [memoryEdges, setMemoryEdges] = useState<any[]>([]);
-    const [memoryLoading, setMemoryLoading] = useState(false);
-    const [memoryGraphError, setMemoryGraphError] = useState<string | null>(null);
-    const [selectedMemoryNodeId, setSelectedMemoryNodeId] = useState<string | null>(null);
+    // Graph data/selection live in the shared memoryStore; the modal renders
+    // the same Sigma MemoryGraph as /memory instead of a second implementation.
+    const fetchMemoryGraphAll = useMemoryStore((st) => st.fetchGraph);
+    const memoryGraphEdgeCount = useMemoryStore((st) => st.edges.length);
+    const memoryGraphLoading = useMemoryStore((st) => st.isLoading);
 
-    // Calculate connected nodes for highlighting
-    const connectedMemoryNodeIds = useMemo(() => {
-        if (!selectedMemoryNodeId) return new Set<string>();
-
-        const connected = new Set<string>();
-        connected.add(selectedMemoryNodeId);
-
-        // Find all edges connected to selected node
-        memoryEdges.forEach(edge => {
-            if (edge.source === selectedMemoryNodeId) {
-                connected.add(edge.target);
-            }
-            if (edge.target === selectedMemoryNodeId) {
-                connected.add(edge.source);
-            }
-        });
-
-        // If a tag is selected, include all memories connected to that tag
-        const selectedNode = memoryNodes.find(n => n.id === selectedMemoryNodeId);
-        if (selectedNode?.type === 'tagNode' || selectedNode?.data?.isTagNode) {
-            memoryEdges.forEach(edge => {
-                if (edge.target === selectedMemoryNodeId || edge.source === selectedMemoryNodeId) {
-                    connected.add(edge.source);
-                    connected.add(edge.target);
-                }
-            });
-        }
-
-        // If a memory is selected, include its connected tags and other memories via those tags
-        if (selectedNode?.type === 'memoryNode' || (!selectedNode?.data?.isTagNode && selectedNode)) {
-            const connectedTags = new Set<string>();
-            memoryEdges.forEach(edge => {
-                if (edge.source === selectedMemoryNodeId && edge.target?.startsWith('tag-')) {
-                    connectedTags.add(edge.target);
-                    connected.add(edge.target);
-                }
-                if (edge.target === selectedMemoryNodeId && edge.source?.startsWith('tag-')) {
-                    connectedTags.add(edge.source);
-                    connected.add(edge.source);
-                }
-            });
-
-            // Get all memories connected to those tags
-            connectedTags.forEach(tagId => {
-                memoryEdges.forEach(edge => {
-                    if (edge.target === tagId) connected.add(edge.source);
-                    if (edge.source === tagId) connected.add(edge.target);
-                });
-            });
-        }
-
-        return connected;
-    }, [selectedMemoryNodeId, memoryEdges, memoryNodes]);
     
     // Workflow Visualization State
     const [workflowModal, setWorkflowModal] = useState<any>(null);
@@ -1681,43 +1554,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     }, [isOpen, localConfig.memory_enabled, memoryApiBase]);
 
-    // Fetch memory graph when memory modal opens
-    const fetchMemoryGraph = useCallback(async () => {
-        setMemoryLoading(true);
-        setMemoryGraphError(null);
-        try {
-            const res = await fetch(`${memoryApiBase}/api/memory/graph?limit=100`);
-            if (!res.ok) {
-                let detail = `HTTP ${res.status}`;
-                try {
-                    const errBody = await res.json();
-                    if (errBody && typeof errBody.detail === 'string') detail = errBody.detail;
-                    else if (errBody && typeof errBody.detail === 'object') detail = (errBody.detail as unknown[]).map((d: unknown) => (d as { msg?: string }).msg ?? String(d)).join('; ');
-                } catch {
-                    // ignore parse error
-                }
-                setMemoryGraphError(detail);
-                throw new Error(`Failed to fetch graph: ${detail}`);
-            }
-            const data = await res.json();
-            // Apply collision detection to prevent overlapping nodes
-            const nodesWithCollisionFix = applyCollisionDetection(data.nodes || []);
-            setMemoryNodes(nodesWithCollisionFix);
-            setMemoryEdges(data.edges || []);
-        } catch (e) {
-            console.error('Failed to fetch memory graph:', e);
-            setMemoryNodes([]);
-            setMemoryEdges([]);
-            setMemoryGraphError((e as Error).message);
-        }
-        setMemoryLoading(false);
-    }, [memoryApiBase]);
 
     useEffect(() => {
         if (showMemoryModal) {
-            fetchMemoryGraph();
+            void fetchMemoryGraphAll();
         }
-    }, [showMemoryModal, fetchMemoryGraph]);
+    }, [showMemoryModal, fetchMemoryGraphAll]);
 
     // Close the skills editor once the backend confirms a create/update/delete.
     // (A blocked save sends skill_error instead, leaving the editor open with findings.)
@@ -5708,17 +5550,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <div className="min-w-0">
                                     <h2 className="text-xl font-bold text-gray-900 max-md:text-base truncate">{tModals('memory.title')}</h2>
                                     <p className="text-sm text-gray-500">
-                                        {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryEdges.length} connections
+                                        {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryGraphEdgeCount} connections
                                     </p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-3 shrink-0 max-md:gap-1.5">
                                 <button
-                                    onClick={fetchMemoryGraph}
-                                    disabled={memoryLoading}
+                                    onClick={() => void fetchMemoryGraphAll()}
+                                    disabled={memoryGraphLoading}
                                     className="flex items-center gap-2 px-4 py-2 max-md:px-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
                                 >
-                                    <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
+                                    <RefreshCw size={16} className={memoryGraphLoading ? 'animate-spin' : ''} />
                                     <span className="max-md:hidden">{tCommon('refresh')}</span>
                                 </button>
                                 <a
@@ -5735,179 +5577,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         </div>
                         
-                        {/* Graph Content */}
+                        {/* Graph Content - the same Sigma renderer as /memory
+                            (loading/empty/error states live inside MemoryGraph) */}
                         <div className="flex-1 overflow-hidden bg-gray-50">
-                            {memoryLoading ? (
-                                <div className="flex items-center justify-center h-full">
-                                    <div className="text-center">
-                                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4" />
-                                        <p className="text-sm text-gray-500">{tModals('memory.loadingGraph')}</p>
-                                    </div>
-                                </div>
-                            ) : memoryNodes.length === 0 ? (
-                                <div className="flex items-center justify-center h-full">
-                                    <div className="text-center">
-                                        <div className="w-20 h-20 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-4">
-                                            <Brain size={40} className="text-gray-500" />
-                                        </div>
-                                        {(memoryStats?.memories ?? 0) > 0 ? (
-                                            <>
-                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">{tModals('memory.graphError')}</h3>
-                                                {memoryGraphError && (
-                                                    <p className="text-sm text-red-600 max-w-sm mb-2 font-mono">
-                                                        {memoryGraphError}
-                                                    </p>
-                                                )}
-                                                <p className="text-sm text-gray-500 max-w-sm mb-4">
-                                                    {tModals('memory.graphErrorHint')}
-                                                </p>
-                                                <button
-                                                    type="button"
-                                                    onClick={fetchMemoryGraph}
-                                                    disabled={memoryLoading}
-                                                    className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-[#f5f5f5] disabled:opacity-50 text-white dark:text-[#181818] font-medium rounded-lg transition-colors text-sm"
-                                                >
-                                                    <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
-                                                    {tCommon('refresh')}
-                                                </button>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <h3 className="text-lg font-semibold text-gray-900 mb-1">{tModals('memory.noMemoriesTitle')}</h3>
-                                                <p className="text-sm text-gray-500 max-w-sm">
-                                                    {tModals('memory.noMemoriesDesc')}
-                                                </p>
-                                                <a 
-                                                    href="/memory"
-                                                    target="_blank"
-                                                    className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-[#f5f5f5] text-white dark:text-[#181818] font-medium rounded-lg transition-colors text-sm"
-                                                >
-                                                    {tModals('memory.createMemory')}
-                                                    <ChevronRight size={16} />
-                                                </a>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            ) : (
-                                <Suspense fallback={<ReactFlowFallback />}>
-                                    <ReactFlow
-                                        nodes={memoryNodes.map((node, i) => {
-                                            const isTagNode = node.type === 'tagNode' || node.data?.isTagNode;
-                                            const isFaded = selectedMemoryNodeId !== null && !connectedMemoryNodeIds.has(node.id);
-                                            const isSelected = node.id === selectedMemoryNodeId;
-                                            return {
-                                            id: node.id,
-                                            type: 'default',
-                                            position: node.position || { x: (i % 5) * 280, y: Math.floor(i / 5) * 180 },
-                                            data: {
-                                                label: (
-                                                    <div className="text-left p-1">
-                                                        <div className={cn(
-                                                            "font-medium text-sm truncate max-w-[180px]",
-                                                            isTagNode ? "text-purple-700" : "text-gray-800"
-                                                        )}>
-                                                            {node.data?.label || 'Untitled'}
-                                                        </div>
-                                                        {!isTagNode && node.data?.preview && (
-                                                            <div className="text-xs text-gray-500 truncate max-w-[180px] mt-0.5">
-                                                                {node.data.preview}
-                                                            </div>
-                                                        )}
-                                                        <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
-                                                            {isTagNode ? (
-                                                                <span>{node.data?.memoryCount || 0} memories</span>
-                                                            ) : (
-                                                                <>
-                                                                    <span>{node.data?.chunkCount || 0} chunks</span>
-                                                                    {node.data?.tags?.length > 0 && (
-                                                                        <span className="px-1.5 py-0.5 bg-gray-100 rounded">
-                                                                            {node.data.tags[0]}
-                                                                        </span>
-                                                                    )}
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                )
-                                            },
-                                            selected: isSelected,
-                                            style: {
-                                                background: isTagNode
-                                                    ? '#f3e8ff'
-                                                    : (node.data?.isHighlighted ? '#fef3c7' : 'white'),
-                                                border: isSelected
-                                                    ? '2px solid #374151'
-                                                    : (isTagNode
-                                                        ? '2px solid #a855f7'
-                                                        : (node.data?.isHighlighted ? '2px solid #f59e0b' : '1px solid #e5e7eb')),
-                                                borderRadius: '12px',
-                                                padding: '8px',
-                                                minWidth: isTagNode ? '140px' : '200px',
-                                                opacity: isFaded ? 0.4 : 1,
-                                                transition: 'opacity 0.3s ease',
-                                            }
-                                        }})}
-                                        edges={memoryEdges
-                                            .filter(edge => edge.data?.connectionType === 'tag')
-                                            .map(edge => {
-                                            const isFaded = selectedMemoryNodeId !== null &&
-                                                !connectedMemoryNodeIds.has(edge.source) &&
-                                                !connectedMemoryNodeIds.has(edge.target);
-                                            return {
-                                            id: edge.id,
-                                            source: edge.source,
-                                            target: edge.target,
-                                            type: 'smoothstep',
-                                            animated: false,
-                                            style: {
-                                                stroke: '#a855f7',
-                                                strokeWidth: Math.max(1, (edge.data?.strength || 0.5) * 3),
-                                                opacity: isFaded ? 0.15 : 0.5,
-                                                strokeDasharray: '5,5',
-                                                transition: 'opacity 0.3s ease',
-                                            },
-                                            markerEnd: undefined,
-                                        }})}
-                                        onNodeClick={(_, node) => setSelectedMemoryNodeId(node.id)}
-                                        onPaneClick={() => setSelectedMemoryNodeId(null)}
-                                        fitView
-                                        fitViewOptions={{ padding: 0.3 }}
-                                        minZoom={0.05}
-                                        maxZoom={4}
-                                        panOnDrag
-                                        zoomOnPinch
-                                        proOptions={{ hideAttribution: true }}
-                                        defaultEdgeOptions={{ type: 'smoothstep' }}
-                                    >
-                                        <Background color="#e5e7eb" gap={24} />
-                                        <Controls className="bg-white rounded-lg shadow-lg" />
-                                        <MiniMap
-                                            nodeColor={(node) => node.style?.background === '#fef3c7' ? '#eab308' : '#374151'}
-                                            maskColor="rgba(0, 0, 0, 0.1)"
-                                            className="bg-white rounded-lg shadow-lg"
-                                        />
-                                    </ReactFlow>
-                                </Suspense>
-                            )}
+                            <MemoryGraph className="h-full w-full" />
                         </div>
 
                         {/* Footer Stats (DESIGN: meta text, status badges) */}
                         <div className="border-t border-gray-200 flex items-center justify-between px-6 py-3 bg-gray-50">
-                            <div className="flex items-center gap-6 text-xs text-gray-500">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded bg-white border-2 border-gray-300" />
-                                    <span>{tModals('memory.legendMemory')}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 rounded bg-purple-100 border-2 border-purple-400" />
-                                    <span>{tModals('memory.legendTag')}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <div className="w-6 h-0.5 bg-purple-400" style={{ borderTop: '2px dashed #a855f7' }} />
-                                    <span>{tModals('memory.legendTagConnection')}</span>
-                                </div>
-                            </div>
+                            <div className="text-xs text-gray-400">Sigma.js WebGL</div>
                             <div className="flex items-center gap-2">
                                 {memoryStats?.db_connected ? (
                                     <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">

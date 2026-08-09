@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (291 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (296 keys).
 
 ## How configuration is set
 
@@ -221,6 +221,10 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_compaction_max_tokens` | `4000` | Target size of a compaction summary. |
 | `resume_compaction_enabled` | `True` | Compact on session resume. |
 | `attachment_rag_*` | (12 keys) | Per-attachment RAG: `attachment_rag_enabled` (`True`), `attachment_rag_k` (`4`), `attachment_rag_threshold` (`0.28`), `attachment_rag_ttl_hours` (`24`), plus hierarchical/lexical/size tuning. See config.py. |
+| `learn_document_max_pages` | `0` | PDF pages extracted for document learning; `0` = the whole document (deliberate default). A positive value is an opt-in spend cap; when it fires, the tool reply names it. Admin-only (spend control). |
+| `learn_max_sections` | `0` | Sections stored per learned document; `0` = all. Positive = opt-in spend cap, named in the reply when it fires. Admin-only (spend control). |
+| `learn_batch_pages` | `10` | Pages per learn batch (clamped 2-100): one batch = one progress tick and one DB commit, so a crash loses at most one batch. Admin-only (spend control). |
+| `memory_document_extraction_max_tokens` | `1200` | Max tokens for each per-section extraction LLM call (clamped 400-4000). Admin-only (spend control). |
 
 ## Web search
 
@@ -255,7 +259,8 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `librarian_max_excel_size_mb` | `30` | Max Excel size. |
 | `librarian_max_pdf_size_mb` | `50` | Max PDF size. |
 | `librarian_max_text_size_kb` | `500` | Max plain-text size. |
-| `librarian_pdf_max_pages_preview` | `50` | PDF preview page cap. |
+| `librarian_pdf_max_pages_preview` | `50` | PDF preview page cap (an explicit page range in the read request bypasses it). |
+| `librarian_ocr_fallback_for_pdf` | `True` | OCR scanned PDFs in the librarian read path (needs pdf2image/pytesseract plus the poppler and Tesseract system packages). |
 | `document_conversion_docker_url` | `http://localhost:5005` | Gotenberg (Office→PDF) endpoint. |
 
 ## Speech (STT / TTS)

@@ -393,7 +393,8 @@ class Config:
         "document_conversion_docker_url": "http://localhost:5005",  # Gotenberg: DOCX/XLSX/PPTX → PDF (LibreOffice in Docker)
         "librarian_auto_chunk_large_files": True,  # Auto-chunk large files (default: True)
         "librarian_pdf_max_pages_preview": 50, # Max pages to show in preview (default: 50)
-        
+        "librarian_ocr_fallback_for_pdf": True,  # OCR scanned PDFs in the librarian read path (needs pdf2image/pytesseract + poppler/Tesseract system packages)
+
         # System Settings
         "server_mode": False,                  # True = server installation (LAN always on, no desktop UI controls)
         "web_ui_enabled": True,                # Start Web UI automatically
@@ -519,6 +520,17 @@ class Config:
         "attachment_rag_hierarchical_min_chars": 4000,              # Min doc length to activate hierarchical indexing (chars)
         "attachment_rag_hierarchical_max_sections": 15,             # Max sections to index per document (2-50)
         "attachment_rag_hierarchical_coarse_k": 3,                  # Top-k sections selected in Tier 1 retrieval (1-10)
+
+        # Document learning (learn_document + attachment transfer). Deliberate:
+        # the DEFAULT is to learn EVERYTHING - a cap is opt-in (0 = no cap), and
+        # when a cap bites, the tool's reply names the key and reports "X of Y"
+        # instead of a bare success count. These keys existed only as inline
+        # fallbacks before (silent 200 pages / 40 sections = 3.9% of a 1000-page
+        # book learned and reported as success).
+        "learn_document_max_pages": 0,                              # PDF pages extracted for learning; 0 = all pages
+        "learn_max_sections": 0,                                    # Sections stored per document; 0 = all sections
+        "learn_batch_pages": 10,                                    # Pages per learn batch (clamped 2-100): one progress tick + one DB commit
+        "memory_document_extraction_max_tokens": 1200,              # Max tokens per per-section extraction LLM call (clamped 400-4000 in agent.py)
 
         # Redis Cache Settings
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
@@ -793,6 +805,15 @@ class Config:
         "mail_composer_max_output_tokens",
         "mail_composer_memory_enabled",
         "mail_composer_mailbox_search_enabled",
+        # Document-learning spend keys: pages/sections/batch size decide how many
+        # LLM calls one learn_document run makes, the token key how large each
+        # one is - a per-user write would let a LAN user multiply instance spend
+        # (precedent: the mail_composer_max_* budget keys above). learn_ is NOT
+        # a global prefix, so these need explicit entries.
+        "learn_document_max_pages",
+        "learn_max_sections",
+        "learn_batch_pages",
+        "memory_document_extraction_max_tokens",
     ])
 
     @classmethod

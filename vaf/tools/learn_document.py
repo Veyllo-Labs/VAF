@@ -323,7 +323,10 @@ async def ingest_document_knowledge(
 ) -> dict:
     """Section-based, contextual ingestion of one document into long-term memory.
 
-    Returns {"created": int, "sections": int, "doc_summary": str, "doc_tags": [str]}.
+    Returns {"created": int, "sections": int, "doc_summary": str, "doc_tags": [str],
+    "sections_total": int, "sections_dropped": int} - the last two exist so a
+    caller can report a firing learn_max_sections cap as "X of Y" instead of a
+    bare success count.
     """
     from sqlalchemy import select, and_
     from vaf.memory.models import Memory
@@ -347,8 +350,17 @@ async def ingest_document_knowledge(
     sections = _split_into_sections(content_markdown, 500, 5000)
     if len(sections) < 2:
         sections = [{"title": doc_title, "text": (content_markdown or "")[:_MAX_DOC_CHARS], "index": 0}]
-    max_sections = max(2, min(80, int(Config.get("learn_max_sections", 40) or 40)))
-    sections = sections[:max_sections]
+    # 0 = store ALL sections (the deliberate default). The old code
+    # hard-clamped even an explicit config raise to 80 and silently dropped the
+    # tail - 40 of a 1000-page book's ~1000 sections were kept and the reply
+    # still said success. A positive value is an opt-in spend cap; when it
+    # bites, the caller reports "X of Y" (sections_total / sections_dropped in
+    # the return dict).
+    sections_total = len(sections)
+    max_sections = int(Config.get("learn_max_sections", 0) or 0)
+    if max_sections > 0:
+        sections = sections[:max_sections]
+    sections_dropped = sections_total - len(sections)
 
     doc_title = _clean_title(doc_title)
 
@@ -432,7 +444,9 @@ async def ingest_document_knowledge(
             f"summary={doc_summary[:80]!r}"
         ))
 
-    return {"created": created, "sections": len(sections), "doc_summary": doc_summary, "doc_tags": doc_tags}
+    return {"created": created, "sections": len(sections), "doc_summary": doc_summary,
+            "doc_tags": doc_tags, "sections_total": sections_total,
+            "sections_dropped": sections_dropped}
 
 
 class LearnDocumentTool(BaseTool):
@@ -518,7 +532,11 @@ class LearnDocumentTool(BaseTool):
         from uuid import UUID
 
         config = Config.load()
-        max_pages = int(config.get("learn_document_max_pages", 200) or 200)
+        # 0 = learn the WHOLE document (the deliberate default): a silent 200-page
+        # cap meant 3.9% of a 1000-page book was stored and reported as success.
+        # A positive value is an opt-in spend cap; the extractor turns 0 into
+        # max_pages=None (all pages).
+        max_pages = int(config.get("learn_document_max_pages", 0) or 0)
         suffix = path.suffix.lower()
 
         if document_title is None:
@@ -536,7 +554,8 @@ class LearnDocumentTool(BaseTool):
         if suffix == ".pdf":
             try:
                 from vaf.core.pdf_extract import extract_pdf_markdown
-                content_markdown = (extract_pdf_markdown(path, max_pages=max_pages) or {}).get("markdown", "")
+                # max_pages 0 = whole document -> extractor None
+                content_markdown = (extract_pdf_markdown(path, max_pages=(max_pages or None)) or {}).get("markdown", "")
             except ImportError:
                 return "Error: PDF support not installed. Run: pip install pdfplumber PyPDF2"
             except Exception as e:

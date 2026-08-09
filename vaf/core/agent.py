@@ -5117,7 +5117,8 @@ class Agent:
     def _generate_for_document_extraction(self, user_prompt: str) -> str:
         """
         Single non-streaming LLM call for document learning extraction (per page/section).
-        Same provider path as compaction but with lower max_tokens (memory_document_extraction_max_tokens, default 800).
+        Same provider path as compaction but with lower max_tokens
+        (memory_document_extraction_max_tokens, default 1200, clamped 400-4000).
         """
         from vaf.core.config import Config
         max_tokens = int(Config.get("memory_document_extraction_max_tokens", 1200) or 1200)

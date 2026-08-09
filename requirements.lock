@@ -1962,10 +1962,6 @@ packaging==26.2 \
     #   pytest
     #   qtpy
     #   transformers
-pdf2image==1.17.0 \
-    --hash=sha256:eaa959bc116b420dd7ec415fcae49b98100dda3dd18cd2fdfa86d09f112f6d57 \
-    --hash=sha256:ecdd58d7afb810dffe21ef2b1bbc057ef434dabbac6c33778a38a3f7744a27e2
-    # via -r requirements.txt
 pdfminer-six==20251230 \
     --hash=sha256:9ff2e3466a7dfc6de6fd779478850b6b7c2d9e9405aa2a5869376a822771f485 \
     --hash=sha256:e8f68a14c57e00c2d7276d26519ea64be1b48f91db1cdc776faa80528ca06c1e
@@ -2077,7 +2073,6 @@ pillow==12.2.0 \
     # via
     #   -r requirements.txt
     #   browser-use
-    #   pdf2image
     #   pdfplumber
     #   pystray
     #   pytesseract
@@ -2580,7 +2575,9 @@ pypdfium2==5.9.0 \
     --hash=sha256:e93f0cf440169a3e445e6fbd06c803877e7418f3e13254287875cb67f208bb5a \
     --hash=sha256:f4991ae39bcea757552579bba4aebfaedb71c96dd35c2292f957b8ac9132f1ff \
     --hash=sha256:ffe49edde2ac86f28ca7e58f565255a442f38a7508fff31b79a55f508f25a31e
-    # via pdfplumber
+    # via
+    #   -r requirements.txt
+    #   pdfplumber
 pyside6==6.11.1 ; sys_platform == "linux" \
     --hash=sha256:0968877ab1fb4ef3587a284da6fe05e8647ada56a6a3750b6395188e01f4aba6 \
     --hash=sha256:537682c3b7530817203e667c1f5a2f00486b37bf52c52eeab438544c7a0917f6 \

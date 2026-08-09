@@ -2253,6 +2253,10 @@ function VAFDashboardContent() {
     // Per-document button state (keyed by name) + the running job's taskId for Cancel.
     const [learnDocStates, setLearnDocStates] = useState<Record<string, 'learning' | 'learned' | 'error' | undefined>>({});
     const learnTaskIdRef = useRef<string | null>(null);
+    // The page-walk animation in the Document Viewer (2s per page, back to top
+    // at the end) listened to the old chat-lane's cursor events; the batched
+    // job drives the SAME event from its learn_state frames.
+    const learnCursorActiveRef = useRef(false);
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -3664,6 +3668,18 @@ function VAFDashboardContent() {
                                 : _phase === 'done' ? 'learned'
                                 : _phase === 'failed' ? 'error' : undefined,
                         }));
+                    }
+                    // Drive the viewer's page-walk animation exactly like the old
+                    // chat lane did (same agent-cursor event; the viewer prefers
+                    // its real page count over the total we pass).
+                    if (_phase === 'learning' && !learnCursorActiveRef.current) {
+                        learnCursorActiveRef.current = true;
+                        window.dispatchEvent(new CustomEvent('agent-cursor', {
+                            detail: { phase: 'start', total: (typeof data.batchesTotal === 'number' && data.batchesTotal > 0) ? data.batchesTotal : 1 },
+                        }));
+                    } else if (_phase !== 'learning' && learnCursorActiveRef.current) {
+                        learnCursorActiveRef.current = false;
+                        window.dispatchEvent(new CustomEvent('agent-cursor', { detail: { phase: 'end' } }));
                     }
                     if (_phase !== 'learning') learnTaskIdRef.current = null;
                 }

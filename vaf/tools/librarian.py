@@ -2538,7 +2538,30 @@ home: {self.home}
                         response_msg = {"role": "assistant", "content": full_content}
                         if tool_calls:
                             response_msg["tool_calls"] = tool_calls
-                            
+                        else:
+                            # Leak recovery for content-embedded calls: the chunk
+                            # filter above only catches a chunk that IS pure JSON.
+                            # A call leaked inside prose/think text accumulates
+                            # into full_content and the turn ends think-only -
+                            # the exact failure the main lane just had. Every
+                            # recovery lane knows every dialect, or the same
+                            # leak "works in chat but hangs the librarian".
+                            from vaf.core.tool_call_recovery import (
+                                extract_wire_json_tool_calls,
+                                extract_xml_tool_call,
+                                strip_tool_call_markup,
+                            )
+                            _names = {t.get("function", {}).get("name")
+                                      for t in (tools_schema or [])}
+                            _names.discard(None)
+                            _leaked = extract_wire_json_tool_calls(full_content, _names)
+                            if not _leaked:
+                                _one = extract_xml_tool_call(full_content, _names)
+                                _leaked = [_one] if _one else []
+                            if _leaked:
+                                response_msg["tool_calls"] = _leaked
+                                response_msg["content"] = strip_tool_call_markup(full_content)
+
                     except Exception as e:
                         live.stop()
                         return self._format_connection_error(f"API Error: {str(e)}", task)

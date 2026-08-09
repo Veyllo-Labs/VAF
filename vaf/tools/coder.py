@@ -6205,6 +6205,17 @@ Task {task_idx + 1}: {current_task}
                             extracted_tool_call = _xml_call
                             tui.append_stream(f"[EXTRACTED] {_xml_call['function']['name']} from XML/DSML invoke markup")
 
+                    # Format 0e: bare OpenAI-wire JSON leaked as content
+                    # ({"tool_calls": [...]}) - the dialect Veyllo produced on
+                    # the main lane; every recovery lane knows every dialect,
+                    # or the same leak "works in chat but hangs the coder".
+                    if not extracted_tool_call:
+                        from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+                        _wire_calls = extract_wire_json_tool_calls(content)
+                        if _wire_calls:
+                            extracted_tool_call = _wire_calls[0]
+                            tui.append_stream(f"[EXTRACTED] {_wire_calls[0]['function']['name']} from wire-JSON leak")
+
                     if tool_call_match:
                         try:
                             tasks_str = tool_call_match.group(1)

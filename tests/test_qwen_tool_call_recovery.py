@@ -339,3 +339,31 @@ def test_the_agent_fallback_chain_consults_the_wire_dialect():
     guard = window[max(0, j - 300):j]
     assert "if not tool_calls_detected:" in guard and "if False" not in guard, \
         "the wire-JSON lane exists in source but can never run"
+
+
+def test_every_recovery_lane_knows_the_wire_dialect():
+    """The main agent, the coder and the librarian each parse model content on
+    their own fallback path - a dialect only one of them knows means the same
+    leak "works in chat but hangs the coder". Source-level wiring pins."""
+    import inspect
+
+    import vaf.core.agent as agent_mod
+    import vaf.tools.coder as coder_mod
+    import vaf.tools.librarian as librarian_mod
+
+    # Presence of the import is not a wiring: each lane must CALL the
+    # extractor on its own content variable (a disabled call keeps the name
+    # in source - the first version of this pin missed exactly that).
+    expected_call = {
+        agent_mod: "extract_wire_json_tool_calls(text_to_search",
+        coder_mod: "extract_wire_json_tool_calls(content",
+        librarian_mod: "extract_wire_json_tool_calls(full_content",
+    }
+    for mod, call in expected_call.items():
+        src = inspect.getsource(mod)
+        assert call in src, f"{mod.__name__} lost the wire-JSON leak dialect"
+    # The librarian must also STRIP the executed leak from the kept content -
+    # feeding the raw JSON back to the model next turn re-teaches the leak.
+    lib_src = inspect.getsource(librarian_mod)
+    i = lib_src.index("extract_wire_json_tool_calls")
+    assert "strip_tool_call_markup" in lib_src[i:i + 1200]

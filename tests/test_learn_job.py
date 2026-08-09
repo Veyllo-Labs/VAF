@@ -451,6 +451,11 @@ def test_frontend_wires_button_banner_and_cancel():
     assert "learn_document_start" in page
     assert "learn_document_cancel" in page
     assert "learningDocument" in page, "the banner lost its i18n label"
+    # The viewer's page-walk animation rides the learn_state frames (the old
+    # chat lane's agent-cursor event) - losing it was the first thing the
+    # owner noticed in the live run.
+    assert page.count("agent-cursor") >= 2, \
+        "learn_state no longer drives the Document Viewer page-walk animation"
     assert "learnStates={learnDocStates}" in page, "the viewer no longer gets button states"
     viewer = Path("web/components/DocumentViewer.tsx").read_text(encoding="utf-8")
     assert "onLearnDocument" in viewer

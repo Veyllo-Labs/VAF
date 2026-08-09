@@ -63,10 +63,14 @@ class _FakeDb:
 
 
 class _FakeGetDb:
+    loops = []  # running-loop id per DB context (the cross-loop regression pin)
+
     def __init__(self, user_scope_id=None):
         pass
 
     async def __aenter__(self):
+        import asyncio as _aio
+        _FakeGetDb.loops.append(id(_aio.get_running_loop()))
         return _FakeDb()
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -83,6 +87,7 @@ class _IngestLog(list):
 def rig(monkeypatch, pdf):
     """Fake extractor (100-page doc, 10 pages/batch), fake DB, fake ingest."""
     _FakeDb.commits = 0
+    _FakeGetDb.loops = []
     ingests = _IngestLog()
 
     def _fake_extract(path, max_pages=None, ocr_fallback=True, *, first_page=1, cancel=None):
@@ -157,6 +162,19 @@ def test_one_commit_per_batch_and_monotonic_offsets(pdf, rig):
         "a per-batch root upsert stamps the last batch's numbers as the document's"
     # complete -> the ledger is gone (the root is the durable record)
     assert LearnLedger.load(out.doc_tag, "") is None
+
+
+def test_the_whole_job_runs_on_one_event_loop(pdf, rig):
+    """First live run: batch 1 committed, batch 2 died on "got Future attached
+    to a different loop" - a per-batch asyncio.run gave every batch a fresh
+    loop while the async DB engine stayed cached on the first one. Every DB
+    context of a job must therefore see the SAME running loop."""
+    out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
+                         user_scope_id=None, session_id="s1")
+    assert out.status == "complete"
+    assert len(_FakeGetDb.loops) >= 10, "the pin needs the multi-batch run it pins"
+    assert len(set(_FakeGetDb.loops)) == 1, \
+        f"batches ran on {len(set(_FakeGetDb.loops))} different event loops"
 
 
 def test_crash_at_batch_three_keeps_the_first_two(pdf, rig, monkeypatch):

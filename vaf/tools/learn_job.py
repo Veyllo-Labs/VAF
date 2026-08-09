@@ -197,7 +197,37 @@ def _learn_batches(
     max_batches: Optional[int] = None,
 ) -> LearnOutcome:
     """Run (or continue) one document's batched learn. Shared by the child and
-    the sync one-batch fallback; never raises - failures become the outcome."""
+    the sync one-batch fallback; never raises - failures become the outcome.
+
+    ONE event loop for the WHOLE job (this wrapper's single asyncio.run): the
+    async DB engine is created once and cached, and its connections are bound
+    to the loop that created them - a per-batch asyncio.run gave every batch a
+    fresh loop, so batch 1 committed and batch 2 died on the cached engine
+    ("got Future attached to a different loop", first live run). Per-batch
+    COMMITS are unaffected: they come from the per-batch get_db context, not
+    from the loop.
+    """
+    return asyncio.run(_learn_batches_async(
+        spec,
+        generate_fn=generate_fn,
+        user_scope_id=user_scope_id,
+        session_id=session_id,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        max_batches=max_batches,
+    ))
+
+
+async def _learn_batches_async(
+    spec: LearnJobSpec,
+    *,
+    generate_fn: Callable[[str], str],
+    user_scope_id,
+    session_id: Optional[str],
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
+    max_batches: Optional[int] = None,
+) -> LearnOutcome:
     from vaf.core.config import Config
     from vaf.tools.learn_document import (
         _clean_title,
@@ -238,13 +268,11 @@ def _learn_batches(
             ledger = None
         if spec.force_relearn:
             # Relearn from scratch: soft-delete the old sections + root, fresh ledger.
-            async def _wipe():
-                from vaf.memory.database import get_db
-                from vaf.memory.rag import RagPipeline
-                async with get_db(user_scope_id=user_scope_id) as db:
-                    await RagPipeline(db).delete_by_tag(doc_tag, soft=True,
-                                                        user_scope_id=user_scope_id)
-            asyncio.run(_wipe())
+            from vaf.memory.database import get_db
+            from vaf.memory.rag import RagPipeline
+            async with get_db(user_scope_id=user_scope_id) as db:
+                await RagPipeline(db).delete_by_tag(doc_tag, soft=True,
+                                                    user_scope_id=user_scope_id)
             if ledger:
                 ledger.delete()
             ledger = None
@@ -258,14 +286,12 @@ def _learn_batches(
         else:
             # Close the write-after-commit window: sections past the cut line are
             # crash orphans of a batch whose ledger write never happened.
-            async def _cut():
-                from vaf.memory.database import get_db
-                from vaf.memory.rag import RagPipeline
-                async with get_db(user_scope_id=user_scope_id) as db:
-                    await RagPipeline(db).delete_document_sections(
-                        doc_tag, from_section_index=ledger.section_count,
-                        user_scope_id=user_scope_id)
-            asyncio.run(_cut())
+            from vaf.memory.database import get_db
+            from vaf.memory.rag import RagPipeline
+            async with get_db(user_scope_id=user_scope_id) as db:
+                await RagPipeline(db).delete_document_sections(
+                    doc_tag, from_section_index=ledger.section_count,
+                    user_scope_id=user_scope_id)
 
         outcome.total_pages = ledger.total_pages
         done_set = ledger.done_batch_indices()
@@ -313,7 +339,7 @@ def _learn_batches(
 
             created = 0
             if (md or "").strip():
-                res = asyncio.run(_ingest_one(md)) or {}
+                res = (await _ingest_one(md)) or {}
                 created = int(res.get("created") or 0)
             if created == 0:
                 ledger.empty_page_ranges.append([first, first + pages - 1])
@@ -334,9 +360,9 @@ def _learn_batches(
         outcome.empty_page_ranges = [list(r) for r in ledger.empty_page_ranges]
 
         if outcome.status == "complete":
-            asyncio.run(_finalize_root(
+            await _finalize_root(
                 doc_tag=doc_tag, doc_title=doc_title, ledger=ledger,
-                generate_fn=generate_fn, user_scope_id=user_scope_id))
+                generate_fn=generate_fn, user_scope_id=user_scope_id)
             ledger.status = "complete"
             ledger.save()
             ledger.delete()  # the document_index root is the durable record

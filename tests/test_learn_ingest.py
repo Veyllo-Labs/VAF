@@ -120,3 +120,54 @@ def test_ingest_document_knowledge_orchestration(monkeypatch):
     # doc_summary lives only on the index root
     assert index_recs[0]["meta"].get("doc_summary") == "Overall overview."
     assert res["doc_summary"] == "Overall overview."
+
+
+def test_is_toc_section_detection():
+    from vaf.memory.attachment_rag import is_toc_section
+    leaders = "\n".join(
+        f"Chapter {i} Introduction and Background {'.' * 12} {i * 3}" for i in range(1, 13))
+    assert is_toc_section("Table of Contents", "prose without any leaders")
+    assert is_toc_section("Inhaltsverzeichnis", "x")
+    assert is_toc_section("List of Tables", "x")
+    assert is_toc_section("Overview", leaders)  # body-only detection
+    assert not is_toc_section("Methods", "methods text " * 50)
+    few = "\n".join(f"Item {i} {'.' * 8} {i}" for i in range(1, 5))  # 4 < min lines
+    assert not is_toc_section("Overview", few)
+    diluted = ("prose line without leaders\n" * 20) + few  # below both thresholds
+    assert not is_toc_section("Overview", diluted)
+
+
+def test_ingest_skips_toc_sections_and_keeps_indices_dense(monkeypatch):
+    import vaf.memory.rag as ragmod
+    _FakePipeline.records = []
+    monkeypatch.setattr(ragmod, "RagPipeline", _FakePipeline)
+
+    toc_lines = "\n".join(
+        f"Chapter {i} Introduction and Background {'.' * 12} {i * 3}" for i in range(1, 13))
+    md = (
+        "## Table of Contents\n" + toc_lines + "\n\n"
+        "## Introduction\n" + ("intro text " * 80) + "\n\n"
+        "## Methods\n" + ("methods text " * 80) + "\n\n"
+        "## Results\n" + ("results text " * 80) + "\n"
+    )
+    section_calls = {"n": 0}
+
+    def gen(prompt):
+        if '"doc_summary"' in prompt:
+            return json.dumps({"doc_summary": "s", "doc_tags": []})
+        section_calls["n"] += 1
+        return "ctx"
+
+    res = asyncio.run(ld.ingest_document_knowledge(
+        _FakeDB(), content_markdown=md, doc_title="MyDoc", doc_tag="doc-mydoc",
+        source="test", mem_type="knowledge", generate_fn=gen, user_scope_id=None,
+    ))
+
+    assert res["sections_skipped_toc"] == 1
+    assert res["toc_titles"] == ["Table of Contents"]
+    assert res["created"] == 3
+    assert section_calls["n"] == 3, "the ToC section must not spend an LLM call"
+    stored = [r for r in _FakePipeline.records if r["meta"].get("type") == "knowledge"]
+    assert [r["meta"]["section_index"] for r in stored] == [0, 1, 2], \
+        "a skipped section must not leave a hole (section_count is the resume cut line)"
+    assert not any("....." in r["content"] for r in stored)

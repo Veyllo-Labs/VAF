@@ -190,7 +190,7 @@ async def ingest_document_knowledge(
     from sqlalchemy import select, and_
     from vaf.memory.models import Memory
     from vaf.memory.rag import RagPipeline
-    from vaf.memory.attachment_rag import _split_into_sections
+    from vaf.memory.attachment_rag import _split_into_sections, is_toc_section
     from vaf.core.config import Config
     # Not BaseTool.log(): this is a module-level helper shared by two tools, so there is no
     # self to name - and the ingest lines belong in memory_*.log next to the rest of the RAG
@@ -226,14 +226,25 @@ async def ingest_document_knowledge(
     # Pass 1: a plain-text contextual summary per section (robust for any model).
     items = []  # (section_index, section_title, section_text, context)
     contexts = []
+    toc_titles = []
     for sec in sections:
         sec_text = (sec.get("text") or "").strip()
         if not sec_text:
             continue
         sec_title = (sec.get("title") or doc_title).strip()
+        if is_toc_section(sec_title, sec_text):
+            # Filler, not knowledge - skipping BEFORE the LLM call saves the
+            # spend and the Memory row. Counted separately from the cap drop.
+            toc_titles.append(sec_title)
+            append_domain_log("memory", (
+                f"[LEARN] skip ToC section '{sec_title[:60]}' ({len(sec_text)} chars)"))
+            continue
         context = _contextualize_section_llm(sec_text, sec_title, doc_title, generate_fn)
         contexts.append(context)
-        items.append((section_offset + sec.get("index", len(items)), sec_title, sec_text, context))
+        # Dense index (len(items), NOT sec["index"]): a skipped section must not
+        # leave a hole - the ledger's section_count is the resume cut line and
+        # the next batch continues at section_offset + created.
+        items.append((section_offset + len(items), sec_title, sec_text, context))
 
     # Doc-level summary + tags from the clean section contexts (applied to every section + the root).
     doc_summary, doc_tags = _summarize_doc_from_contexts(contexts, doc_title, generate_fn)
@@ -305,7 +316,8 @@ async def ingest_document_knowledge(
 
     return {"created": created, "sections": len(sections), "doc_summary": doc_summary,
             "doc_tags": doc_tags, "sections_total": sections_total,
-            "sections_dropped": sections_dropped}
+            "sections_dropped": sections_dropped,
+            "sections_skipped_toc": len(toc_titles), "toc_titles": toc_titles[:10]}
 
 
 class LearnDocumentTool(BaseTool):
@@ -521,10 +533,12 @@ class LearnDocumentTool(BaseTool):
         if outcome.status in ("refused", "failed"):
             return outcome.message() if outcome.status == "failed" else f"Error: {outcome.error}"
         if outcome.status == "partial":
+            toc_note = (f" Skipped {outcome.sections_skipped_toc} table-of-contents "
+                        "section(s)." if outcome.sections_skipped_toc else "")
             return (
                 f'Learned batch {outcome.batches_done} of {outcome.batches_total} of '
                 f'"{document_title}" and saved the progress ({outcome.sections_stored} '
-                f"section(s) so far). Background learning is off "
+                f"section(s) so far).{toc_note} Background learning is off "
                 f"(sub_agents_in_separate_terminals=false), so each call learns one "
                 f"batch - call learn_document again to continue, or enable separate "
                 f"terminals to finish in one run."

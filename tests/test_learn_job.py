@@ -103,7 +103,8 @@ def rig(monkeypatch, pdf):
         ingests.append({"section_offset": kw.get("section_offset"),
                         "update_root": kw.get("update_root")})
         return {"created": 3, "sections": 3, "doc_summary": "", "doc_tags": [],
-                "sections_total": 3, "sections_dropped": 0}
+                "sections_total": 3, "sections_dropped": 0,
+                "sections_skipped_toc": 0, "toc_titles": []}
 
     class _FakePipeline:
         """Finalize + wipe + orphan-cut all go through RagPipeline; the fakes
@@ -185,7 +186,8 @@ def test_crash_at_batch_three_keeps_the_first_two(pdf, rig, monkeypatch):
         if calls["n"] == 3:
             raise RuntimeError("db died")
         return {"created": 3, "sections": 3, "doc_summary": "", "doc_tags": [],
-                "sections_total": 3, "sections_dropped": 0}
+                "sections_total": 3, "sections_dropped": 0,
+                "sections_skipped_toc": 0, "toc_titles": []}
 
     monkeypatch.setattr("vaf.tools.learn_document.ingest_document_knowledge", _boom)
     out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
@@ -274,7 +276,8 @@ def test_section_cap_ends_as_capped_and_names_the_key(pdf, rig, monkeypatch):
 def test_empty_batches_are_listed_not_absorbed(pdf, rig, monkeypatch):
     async def _empty(db, **kw):
         return {"created": 0, "sections": 0, "doc_summary": "", "doc_tags": [],
-                "sections_total": 0, "sections_dropped": 0}
+                "sections_total": 0, "sections_dropped": 0,
+                "sections_skipped_toc": 0, "toc_titles": []}
 
     monkeypatch.setattr("vaf.tools.learn_document.ingest_document_knowledge", _empty)
     out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
@@ -477,3 +480,67 @@ def test_learn_status_route_is_declared_before_the_catchall():
     i = src.index('get("/learn-status/{doc_tag}")')
     block = src[i:i + 2400]
     assert "get_current_user_scope" in block, "learn-status lost its user scoping"
+
+
+def test_resume_resets_the_ledger_status_to_running(pdf, rig):
+    """The previous run's terminal status must not survive the resume - the
+    live run reported "failed" for half an hour of healthy batching."""
+    from vaf.core.learn_ledger import LearnBatch, file_sha256
+
+    led = LearnLedger(doc_tag="doc-book", source_path=str(pdf),
+                      content_sha256=file_sha256(pdf), user_scope_id="",
+                      session_id="s1", total_pages=100, batch_pages=10,
+                      total_batches=10, status="failed", last_error="db died")
+    led.record_batch(LearnBatch(index=0, first_page=1, pages=10, section_start=0, sections=3))
+
+    states = []
+    real_record = LearnLedger.record_batch
+
+    def _spy(self, batch):
+        states.append(self.status)
+        return real_record(self, batch)
+
+    import vaf.core.learn_ledger as ll
+    orig = ll.LearnLedger.record_batch
+    ll.LearnLedger.record_batch = _spy
+    try:
+        out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
+                             user_scope_id=None, session_id="s1")
+    finally:
+        ll.LearnLedger.record_batch = orig
+    assert out.status == "complete"
+    assert states and all(s == "running" for s in states), \
+        f"batches recorded under a terminal status: {set(states)}"
+
+
+def test_toc_skips_survive_resume_and_reach_the_message(pdf, rig, monkeypatch):
+    """The batch-1 ToC skip must survive a crash + resume via the ledger and
+    end up as a named line in the completion message."""
+    calls = {"n": 0}
+
+    async def _first_batch_skips_then_dies(db, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"created": 3, "sections": 4, "doc_summary": "", "doc_tags": [],
+                    "sections_total": 4, "sections_dropped": 0,
+                    "sections_skipped_toc": 1, "toc_titles": ["Table of Contents"]}
+        raise RuntimeError("db died")
+
+    monkeypatch.setattr("vaf.tools.learn_document.ingest_document_knowledge",
+                        _first_batch_skips_then_dies)
+    out1 = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
+                          user_scope_id=None, session_id="s1")
+    assert out1.status == "failed"
+
+    async def _clean(db, **kw):
+        return {"created": 3, "sections": 3, "doc_summary": "", "doc_tags": [],
+                "sections_total": 3, "sections_dropped": 0,
+                "sections_skipped_toc": 0, "toc_titles": []}
+
+    monkeypatch.setattr("vaf.tools.learn_document.ingest_document_knowledge", _clean)
+    out2 = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
+                          user_scope_id=None, session_id="s1")
+    assert out2.status == "complete"
+    assert out2.sections_skipped_toc == 1, \
+        "the batch-1 skip must survive the resume via the ledger"
+    assert "Skipped 1 table-of-contents section(s)." in out2.message()

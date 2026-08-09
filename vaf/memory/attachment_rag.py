@@ -445,6 +445,32 @@ def _split_into_sections(
     return final if len(final) >= 2 else []
 
 
+# A table-of-contents section is filler, not knowledge: dot-leader listings
+# ("Introduction ........ 7") pollute retrieval and waste one LLM call plus one
+# Memory row per section. Detected by listing title OR dot-leader density.
+_TOC_TITLE_RE = re.compile(
+    r"^\s*#{0,4}\s*(?:table of contents|contents|inhaltsverzeichnis"
+    r"|list of (?:tables|figures|abbreviations)"
+    r"|abbildungsverzeichnis|tabellenverzeichnis"
+    r"|abk(?:ue|ü)rzungsverzeichnis|index)\s*$",
+    re.IGNORECASE,
+)
+_TOC_LEADER_RE = re.compile(r"\.{4,}\s*\d+\s*$")
+_TOC_MIN_LEADER_LINES = 5    # fewer dot-leader lines is prose quoting a ToC, not a ToC
+_TOC_LEADER_RATIO = 0.30     # >= 30% of non-empty lines end in a dot-leader
+
+
+def is_toc_section(title: str, text: str) -> bool:
+    """True when a split section is a table of contents / list-of-X listing."""
+    if _TOC_TITLE_RE.match((title or "").strip()):
+        return True
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return False
+    leaders = sum(1 for ln in lines if _TOC_LEADER_RE.search(ln))
+    return leaders >= _TOC_MIN_LEADER_LINES and (leaders / len(lines)) >= _TOC_LEADER_RATIO
+
+
 def _summarize_section_llm(
     section_text: str,
     section_title: str,
@@ -493,6 +519,11 @@ async def _hierarchical_ingest_doc(
     """
     max_sections = max(2, min(50, int(Config.get("attachment_rag_hierarchical_max_sections", 15) or 15)))
     sections = _split_into_sections(content, min_section_chars=500, max_section_chars=5000)
+    # ToC/list-of-X sections are dropped BEFORE the max_sections slice so filler
+    # never occupies a summarization slot. Deliberate: they are not indexed at
+    # all - dot-leader listings only pollute section retrieval.
+    sections = [s for s in sections
+                if not is_toc_section(s.get("title") or "", s.get("text") or "")]
 
     if len(sections) < 2:
         return {"sections": 0, "chunks": 0, "method": "flat_fallback"}

@@ -103,6 +103,7 @@ class LearnOutcome:
     batches_done: int = 0
     batches_total: int = 0
     empty_page_ranges: List[List[int]] = field(default_factory=list)
+    sections_skipped_toc: int = 0
     error: str = ""
 
     def message(self) -> str:
@@ -128,6 +129,9 @@ class LearnOutcome:
             ranges = ", ".join(f"{a}-{b}" if a != b else str(a)
                                for a, b in self.empty_page_ranges)
             parts.append(f"Pages {ranges} had no extractable text.")
+        if self.sections_skipped_toc:
+            parts.append(f"Skipped {self.sections_skipped_toc} "
+                         "table-of-contents section(s).")
         if self.status == "capped":
             parts.append(
                 "Stopped at the configured limit learn_max_sections - raise the key "
@@ -292,6 +296,12 @@ async def _learn_batches_async(
                 await RagPipeline(db).delete_document_sections(
                     doc_tag, from_section_index=ledger.section_count,
                     user_scope_id=user_scope_id)
+            # A resumed job is RUNNING again: the previous run's terminal
+            # status must not survive it (live run: the learn-status endpoint
+            # reported "failed" for half an hour of healthy batching).
+            ledger.status = "running"
+            ledger.last_error = None
+            ledger.save()
 
         outcome.total_pages = ledger.total_pages
         done_set = ledger.done_batch_indices()
@@ -341,6 +351,7 @@ async def _learn_batches_async(
             if (md or "").strip():
                 res = (await _ingest_one(md)) or {}
                 created = int(res.get("created") or 0)
+                ledger.toc_skipped += int(res.get("sections_skipped_toc") or 0)
             if created == 0:
                 ledger.empty_page_ranges.append([first, first + pages - 1])
             ledger.record_batch(LearnBatch(
@@ -358,6 +369,7 @@ async def _learn_batches_async(
         outcome.sections_stored = ledger.section_count
         outcome.pages_learned = sum(b.pages for b in ledger.batches if b.status == "done")
         outcome.empty_page_ranges = [list(r) for r in ledger.empty_page_ranges]
+        outcome.sections_skipped_toc = ledger.toc_skipped
 
         if outcome.status == "complete":
             await _finalize_root(
@@ -366,6 +378,14 @@ async def _learn_batches_async(
             ledger.status = "complete"
             ledger.save()
             ledger.delete()  # the document_index root is the durable record
+            # The graph cache never learns about ingests (only HTTP routes
+            # invalidate it) - without this, the finished document appears in
+            # the graph up to 5 minutes late and "Refresh" seems dead.
+            try:
+                from vaf.memory.cache import get_cache
+                await get_cache().invalidate_graph()
+            except Exception:
+                pass  # cache is an accelerator; TTL expires a stale entry
         return outcome
     except Exception as e:  # never raises - the outcome carries the failure
         outcome.status = "failed"

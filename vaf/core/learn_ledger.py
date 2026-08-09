@@ -74,6 +74,7 @@ class LearnLedger:
     batches: List[LearnBatch] = field(default_factory=list)
     section_count: int = 0        # next global section_index (resume cut line)
     empty_page_ranges: List[List[int]] = field(default_factory=list)
+    toc_skipped: int = 0          # ToC/list-of-X sections skipped (survives resume)
     status: str = "running"       # running | complete | stopped | capped | failed
     last_error: Optional[str] = None
     version: int = LEDGER_VERSION
@@ -144,6 +145,7 @@ class LearnLedger:
                 batches=batches,
                 section_count=int(raw.get("section_count") or 0),
                 empty_page_ranges=[list(map(int, r)) for r in (raw.get("empty_page_ranges") or [])],
+                toc_skipped=int(raw.get("toc_skipped") or 0),
                 status=str(raw.get("status") or "running"),
                 last_error=raw.get("last_error"),
                 version=int(raw.get("version") or LEDGER_VERSION),

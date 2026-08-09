@@ -25,6 +25,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   re-encrypts every affected row from a config backup that still carries the
   previous key (dry-run first; rows neither key opens are counted and never
   touched).
+- **Learning the same PDF twice is refused, not duplicated.** The content
+  checksum of every finished document is stored with it; clicking learn again
+  on a byte-identical file (even re-uploaded under a new name) now answers
+  "already learned" with the stored numbers, and the button shows the learned
+  state. A deliberate re-learn stays available via force_relearn.
 - **Table-of-contents pages are no longer learned as knowledge.** Learning a
   document skipped nothing before: the contents/list-of-tables pages became
   stored "knowledge" full of dot leaders and wasted one model call each. They

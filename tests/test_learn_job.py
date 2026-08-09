@@ -58,6 +58,9 @@ class _FakeDb:
                 class _S:
                     def all(self):
                         return []
+
+                    def first(self):
+                        return None  # no completed root: the learn proceeds
                 return _S()
         return _R()
 
@@ -156,8 +159,9 @@ def test_one_commit_per_batch_and_monotonic_offsets(pdf, rig):
     assert out.status == "complete"
     assert out.batches_total == 10 and out.batches_done == 10
     assert out.sections_stored == 30
-    # 10 batch commits + 1 finalize commit
-    assert _FakeDb.commits == 11
+    # 10 batch commits + 1 finalize commit + 1 read-only already-learned
+    # lookup at the start (it opens its own short DB context)
+    assert _FakeDb.commits == 12
     assert [i["section_offset"] for i in rig] == [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
     assert all(i["update_root"] is False for i in rig), \
         "a per-batch root upsert stamps the last batch's numbers as the document's"
@@ -193,7 +197,8 @@ def test_crash_at_batch_three_keeps_the_first_two(pdf, rig, monkeypatch):
     out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
                          user_scope_id=None, session_id="s1")
     assert out.status == "failed"
-    assert _FakeDb.commits == 2, "the failed batch must not commit"
+    # batches 1-2 plus the start's read-only already-learned lookup context
+    assert _FakeDb.commits == 3, "the failed batch must not commit"
     led = LearnLedger.load(out.doc_tag, "")
     assert led is not None and led.done_batch_indices() == {0, 1}
     assert led.status == "failed"
@@ -237,7 +242,8 @@ def test_sync_lane_runs_exactly_one_batch(pdf, rig):
                          user_scope_id=None, session_id="s1", max_batches=1)
     assert out.status == "partial"
     assert out.batches_done == 1 and out.batches_total == 10
-    assert _FakeDb.commits == 1
+    # one batch commit + the start's read-only already-learned lookup context
+    assert _FakeDb.commits == 2
     # Second call continues at batch 2
     out2 = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
                           user_scope_id=None, session_id="s1", max_batches=1)
@@ -433,13 +439,17 @@ def test_learn_ws_handler_gates_ownership_and_path():
     running duplicate, and answer deny frames instead of silence."""
     src = Path("vaf/core/web_server.py").read_text(encoding="utf-8")
     i = src.index('elif type == "learn_document_start"')
-    block = src[i:i + 4200]
+    block = src[i:i + 6000]
     assert "_ws_session_owner_ok(websocket, session_id)" in block
     assert "learn_denied" in block
     assert "realpath(_doc_path).startswith" in block, \
         "the handler stopped pinning the path to the session attachments dir"
     assert 'has_live_task("learn_agent"' in block
     assert "spawn_subagent(" in block
+    # Already-learned pre-check: the frame answers BEFORE a child is spawned.
+    assert block.index("find_completed_learn") < block.index("spawn_subagent("), \
+        "the checksum pre-check must run before the spawn"
+    assert '"already_learned"' in block
 
     j = src.index('elif type == "learn_document_cancel"')
     cancel_block = src[j:j + 1600]
@@ -544,3 +554,80 @@ def test_toc_skips_survive_resume_and_reach_the_message(pdf, rig, monkeypatch):
     assert out2.sections_skipped_toc == 1, \
         "the batch-1 skip must survive the resume via the ledger"
     assert "Skipped 1 table-of-contents section(s)." in out2.message()
+
+
+def test_already_learned_by_checksum_is_refused(pdf, rig, monkeypatch):
+    """The ledger dies on completion, so the durable guard is the root's
+    stored checksum - a byte-identical re-learn must refuse, not duplicate."""
+    calls = {"n": 0}
+
+    async def _found(sha, scope):
+        calls["n"] += 1
+        return {"doc_title": "Book", "doc_tag": "doc-book",
+                "sections": 30, "total_pages": 100}
+
+    monkeypatch.setattr(lj, "find_completed_learn", _found)
+    out = _learn_batches(_spec(pdf), generate_fn=lambda p: "x",
+                         user_scope_id=None, session_id="s1")
+    assert out.status == "refused"
+    assert "already learned" in out.message()
+    assert "force_relearn" in out.message()
+    assert calls["n"] == 1
+    assert len(rig) == 0, "no batch may run for an already-learned document"
+    assert LearnLedger.load(out.doc_tag, "") is None, "a refused start leaves no ledger"
+
+
+def test_force_relearn_bypasses_the_checksum_refusal(pdf, rig, monkeypatch):
+    async def _found(sha, scope):
+        raise AssertionError("force_relearn must not consult the already-learned lookup")
+
+    monkeypatch.setattr(lj, "find_completed_learn", _found)
+    out = _learn_batches(_spec(pdf, force_relearn=True), generate_fn=lambda p: "x",
+                         user_scope_id=None, session_id="s1")
+    assert out.status == "complete"
+
+
+def test_find_completed_learn_query_filters_checksum_status_and_scope(monkeypatch):
+    import asyncio
+    import uuid as _uuid
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.dialects import postgresql
+
+    sqls = []
+
+    class _R:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _Db:
+        async def execute(self, stmt):
+            sqls.append(str(stmt.compile(dialect=postgresql.dialect())))
+            return _R()
+
+    @asynccontextmanager
+    async def _gdb(user_scope_id=None):
+        yield _Db()
+
+    params = []
+
+    class _Db2(_Db):
+        async def execute(self, stmt):
+            comp = stmt.compile(dialect=postgresql.dialect())
+            sqls.append(str(comp))
+            params.append(set(map(str, comp.params.values())))
+            return _R()
+
+    @asynccontextmanager
+    async def _gdb2(user_scope_id=None):
+        yield _Db2()
+
+    monkeypatch.setattr("vaf.memory.database.get_db", _gdb2)
+    assert asyncio.run(lj.find_completed_learn("abc123", _uuid.uuid4())) is None
+    # JSON accessor keys and comparison values travel as bind params.
+    for needle in ("content_sha256", "learn_status", "document_index", "complete", "abc123"):
+        assert needle in params[0], f"the already-learned lookup lost its {needle} filter"
+    assert "user_scope_id" in sqls[0].split("WHERE", 1)[1]

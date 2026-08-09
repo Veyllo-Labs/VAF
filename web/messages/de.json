@@ -145,6 +145,7 @@
     "learningComplete": "„{name}“ ins Langzeitgedächtnis gelernt",
     "learningEnded": "Lernen von „{name}“ beendet: {phase}",
     "learnDenied": "Lernen dieses Dokuments konnte nicht gestartet werden",
+    "learnAlreadyLearned": "Bereits gelernt - dieses Dokument ist im Langzeitgedaechtnis.",
     "cancel": "Abbrechen"
   },
   "nav": {

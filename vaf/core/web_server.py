@@ -4614,6 +4614,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     from vaf.tools.learn_document import _clean_title, _normalize_doc_tag
                     from vaf.tools.learn_job import LearnJobSpec
                     _title = _clean_title(doc_name)
+                    # Already learned? Ask BEFORE spawning so the answer is a
+                    # friendly frame instead of a spawned child's refusal. The
+                    # child re-checks authoritatively via the same helper.
+                    try:
+                        from uuid import UUID as _UUID
+
+                        from vaf.core.learn_ledger import file_sha256 as _fsha
+                        from vaf.tools.learn_job import find_completed_learn as _fcl
+                        _scope_uuid = _UUID(str(user_scope_id)) if user_scope_id else None
+                        _done = await _fcl(_fsha(Path(_doc_path)), _scope_uuid)
+                    except Exception:
+                        _done = None  # best-effort; the job is the authority
+                    if _done:
+                        await websocket.send_json({
+                            "type": "learn_denied", "sessionId": session_id,
+                            "name": doc_name, "reason": "already_learned",
+                            "message": (
+                                f'"{_done["doc_title"] or _title}" is already learned '
+                                f'({_done["total_pages"]} page(s), '
+                                f'{_done["sections"]} section(s)).'),
+                        })
+                        continue
                     _spec = LearnJobSpec(path=_doc_path, document_title=_title,
                                          doc_tag=_normalize_doc_tag(_title))
                     _sub_env = {}

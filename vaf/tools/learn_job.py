@@ -146,6 +146,41 @@ class LearnOutcome:
     _path_hint: str = ""
 
 
+async def find_completed_learn(content_sha256: str, user_scope_id):
+    """The durable already-learned lookup, keyed on CONTENT.
+
+    The ledger dies on completion (the document_index root is the durable
+    record), so re-learn protection must ask the root: same checksum + status
+    complete means this exact document is already in long-term memory - even
+    under a different filename (every upload persists under a fresh
+    timestamped name, so a path or tag comparison would miss the duplicate).
+    Returns {doc_title, doc_tag, sections, total_pages} or None.
+    """
+    from sqlalchemy import and_, select
+    from vaf.memory.database import get_db
+    from vaf.memory.models import Memory
+
+    conditions = [
+        Memory.is_deleted == False,  # noqa: E712
+        Memory.meta["type"].as_string() == "document_index",
+        Memory.meta["content_sha256"].as_string() == content_sha256,
+        Memory.meta["learn_status"].as_string() == "complete",
+    ]
+    if user_scope_id is not None:
+        conditions.append(Memory.user_scope_id == user_scope_id)
+    async with get_db(user_scope_id=user_scope_id) as db:
+        root = (await db.execute(select(Memory).where(and_(*conditions)))).scalars().first()
+        if root is None:
+            return None
+        meta = dict(root.meta or {})
+    return {
+        "doc_title": str(meta.get("title") or ""),
+        "doc_tag": str(meta.get("doc_tag") or ""),
+        "sections": int(meta.get("page_count") or 0),
+        "total_pages": int(meta.get("total_pages") or 0),
+    }
+
+
 def _probe_document(path: Path):
     """(total_pages, is_pdf). A PDF probe reads ZERO pages (max_pages=0 slices
     empty) but still reports the true total."""
@@ -280,6 +315,20 @@ async def _learn_batches_async(
             if ledger:
                 ledger.delete()
             ledger = None
+        if ledger is None and not spec.force_relearn:
+            # No run in flight: refuse a byte-identical document that is
+            # already fully learned (the button and the tool both land here).
+            done = await find_completed_learn(sha, user_scope_id)
+            if done:
+                outcome.status = "refused"
+                t = done["doc_title"] or doc_title
+                outcome.error = (
+                    f'"{t}" is already learned: {done["total_pages"]} page(s), '
+                    f'{done["sections"]} section(s), stored under tag '
+                    f'{done["doc_tag"] or doc_tag}. The content checksum matches '
+                    f"the stored document. Pass force_relearn=true to learn it "
+                    f"again from scratch.")
+                return outcome
         if ledger is None:
             ledger = LearnLedger(
                 doc_tag=doc_tag, source_path=str(path), content_sha256=sha,

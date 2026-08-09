@@ -3690,11 +3690,16 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'learn_denied') {
                     const _n = String(data.name ?? '');
-                    if (_n) setLearnDocStates(prev => ({ ...prev, [_n]: undefined }));
                     const reason = String(data.reason ?? '');
+                    const already = reason === 'already_learned';
+                    // Already learned is a SUCCESS state for the button, not an error.
+                    if (_n) setLearnDocStates(prev => ({ ...prev, [_n]: already ? 'learned' : undefined }));
+                    const detail = String(data.message ?? '');
                     setMessages(prev => [...prev, {
                         role: 'system',
-                        content: `⚠️ ${tMain('learnDenied')}${reason ? ` (${reason})` : ''}`,
+                        content: already
+                            ? `✓ ${detail || tMain('learnAlreadyLearned')}`
+                            : `⚠️ ${tMain('learnDenied')}${reason ? ` (${reason})` : ''}`,
                         timestamp: Date.now(),
                     }]);
                 }

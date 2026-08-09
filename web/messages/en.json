@@ -145,6 +145,7 @@
     "learningComplete": "“{name}” learned into long-term memory",
     "learningEnded": "Learning “{name}” ended: {phase}",
     "learnDenied": "Could not start learning this document",
+    "learnAlreadyLearned": "Already learned - this document is in long-term memory.",
     "cancel": "Cancel"
   },
   "nav": {

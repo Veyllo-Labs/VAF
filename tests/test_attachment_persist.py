@@ -110,3 +110,21 @@ def test_runner_advice_skips_pathless_documents():
     window = src[i:i + 1200]
     assert 'startswith("Hochgeladen")' in window, \
         "the advice line emits the no-path literal as a path again"
+
+
+def test_attachment_context_names_the_persisted_path():
+    """The model spent three failed calls and a find_files discovering the
+    attachment's path - the context header now says it, and only for REAL
+    paths (the honest no-path literal is never dressed up as one)."""
+    import inspect
+
+    import vaf.core.headless_runner as hr
+
+    src = inspect.getsource(hr)
+    i = src.index("DOCUMENT CONTEXT ACTIVE")
+    window = src[i - 2200:i + 1200]
+    assert '(path: ' in window, "the attachment context lost the persisted path"
+    assert 'startswith("Hochgeladen")' in window, \
+        "the no-path literal would be presented as a real path"
+    assert "first_page/last_page" in window, \
+        "the context stopped telling the model how to read a page range"

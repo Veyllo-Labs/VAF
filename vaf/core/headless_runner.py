@@ -1230,10 +1230,22 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             names=[str((d or {}).get('name','?'))[:60] for d in sidebar_docs[:5]],
                             content_lens=[len(str((d or {}).get('content') or '')) for d in sidebar_docs[:5]])
                         if sidebar_docs:
-                            sidebar_names = [str((d or {}).get("name") or "").strip() for d in sidebar_docs]
-                            sidebar_names = [n for n in sidebar_names if n]
-                            sidebar_name_list = ", ".join(sidebar_names[:5])
-                            if len(sidebar_names) > 5:
+                            # Name AND persisted path: without the path the model
+                            # has to guess it for any page-targeted read_file - the
+                            # first live run spent three failed calls and a
+                            # find_files discovering what this line can simply say.
+                            _sidebar_entries = []
+                            for d in sidebar_docs:
+                                _n = str((d or {}).get("name") or "").strip()
+                                if not _n:
+                                    continue
+                                _p = str((d or {}).get("path") or "").strip()
+                                if _p and not _p.startswith("Hochgeladen"):
+                                    _sidebar_entries.append(f"{_n} (path: {_p})")
+                                else:
+                                    _sidebar_entries.append(_n)
+                            sidebar_name_list = ", ".join(_sidebar_entries[:5])
+                            if len(_sidebar_entries) > 5:
                                 sidebar_name_list += ", ..."
                             # Explicit anchor so the model knows these documents are active working context
                             # even when the user did not mark a specific selection in the editor/viewer.
@@ -1243,7 +1255,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 "Use the retrieved attachment snippets below as primary context for this turn.\n"
                             )
                             if sidebar_name_list:
-                                context_header += f"Attached: {sidebar_name_list}\n"
+                                context_header += (
+                                    f"Attached: {sidebar_name_list}\n"
+                                    "For a specific page or range, call read_file with that "
+                                    "path and first_page/last_page - never guess a path.\n"
+                                )
 
                             # Warn the agent when any attachment exceeded the indexing size limit.
                             _max_attach_chars = int(Config.get("attachment_rag_max_chars_per_doc", 24000) or 24000)

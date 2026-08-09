@@ -633,61 +633,25 @@ class ResearchAgentTool(BaseTool):
             # Continue with normal execution below
             pass
         elif Config.get("sub_agents_in_separate_terminals", False):
-            # Start in new terminal window with IPC tracking
-            import shlex
-            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-            
-            # Create task in IPC system
-            ipc = get_ipc()
-            # Use RAW topic for description so we see the full request
-            task_id = ipc.create_task("research_agent", task_description=raw_topic)
-            
-            # Pass session/task context to the sub-agent via the CHILD env only (not the parent's
-            # process-global os.environ), so concurrent workers don't clobber each other's session.
-            session_id = get_current_session_id()
-            _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "research_agent"}
-            if session_id:
-                _sub_env["VAF_SESSION_ID"] = session_id
+            # Spawn via the ONE spawn primitive. Agent-specific data here: the
+            # RAW topic travels as --topic (the child cleans it up itself), so
+            # the generic --task stays off the argv entirely.
+            from vaf.core.subagent_spawn import spawn_subagent
 
-            # Pass provider configuration to sub-agent
-            _sub_provider = subagent_provider_override()
-            if _sub_provider:
-                _sub_env["VAF_PROVIDER"] = _sub_provider
-            
-            # Pass RAW topic to sub-agent (it will clean it up)
-            cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
+            _args = ["--topic", raw_topic]
             if out_format:
-                cmd_parts.extend(['--format', out_format])
+                _args += ["--format", out_format]
             if max_results:
-                cmd_parts.extend(['--max-results', str(max_results)])
-            
-            if Platform.is_windows():
-                # Windows: properly escape for cmd /k
-                escaped_parts = []
-                for part in cmd_parts:
-                    if ' ' in part or '"' in part:
-                        escaped = part.replace('"', '\\"')
-                        escaped_parts.append(f'"{escaped}"')
-                    else:
-                        escaped_parts.append(part)
-                cmd = ' '.join(escaped_parts)
-                title = f"VAF Research Agent [{task_id}]"
-            else:
-                # Unix: use shell quoting
-                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-                title = f"VAF Research Agent [{task_id}]"
-            
-            if Platform.open_new_terminal(cmd, title=title, extra_env=_sub_env):
-                # Mark task as running
-                ipc.mark_task_running(task_id)
-                
-                UI.event("Sub-Agent", f"Research Agent started in new terminal [Task: {task_id}]", style="bold cyan")
-                # Return special marker for main agent to recognize async task
-                return f"[SUBAGENT_ASYNC:{task_id}:research_agent] Sub-Agent running in separate terminal. Topic: {topic[:80]}..."
-            else:
-                # Fallback: run normally if terminal opening fails
-                UI.warning("Failed to open new terminal, running in current window")
-                ipc.cancel_task(task_id)
+                _args += ["--max-results", str(max_results)]
+            spawned = spawn_subagent(
+                "research_agent", raw_topic,
+                args=_args,
+                include_task_arg=False,
+                marker_note=f"Sub-Agent running in separate terminal. Topic: {topic[:80]}...",
+            )
+            if spawned:
+                return spawned.marker
+            # Fallback: run normally if terminal opening fails (task already cancelled).
 
         max_results = max(1, min(max_results, 10))
         lang = forced_lang if forced_lang in ("de", "en") else _detect_language(topic)

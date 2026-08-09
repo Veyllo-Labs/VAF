@@ -642,36 +642,32 @@ class BrowserAgentTool(BaseTool):
         # VAF_IN_SUBAGENT_TERMINAL=1 and runs browser-use in-process there (no re-spawn);
         # it streams live frames + writes its result back through the IPC queue. Standalone
         # callers (no flag) keep the existing in-process behaviour unchanged.
-        import os as _os, sys as _sys
+        import os as _os
         if (_os.environ.get("VAF_SPAWN_BROWSER_SUBAGENT", "").strip().lower() in ("1", "true", "yes")
                 and _os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes")):
             try:
-                import shlex as _shlex
-                from vaf.core.platform import Platform
-                from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-                ipc = get_ipc()
-                task_id = ipc.create_task("browser_agent", task_description=task)
-                # Session/task context goes into the CHILD env only (not the parent's global env),
-                # so concurrent workers don't clobber each other's session.
-                _sid = get_current_session_id()
-                _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "browser_agent"}
-                if _sid:
-                    _sub_env["VAF_SESSION_ID"] = _sid
+                # ONE spawn primitive; this lane's contract stays: any spawn
+                # problem falls through to in-process execution (the broad
+                # except is deliberate here). Agent-specific data: the user
+                # scope keeps the per-user browser cookie/login store scoped in
+                # the child too. Side effect of the conversion: the child argv
+                # is escaped by the shared implementation - the private copy
+                # quoted without escaping inner quotes, so a task containing a
+                # double quote broke the child's command line on Windows.
+                from vaf.core.subagent_spawn import spawn_subagent
+
+                _sub_env = {}
                 _us = kwargs.get("user_scope_id")
                 if _us:
-                    # Keep the per-user browser cookie/login store scoped in the child process too.
                     _sub_env["VAF_USER_SCOPE_ID"] = str(_us)
-                _parts = [_sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'browser_agent',
-                          '--task', task, '--task-id', task_id]
-                if Platform.is_windows():
-                    _cmd = ' '.join((f'"{p}"' if (' ' in p or '"' in p) else p) for p in _parts)
-                else:
-                    _cmd = ' '.join(_shlex.quote(str(p)) for p in _parts)
-                if Platform.open_new_terminal(_cmd, title=f"VAF Browser Agent [{task_id}]", extra_env=_sub_env):
-                    ipc.mark_task_running(task_id)
-                    return (f"[SUBAGENT_ASYNC:{task_id}:browser_agent] "
-                            f"Browser agent running as a child process. Task: {task[:80]}...")
-                ipc.cancel_task(task_id)   # spawn failed → fall through to in-process
+                spawned = spawn_subagent(
+                    "browser_agent", task,
+                    extra_env=_sub_env,
+                    marker_note=f"Browser agent running as a child process. Task: {task[:80]}...",
+                )
+                if spawned:
+                    return spawned.marker
+                # spawn failed (task already cancelled) -> fall through to in-process
             except Exception:
                 pass   # any spawn error → fall through to in-process below
 

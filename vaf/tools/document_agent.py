@@ -87,54 +87,18 @@ Handles documents of any size using section-by-section generation (no context ov
         if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes"):
             pass
         elif Config.get("sub_agents_in_separate_terminals", False):
-            # Start in new terminal window with IPC tracking
-            import shlex
-            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
-            
-            # Create task in IPC system
-            ipc = get_ipc()
-            task_id = ipc.create_task("document_agent", task_description=task)
-            
-            # Pass session/task context to the sub-agent via the CHILD env only (not the parent's
-            # process-global os.environ), so concurrent workers don't clobber each other's session.
-            session_id = get_current_session_id()
-            _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "document_agent"}
-            if session_id:
-                _sub_env["VAF_SESSION_ID"] = session_id
+            # Spawn via the ONE spawn primitive. Agent-specific data here: long
+            # tasks stay OFF the argv (Windows cmd.exe limit ~8191 chars) - the
+            # child then reads the IPC payload sidecar create_task already wrote.
+            from vaf.core.subagent_spawn import spawn_subagent
 
-            # Pass provider configuration to sub-agent
-            _sub_provider = subagent_provider_override()
-            if _sub_provider:
-                _sub_env["VAF_PROVIDER"] = _sub_provider
-            
-            # Windows cmd.exe limit ~8191 chars; pass long tasks via IPC only
-            max_task_len = 3000
-            if len(task) > max_task_len:
-                cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'document_agent', '--task-id', task_id]
-            else:
-                cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'document_agent', '--task', task, '--task-id', task_id]
-            
-            if Platform.is_windows():
-                escaped_parts = []
-                for part in cmd_parts:
-                    if ' ' in part or '"' in part:
-                        escaped = part.replace('"', '\\"')
-                        escaped_parts.append(f'"{escaped}"')
-                    else:
-                        escaped_parts.append(part)
-                cmd = ' '.join(escaped_parts)
-                title = f"VAF Document Agent [{task_id}]"
-            else:
-                cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-                title = f"VAF Document Agent [{task_id}]"
-            
-            if Platform.open_new_terminal(cmd, title=title, extra_env=_sub_env):
-                ipc.mark_task_running(task_id)
-                UI.event("Sub-Agent", f"Document Agent started in new terminal [Task: {task_id}]", style="bold cyan")
-                return f"[SUBAGENT_ASYNC:{task_id}:document_agent] Sub-Agent running in separate terminal. Task: {task[:80]}..."
-            else:
-                UI.warning("Failed to open new terminal, running in current window")
-                ipc.cancel_task(task_id)
+            spawned = spawn_subagent(
+                "document_agent", task,
+                include_task_arg=(len(task) <= 3000),
+            )
+            if spawned:
+                return spawned.marker
+            # Fallback: run normally if terminal opening fails (task already cancelled).
         
         # ═══════════════════════════════════════════════════════════════════════
         # EXECUTE DOCUMENT GENERATION

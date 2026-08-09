@@ -134,10 +134,13 @@ def test_converted_tools_have_no_private_spawn_blocks():
     wrapped. A resurrected private block re-splits the implementations."""
     import inspect
 
+    import vaf.tools.browser_agent as browser_agent
     import vaf.tools.coder as coder
+    import vaf.tools.document_agent as document_agent
     import vaf.tools.librarian as librarian
+    import vaf.tools.research_agent as research_agent
 
-    for mod in (coder, librarian):
+    for mod in (coder, librarian, document_agent, research_agent, browser_agent):
         src = inspect.getsource(mod)
         assert "open_new_terminal" not in src, \
             f"{mod.__name__} spawns terminals privately again"

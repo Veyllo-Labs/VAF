@@ -318,7 +318,13 @@ async def _learn_batches_async(
         if ledger is None and not spec.force_relearn:
             # No run in flight: refuse a byte-identical document that is
             # already fully learned (the button and the tool both land here).
-            done = await find_completed_learn(sha, user_scope_id)
+            # Best-effort: if the lookup cannot answer (DB down), the learn
+            # proceeds and the ingest path reports the real problem honestly
+            # - failing HERE would wear the lookup's error as the outcome.
+            try:
+                done = await find_completed_learn(sha, user_scope_id)
+            except Exception:
+                done = None
             if done:
                 outcome.status = "refused"
                 t = done["doc_title"] or doc_title

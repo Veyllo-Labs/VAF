@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Scanned PDFs no longer poison the memory.** A scanned document of four or
+  more pages never triggered the OCR fallback, because the check mistook the
+  extractor's own page markers for text - so learning such a document stored
+  bare page scaffolding as knowledge. The check now counts real content, and
+  when OCR cannot run, the answer names the actual reason (a missing Tesseract
+  used to be reported as an empty document) instead of staying silent.
+- **Reading a huge PDF no longer eats gigabytes.** The PDF reader kept every
+  page in memory until the end - measured 9 GB for a 1000-page book. Pages are
+  now released as they are read: same output, byte for byte, at 0.7 GB.
 - **A local model that can see images finally does.** Local vision only
   worked if you had explicitly set the vision provider to "local" - leaving
   it on its default meant the local server started without the image

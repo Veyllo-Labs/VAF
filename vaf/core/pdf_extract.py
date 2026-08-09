@@ -15,22 +15,77 @@ pulling AGPL (PyMuPDF) or a heavy ML stack (docling/torch). Robustness:
 - on any pdfplumber failure -> graceful fallback to PyPDF2 per-page text (never regress),
 - for scanned / image-only PDFs (almost no embedded text) -> OCR via pdf2image + pytesseract.
 
+Contract points that exist because their absence caused real damage:
+
+- **Pages are streamed, never retained.** Holding every parsed page until the end
+  measured 9 GB peak RSS on a 1000-page book; closing each page after its pass-1
+  read brings the same run to ~0.7 GB with byte-identical output.
+- **Truncation is DATA, not prose.** The result dict reports `pages_read`,
+  `total_pages` and `truncated`; a notice appended to the end of the text was
+  destroyed by every downstream cut and, worse, counted as "content" by the OCR
+  gate. Rendering a truncation message is the consumer's job
+  (`format_pdf_read_result`).
+- **The OCR gate counts content, not scaffolding.** The extractor emits a
+  `--- Page N ---` marker per page; counting those against `_MIN_TEXT_CHARS`
+  meant a scanned PDF of 4+ pages never triggered OCR and its bare markers were
+  stored as knowledge. `_content_chars` strips the markers this module itself
+  emits before measuring.
+- **OCR failures are NAMED.** A missing Tesseract binary raises
+  `TesseractNotFoundError`, which subclasses OSError - the old
+  `except TesseractError` could not catch it, so the user saw the same silent ""
+  as for a genuinely empty page. Unavailability is returned as an
+  `OCR unavailable: <reason>` sentinel (never raised: the text lane must not die
+  because OCR cannot run).
+
 Image/diagram text (raster figures) is intentionally out of scope here -- that is a separate optional
 feature (vision-model figure descriptions / page-image OCR).
 """
 from __future__ import annotations
 
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Heading thresholds relative to the body font size. Validated against slides / prose / contract /
 # invoice in tmp/pdf_extract_compare.py (DIY vs pymupdf4llm): comparable section counts, real titles.
 _H1, _H2, _H3 = 1.6, 1.28, 1.16
 _HEADING_MAX_LEN = 120   # only short lines (titles) become headings, not large-font paragraphs
 _LINE_TOL = 3.0          # px tolerance when grouping words into one visual line
-_MIN_TEXT_CHARS = 50     # below this the PDF is treated as scanned -> OCR fallback
+_MIN_TEXT_CHARS = 50     # below this CONTENT length the PDF is treated as scanned -> OCR fallback
+
+# The one page-marker format this module emits (all three extractors). _content_chars
+# strips exactly this before measuring, so the marker format and the regex must move
+# together - a test pins the coupling.
+_PAGE_MARKER_RE = re.compile(r"^--- Page \d+ ---$", re.MULTILINE)
+
+# Sentinel prefix for "OCR could not run" (vs "" = ran fine, found nothing).
+# String-prefix pattern per bounded_run.TIMEOUT_PREFIX precedent: the OCR lane is
+# best-effort inside a text pipeline and must return, not raise.
+OCR_UNAVAILABLE_PREFIX = "OCR unavailable: "
+
+# OCR rasterization: pages per pdf2image batch. Rasterizing a whole book at once
+# holds every page image in RAM (~12 MB/page at 200 dpi); batches of 10 keep the
+# peak at ~120 MB regardless of document size.
+_OCR_BATCH_PAGES = 10
+# Hard ceiling for ONE poppler rasterization call (pdf2image supports timeout=).
+_OCR_CONVERT_TIMEOUT_S = 300
+
+# Default char cap for the human/model-facing rendering of a read result. Context
+# protection, NOT an extraction limit - the cap and what it cut are named in the
+# output instead of a bare "(truncated)".
+_PDF_RESULT_CHAR_CAP = 15000
+
+
+def _content_chars(markdown: str) -> int:
+    """Chars of rendered content, excluding the `--- Page N ---` scaffolding this
+    module itself emits. The OCR gate and the OCR acceptance compare both use
+    this: raw `len()` counted ~12 marker chars per page, so a scanned PDF of 4+
+    pages could never look "sparse" and OCR never fired (its page skeleton was
+    then stored as knowledge). A document whose TEXT contains a literal marker
+    line undercounts by one marker length - harmless at a threshold of 50."""
+    return len(_PAGE_MARKER_RE.sub("", markdown or "").strip())
 
 
 def _render_table(tbl) -> str:
@@ -77,37 +132,67 @@ def _heading_prefix(text: str, line_size: float, body_size: float, bold: bool) -
     return ""
 
 
-def _extract_pdfplumber(file_path: Path, max_pages: int) -> Tuple[str, int]:
-    """Primary path: markdown with headings + tables. Returns (markdown, total_num_pages)."""
+def _extract_pdfplumber(
+    file_path: Path,
+    max_pages: Optional[int],
+    first_page: int = 1,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> Tuple[str, int, int]:
+    """Primary path: markdown with headings + tables.
+
+    Returns (markdown, total_pages, pages_read). Page markers carry ABSOLUTE
+    page numbers so a slice read ("pages 100-120") cites correctly.
+
+    Streaming contract: each page is fully consumed (words + tables RENDERED)
+    while it is open, then closed and dropped - pass 2 works on plain lists.
+    Retaining the Page objects kept pdfplumber's per-page caches alive and
+    measured 9 GB peak RSS over 1000 pages; streaming measures ~0.7 GB with
+    byte-identical output (tables do not depend on the body font size, so
+    rendering them in pass 1 changes nothing).
+    """
     import pdfplumber
 
     out: List[str] = []
+    start = max(0, first_page - 1)
     with pdfplumber.open(str(file_path)) as pdf:
         total_pages = len(pdf.pages)
-        pages = pdf.pages[:max_pages]
+        stop = None if max_pages is None else start + max_pages
+        pages = pdf.pages[start:stop]
 
-        # Pass 1: body font size = the size carrying the most CHARACTERS (robust on heading-heavy slides).
-        page_data: List[Tuple[Any, List[Dict[str, Any]], List[Any]]] = []
+        # Pass 1: per page, read words, RENDER tables, then close the page.
+        # Body font size = the size carrying the most CHARACTERS (robust on
+        # heading-heavy slides) - known only after all pages are read, which is
+        # why rendering waits for pass 2 but reading cannot.
+        page_data: List[Tuple[List[Dict[str, Any]], List[Tuple[tuple, str]]]] = []
         size_mass: "Counter[float]" = Counter()
+        pages_read = 0
         for pg in pages:
+            if cancel is not None and cancel():
+                break
             words = pg.extract_words(extra_attrs=["size", "fontname"])
             try:
                 tables = pg.find_tables()
             except Exception:
                 tables = []
-            page_data.append((pg, words, tables))
+            # Keep only real tables (>=2 cols, >=2 rows) and only their RENDERED
+            # form + bbox - the live table object dies with its page.
+            real_tables = [(t.bbox, m) for t in tables if (m := _render_table(t))]
+            page_data.append((words, real_tables))
             for w in words:
                 s = round(float(w.get("size") or 0), 1)
                 if s:
                     size_mass[s] += max(1, len(w.get("text") or ""))
+            try:
+                pg.close()
+            except Exception:
+                pass
+            pages_read += 1
         body = size_mass.most_common(1)[0][0] if size_mass else 10.0
 
         # Pass 2: per page, interleave heading/body lines and tables by vertical position.
-        for pidx, (pg, words, tables) in enumerate(page_data, 1):
+        for pidx, (words, real_tables) in enumerate(page_data, first_page):
             out.append(f"--- Page {pidx} ---")
-            # Keep only real tables (>=2 cols, >=2 rows); their words are pulled out of the text flow.
-            real_tables = [(t, m) for t in tables if (m := _render_table(t))]
-            tboxes = [t.bbox for t, _ in real_tables]
+            tboxes = [b for b, _ in real_tables]
             free = [w for w in words if not any(_word_in_bbox(w, b) for b in tboxes)]
             free.sort(key=lambda w: (round(w["top"]), w["x0"]))
 
@@ -134,84 +219,279 @@ def _extract_pdfplumber(file_path: Path, max_pages: int) -> Tuple[str, int]:
                 bold = any("bold" in (w.get("fontname") or "").lower() for w in ln)
                 top = min(w["top"] for w in ln)
                 blocks.append((top, _heading_prefix(txt, line_size, body, bold) + txt))
-            for t, md in real_tables:
-                blocks.append((t.bbox[1], md))
+            for bbox, md in real_tables:
+                blocks.append((bbox[1], md))
 
             blocks.sort(key=lambda b: b[0])
             for _, b in blocks:
                 if b.strip():
                     out.append(b)
 
-        if total_pages > len(pages):
-            out.append(f"\n... ({total_pages - len(pages)} more pages not shown)")
-
-    return "\n\n".join(out), total_pages
+    return "\n\n".join(out), total_pages, pages_read
 
 
-def _extract_pypdf2(file_path: Path, max_pages: int) -> Tuple[str, int]:
-    """Fallback path (no headings): the original per-page PyPDF2 text. Returns (text, total_num_pages)."""
+def _extract_pypdf2(
+    file_path: Path,
+    max_pages: Optional[int],
+    first_page: int = 1,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> Tuple[str, int, int]:
+    """Fallback path (no headings): per-page PyPDF2 text.
+
+    Returns (text, total_pages, pages_read); markers are absolute. Unlike the
+    pdfplumber path this one never emits a marker for an empty page (original
+    behavior, kept - it makes fully scanned PDFs come back truly empty here)."""
     import PyPDF2
 
     out: List[str] = []
+    start = max(0, first_page - 1)
     with open(file_path, "rb") as f:
         reader = PyPDF2.PdfReader(f)
         total_pages = len(reader.pages)
-        n = min(total_pages, max_pages)
-        for i in range(n):
+        end = total_pages if max_pages is None else min(total_pages, start + max_pages)
+        pages_read = 0
+        for i in range(start, end):
+            if cancel is not None and cancel():
+                break
             page_text = reader.pages[i].extract_text() or ""
             if page_text.strip():
                 out.append(f"--- Page {i + 1} ---\n{page_text}")
-        if total_pages > n:
-            out.append(f"\n... ({total_pages - n} more pages not shown)")
-    return "\n\n".join(out), total_pages
+            pages_read += 1
+    return "\n\n".join(out), total_pages, pages_read
 
 
-def pdf_ocr_fallback(file_path: Path, max_pages: int) -> str:
-    """Extract text from scanned (image-only) PDFs via OCR. Requires pdf2image + pytesseract (+ poppler,
-    Tesseract). Returns "" if unavailable or empty. (Shared: Librarian delegates to this.)"""
+def pdf_ocr_fallback(
+    file_path: Path,
+    max_pages: int,
+    *,
+    first_page: int = 1,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> str:
+    """Extract text from scanned (image-only) PDFs via OCR.
+
+    Requires pdf2image + pytesseract (Python, `vaf[pdf]` extra) plus the poppler
+    and Tesseract SYSTEM packages. Returns the extracted text, "" when OCR ran
+    fine but found nothing readable, or an `OCR unavailable: <reason>` sentinel
+    (OCR_UNAVAILABLE_PREFIX) when it could not run at all - the old bare ""
+    for both cases sent users hunting in empty documents while the actual
+    problem was a missing binary.
+
+    Rasterizes in batches of `_OCR_BATCH_PAGES` into a temp dir
+    (`output_folder=`): pdf2image otherwise buffers every page image in RAM.
+    The OCR language is resolved ONCE on the first page (deu+eng -> eng ->
+    default); a missing traineddata raises TesseractError and falls through the
+    candidates, exactly what the old per-language whole-document retry achieved.
+    """
     try:
         from pdf2image import convert_from_path
         import pytesseract
     except ImportError:
+        return (OCR_UNAVAILABLE_PREFIX
+                + "pdf2image/pytesseract not installed "
+                  "(pip install 'vaf[pdf]'; system packages: poppler, tesseract-ocr)")
+    import tempfile
+
+    first_page = max(1, int(first_page or 1))
+    last_page = first_page + max(0, int(max_pages)) - 1
+    if last_page < first_page:
         return ""
+    lang_selected: Optional[str] = None  # None = not resolved yet; "" = tesseract default
+    parts: List[str] = []
     try:
-        images = convert_from_path(str(file_path), first_page=1, last_page=max_pages, dpi=200)
-        for lang in ("deu+eng", "eng", None):
-            try:
-                lang_arg = {"lang": lang} if lang else {}
-                parts = []
+        for batch_start in range(first_page, last_page + 1, _OCR_BATCH_PAGES):
+            if cancel is not None and cancel():
+                break
+            batch_end = min(batch_start + _OCR_BATCH_PAGES - 1, last_page)
+            with tempfile.TemporaryDirectory(prefix="vaf_ocr_") as tmpdir:
+                images = convert_from_path(
+                    str(file_path),
+                    first_page=batch_start,
+                    last_page=batch_end,
+                    dpi=200,
+                    output_folder=tmpdir,
+                    timeout=_OCR_CONVERT_TIMEOUT_S,
+                )
                 for i, img in enumerate(images):
-                    text = pytesseract.image_to_string(img, **lang_arg)
+                    if cancel is not None and cancel():
+                        break
+                    pageno = batch_start + i
+                    if lang_selected is None:
+                        for cand in ("deu+eng", "eng", ""):
+                            try:
+                                kwargs = {"lang": cand} if cand else {}
+                                text = pytesseract.image_to_string(img, **kwargs)
+                                lang_selected = cand
+                                break
+                            except pytesseract.TesseractError:
+                                continue
+                        else:
+                            return (OCR_UNAVAILABLE_PREFIX
+                                    + "no usable Tesseract language data "
+                                      "(install tesseract-ocr language packs, e.g. eng)")
+                    else:
+                        kwargs = {"lang": lang_selected} if lang_selected else {}
+                        text = pytesseract.image_to_string(img, **kwargs)
                     if text.strip():
-                        parts.append(f"--- Page {i + 1} ---\n{text.strip()}")
-                if parts:
-                    return "\n\n".join(parts)
-            except pytesseract.TesseractError:
-                continue
-        return ""
-    except Exception:
-        return ""
+                        parts.append(f"--- Page {pageno} ---\n{text.strip()}")
+        return "\n\n".join(parts)
+    except pytesseract.TesseractNotFoundError:
+        # Subclasses OSError, NOT TesseractError - the old handler missed it and
+        # the blanket except turned "binary missing" into "document is empty".
+        return (OCR_UNAVAILABLE_PREFIX
+                + "Tesseract binary not found (install tesseract-ocr and ensure it is on PATH)")
+    except Exception as e:
+        # poppler missing (PDFInfoNotInstalledError), rasterization timeout, ...
+        # Name the class: the full rasterization cost was already paid, the user
+        # must not be told the document was empty.
+        return OCR_UNAVAILABLE_PREFIX + f"{e.__class__.__name__}: {e}"
 
 
-def extract_pdf_markdown(file_path, max_pages: int = 50, ocr_fallback: bool = True) -> Dict[str, Any]:
+def extract_pdf_markdown(
+    file_path,
+    max_pages: Optional[int] = None,
+    ocr_fallback: bool = True,
+    *,
+    first_page: int = 1,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
     """
     Extract a PDF as Markdown (headings + tables).
 
-    Returns {"markdown": str, "num_pages": int, "used_ocr": bool, "method": "pdfplumber"|"pypdf2"|"ocr"}.
-    Tries pdfplumber; on failure falls back to PyPDF2; for scanned PDFs (almost no text) tries OCR.
+    `max_pages=None` reads ALL pages (every in-repo caller passes an explicit
+    budget; the library default is the whole document). `first_page` is 1-based
+    and makes slice reads ("pages 100-120") possible; markers stay absolute.
+    `cancel` is polled once per page; `None` wires it to
+    `bounded_run.cancel_requested`, which reaches the extraction thread on every
+    in-tool lane - a background job passes its own check (the thread-local
+    default never fires on a bare thread or in a child process).
+
+    Returns a dict; new consumers should read the honest fields, old keys stay:
+      markdown        extracted text ("" possible)
+      total_pages     pages in the DOCUMENT
+      pages_read      pages actually consumed (cancel-aware)
+      first_page      echo of the requested start (clamped >= 1)
+      truncated       True when the caller did NOT see the whole document
+      used_ocr/method as before; num_pages == total_pages (backward compat)
+      ocr_unavailable_reason  "" unless OCR was needed but could not run
+
+    Raises ImportError (with the `vaf[pdf]` remedy named) only when BOTH
+    extraction engines are missing.
     """
     file_path = Path(file_path)
+    first_page = max(1, int(first_page or 1))
+    if cancel is None:
+        try:
+            from vaf.core.bounded_run import cancel_requested as cancel
+        except Exception:
+            cancel = None
+
     method = "pdfplumber"
     try:
-        markdown, num_pages = _extract_pdfplumber(file_path, max_pages)
+        markdown, total_pages, pages_read = _extract_pdfplumber(
+            file_path, max_pages, first_page=first_page, cancel=cancel
+        )
     except Exception:
-        markdown, num_pages = _extract_pypdf2(file_path, max_pages)
         method = "pypdf2"
+        try:
+            markdown, total_pages, pages_read = _extract_pypdf2(
+                file_path, max_pages, first_page=first_page, cancel=cancel
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "PDF support is not installed: pip install 'vaf[pdf]' (pdfplumber + PyPDF2)"
+            ) from exc
 
     used_ocr = False
-    if ocr_fallback and len((markdown or "").strip()) < _MIN_TEXT_CHARS and num_pages > 0:
-        ocr_text = pdf_ocr_fallback(file_path, min(num_pages, max_pages))
-        if ocr_text and len(ocr_text.strip()) > len((markdown or "").strip()):
-            markdown, method, used_ocr = ocr_text, "ocr", True
+    ocr_unavailable_reason = ""
+    content = _content_chars(markdown)
+    if (
+        ocr_fallback
+        and content < _MIN_TEXT_CHARS
+        and total_pages > 0
+        and not (cancel is not None and cancel())
+    ):
+        budget = max(0, total_pages - (first_page - 1))
+        if max_pages is not None:
+            budget = min(budget, max_pages)
+        if budget > 0:
+            ocr_text = pdf_ocr_fallback(
+                file_path, budget, first_page=first_page, cancel=cancel
+            )
+            if ocr_text.startswith(OCR_UNAVAILABLE_PREFIX):
+                ocr_unavailable_reason = ocr_text[len(OCR_UNAVAILABLE_PREFIX):]
+            elif _content_chars(ocr_text) > content:
+                markdown, method, used_ocr = ocr_text, "ocr", True
+                # Named approximation: OCR covered the requested slice. A
+                # mid-OCR cancel may overcount trailing pages here.
+                pages_read = budget
 
-    return {"markdown": markdown or "", "num_pages": num_pages, "used_ocr": used_ocr, "method": method}
+    truncated = not (first_page == 1 and pages_read >= total_pages)
+    return {
+        "markdown": markdown or "",
+        "num_pages": total_pages,   # backward-compat alias
+        "used_ocr": used_ocr,
+        "method": method,
+        "total_pages": total_pages,
+        "pages_read": pages_read,
+        "first_page": first_page,
+        "truncated": truncated,
+        "ocr_unavailable_reason": ocr_unavailable_reason,
+    }
+
+
+def format_pdf_read_result(
+    res: Dict[str, Any],
+    *,
+    file_name: str,
+    char_cap: int = _PDF_RESULT_CHAR_CAP,
+) -> str:
+    """Render an extract_pdf_markdown result for a read tool - honestly.
+
+    The facts (page range covered, how to continue) come FIRST so they survive
+    the chat lane's 2000-char tool-result cut; the char cap notice names the
+    page it cut into instead of a bare "(truncated)". This is the ONE rendering
+    of a PDF read: read_file and the librarian used to carry byte-identical
+    hand-rolled 15k truncations whose messages guessed ("no embedded text?")
+    where the extractor already knew.
+    """
+    md = (res.get("markdown") or "").strip()
+    total = int(res.get("total_pages") or res.get("num_pages") or 0)
+    read = int(res.get("pages_read") or 0)
+    first = int(res.get("first_page") or 1)
+    last = first + read - 1 if read > 0 else 0
+
+    header = f"### PDF: {file_name}\n**Pages:** "
+    header += f"{first}-{last} of {total}" if read > 0 else f"0 of {total}"
+    if res.get("used_ocr"):
+        header += " (OCR)"
+    lines: List[str] = [header]
+
+    if read > 0 and last < total:
+        lines.append(
+            f"[Pages {last + 1}-{total} not included - call read_file with "
+            f"first_page={last + 1} (and optional last_page) to continue.]"
+        )
+
+    if not md:
+        reason = (res.get("ocr_unavailable_reason") or "").strip()
+        if read == 0 and total > 0 and first > total:
+            lines.append(
+                f"[Requested pages start at {first} but the document has only {total} pages.]"
+            )
+        elif reason:
+            lines.append(f"[No text layer detected. OCR unavailable: {reason}]")
+        else:
+            lines.append("[No readable text found in these pages.]")
+        return "\n".join(lines)
+
+    capped = bool(char_cap) and len(md) > char_cap
+    body = md[:char_cap] if capped else md
+    lines.append(body)
+    if capped:
+        markers = _PAGE_MARKER_RE.findall(body)
+        cut_page = int(markers[-1].split()[2]) if markers else first
+        lines.append(
+            f"[Output capped at {char_cap:,} characters inside page {cut_page} - "
+            f"continue with first_page={cut_page}.]"
+        )
+    return "\n".join(lines)

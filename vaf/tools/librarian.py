@@ -972,6 +972,10 @@ Remove duplicates and ensure smooth flow.
         # ─────────────────────────────────────────────────────────────────────
         read_patterns = [
             r"read (file|content|the file)",
+            # "read pages 10-20 of report.pdf" - promised by this tool's own tip
+            # and five doc sites; without this row the phrase matched NO read
+            # pattern and fell to the LLM loop.
+            r"read pages?",
             r"show (content|file content|me the file)",
             r"cat ",
             r"lies (mir |die |den |das |mir die |mir den )?",
@@ -989,7 +993,20 @@ Remove duplicates and ensure smooth flow.
         read_pattern_hit = any(re.search(p, task_lower) for p in read_patterns)
         if read_pattern_hit:
             if file_path:
-                return self._read_file(file_path, enable_chunking=True)
+                # Optional PDF page range: "pages 10-20" / "Seiten 10 bis 20" /
+                # a single "page 7". Parsed from the task so the six documented
+                # "read pages 10-20 of <file>" promises are honoured end-to-end.
+                _first = _last = None
+                m = re.search(r"(?:pages?|seiten?)\s+(\d{1,5})\s*(?:-|–|—|\bto\b|\bbis\b)\s*(\d{1,5})",
+                              task_lower)
+                if m:
+                    _first, _last = int(m.group(1)), int(m.group(2))
+                else:
+                    m = re.search(r"(?:page|seite)\s+(\d{1,5})\b", task_lower)
+                    if m:
+                        _first = _last = int(m.group(1))
+                return self._read_file(file_path, enable_chunking=True,
+                                       first_page=_first, last_page=_last)
             # Pattern matched but no path could be extracted — inject hint for LLM path
             self._read_hint_for_llm = (
                 f"\n\n[LIBRARIAN_HINT: The task appears to be a file-read request but no "
@@ -1551,17 +1568,18 @@ Remove duplicates and ensure smooth flow.
         UI.event("Librarian", f"Writing {file_path.name}...", style="dim")
         return caller.execute("write_file", {"path": str(file_path), "content": content})
 
-    def _pdf_ocr_fallback(self, file_path: Path, max_pages: int) -> str:
-        """Thin wrapper -> shared OCR helper (single copy lives in vaf/core/pdf_extract.py)."""
-        from vaf.core.pdf_extract import pdf_ocr_fallback
-        return pdf_ocr_fallback(file_path, max_pages)
-    
-    def _read_file(self, file_path: Path, enable_chunking: bool = True) -> str:
+    def _read_file(self, file_path: Path, enable_chunking: bool = True,
+                   first_page: Optional[int] = None,
+                   last_page: Optional[int] = None) -> str:
         """Read file contents - supports text, PDF, Word, Excel, PowerPoint.
 
         Args:
             file_path: Path to the file to read
             enable_chunking: If True, automatically chunk large files (default: True)
+            first_page/last_page: PDF only - explicit 1-indexed page range.
+                An explicit range bypasses the size gate and the preview page
+                cap: extraction streams page by page now, so "read pages
+                100-120 of an 85 MB PDF" must extract that slice, not preview.
         """
         safe, res = is_safe_path(str(file_path))
         if not safe:
@@ -1625,8 +1643,10 @@ Remove duplicates and ensure smooth flow.
             max_size = size_limits.get(ext, size_limits['text'])
             auto_chunk = config.get('librarian_auto_chunk_large_files', True)
             
-            # Check if file is too large
-            if size > max_size:
+            # Check if file is too large. An explicit PDF page range skips the
+            # gate: the requested slice is bounded by the range itself, and the
+            # extractor streams pages instead of holding the document.
+            if size > max_size and not (ext == '.pdf' and first_page):
                 max_mb = max_size / (1024 * 1024)
                 
                 # Offer chunking for supported formats (if enabled in config)
@@ -1660,28 +1680,24 @@ Remove duplicates and ensure smooth flow.
             if ext == '.pdf':
                 try:
                     from vaf.core.config import Config
-                    from vaf.core.pdf_extract import extract_pdf_markdown
+                    from vaf.core.pdf_extract import extract_pdf_markdown, format_pdf_read_result
                     config = Config.load()
-                    max_pages = config.get('librarian_pdf_max_pages_preview', 50)
                     use_ocr = config.get("librarian_ocr_fallback_for_pdf", True)
+                    # Explicit range wins over the preview cap; the shared
+                    # formatter renders the result honestly (page range covered,
+                    # continuation hint, named OCR reason) - the hand-rolled 15k
+                    # cut with its guessed scan message lived here AND in
+                    # read_file, byte-identical, and destroyed the facts the
+                    # extractor already knew.
+                    first = max(1, int(first_page or 1))
+                    if last_page:
+                        window = max(0, int(last_page) - first + 1)
+                    else:
+                        window = config.get('librarian_pdf_max_pages_preview', 50)
 
-                    # Shared extractor: pdfplumber markdown (headings + tables), PyPDF2 + OCR fallbacks.
-                    res = extract_pdf_markdown(file_path, max_pages=max_pages, ocr_fallback=use_ocr)
-                    full_text = res["markdown"]
-                    num_pages = res["num_pages"]
-
-                    # Truncate if too long
-                    if len(full_text) > 15000:
-                        full_text = full_text[:15000] + "\n\n... (truncated)"
-
-                    if not full_text.strip():
-                        full_text = (
-                            "[Scanned PDF: no embedded text detected. For OCR install: "
-                            "pip install pdf2image pytesseract, and system tools: poppler (pdf2image), Tesseract (pytesseract). "
-                            "Then re-open this file."
-                        )
-
-                    return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
+                    res = extract_pdf_markdown(
+                        file_path, max_pages=window, ocr_fallback=use_ocr, first_page=first)
+                    return format_pdf_read_result(res, file_name=file_path.name)
 
                 except ImportError:
                     return f"[ERROR] PDF support not installed. Run: pip install pdfplumber PyPDF2"
@@ -2389,7 +2405,7 @@ home: {self.home}
 </context>
 
 <tools>
-- read_file(path): Reads a file's contents. **SUPPORTS: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and text files**
+- read_file(path, first_page?, last_page?): Reads a file's contents. **SUPPORTS: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and text files.** For PDFs pass first_page/last_page (1-indexed) to read a page range - the result header names the pages covered and how to continue.
 - write_file(path, content): Writes content to a file
 - list_files(path, sort_by='name'|'date'|'size', limit=100): Lists files and folders in a directory. Use this to see what folders exist on a drive.
 - tree(path, depth): Shows directory tree structure. Use this to explore folder structure on a drive.
@@ -2400,7 +2416,7 @@ home: {self.home}
 </tools>
 
 <document_capabilities>
-- PDF files (.pdf): Extracts text from all pages (up to 50 pages shown)
+- PDF files (.pdf): Extracts text with headings/tables; the default window is the first 50 pages, an explicit first_page/last_page range reads ANY slice of the document (the header always names which pages of how many were read)
 - Word documents (.docx): Reads paragraphs and tables
 - Excel files (.xlsx, .xls): Reads all sheets and cells (up to 3 sheets, 50 rows each)
 - PowerPoint (.pptx): Extracts text from slides (up to 20 slides)

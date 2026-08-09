@@ -88,8 +88,10 @@ User: "Open file:///C:/Users/user/Downloads/20251110_075336_approval_notice.pdf"
 
 The document_editor tool and Librarian accept `file:///` URLs and convert them to the correct path on your OS. The librarian will:
 1. Detect it's a PDF file
-2. Extract text from all pages (up to 50 pages)
-3. Return formatted content with page numbers
+2. Extract text (the first 50 pages by default; an explicit page range like
+   "read pages 100-120" reads exactly that slice of ANY size document)
+3. Return formatted content whose header names the pages covered
+   (`**Pages:** 1-50 of 1000`) and how to continue (`first_page=51`)
 
 **Output:**
 ```
@@ -281,7 +283,9 @@ The system automatically detects file types based on file extensions and uses th
 The Librarian Agent automatically handles large files to prevent context overflow:
 
 #### Standard Limits (Direct Reading)
-- **PDFs**: First 50 pages shown (configurable)
+- **PDFs**: First 50 pages shown by default (configurable); an explicit page
+  range ("read pages 100-120") reads that exact slice of any size document,
+  and the result header always names the pages covered and how to continue
 - **Word**: All paragraphs + first 5 tables (10 rows each)
 - **Excel**: First 3 sheets (50 rows × 20 columns each)
 - **PowerPoint**: First 20 slides
@@ -359,14 +363,26 @@ PDFs are extracted to Markdown by `vaf/core/pdf_extract.py`:
 
 ```python
 from vaf.core.pdf_extract import extract_pdf_markdown
-result = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True)
-# result = {"markdown": str, "num_pages": int, "used_ocr": bool,
-#           "method": "pdfplumber" | "pypdf2" | "ocr"}
+result = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True, first_page=1)
+# result = {"markdown": str, "used_ocr": bool,
+#           "method": "pdfplumber" | "pypdf2" | "ocr",
+#           "total_pages": int, "pages_read": int, "first_page": int,
+#           "truncated": bool, "ocr_unavailable_reason": str,
+#           "num_pages": int}  # backward-compat alias of total_pages
 ```
 
 - **Headings** are inferred from font size: lines larger than the body size become `#`/`##`/`###`. The hierarchical attachment index keys on these (see `docs/memory/MEMORY_SYSTEM.md`).
 - **Tables** detected by pdfplumber are rendered as Markdown tables and removed from the surrounding text flow.
 - **Fallback:** if pdfplumber raises, the per-page PyPDF2 text is used instead (`method="pypdf2"`).
+- **Page ranges:** `first_page` (1-based) + `max_pages` read any slice; page markers keep
+  ABSOLUTE numbers, so citations from a slice stay correct. `max_pages=None` reads the
+  whole document; pages are streamed and closed as they are read, so memory stays flat
+  regardless of document size.
+- **Truncation is data:** consumers read `pages_read`/`total_pages`/`truncated` and render
+  through `format_pdf_read_result`, whose header names the covered range
+  (`**Pages:** 100-120 of 1000`) and how to continue (`first_page=121`). There is no
+  silent "(truncated)" tail anywhere on this path any more.
+- **`cancel`** is polled once per page; the in-tool default wires it to the Stop button.
 
 **Reaching the agent's context (per turn):** an attachment that fits under `attachment_rag_max_chars_per_doc` (default 24000) is inlined into the turn context **in full**, so the agent can read every page. Only documents larger than that cap fall back to the hierarchical attachment index - query-driven top-k retrieval (`attachment_rag_enabled`), which cannot resolve a request *by page number* (a page number is not its content); ask a content question or `learn_document` the file instead. See `vaf/core/headless_runner.py`.
 

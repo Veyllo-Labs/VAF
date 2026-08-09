@@ -609,9 +609,16 @@ For detailed analysis of large files, consider using librarian_agent instead."""
             "path": {"type": "string"},
             "start_line": {"type": "integer", "description": "First line to return (1-indexed). Use to read a file in sections."},
             "end_line": {"type": "integer", "description": "Last line to return (inclusive). Omit to read to end of file."},
+            "first_page": {"type": "integer", "description": "PDF only: first page to read (1-indexed). Default 1."},
+            "last_page": {"type": "integer", "description": "PDF only: last page to read (inclusive). Omit for the default window from first_page."},
         },
         "required": ["path"]
     }
+
+    # PDF pages returned when no explicit range is asked for. The limit is
+    # NAMED to the caller: the honest header says which pages of how many were
+    # read and how to continue (first_page=N) - never a bare "(truncated)".
+    _PDF_READ_DEFAULT_PAGES = 50
 
 
     def run(self, **kwargs) -> str:
@@ -634,23 +641,19 @@ For detailed analysis of large files, consider using librarian_agent instead."""
             # ═══════════════════════════════════════════════════════════
             if ext == '.pdf':
                 try:
-                    from vaf.core.pdf_extract import extract_pdf_markdown
-                    # Shared extractor: pdfplumber markdown (headings + tables), PyPDF2 + OCR fallbacks.
-                    res_md = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True)
-                    full_text = res_md["markdown"]
-                    num_pages = res_md["num_pages"]
-
-                    # Truncate if too long
-                    if len(full_text) > 15000:
-                        full_text = full_text[:15000] + "\n\n... (truncated)"
-
-                    if not full_text.strip():
-                        full_text = (
-                            "[Scanned PDF: no embedded text detected. Install OCR deps "
-                            "(pdf2image, pytesseract, poppler, Tesseract) to read it.]"
-                        )
-
-                    return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
+                    from vaf.core.pdf_extract import extract_pdf_markdown, format_pdf_read_result
+                    # Shared extractor: pdfplumber markdown (headings + tables), PyPDF2 + OCR
+                    # fallbacks. The shared formatter renders the result honestly (page range
+                    # covered, continuation hint, named OCR reason) - the hand-rolled 15k cut
+                    # with its guessed "no embedded text?" message lived here twice (this tool
+                    # + the librarian) and destroyed the facts the extractor already knew.
+                    first = max(1, int(kwargs.get('first_page') or 1))
+                    last = kwargs.get('last_page')
+                    window = (max(0, int(last) - first + 1) if last
+                              else self._PDF_READ_DEFAULT_PAGES)
+                    res_md = extract_pdf_markdown(
+                        file_path, max_pages=window, ocr_fallback=True, first_page=first)
+                    return format_pdf_read_result(res_md, file_name=file_path.name)
 
                 except ImportError:
                     return "Error: PDF support not installed. Run: pip install pdfplumber PyPDF2"

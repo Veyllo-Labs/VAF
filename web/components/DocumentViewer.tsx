@@ -839,7 +839,7 @@ export default function DocumentViewer({
                                                         if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
                                                     }}
                                                     disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
-                                                    className="rounded p-1 text-gray-400 hover:bg-violet-50 hover:text-violet-600 transition disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                                                    className="rounded p-1 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10 hover:scale-125 transition-all disabled:opacity-45 disabled:text-gray-500 disabled:hover:scale-100 disabled:hover:bg-transparent"
                                                     title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
                                                     aria-label={`Learn ${doc.name}`}
                                                 >
@@ -1096,7 +1096,7 @@ export default function DocumentViewer({
                                                         if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
                                                     }}
                                                     disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
-                                                    className="rounded p-1.5 text-gray-400 hover:bg-violet-50 hover:text-violet-600 transition disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                                                    className="rounded p-1.5 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10 hover:scale-125 transition-all disabled:opacity-45 disabled:text-gray-500 disabled:hover:scale-100 disabled:hover:bg-transparent"
                                                     title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
                                                     aria-label={`Learn ${doc.name}`}
                                                 >

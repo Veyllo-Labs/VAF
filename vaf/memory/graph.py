@@ -56,18 +56,26 @@ class GraphManager:
         Get memory graph data for ReactFlow visualization.
 
         Args:
-            limit: Maximum number of nodes to return
+            limit: Maximum number of nodes to return; 0 = ALL memories of the
+                scope (the /memory page default - the old 100-node recency
+                window silently hid every older memory once a learned
+                document filled it)
             include_deleted: Include soft-deleted memories
             highlight_ids: Memory IDs to highlight (e.g., RAG sources)
             relevance_scores: Dict mapping memory ID to relevance score
             user_scope_id: Filter to only show memories for this user scope
 
         Returns:
-            Dict with 'nodes' and 'edges' arrays for ReactFlow
+            Dict with 'nodes' and 'edges' arrays for the graph renderer
         """
         # Query memories (eager-load chunks so async session doesn't lazy-load)
-        # Filter by user_scope_id if provided
-        conditions = [Memory.is_deleted == include_deleted]
+        # Filter by user_scope_id if provided.
+        # Live memories always; deleted ones only ADDITIONALLY on request (the
+        # old `is_deleted == include_deleted` returned ONLY deleted rows when
+        # include_deleted=True).
+        conditions = []
+        if not include_deleted:
+            conditions.append(Memory.is_deleted == False)  # noqa: E712
         conditions.append(
             or_(
                 Memory.meta["source"].astext.is_(None),
@@ -82,8 +90,9 @@ class GraphManager:
             .where(and_(*conditions))
             .options(selectinload(Memory.chunks))
             .order_by(Memory.updated_at.desc())
-            .limit(limit)
         )
+        if limit and limit > 0:
+            query = query.limit(limit)
         result = await self.db.execute(query)
         memories = result.unique().scalars().all()
         logger.debug("get_graph_data memories count: %s", len(memories))
@@ -147,6 +156,9 @@ class GraphManager:
                     "relevance": relevance,
                     "hasParent": memory.parent_id is not None,
                     "parentId": str(memory.parent_id) if memory.parent_id else None,
+                    # Document sections cluster around their document via this
+                    # key (set by learn_document on sections AND the root).
+                    "docTag": (memory.meta or {}).get("doc_tag", ""),
                 }
             }
             nodes.append(node)

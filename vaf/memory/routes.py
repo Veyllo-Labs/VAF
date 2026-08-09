@@ -320,11 +320,14 @@ async def delete_tag_link(tag_a: str = Query(...), tag_b: str = Query(...)):
 # Must be before /{memory_id} or "graph" is matched as memory_id
 @memory_router.get("/graph", response_model=GraphResponse)
 async def get_graph(
-    limit: int = Query(default=100, ge=1, le=500),
+    # 0 = ALL memories of the scope (the /memory page default). The old
+    # 100-node recency window hid every older memory once a learned document
+    # filled it. Scoping is unchanged: RLS GUC + explicit WHERE per scope.
+    limit: int = Query(default=100, ge=0),
     highlight: Optional[str] = Query(default=None, description="Comma-separated memory IDs to highlight"),
     user_scope_id: Optional[UUID] = Depends(get_current_user_scope)
 ):
-    """Get memory graph data for ReactFlow visualization."""
+    """Get memory graph data for the graph renderer."""
     try:
         use_cache = not highlight
         scope_str = str(user_scope_id) if user_scope_id else None

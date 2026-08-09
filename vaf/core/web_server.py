@@ -4559,6 +4559,106 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         file_info = f" [{len(files)} file(s)]" if files else ""
                         print(f"[WebUI] Queued input{file_info} for session {session_id}: {content[:50]}...")
 
+                elif type == "learn_document_start":
+                    # The learn button: start the batched learn job for ONE
+                    # persisted chat attachment. The click IS the confirmation.
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    user_scope_id = manager.get_connection_user(websocket)
+                    doc_name = str(cmd.get("name") or "").strip()
+
+                    def _deny(reason: str):
+                        return websocket.send_json({
+                            "type": "learn_denied", "sessionId": session_id,
+                            "name": doc_name, "reason": reason,
+                        })
+
+                    if not session_id or not doc_name:
+                        await _deny("missing_session_or_name")
+                        continue
+                    allowed, _loaded_sess = _ws_session_owner_ok(websocket, session_id)
+                    if not allowed:
+                        log("API", f"Access denied: learn_document_start {session_id} not owned by {user_scope_id}")
+                        await _deny("not_owned")
+                        continue
+                    # The document must carry a REAL persisted path inside the
+                    # session's attachments dir - never a client-supplied path.
+                    _doc_path = ""
+                    try:
+                        _docs = ((getattr(_loaded_sess, "runtime_state", None) or {})
+                                 .get("sidebar_documents") or [])
+                        for _d in _docs:
+                            if str((_d or {}).get("name") or "") == doc_name:
+                                _doc_path = str((_d or {}).get("path") or "")
+                                break
+                    except Exception:
+                        _doc_path = ""
+                    import os as _os
+                    from vaf.core.session import get_session_attachments_dir as _gsad
+                    try:
+                        _adir = str(_gsad(session_id, user_scope_id, create=False))
+                    except Exception:
+                        _adir = ""
+                    if (not _doc_path or not _os.path.isfile(_doc_path)
+                            or not _adir
+                            or not _os.path.realpath(_doc_path).startswith(_os.path.realpath(_adir))):
+                        await _deny("no_persisted_file")
+                        continue
+                    from vaf.core.subagent_ipc import get_ipc as _get_ipc
+                    try:
+                        if _get_ipc().has_live_task("learn_agent", session_id):
+                            await _deny("already_learning")
+                            continue
+                    except Exception:
+                        pass
+                    from vaf.core.subagent_spawn import spawn_subagent
+                    from vaf.tools.learn_document import _clean_title, _normalize_doc_tag
+                    from vaf.tools.learn_job import LearnJobSpec
+                    _title = _clean_title(doc_name)
+                    _spec = LearnJobSpec(path=_doc_path, document_title=_title,
+                                         doc_tag=_normalize_doc_tag(_title))
+                    _sub_env = {}
+                    if user_scope_id:
+                        _sub_env["VAF_USER_SCOPE_ID"] = str(user_scope_id)
+                    _role = manager.connection_roles.get(websocket)
+                    if _role:
+                        _sub_env["VAF_USER_ROLE"] = str(_role)
+                    spawned = spawn_subagent(
+                        "learn_agent", f"Learn document: {_title}",
+                        include_task_arg=False, payload=_spec.to_json(),
+                        extra_env=_sub_env, session_id=session_id,
+                        marker_note=f"Learning \"{_title}\" batch by batch.",
+                    )
+                    if spawned:
+                        await websocket.send_json({
+                            "type": "learn_started", "sessionId": session_id,
+                            "name": doc_name, "taskId": spawned.task_id,
+                        })
+                    else:
+                        await _deny("spawn_failed")
+
+                elif type == "learn_document_cancel":
+                    # Graceful cancel: touch the flag file the job polls at batch
+                    # boundaries. One writer (this handler), one reader (the job) -
+                    # deliberately NOT a field on the IPC record, which the
+                    # heartbeat rewrites every 3 seconds.
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    task_id = str(cmd.get("taskId") or "").strip()
+                    allowed, _ = _ws_session_owner_ok(websocket, session_id)
+                    if not allowed or not task_id:
+                        continue
+                    # The task must belong to THIS session (never cancel another
+                    # tenant's job by guessing ids).
+                    try:
+                        from vaf.core.subagent_ipc import get_ipc as _get_ipc
+                        _mine = any(getattr(t, "task_id", "") == task_id
+                                    for t in _get_ipc().get_active_tasks(session_id=session_id))
+                        if not _mine:
+                            continue
+                        from vaf.tools.learn_job import cancel_flag_path
+                        cancel_flag_path(task_id).touch()
+                    except Exception:
+                        pass
+
                 elif type == "set_sidebar_documents":
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                     user_scope_id = manager.get_connection_user(websocket)

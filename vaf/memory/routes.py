@@ -351,6 +351,58 @@ async def get_graph(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@memory_router.get("/learn-status/{doc_tag}")
+async def get_learn_status(
+    doc_tag: str,
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope),
+):
+    """
+    Learn coverage for one document (the learn button's state across reloads).
+
+    Reads the document_index root's coverage stamp (learn_status,
+    learned_pages/total_pages, learned_at) plus any live LearnLedger, both
+    scoped to the caller - never another tenant's progress (route ordering:
+    declared before the /{memory_id} catch-all, like /by-doc-tag).
+    """
+    try:
+        from sqlalchemy import select, and_
+        from vaf.memory.models import Memory
+
+        out = {"doc_tag": doc_tag, "learn_status": None, "learned_pages": None,
+               "total_pages": None, "learned_at": None, "running": False,
+               "batches_done": 0, "batches_total": 0}
+        async with get_db(user_scope_id=user_scope_id) as db:
+            conditions = [
+                Memory.is_deleted == False,  # noqa: E712
+                Memory.meta["type"].as_string() == "document_index",
+                Memory.meta["doc_tag"].as_string() == doc_tag,
+            ]
+            if user_scope_id is not None:
+                conditions.append(Memory.user_scope_id == user_scope_id)
+            root = (await db.execute(select(Memory).where(and_(*conditions)))).scalar_one_or_none()
+            if root is not None:
+                meta = root.meta or {}
+                out["learn_status"] = meta.get("learn_status")
+                out["learned_pages"] = meta.get("learned_pages")
+                out["total_pages"] = meta.get("total_pages")
+                out["learned_at"] = meta.get("learned_at")
+        try:
+            from vaf.core.learn_ledger import LearnLedger
+            led = LearnLedger.load(doc_tag, str(user_scope_id or ""))
+            if led is not None:
+                out["running"] = led.status == "running"
+                out["batches_done"] = len(led.done_batch_indices())
+                out["batches_total"] = led.total_batches
+                if out["learn_status"] is None:
+                    out["learn_status"] = led.status
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        logger.error(f"Failed to read learn status for {doc_tag!r}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @memory_router.get("/{memory_id}", response_model=MemoryResponse)
 async def get_memory(
     memory_id: str,

@@ -2246,6 +2246,9 @@ function VAFDashboardContent() {
         docName: string; docTag?: string; batch: number; batchesTotal: number;
         phase: 'learning' | 'done' | 'stopped' | 'capped' | 'failed' | 'refused' | string;
     } | null>(null);
+    // Per-document button state (keyed by name) + the running job's taskId for Cancel.
+    const [learnDocStates, setLearnDocStates] = useState<Record<string, 'learning' | 'learned' | 'error' | undefined>>({});
+    const learnTaskIdRef = useRef<string | null>(null);
     const [volume, setVolume] = useState(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -3638,13 +3641,39 @@ function VAFDashboardContent() {
                     // outcome is readable; the completion chat message carries the
                     // full numbers.
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    const _phase = String(data.phase ?? 'learning');
+                    const _docName = String(data.docName ?? '');
                     setLearnState({
-                        docName: String(data.docName ?? ''),
+                        docName: _docName,
                         docTag: data.docTag ? String(data.docTag) : undefined,
                         batch: typeof data.batch === 'number' ? data.batch : 0,
                         batchesTotal: typeof data.batchesTotal === 'number' ? data.batchesTotal : 0,
-                        phase: String(data.phase ?? 'learning'),
+                        phase: _phase,
                     });
+                    if (_docName) {
+                        setLearnDocStates(prev => ({
+                            ...prev,
+                            [_docName]: _phase === 'learning' ? 'learning'
+                                : _phase === 'done' ? 'learned'
+                                : _phase === 'failed' ? 'error' : undefined,
+                        }));
+                    }
+                    if (_phase !== 'learning') learnTaskIdRef.current = null;
+                }
+                else if (data.type === 'learn_started') {
+                    learnTaskIdRef.current = String(data.taskId ?? '') || null;
+                    const _n = String(data.name ?? '');
+                    if (_n) setLearnDocStates(prev => ({ ...prev, [_n]: 'learning' }));
+                }
+                else if (data.type === 'learn_denied') {
+                    const _n = String(data.name ?? '');
+                    if (_n) setLearnDocStates(prev => ({ ...prev, [_n]: undefined }));
+                    const reason = String(data.reason ?? '');
+                    setMessages(prev => [...prev, {
+                        role: 'system',
+                        content: `⚠️ ${tMain('learnDenied')}${reason ? ` (${reason})` : ''}`,
+                        timestamp: Date.now(),
+                    }]);
                 }
                 else if (data.type === 'browser_state') {
                     // Live structured state from the browser agent: task, step, action plan,
@@ -6645,6 +6674,76 @@ function VAFDashboardContent() {
                                     </div>
                                 )}
 
+                                {/* Document Learning Banner — batch N of M with a determinate bar
+                                    (model_download markup) + Cancel; driven by learn_state frames. */}
+                                {learnState && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex-1 min-w-0 flex justify-center">
+                                            <div className={cn(
+                                                "flex items-center gap-3 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2 max-w-full",
+                                                learnState.phase === 'learning'
+                                                    ? "bg-violet-50 border-violet-300 text-violet-700"
+                                                    : learnState.phase === 'done'
+                                                        ? "bg-green-50 border-green-300 text-green-700"
+                                                        : "bg-amber-50 border-amber-300 text-amber-700"
+                                            )}>
+                                                {learnState.phase === 'learning' ? (
+                                                    <div className="w-4 h-4 shrink-0 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                                                ) : learnState.phase === 'done' ? (
+                                                    <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 4h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 5c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z" />
+                                                    </svg>
+                                                )}
+                                                <span className="text-sm font-medium min-w-0 truncate">
+                                                    {learnState.phase === 'learning'
+                                                        ? tMain('learningDocument', { name: learnState.docName, batch: learnState.batch + 1 > learnState.batchesTotal ? learnState.batchesTotal : learnState.batch + 1, total: learnState.batchesTotal })
+                                                        : learnState.phase === 'done'
+                                                            ? tMain('learningComplete', { name: learnState.docName })
+                                                            : tMain('learningEnded', { name: learnState.docName, phase: learnState.phase })}
+                                                </span>
+                                                {learnState.phase === 'learning' && learnState.batchesTotal > 0 && (
+                                                    <div className="w-28 shrink-0 h-1.5 rounded-full bg-violet-200 overflow-hidden">
+                                                        <div className="h-full bg-violet-600 transition-all"
+                                                             style={{ width: `${Math.min(100, Math.round((learnState.batch / learnState.batchesTotal) * 100))}%` }} />
+                                                    </div>
+                                                )}
+                                                {learnState.phase === 'learning' && learnTaskIdRef.current && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (ws && learnTaskIdRef.current) {
+                                                                ws.send(JSON.stringify({
+                                                                    type: 'learn_document_cancel',
+                                                                    sessionId: currentSessionId,
+                                                                    taskId: learnTaskIdRef.current,
+                                                                }));
+                                                            }
+                                                        }}
+                                                        className="shrink-0 text-xs font-medium text-violet-500 hover:text-violet-800 underline"
+                                                    >
+                                                        {tMain('cancel')}
+                                                    </button>
+                                                )}
+                                                {learnState.phase !== 'learning' && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setLearnState(null)}
+                                                        className="shrink-0 text-xs text-current/60 hover:text-current"
+                                                        aria-label="Dismiss"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Attachment Indexing Banner — same UI as the Memory Learning banner,
                                     shown while the LLM indexes attached documents for retrieval. */}
                                 {activeAttachmentIndexStatus && (
@@ -7100,6 +7199,17 @@ function VAFDashboardContent() {
                                     insertedSelections={insertedSelections}
                                     indexStatus={activeAttachmentIndexStatus}
                                     canClose={!isIndexing}
+                                    onLearnDocument={(name) => {
+                                        if (ws && currentSessionId) {
+                                            ws.send(JSON.stringify({
+                                                type: 'learn_document_start',
+                                                sessionId: currentSessionId,
+                                                name,
+                                            }));
+                                            setLearnDocStates(prev => ({ ...prev, [name]: 'learning' }));
+                                        }
+                                    }}
+                                    learnStates={learnDocStates}
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor

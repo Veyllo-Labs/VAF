@@ -51,6 +51,10 @@ WEB_SERVER = Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.
 BRANCHES_WITH_CLIENT_SESSION_ID = {
     "artifact_edit", "chat", "set_sidebar_documents",
     "voice_call_start", "voice_call_turn", "stop_generation",
+    # The learn button lanes: start resolves the PERSISTED file itself (never a
+    # client path) and cancel verifies the task belongs to the caller's session
+    # before touching the flag file - both behind _ws_session_owner_ok.
+    "learn_document_start", "learn_document_cancel",
 }
 
 

@@ -140,7 +140,12 @@
     "speakerConfirmHint": "Your answer never changes your own voice profile.",
     "stopGeneration": "Stop generation",
     "stoppingGeneration": "Stopping...",
-    "fileTooLargeToAttach": "That file is larger than {limit} MB and cannot be attached. Save it to disk and ask me to learn or read it by path instead."
+    "fileTooLargeToAttach": "That file is larger than {limit} MB and cannot be attached. Save it to disk and ask me to learn or read it by path instead.",
+    "learningDocument": "Learning “{name}” – batch {batch} of {total}",
+    "learningComplete": "“{name}” learned into long-term memory",
+    "learningEnded": "Learning “{name}” ended: {phase}",
+    "learnDenied": "Could not start learning this document",
+    "cancel": "Cancel"
   },
   "nav": {
     "settings": "Settings",

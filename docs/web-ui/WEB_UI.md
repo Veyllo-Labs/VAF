@@ -304,6 +304,21 @@ The Code Viewer is a Monaco-based (VS Code engine) code editor in the right pane
 
 **Image Viewer - mark a region & ask:** a highlighter toggle in the viewer lets the user drag a **yellow rectangle** over part of the image. On release the frontend burns the rectangle into a full-res copy and also produces a zoomed crop of the region (both via `<canvas>`, same-origin so untainted). While a marking is set, an "Markierung aktiv" chip appears above the input and the next chat message carries `markedRegion: {name, annotated, crop}`. The backend (`web_server.py` chat handler) runs vision **once** on the annotated image + crop with the user's question (offloaded via `asyncio.to_thread`), stores the focused answer in `runtime_state["marked_region_answer"]`, and `headless_runner.py` injects a `--- MARKED REGION … ---` block into that turn, then clears it. The marking is **one-shot** (auto-cleared after the question) so an idle marking never re-bills a vision call - re-draw to ask again. Coordinates are never sent; the yellow box is burned into the image because vision models read "what's in the yellow box" far more reliably than pixel coordinates.
 
+**Learning a document from the viewer.** Every document row carries a learn
+button (graduation-cap icon, next to the delete button, in the dock and the
+overlay list). It is disabled until the attachment indexing reports ready
+(`attachment_indexed`); the click is the confirmation and sends
+`learn_document_start {sessionId, name}`. The server resolves the PERSISTED
+file itself (a client-supplied path is never trusted: the document must carry a
+real path inside the session's attachments directory), gates on session
+ownership, refuses a second concurrent learn per session, and spawns the same
+batched `learn_agent` job the `learn_document` tool uses. Progress renders as
+the learning banner ("batch N of M" with a determinate bar and a Cancel that
+sends `learn_document_cancel {taskId}`); the button shows a spinner while
+learning and a checkmark when done, and `GET /api/memory/learn-status/{doc_tag}`
+serves the coverage (learned/partial, pages) across reloads. The completion
+message with the full numbers arrives as a chat message.
+
 ### 7a. HTML Viewer
 
 A dedicated viewer for HTML files (reports, generated web pages). Opens automatically when the agent creates a `.html` or `.htm` file - shown as an **orange chip** in the chat (distinct from violet code chips and blue download chips).

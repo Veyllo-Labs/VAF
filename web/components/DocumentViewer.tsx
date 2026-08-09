@@ -7,7 +7,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { marked } from 'marked';
 import mammoth from 'mammoth';
-import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List, Loader2 } from 'lucide-react';
+import { X, FileText, Plus, Trash2, ChevronRight, ChevronLeft, List, Loader2, GraduationCap, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const PdfWithHighlights = dynamic(() => import('@/components/PdfWithHighlights'), { ssr: false });
@@ -61,6 +61,12 @@ export type DocumentViewerProps = {
     insertedSelections?: InsertedSelectionRange[];
     /** Attachment RAG indexing status, shown in the header (undefined = idle). */
     indexStatus?: 'indexing' | 'ready' | 'error';
+    /** Start the batched learn job for one document (by NAME - the server resolves
+     *  the persisted file itself; a client-supplied path is never trusted). The
+     *  button appears once indexing is ready; the click is the confirmation. */
+    onLearnDocument?: (name: string) => void;
+    /** Per-document learn state (keyed by name), driven by learn_state frames. */
+    learnStates?: Record<string, 'learning' | 'learned' | 'error' | undefined>;
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.html,.htm';
@@ -489,6 +495,8 @@ export default function DocumentViewer({
     documents,
     onAddFiles,
     onRemoveDocument,
+    onLearnDocument,
+    learnStates,
     onInsertSelection,
     insertedSelectionsCount = 0,
     insertedSelections = [],
@@ -823,6 +831,25 @@ export default function DocumentViewer({
                                             <span className="flex-1 truncate text-[13px] font-medium text-gray-900" title={doc.name}>
                                                 {doc.name}
                                             </span>
+{onLearnDocument && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
+                                                    }}
+                                                    disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
+                                                    className="rounded p-1 text-gray-400 hover:bg-violet-50 hover:text-violet-600 transition disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                                                    title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
+                                                    aria-label={`Learn ${doc.name}`}
+                                                >
+                                                    {learnStates?.[doc.name] === 'learning'
+                                                        ? <Loader2 size={12} className="animate-spin text-violet-600" />
+                                                        : learnStates?.[doc.name] === 'learned'
+                                                            ? <Check size={12} className="text-emerald-600" />
+                                                            : <GraduationCap size={12} />}
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={(e) => {
@@ -1061,7 +1088,26 @@ export default function DocumentViewer({
                                     >
                                         <FileText size={16} className="shrink-0 text-gray-500" />
                                         <span className="flex-1 truncate text-sm font-medium text-gray-900">{doc.name}</span>
-                                        <button
+{onLearnDocument && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (indexStatus === 'ready' && learnStates?.[doc.name] !== 'learning') onLearnDocument(doc.name);
+                                                    }}
+                                                    disabled={indexStatus !== 'ready' || learnStates?.[doc.name] === 'learning'}
+                                                    className="rounded p-1.5 text-gray-400 hover:bg-violet-50 hover:text-violet-600 transition disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                                                    title={learnStates?.[doc.name] === 'learned' ? 'Learned into long-term memory' : 'Learn this document into long-term memory'}
+                                                    aria-label={`Learn ${doc.name}`}
+                                                >
+                                                    {learnStates?.[doc.name] === 'learning'
+                                                        ? <Loader2 size={14} className="animate-spin text-violet-600" />
+                                                        : learnStates?.[doc.name] === 'learned'
+                                                            ? <Check size={14} className="text-emerald-600" />
+                                                            : <GraduationCap size={14} />}
+                                                </button>
+                                            )}
+                                            <button
                                             type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();

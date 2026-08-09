@@ -140,7 +140,12 @@
     "speakerConfirmHint": "Deine Antwort ändert nie dein eigenes Stimmprofil.",
     "stopGeneration": "Generierung stoppen",
     "stoppingGeneration": "Stoppe...",
-    "fileTooLargeToAttach": "Diese Datei ist größer als {limit} MB und kann nicht angehängt werden. Speichere sie auf der Festplatte und bitte mich, sie per Pfad zu lernen oder zu lesen."
+    "fileTooLargeToAttach": "Diese Datei ist größer als {limit} MB und kann nicht angehängt werden. Speichere sie auf der Festplatte und bitte mich, sie per Pfad zu lernen oder zu lesen.",
+    "learningDocument": "Lerne „{name}“ – Batch {batch} von {total}",
+    "learningComplete": "„{name}“ ins Langzeitgedächtnis gelernt",
+    "learningEnded": "Lernen von „{name}“ beendet: {phase}",
+    "learnDenied": "Lernen dieses Dokuments konnte nicht gestartet werden",
+    "cancel": "Abbrechen"
   },
   "nav": {
     "settings": "Einstellungen",

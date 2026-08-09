@@ -399,3 +399,52 @@ def test_dispatcher_branch_prefers_the_payload():
     block = src.split('agent_type == "learn_agent"')[1][:1200]
     assert "get_task_payload" in block
     assert "run_learn_job" in block
+
+
+# ---------------------------------------------------------------------------
+# The Web UI wiring (button handler + banner + cancel)
+# ---------------------------------------------------------------------------
+
+def test_learn_ws_handler_gates_ownership_and_path():
+    """The button's WS handler must gate on session ownership, resolve the
+    persisted file itself (a client-supplied path is never trusted), refuse a
+    running duplicate, and answer deny frames instead of silence."""
+    src = Path("vaf/core/web_server.py").read_text(encoding="utf-8")
+    i = src.index('elif type == "learn_document_start"')
+    block = src[i:i + 4200]
+    assert "_ws_session_owner_ok(websocket, session_id)" in block
+    assert "learn_denied" in block
+    assert "realpath(_doc_path).startswith" in block, \
+        "the handler stopped pinning the path to the session attachments dir"
+    assert 'has_live_task("learn_agent"' in block
+    assert "spawn_subagent(" in block
+
+    j = src.index('elif type == "learn_document_cancel"')
+    cancel_block = src[j:j + 1600]
+    assert "_ws_session_owner_ok(websocket, session_id)" in cancel_block
+    assert "get_active_tasks(session_id=session_id)" in cancel_block, \
+        "cancel no longer verifies the task belongs to the caller's session"
+    assert "cancel_flag_path(task_id).touch()" in cancel_block
+
+
+def test_frontend_wires_button_banner_and_cancel():
+    page = Path("web/app/page.tsx").read_text(encoding="utf-8")
+    assert "learn_document_start" in page
+    assert "learn_document_cancel" in page
+    assert "learningDocument" in page, "the banner lost its i18n label"
+    assert "learnStates={learnDocStates}" in page, "the viewer no longer gets button states"
+    viewer = Path("web/components/DocumentViewer.tsx").read_text(encoding="utf-8")
+    assert "onLearnDocument" in viewer
+    assert viewer.count("indexStatus !== 'ready'") >= 2, \
+        "the learn button is clickable before indexing is done (both rows must gate)"
+
+
+def test_learn_status_route_is_declared_before_the_catchall():
+    """FastAPI matches in declaration order: /{memory_id} before /learn-status
+    would swallow the path as a memory id."""
+    src = Path("vaf/memory/routes.py").read_text(encoding="utf-8")
+    assert src.index('get("/learn-status/{doc_tag}")') < src.index('get("/{memory_id}"'), \
+        "learn-status is unreachable behind the /{memory_id} catch-all"
+    i = src.index('get("/learn-status/{doc_tag}")')
+    block = src[i:i + 2400]
+    assert "get_current_user_scope" in block, "learn-status lost its user scoping"

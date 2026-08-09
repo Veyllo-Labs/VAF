@@ -108,6 +108,44 @@ def test_real_tool_in_turn_falls_through_to_judge():
     assert ungrounded is False
 
 
+def test_a_committed_memory_save_is_not_bookkeeping():
+    """Live incident, opposite polarity: the model was told its own truthful
+    confirmation was a confabulation.
+
+    The user asked "remember this"; the turn ran memory_save (bounced by the
+    plan gate), update_working_memory (the plan the gate demanded), then
+    memory_save again, which committed a row. The reply said "Gespeichert." and
+    the deterministic rule flagged it, because memory_save used to be counted
+    as bookkeeping - so the one shape where saving IS the whole task was
+    unearned by construction. Note the plan gate makes this self-inflicted:
+    memory_save is irreversible, so a plan call is FORCED into the same turn and
+    nothing non-bookkeeping is left in it.
+
+    Reverting the fix turns this test red on the first assertion; the second
+    keeps the guard's actual job pinned, so the fix cannot be "delete the rule".
+    """
+    live_turn = [
+        ("memory_save", "[PLAN REQUIRED] 'memory_save' changes state, so set your REAL approach"),
+        ("update_working_memory", "✅ Working Memory updated."),
+        ("memory_save", "Memory stored."),
+    ]
+    reply = "Gespeichert. Deine Headline ist jetzt festgehalten."
+    ungrounded, _ = _grounding_agent()._detect_ungrounded_result_claim(reply, live_turn)
+    assert ungrounded is False, "a committed memory_save must not be bookkeeping"
+
+    # A save alone is the same answer: the branch reads tool NAMES, so the
+    # single-call shape has to be pinned too or a partial revert stays green.
+    ungrounded, _ = _grounding_agent()._detect_ungrounded_result_claim(
+        reply, [("memory_save", "Memory stored.")])
+    assert ungrounded is False
+
+    # The guard's real job is untouched: notes-only plus an outcome claim is
+    # still ungrounded by construction, with no judge asked.
+    ungrounded, claim = _grounding_agent()._detect_ungrounded_result_claim(
+        INCIDENT_FINAL, [("update_working_memory", "✅ Working Memory updated.")])
+    assert ungrounded is True and claim
+
+
 def test_conversational_turn_without_tools_is_not_deterministically_flagged():
     """Zero tool calls = possibly a recap of EARLIER turns ("ich habe vorhin
     die Datei erstellt") - must not be auto-flagged; the LLM judge lane owns it."""

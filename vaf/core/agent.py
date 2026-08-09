@@ -11425,8 +11425,19 @@ class Agent:
         # reported it as done). Purely conversational turns (zero tool calls,
         # e.g. recapping YESTERDAY'S work) deliberately fall through to the
         # LLM judge as before.
-        _bookkeeping_ish = _BOOKKEEPING_TOOLS | {"memory_save"}
-        if turn_results and all((n or "") in _bookkeeping_ish for n, _ in turn_results):
+        #
+        # The set is _BOOKKEEPING_TOOLS itself, and memory_save is deliberately
+        # NOT added to it. It used to be, which made "Gespeichert." after a
+        # committed write a confabulation by construction - and a plain "remember
+        # this" is exactly that shape, because memory_save is irreversible, so the
+        # plan gate forces an update_working_memory into the same turn and leaves
+        # nothing else in it. memory_save writes to the store and declares itself
+        # permission_level="write" / side_effect_class="irreversible"; the
+        # turn-progress flag above already counts it as real progress, and the
+        # incident this rule was written for was narrated NOTES, never a save. A
+        # save-only turn that also claims something else is the judge's call, made
+        # on the actual results, which is where a judgement about content belongs.
+        if turn_results and all((n or "") in _BOOKKEEPING_TOOLS for n, _ in turn_results):
             _m = _re.search(
                 r'[^.!?\n]{0,120}(ausgeführt|abgeschlossen|erstellt|gespeichert|durchgeführt'
                 r'|executed|completed|created|saved|success)[^.!?\n]{0,80}',

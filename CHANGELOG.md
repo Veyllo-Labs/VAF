@@ -25,6 +25,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `tests/contract/README.md`.
 
 ### Fixed
+- **"Remember this" no longer gets flagged as something the agent made up.**
+  Asking the agent to save a fact ran the save, stored it, and then tripped
+  the anti-confabulation guard: the reply "Saved." was declared unearned and
+  the agent was forced to correct an answer that was true. The cause was a
+  classification error. `memory_save` writes to the memory store and counts as
+  a real action everywhere else, but the grounding rule counted it as
+  note-taking, and because saving is irreversible the plan gate forces a plan
+  call into the same turn, leaving a turn that looks like nothing but
+  note-taking. The rule now covers only the working-memory tools it was
+  written for. A wrongly forced correction could also send the turn off course:
+  in the reported case the agent, told its confirmation was fiction, offered to
+  deliver the answer over a messaging channel that was never asked for.
 - **Your memory encryption key can no longer be silently replaced.** The
   config file is written by several processes at once, and a reader that
   caught it mid-write saw an empty file, concluded "no key yet" and minted a

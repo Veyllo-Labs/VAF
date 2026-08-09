@@ -23,6 +23,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   now released as they are read: same output, byte for byte, at 0.7 GB.
 
 ### Added
+- **Scanned PDFs work out of the box - and Windows is no longer a special
+  case.** Text recognition for scans now has two engines: Tesseract (free,
+  local - the installers set it up on every platform, including Windows via
+  winget, with the German language pack) and the vision model (reads each page
+  with one model call, using your Vision setting - no system install at all).
+  The default picks Tesseract when present, else the vision model, and an
+  explicit choice in Settings never silently runs the other one. The
+  GPL-licensed poppler dependency is gone entirely: page images come straight
+  from the PDF or a permissively licensed renderer that ships as a normal
+  Python package.
 - **A learn button on every attached document.** Once a chat attachment
   finishes indexing, a button on its row starts learning it into long-term
   memory - no chat command needed. Attached documents are stored as real files

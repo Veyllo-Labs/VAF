@@ -272,7 +272,7 @@ Agent: [INFO] File is large (2.1 MB, max 500 KB direct read)
 
 The system automatically detects file types based on file extensions and uses the appropriate parser:
 
-- `.pdf` → pdfplumber, returning Markdown. Headings are inferred from font size and tables are rendered as Markdown tables. Falls back to PyPDF2 if pdfplumber fails, and to OCR (pdf2image + pytesseract) for scanned/image-only PDFs. Implemented in `vaf/core/pdf_extract.py` and shared by the document reader and the Web UI attachment lane.
+- `.pdf` → pdfplumber, returning Markdown. Headings are inferred from font size and tables are rendered as Markdown tables. Falls back to PyPDF2 if pdfplumber fails, and to OCR for scanned/image-only PDFs - engine per `ocr_engine`: Tesseract (free, local) or the vision model (one call per page); page images come from the embedded streams or a pypdfium2 render, no poppler. Implemented in `vaf/core/pdf_extract.py` and shared by the document reader and the Web UI attachment lane.
 - `.docx` → python-docx Word reader
 - `.xlsx`, `.xls` → openpyxl Excel reader
 - `.pptx` → python-pptx PowerPoint reader
@@ -387,7 +387,7 @@ result = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True, first_
 **Reaching the agent's context (per turn):** an attachment that fits under `attachment_rag_max_chars_per_doc` (default 24000) is inlined into the turn context **in full**, so the agent can read every page. Only documents larger than that cap fall back to the hierarchical attachment index - query-driven top-k retrieval (`attachment_rag_enabled`), which cannot resolve a request *by page number* (a page number is not its content); ask a content question or `learn_document` the file instead. See `vaf/core/headless_runner.py`.
 
 **Limitations:**
-- **Scanned PDFs (image-only):** if little or no text is extracted, OCR is tried when `librarian_ocr_fallback_for_pdf` is enabled (default: true). Requires optional deps: `pip install pdf2image pytesseract` and system tools: **poppler** (for pdf2image), **Tesseract** (for pytesseract). Install the German language pack for Tesseract for German documents.
+- **Scanned PDFs (image-only):** if little or no text is extracted, OCR is tried when `librarian_ocr_fallback_for_pdf` is enabled (default: true). The engine comes from `ocr_engine` (`auto`: **Tesseract** when its binary answers - the installers set it up, incl. the German language pack - else the **vision model** when the vision lane resolves; one model call per page, per-call budget `ocr_vision_max_pages_per_call`). When neither can run, the result names BOTH remedies instead of looking like an empty document.
 - **Images/diagrams:** text embedded in raster figures is not extracted (a separate, optional vision step would be required).
 - **Multi-column layouts:** extraction assumes a single-column reading order, so heavily multi-column pages may be mis-ordered.
 - Password-protected PDFs are not supported.
@@ -654,7 +654,7 @@ See [Librarian Configuration](LIBRARIAN_CONFIGURATION.md) for details.
 
 Planned improvements:
 
-- [x] OCR fallback for scanned PDFs (optional: pdf2image + pytesseract + poppler + Tesseract)
+- [x] OCR fallback for scanned PDFs (engine via `ocr_engine`: Tesseract, or the vision model; poppler-free page images)
 - [ ] Image extraction from documents
 - [ ] Support for older formats (.doc, .ppt, .xls)
 - [ ] Password-protected file support

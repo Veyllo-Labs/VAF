@@ -281,7 +281,7 @@ print_step "Installing System Dependencies..."
 
 if [[ "$OS_TYPE" == "macos" ]]; then
     # macOS dependencies via Homebrew
-    DEPS="portaudio git ffmpeg"
+    DEPS="portaudio git ffmpeg tesseract tesseract-lang"
     print_info "Installing: $DEPS"
     brew install $DEPS 2>/dev/null || print_warning "Some packages may already be installed"
     
@@ -293,7 +293,7 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
             # Core build deps in ONE call. Keep the WebKitGTK typelib SEPARATE: Ubuntu 24.04 dropped
             # gir1.2-webkit2-4.0 (only 4.1 exists), and a single unknown package name aborts the whole
             # apt-get transaction - which would otherwise silently skip build-essential/portaudio/etc.
-            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg python3-gi gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
+            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg tesseract-ocr tesseract-ocr-deu python3-gi gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             # WebKitGTK typelib (used by the AppIndicator tray icon; the app window uses Qt, so this is
@@ -305,7 +305,7 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
         dnf|yum)
             # WebKitGTK kept separate (Fedora 39+ ships webkit2gtk4.1, not 4.0) so one bad name can't
             # abort the whole transaction.
-            DEPS="portaudio-devel python3-devel gcc git ffmpeg python3-gobject3 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
+            DEPS="portaudio-devel python3-devel gcc git ffmpeg tesseract tesseract-langpack-deu python3-gobject3 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             $INSTALL_CMD webkit2gtk4.1 2>/dev/null \
@@ -314,12 +314,12 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
                 || print_warning "WebKitGTK unavailable (tray icon may not load; app window unaffected)"
             ;;
         pacman)
-            DEPS="portaudio python git ffmpeg base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
+            DEPS="portaudio python git ffmpeg tesseract tesseract-data-deu base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
         zypper)
-            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg nodejs-default npm-default docker-compose typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0 typelib-1_0-AyatanaAppIndicator3-0_1 gobject-introspection-devel cairo-devel"
+            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg tesseract-ocr tesseract-ocr-traineddata-german nodejs-default npm-default docker-compose typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0 typelib-1_0-AyatanaAppIndicator3-0_1 gobject-introspection-devel cairo-devel"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;

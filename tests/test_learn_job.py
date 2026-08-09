@@ -388,7 +388,8 @@ def test_scanned_pdf_without_ocr_is_refused_before_any_spawn(pdf, monkeypatch):
     out = LearnDocumentTool().run(path=str(pdf), _agent=MagicMock())
     assert out.startswith("Error:")
     assert "Tesseract binary not found" in out
-    assert "poppler" in out
+    # Both ways out are named: the free local engine AND the vision lane.
+    assert "install Tesseract" in out and "vision" in out.lower()
     assert not spawn_called, "a hopeless scan spawned a job that would store nothing"
 
 

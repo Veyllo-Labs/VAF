@@ -262,78 +262,116 @@ def test_cancel_is_polled_per_page(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# OCR hardening: named unavailability, kwargs, batching
+# OCR engines: resolution (auto/tesseract/vision), page images, named reasons
 # ---------------------------------------------------------------------------
 
-def test_tesseract_binary_missing_yields_named_reason(monkeypatch):
+def _cfg(monkeypatch, mapping):
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "get",
+                        classmethod(lambda cls, k, d=None: mapping.get(k, d)))
+
+
+def _fake_pytesseract(monkeypatch, *, binary_ok=True, text="words"):
     import sys as _sys
     import types
 
     class _NotFound(OSError):
         pass
 
-    calls = {}
+    def _version_fail():
+        raise _NotFound("tesseract is not installed")
 
-    def _convert(path, **kwargs):
-        calls.update(kwargs)
-        return [object()]
-
-    fake_pdf2image = types.SimpleNamespace(convert_from_path=_convert)
-    fake_pytesseract = types.SimpleNamespace(
+    fake = types.SimpleNamespace(
         TesseractNotFoundError=_NotFound,
         TesseractError=type("TesseractError", (RuntimeError,), {}),
-        image_to_string=lambda img, **kw: (_ for _ in ()).throw(_NotFound("tesseract is not installed")),
+        get_tesseract_version=(lambda: "5.3") if binary_ok else _version_fail,
+        image_to_string=lambda img, **kw: text,
     )
-    monkeypatch.setitem(_sys.modules, "pdf2image", fake_pdf2image)
-    monkeypatch.setitem(_sys.modules, "pytesseract", fake_pytesseract)
+    monkeypatch.setitem(_sys.modules, "pytesseract", fake)
+    return fake
 
+
+def test_resolver_auto_prefers_tesseract(monkeypatch):
+    _cfg(monkeypatch, {"ocr_engine": "auto"})
+    _fake_pytesseract(monkeypatch, binary_ok=True)
+    engine, reason = pdf_extract.resolve_ocr_engine()
+    assert engine == "tesseract" and reason == ""
+
+
+def test_resolver_auto_falls_to_vision_when_binary_missing(monkeypatch):
+    """The out-of-the-box case: no Tesseract installed, but the vision lane
+    resolves (Veyllo default / local Gemma) - scans work with zero system
+    packages."""
+    _cfg(monkeypatch, {"ocr_engine": "auto"})
+    _fake_pytesseract(monkeypatch, binary_ok=False)
+    monkeypatch.setattr("vaf.core.vision_infer.select_vision_backend",
+                        lambda: ("veyllo", "veyllo-chat"))
+    engine, reason = pdf_extract.resolve_ocr_engine()
+    assert engine == "vision" and reason == ""
+
+
+def test_resolver_names_both_remedies_when_nothing_can_run(monkeypatch):
+    _cfg(monkeypatch, {"ocr_engine": "auto"})
+    _fake_pytesseract(monkeypatch, binary_ok=False)
+    monkeypatch.setattr("vaf.core.vision_infer.select_vision_backend",
+                        lambda: (None, None))
+    engine, reason = pdf_extract.resolve_ocr_engine()
+    assert engine is None
+    assert "Tesseract" in reason and "vision" in reason, \
+        "the reason must name BOTH ways out"
+
+
+def test_explicit_pick_never_silently_falls_elsewhere(monkeypatch):
+    """An explicit choice that quietly runs the other engine is the settings
+    lie this codebase keeps paying for."""
+    _cfg(monkeypatch, {"ocr_engine": "vision"})
+    _fake_pytesseract(monkeypatch, binary_ok=True)  # tesseract WOULD work
+    monkeypatch.setattr("vaf.core.vision_infer.select_vision_backend",
+                        lambda: (None, None))
+    engine, reason = pdf_extract.resolve_ocr_engine()
+    assert engine is None
+    assert "ocr_engine=vision" in reason
+
+
+def test_vision_engine_transcribes_pages_and_caps_per_call(monkeypatch):
+    """One model call per page is instance spend: the per-call budget cuts and
+    NAMES itself with the continuation page."""
+    calls = []
+
+    def _fake_vision(images, prompt, **kw):
+        calls.append(images[0]["name"])
+        assert "Transcribe" in prompt
+        return f"text of {images[0]['name']}"
+
+    monkeypatch.setattr("vaf.core.vision_infer.vision_infer", _fake_vision)
+    pages = [(n, b"jpegbytes", "image/jpeg") for n in range(1, 6)]
+    out = pdf_extract._ocr_pages_vision(iter(pages), None, max_pages_budget=3)
+    assert calls == ["page-1", "page-2", "page-3"]
+    assert "--- Page 3 ---" in out
+    assert "ocr_vision_max_pages_per_call" in out and "first_page=4" in out
+
+
+def test_tesseract_engine_reads_page_images(monkeypatch):
+    _fake_pytesseract(monkeypatch, binary_ok=True, text="erkannter text")
+    import sys as _sys
+    import types
+    fake_img = object()
+    monkeypatch.setitem(_sys.modules, "PIL", types.SimpleNamespace(
+        Image=types.SimpleNamespace(open=lambda buf: fake_img)))
+    monkeypatch.setitem(_sys.modules, "PIL.Image",
+                        types.SimpleNamespace(open=lambda buf: fake_img))
+    pages = [(7, b"jpegbytes", "image/jpeg")]
+    out = pdf_extract._ocr_pages_tesseract(iter(pages), None)
+    assert "--- Page 7 ---" in out and "erkannter text" in out
+
+
+def test_fallback_reports_the_resolver_reason(monkeypatch):
+    _cfg(monkeypatch, {"ocr_engine": "tesseract"})
+    _fake_pytesseract(monkeypatch, binary_ok=False)
     res = pdf_extract.pdf_ocr_fallback("/scan.pdf", 3)
     assert res.startswith(OCR_UNAVAILABLE_PREFIX)
     assert "Tesseract binary not found" in res
-    # And the rasterizer got the hardening kwargs
-    assert calls.get("timeout") == pdf_extract._OCR_CONVERT_TIMEOUT_S
-    assert calls.get("output_folder"), "images are buffered in RAM again"
-    assert calls.get("first_page") == 1
 
-
-def test_ocr_batches_use_absolute_page_windows(monkeypatch):
-    import sys as _sys
-    import types
-
-    windows = []
-
-    def _convert(path, **kwargs):
-        windows.append((kwargs["first_page"], kwargs["last_page"]))
-        return [object()] * (kwargs["last_page"] - kwargs["first_page"] + 1)
-
-    fake_pdf2image = types.SimpleNamespace(convert_from_path=_convert)
-    fake_pytesseract = types.SimpleNamespace(
-        TesseractNotFoundError=type("NF", (OSError,), {}),
-        TesseractError=type("TE", (RuntimeError,), {}),
-        image_to_string=lambda img, **kw: "words",
-    )
-    monkeypatch.setitem(_sys.modules, "pdf2image", fake_pdf2image)
-    monkeypatch.setitem(_sys.modules, "pytesseract", fake_pytesseract)
-
-    res = pdf_extract.pdf_ocr_fallback("/scan.pdf", 25, first_page=11)
-    assert windows == [(11, 20), (21, 30), (31, 35)]
-    assert "--- Page 11 ---" in res and "--- Page 35 ---" in res
-
-
-def test_ocr_import_missing_yields_named_reason(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _no_pdf2image(name, *a, **kw):
-        if name == "pdf2image":
-            raise ImportError("No module named 'pdf2image'")
-        return real_import(name, *a, **kw)
-
-    monkeypatch.setattr(builtins, "__import__", _no_pdf2image)
-    res = pdf_extract.pdf_ocr_fallback("/scan.pdf", 3)
-    assert res.startswith(OCR_UNAVAILABLE_PREFIX)
-    assert "poppler" in res and "tesseract" in res.lower()
 
 
 def test_unavailable_ocr_is_reported_not_stored(monkeypatch):

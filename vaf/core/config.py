@@ -393,7 +393,7 @@ class Config:
         "document_conversion_docker_url": "http://localhost:5005",  # Gotenberg: DOCX/XLSX/PPTX → PDF (LibreOffice in Docker)
         "librarian_auto_chunk_large_files": True,  # Auto-chunk large files (default: True)
         "librarian_pdf_max_pages_preview": 50, # Max pages to show in preview (default: 50)
-        "librarian_ocr_fallback_for_pdf": True,  # OCR scanned PDFs in the librarian read path (needs pdf2image/pytesseract + poppler/Tesseract system packages)
+        "librarian_ocr_fallback_for_pdf": True,  # OCR scanned PDFs in the librarian read path (engine via ocr_engine: tesseract or the vision model)
 
         # System Settings
         "server_mode": False,                  # True = server installation (LAN always on, no desktop UI controls)
@@ -531,6 +531,10 @@ class Config:
         "learn_max_sections": 0,                                    # Sections stored per document; 0 = all sections
         "learn_batch_pages": 10,                                    # Pages per learn batch (clamped 2-100): one progress tick + one DB commit
         "memory_document_extraction_max_tokens": 1200,              # Max tokens per per-section extraction LLM call (clamped 400-4000 in agent.py)
+
+        # OCR for scanned PDFs (resolver: pdf_extract.resolve_ocr_engine).
+        "ocr_engine": "auto",                                       # "auto" (tesseract if present, else vision model), "tesseract", or "vision"
+        "ocr_vision_max_pages_per_call": 10,                        # Vision OCR = one model call PER PAGE; per-call cost guard, named in the output when it cuts
 
         # Redis Cache Settings
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
@@ -814,6 +818,10 @@ class Config:
         "learn_max_sections",
         "learn_batch_pages",
         "memory_document_extraction_max_tokens",
+        # OCR spend keys: the vision engine is one model call PER PAGE, so the
+        # engine choice and its per-call budget are instance spend.
+        "ocr_engine",
+        "ocr_vision_max_pages_per_call",
     ])
 
     @classmethod

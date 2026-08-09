@@ -71,7 +71,7 @@ ruff>=0.1.0  # Fast Python linter and formatter
 PyPDF2>=3.0.0  # PDF reading (fallback path for pdf_extract)
 pdfplumber>=0.11.0  # PDF -> markdown (headings + tables); primary path in vaf/core/pdf_extract.py (MIT)
 pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
-pdf2image>=1.16.0  # PDF → images for OCR (scanned PDFs); system: poppler required
+pypdfium2>=4.30.0  # PDF page rendering for OCR (scanned PDFs); permissive (BSD/Apache) pip wheel on every platform - replaced GPL poppler/pdf2image
 pytesseract>=0.3.10  # OCR for scanned PDFs; system: Tesseract required (optional lang pack "deu" for German)
 python-docx>=1.1.0  # Word document reading
 openpyxl>=3.1.0  # Excel file reading
@@ -109,8 +109,9 @@ zstandard>=0.22.0    # Compression for raw RFC822 blobs in the mail store (BSD)
 # - Windows: https://git-scm.com/download/win or `winget install Git.Git`
 # - macOS: `brew install git` or `xcode-select --install`
 # Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution
-# Poppler: Required for pdf2image (scanned PDF → images). Windows: e.g. https://github.com/osber/poppler-windows/releases or chocolatey/winget; macOS: brew install poppler; Linux: apt install poppler-utils
-# Tesseract: Required for pytesseract (OCR). Windows: https://github.com/UB-Mannheim/tesseract/wiki; macOS: brew install tesseract tesseract-lang; Linux: apt install tesseract-ocr tesseract-ocr-deu
+# Tesseract: needed only for ocr_engine=tesseract (the free local OCR lane; the installers set it up).
+# Windows: winget install UB-Mannheim.TesseractOCR; macOS: brew install tesseract tesseract-lang; Linux: apt install tesseract-ocr tesseract-ocr-deu.
+# Without it, ocr_engine=auto falls back to the configured vision model (one model call per page).
 
 
 # Testing

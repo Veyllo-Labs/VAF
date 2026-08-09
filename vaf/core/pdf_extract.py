@@ -13,7 +13,12 @@ Engine: `pdfplumber` (MIT, lightweight, exposes per-word font sizes) + a font-si
 (the concept pymupdf4llm uses internally). This keeps VAF clean-license and lightweight instead of
 pulling AGPL (PyMuPDF) or a heavy ML stack (docling/torch). Robustness:
 - on any pdfplumber failure -> graceful fallback to PyPDF2 per-page text (never regress),
-- for scanned / image-only PDFs (almost no embedded text) -> OCR via pdf2image + pytesseract.
+- for scanned / image-only PDFs (almost no embedded text) -> OCR via the resolved
+  engine (`resolve_ocr_engine`): Tesseract (free, local) or the VISION MODEL
+  (one call per page; uses the vision lane's provider choice). Page images come
+  from the embedded streams (instant, original quality) or a pypdfium2 render -
+  poppler is gone: it is GPL, has no official Windows build, and rendering was
+  all it did.
 
 Contract points that exist because their absence caused real damage:
 
@@ -64,13 +69,6 @@ _PAGE_MARKER_RE = re.compile(r"^--- Page \d+ ---$", re.MULTILINE)
 # String-prefix pattern per bounded_run.TIMEOUT_PREFIX precedent: the OCR lane is
 # best-effort inside a text pipeline and must return, not raise.
 OCR_UNAVAILABLE_PREFIX = "OCR unavailable: "
-
-# OCR rasterization: pages per pdf2image batch. Rasterizing a whole book at once
-# holds every page image in RAM (~12 MB/page at 200 dpi); batches of 10 keep the
-# peak at ~120 MB regardless of document size.
-_OCR_BATCH_PAGES = 10
-# Hard ceiling for ONE poppler rasterization call (pdf2image supports timeout=).
-_OCR_CONVERT_TIMEOUT_S = 300
 
 # Default char cap for the human/model-facing rendering of a read result. Context
 # protection, NOT an extraction limit - the cap and what it cut are named in the
@@ -260,6 +258,210 @@ def _extract_pypdf2(
     return "\n\n".join(out), total_pages, pages_read
 
 
+def resolve_ocr_engine() -> Tuple[Optional[str], str]:
+    """Which engine reads scanned pages: ("tesseract"|"vision"|None, reason).
+
+    The speech-lane resolver pattern: ONE place decides, every consumer asks it.
+    `ocr_engine` config (default "auto"):
+
+    - "auto": tesseract when its binary answers, else the vision model when the
+      vision lane resolves (`vision_infer.select_vision_backend` - explicit
+      choice, else the main agent if it can see), else None with a reason that
+      names BOTH remedies. Tesseract first because it is free and local; the
+      vision engine costs one model call per page.
+    - "tesseract" / "vision": the explicit pick wins; if it cannot run, the
+      reason says so instead of silently trying the other one - an explicit
+      choice that quietly falls elsewhere is the settings lie this codebase
+      keeps paying for.
+
+    Never raises; the reason is "" when an engine resolved.
+    """
+    from vaf.core.config import Config
+
+    choice = str(Config.get("ocr_engine", "auto") or "auto").strip().lower()
+
+    def _tesseract_ok() -> Tuple[bool, str]:
+        try:
+            import pytesseract
+        except ImportError:
+            return False, "pytesseract is not installed (pip install 'vaf[pdf]')"
+        try:
+            pytesseract.get_tesseract_version()
+            return True, ""
+        except Exception:
+            return False, ("Tesseract binary not found "
+                           "(install tesseract-ocr and ensure it is on PATH)")
+
+    def _vision_ok() -> Tuple[bool, str]:
+        try:
+            from vaf.core.vision_infer import select_vision_backend
+            provider, _model = select_vision_backend()
+            if provider:
+                return True, ""
+            return False, ("no vision model is configured "
+                           "(set a vision-capable provider in Settings)")
+        except Exception as e:
+            return False, f"vision lane unavailable ({e.__class__.__name__})"
+
+    if choice == "tesseract":
+        ok, why = _tesseract_ok()
+        return ("tesseract", "") if ok else (None, f"ocr_engine=tesseract, but {why}")
+    if choice == "vision":
+        ok, why = _vision_ok()
+        return ("vision", "") if ok else (None, f"ocr_engine=vision, but {why}")
+    # auto
+    ok, t_why = _tesseract_ok()
+    if ok:
+        return "tesseract", ""
+    ok, v_why = _vision_ok()
+    if ok:
+        return "vision", ""
+    return None, f"{t_why}; and {v_why}"
+
+
+def _page_images(
+    file_path: Path,
+    first_page: int,
+    last_page: int,
+    cancel: Optional[Callable[[], bool]],
+):
+    """Yield (pageno, jpeg_or_png_bytes, mime) for a page range - poppler-free.
+
+    Fast path per page: the EMBEDDED image. A true scan is one full-page image
+    per page, and PyPDF2 hands the original bytes over instantly (measured:
+    0.00s for 6 pages, original quality, zero CPU). Pages without a usable
+    embedded image (hybrid/vector layouts) are RENDERED via pypdfium2 - a
+    permissively licensed pip wheel on every platform, which is what replaced
+    the GPL poppler dependency. One page in memory at a time, never the batch.
+    """
+    import io
+
+    import PyPDF2
+
+    with open(file_path, "rb") as f:
+        reader = PyPDF2.PdfReader(f)
+        total = len(reader.pages)
+        last_page = min(last_page, total)
+        pdfium_doc = None
+        try:
+            for i in range(first_page - 1, last_page):
+                if cancel is not None and cancel():
+                    break
+                pageno = i + 1
+                # Embedded fast path: the largest image stream on the page.
+                try:
+                    imgs = list(reader.pages[i].images)
+                except Exception:
+                    imgs = []
+                best = max(imgs, key=lambda im: len(im.data or b""), default=None)
+                if best is not None and best.data and len(best.data) > 1024:
+                    name = (getattr(best, "name", "") or "").lower()
+                    mime = "image/png" if name.endswith(".png") else "image/jpeg"
+                    yield pageno, best.data, mime
+                    continue
+                # Render fallback (also the path when PyPDF2 cannot decode the stream).
+                if pdfium_doc is None:
+                    import pypdfium2 as pdfium
+                    pdfium_doc = pdfium.PdfDocument(str(file_path))
+                page = pdfium_doc[i]
+                try:
+                    bitmap = page.render(scale=200 / 72)  # ~200 dpi
+                    pil = bitmap.to_pil()
+                    buf = io.BytesIO()
+                    pil.save(buf, format="PNG")
+                    yield pageno, buf.getvalue(), "image/png"
+                finally:
+                    page.close()
+        finally:
+            if pdfium_doc is not None:
+                try:
+                    pdfium_doc.close()
+                except Exception:
+                    pass
+
+
+# The vision engine's transcription instruction: exact text out, no commentary -
+# the output is stored as document content, so chat would be corruption.
+_OCR_VISION_PROMPT = (
+    "Transcribe ALL text in this scanned page exactly as written, preserving "
+    "reading order and line breaks. Output ONLY the transcribed text - no "
+    "commentary, no summary, no markdown fences. If the page contains no "
+    "readable text, output nothing."
+)
+
+
+def _ocr_pages_tesseract(page_iter, cancel) -> str:
+    """Tesseract over (pageno, bytes, mime) tuples. The OCR language is
+    resolved ONCE on the first page (deu+eng -> eng -> default); missing
+    traineddata raises TesseractError and falls through the candidates."""
+    import io
+
+    import pytesseract
+    from PIL import Image
+
+    lang_selected: Optional[str] = None
+    parts: List[str] = []
+    for pageno, raw, _mime in page_iter:
+        if cancel is not None and cancel():
+            break
+        img = Image.open(io.BytesIO(raw))
+        if lang_selected is None:
+            for cand in ("deu+eng", "eng", ""):
+                try:
+                    kwargs = {"lang": cand} if cand else {}
+                    text = pytesseract.image_to_string(img, **kwargs)
+                    lang_selected = cand
+                    break
+                except pytesseract.TesseractError:
+                    continue
+            else:
+                return (OCR_UNAVAILABLE_PREFIX
+                        + "no usable Tesseract language data "
+                          "(install tesseract-ocr language packs, e.g. eng)")
+        else:
+            kwargs = {"lang": lang_selected} if lang_selected else {}
+            text = pytesseract.image_to_string(img, **kwargs)
+        if text.strip():
+            parts.append(f"--- Page {pageno} ---\n{text.strip()}")
+    return "\n\n".join(parts)
+
+
+def _ocr_pages_vision(page_iter, cancel, max_pages_budget: int) -> str:
+    """Vision-model OCR over (pageno, bytes, mime) tuples: one model call per
+    page, so the per-call budget is a COST guard and its truncation is named
+    in the output (the batched learn job never hits it - its batches are
+    smaller than the budget)."""
+    import base64
+
+    from vaf.core.vision_infer import vision_infer
+
+    parts: List[str] = []
+    seen = 0
+    truncated_at = None
+    for pageno, raw, mime in page_iter:
+        if cancel is not None and cancel():
+            break
+        if seen >= max_pages_budget:
+            truncated_at = pageno
+            break
+        seen += 1
+        text = vision_infer(
+            [{"data": base64.b64encode(raw).decode("ascii"),
+              "mime_type": mime, "name": f"page-{pageno}"}],
+            _OCR_VISION_PROMPT,
+            max_tokens=2048,
+        )
+        if text and text.strip():
+            parts.append(f"--- Page {pageno} ---\n{text.strip()}")
+    if truncated_at is not None:
+        parts.append(
+            f"[Vision OCR stopped after {max_pages_budget} page(s) - one model "
+            f"call per page (ocr_vision_max_pages_per_call). Continue with "
+            f"first_page={truncated_at}.]"
+        )
+    return "\n\n".join(parts)
+
+
 def pdf_ocr_fallback(
     file_path: Path,
     max_pages: int,
@@ -267,82 +469,40 @@ def pdf_ocr_fallback(
     first_page: int = 1,
     cancel: Optional[Callable[[], bool]] = None,
 ) -> str:
-    """Extract text from scanned (image-only) PDFs via OCR.
+    """Extract text from scanned (image-only) PDF pages via the resolved OCR
+    engine (`resolve_ocr_engine`: tesseract, or the vision model).
 
-    Requires pdf2image + pytesseract (Python, `vaf[pdf]` extra) plus the poppler
-    and Tesseract SYSTEM packages. Returns the extracted text, "" when OCR ran
-    fine but found nothing readable, or an `OCR unavailable: <reason>` sentinel
-    (OCR_UNAVAILABLE_PREFIX) when it could not run at all - the old bare ""
-    for both cases sent users hunting in empty documents while the actual
-    problem was a missing binary.
+    Returns the extracted text, "" when OCR ran fine and found nothing
+    readable, or an `OCR unavailable: <reason>` sentinel (OCR_UNAVAILABLE_PREFIX)
+    when it could not run - the old bare "" for both cases sent users hunting
+    in empty documents while the actual problem was a missing binary.
 
-    Rasterizes in batches of `_OCR_BATCH_PAGES` into a temp dir
-    (`output_folder=`): pdf2image otherwise buffers every page image in RAM.
-    The OCR language is resolved ONCE on the first page (deu+eng -> eng ->
-    default); a missing traineddata raises TesseractError and falls through the
-    candidates, exactly what the old per-language whole-document retry achieved.
+    Page images come from `_page_images` (embedded fast path, pypdfium2 render
+    fallback) - the pdf2image/poppler dependency is gone: poppler is GPL, has
+    no official Windows build, and rendering is all it did.
     """
-    try:
-        from pdf2image import convert_from_path
-        import pytesseract
-    except ImportError:
-        return (OCR_UNAVAILABLE_PREFIX
-                + "pdf2image/pytesseract not installed "
-                  "(pip install 'vaf[pdf]'; system packages: poppler, tesseract-ocr)")
-    import tempfile
-
     first_page = max(1, int(first_page or 1))
     last_page = first_page + max(0, int(max_pages)) - 1
     if last_page < first_page:
         return ""
-    lang_selected: Optional[str] = None  # None = not resolved yet; "" = tesseract default
-    parts: List[str] = []
+
+    engine, reason = resolve_ocr_engine()
+    if engine is None:
+        return OCR_UNAVAILABLE_PREFIX + reason
+
     try:
-        for batch_start in range(first_page, last_page + 1, _OCR_BATCH_PAGES):
-            if cancel is not None and cancel():
-                break
-            batch_end = min(batch_start + _OCR_BATCH_PAGES - 1, last_page)
-            with tempfile.TemporaryDirectory(prefix="vaf_ocr_") as tmpdir:
-                images = convert_from_path(
-                    str(file_path),
-                    first_page=batch_start,
-                    last_page=batch_end,
-                    dpi=200,
-                    output_folder=tmpdir,
-                    timeout=_OCR_CONVERT_TIMEOUT_S,
-                )
-                for i, img in enumerate(images):
-                    if cancel is not None and cancel():
-                        break
-                    pageno = batch_start + i
-                    if lang_selected is None:
-                        for cand in ("deu+eng", "eng", ""):
-                            try:
-                                kwargs = {"lang": cand} if cand else {}
-                                text = pytesseract.image_to_string(img, **kwargs)
-                                lang_selected = cand
-                                break
-                            except pytesseract.TesseractError:
-                                continue
-                        else:
-                            return (OCR_UNAVAILABLE_PREFIX
-                                    + "no usable Tesseract language data "
-                                      "(install tesseract-ocr language packs, e.g. eng)")
-                    else:
-                        kwargs = {"lang": lang_selected} if lang_selected else {}
-                        text = pytesseract.image_to_string(img, **kwargs)
-                    if text.strip():
-                        parts.append(f"--- Page {pageno} ---\n{text.strip()}")
-        return "\n\n".join(parts)
-    except pytesseract.TesseractNotFoundError:
-        # Subclasses OSError, NOT TesseractError - the old handler missed it and
-        # the blanket except turned "binary missing" into "document is empty".
-        return (OCR_UNAVAILABLE_PREFIX
-                + "Tesseract binary not found (install tesseract-ocr and ensure it is on PATH)")
+        page_iter = _page_images(file_path, first_page, last_page, cancel)
+        if engine == "vision":
+            from vaf.core.config import Config
+            budget = int(Config.get("ocr_vision_max_pages_per_call", 10) or 10)
+            return _ocr_pages_vision(page_iter, cancel, max(1, budget))
+        return _ocr_pages_tesseract(page_iter, cancel)
     except Exception as e:
-        # poppler missing (PDFInfoNotInstalledError), rasterization timeout, ...
-        # Name the class: the full rasterization cost was already paid, the user
-        # must not be told the document was empty.
+        # Tesseract binary vanished mid-run, an unreadable stream, ... Name the
+        # class: cost was already paid, the user must not be told the document
+        # was empty. (TesseractNotFoundError subclasses OSError and lands here
+        # by design now - resolve_ocr_engine probes the binary up front, so
+        # reaching this means it disappeared between probe and use.)
         return OCR_UNAVAILABLE_PREFIX + f"{e.__class__.__name__}: {e}"
 
 

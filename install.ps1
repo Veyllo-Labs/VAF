@@ -658,6 +658,32 @@ try {
 }
 
 # ============================================================================
+# 4b. TESSERACT (OCR for scanned PDFs - optional, best effort)
+# ============================================================================
+# Free local OCR engine (Apache-2.0). Without it, ocr_engine=auto falls back to
+# the configured vision model (one model call per page) and the app names the
+# missing binary honestly - so a failed install here is never fatal.
+Write-Step "Checking Tesseract OCR (for scanned PDFs)..."
+
+try {
+    $tessVersion = & tesseract --version 2>&1 | Select-Object -First 1
+    if ($tessVersion -match "tesseract") {
+        Write-Success "Tesseract installed: $tessVersion"
+    } else {
+        throw "not found"
+    }
+} catch {
+    Write-Info "Tesseract not found - installing via winget (best effort)..."
+    try {
+        & winget install --id UB-Mannheim.TesseractOCR --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        Write-Success "Tesseract installed (restart the terminal if it is not on PATH yet)"
+    } catch {
+        Write-Warn "Tesseract install failed - scanned-PDF OCR will use the vision model instead"
+        Write-Info "Manual install: winget install UB-Mannheim.TesseractOCR"
+    }
+}
+
+# ============================================================================
 # 5. NODE.JS CHECK (for Web UI)
 # ============================================================================
 Write-Step "Checking Node.js Installation (for Web UI)..."

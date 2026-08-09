@@ -40,7 +40,7 @@ On Windows: `C:\Users\<YourName>\.vaf\config.json`
 | `librarian_max_text_size_kb` | Integer | `500` | Maximum text file size in kilobytes |
 | `librarian_auto_chunk_large_files` | Boolean | `true` | Auto-chunk large files into readable sections |
 | `librarian_pdf_max_pages_preview` | Integer | `50` | Maximum PDF pages to show in preview |
-| `librarian_ocr_fallback_for_pdf` | Boolean | `true` | When a PDF has no embedded text (scanned PDF), try OCR if pdf2image and pytesseract are installed (requires system: poppler, Tesseract) |
+| `librarian_ocr_fallback_for_pdf` | Boolean | `true` | When a PDF has no embedded text (scanned PDF), try OCR; the engine comes from `ocr_engine` (Tesseract, or the vision model) |
 
 ## Usage Examples
 

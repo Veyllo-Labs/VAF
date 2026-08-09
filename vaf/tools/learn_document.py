@@ -430,8 +430,10 @@ class LearnDocumentTool(BaseTool):
                     return (
                         f"Error: No text could be extracted from {path.name}. The PDF "
                         f"appears to be scanned (no text layer) and OCR is unavailable: "
-                        f"{reason} Install: pip install pdf2image pytesseract, plus the "
-                        f"poppler and Tesseract system packages, then retry."
+                        f"{reason} Two ways out: install Tesseract (free, local - "
+                        f"the installers set it up), or set a vision-capable "
+                        f"provider so ocr_engine=auto reads pages with the vision "
+                        f"model. Then retry."
                     )
                 if int(probe.get("total_pages") or 0) <= 3:
                     # The probe covered the whole document and OCR ran empty.

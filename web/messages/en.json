@@ -597,7 +597,12 @@
       "tempCreative": "Creative (writing, ideas)",
       "strict": "Strict",
       "balanced": "Balanced",
-      "creative": "Creative"
+      "creative": "Creative",
+      "ocrEngine": "Text recognition for scanned PDFs (OCR)",
+      "ocrEngineDesc": "How pages without a text layer are read. Tesseract runs locally and is free; the vision model reads each page with one model call (uses the Vision setting above).",
+      "ocrAuto": "Automatic (Tesseract if installed, else vision model)",
+      "ocrTesseract": "Tesseract (local, free)",
+      "ocrVision": "Vision model (one model call per page)"
     },
     "voice": {
       "stt": "Speech recognition (STT)",

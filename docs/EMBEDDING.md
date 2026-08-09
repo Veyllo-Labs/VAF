@@ -33,7 +33,7 @@ bridges. Add those only if you need them, via extras:
 | `vaf[memory]` | sqlalchemy, pgvector, sentence-transformers, redis | long-term RAG memory |
 | `vaf[speech]` | SpeechRecognition, pyaudio, faster-whisper | offline speech-to-text |
 | `vaf[browser]` | browser-use, playwright | browser automation tools |
-| `vaf[pdf]` | pdfplumber, pytesseract, pdf2image | PDF extraction / OCR |
+| `vaf[pdf]` | pdfplumber, pytesseract, pypdfium2 | PDF extraction / OCR |
 | `vaf[docs]` | python-docx, openpyxl, python-pptx | Office document tools |
 | `vaf[discord]` / `vaf[telegram]` | chat bridges | messaging integrations |
 | `vaf[all]` | everything above | parity with the full product |

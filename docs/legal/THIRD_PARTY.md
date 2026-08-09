@@ -157,7 +157,7 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 | PyPDF2 | >=3.0.0 | BSD-3-Clause |
 | pdfplumber | >=0.11.0 | MIT |
 | pycryptodome | >=3.15.0 | BSD-2-Clause AND Public Domain |
-| pdf2image | >=1.16.0 | MIT |
+| pypdfium2 | >=4.30.0 | BSD-3-Clause AND Apache-2.0 (bundles PDFium; its dependency licenses ship in the wheel) |
 | pytesseract | >=0.3.10 | Apache-2.0 |
 
 ### docs

@@ -2915,6 +2915,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     );
                                 })()}
 
+                                {/* OCR for scanned PDFs: Tesseract (free, local) or the vision
+                                    model above (one model call PER PAGE - real spend). */}
+                                <Section title={tAi('ocrEngine')}>
+                                    <p className="text-xs text-gray-400 mb-3">{tAi('ocrEngineDesc')}</p>
+                                    <Select
+                                        label={tAi('ocrEngine')}
+                                        value={localConfig.ocr_engine || 'auto'}
+                                        onChange={(v: string) => handleChange('ocr_engine', v)}
+                                        options={[
+                                            { value: 'auto', label: tAi('ocrAuto') },
+                                            { value: 'tesseract', label: tAi('ocrTesseract') },
+                                            { value: 'vision', label: tAi('ocrVision') },
+                                        ]}
+                                    />
+                                </Section>
+
                                 <Section title={tAdvanced('subAgents')}>
                                     <Switch
                                         label={tInterface('separateTerminals')}

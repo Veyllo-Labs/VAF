@@ -167,9 +167,13 @@ had been launched from the browser.
 - **Wayland-native screen capture / some GPU drivers.** Because rendering goes via
   XWayland, behavior can vary by GPU driver; the DMA-buf renderer is disabled to
   work around the most common buffer errors.
-- **Optional system tools.** `poppler-utils` (PDF→image) and `tesseract-ocr` are
-  needed for scanned-PDF OCR; without them those paths degrade. `ffmpeg` and
-  `portaudio` support the speech features.
+- **Optional system tools.** `tesseract-ocr` (+ `tesseract-ocr-deu`) is the free
+  local OCR engine for scanned PDFs; `install.sh` installs it on every supported
+  distro. Without it, `ocr_engine=auto` falls back to the configured vision model
+  (one model call per page), and if neither can run the app names both remedies
+  instead of degrading silently. Poppler is NOT needed any more - page images
+  come from the PDF's embedded streams or a `pypdfium2` render (a pip wheel).
+  `ffmpeg` and `portaudio` support the speech features.
 
 ## See also
 

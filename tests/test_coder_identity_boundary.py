@@ -35,7 +35,7 @@ def test_the_coder_declares_its_caller():
 
 def test_the_coder_itself_carries_no_file_access():
     """The boundary belongs around the INNER tools, where it already is; a jail around the
-    whole coder would be the crippling the owner ruled out."""
+    whole coder would stop it reading the very files it was asked to change."""
     assert getattr(CodingAgentTool, "file_access", None) is None
 
 

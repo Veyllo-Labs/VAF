@@ -259,6 +259,7 @@ _ATTRIBUTION_PHRASES = tuple(
         ("owner-", "mandated"), ("owner ", "request"), ("owner ", "mandated"),
         ("owner product ", "decision"), ("owner's design ", "rule"),
         ("Owner-", "Entscheidung"), ("Owner-", "Auflage"),
+        ("owner ", "ruled out"),
     )
 )
 
@@ -290,5 +291,6 @@ def test_the_attribution_detector_actually_detects():
     """The detector's own floor, so an empty result means clean rather than blind."""
     assert _attribution_hits("kept broad (owner " + "decision, 2026-08-01)")
     assert _attribution_hits("Per Owner-" + "Auflage bleibt das so")
+    assert _attribution_hits("a jail here is the crippling the owner " + "ruled out")
     assert not _attribution_hits("the machine owner's key collapses to the ownerless form")
     assert not _attribution_hits("chmod: restrict permissions (owner only)")

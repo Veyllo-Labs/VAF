@@ -11,13 +11,16 @@ Provides envelope encryption:
     with AES-256-GCM (same scheme as before).
   - The DEK is wrapped by a Key Encryption Key (KEK):
       * with a master passphrase (VAF_MASTER_PASSPHRASE env or set_passphrase()):
-        KEK = scrypt(passphrase, salt) -> config.json holds no secret;
-      * without a passphrase (default / headless): KEK is a random key persisted
-        in config.json (secure_store_kek). config.json is chmod 0600, so this is
-        equivalent to chmod-only protection, but allows a seamless upgrade to a
-        passphrase later (only the small wrapped-DEK file is re-encrypted).
+        KEK = scrypt(passphrase, salt), so nothing on disk holds the key;
+      * without a passphrase (the default): KEK is a random key persisted in a
+        0600 file beside the config (secure_store.kek), or in the OS keyring when
+        secure_store_kek_backend is set to "keyring" - see _preferred_kek_backend
+        for why the file is the default on every platform. A KEK left in
+        config.json by an older version is adopted byte-identically and that copy
+        is then blanked. Upgrading to a passphrase later stays seamless (only the
+        small wrapped-DEK file is re-encrypted).
 
-All on-disk artifacts (payload .enc, wrapped-DEK .key.json, config.json) are chmod
+All on-disk artifacts (payload .enc, wrapped-DEK .key.json, the KEK file) are chmod
 0600. Read-modify-write is serialized with a process-local threading.Lock plus a
 cross-process filelock.FileLock to prevent lost updates between separate processes
 (e.g. backend and CLI).
@@ -394,7 +397,8 @@ def _machine_kek(create: bool = True) -> Optional[bytes]:
 
     Order:
       1. the backend the marker names (missing there = hard refusal, not a mint);
-      2. no marker: file, then keyring, then the legacy config.json value;
+      2. no marker: file, then the legacy config.json value, then the keyring
+         (and the keyring only when it is the configured backend);
       3. only with nothing found anywhere AND nothing to shadow: mint.
 
     The legacy value is adopted byte-identically - the existing .key.json wraps

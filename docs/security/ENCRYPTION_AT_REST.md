@@ -99,9 +99,11 @@ every encrypted row silently stops opening.
 ### Back these up together
 
 `data_keys.enc`, `data_keys.key.json` and the master key (the OS keyring entry or
-`~/.vaf/secure_store.kek`). **Any one of them missing means the data is gone** -
-there is no recovery path and no vendor who can help, which is the honest price
-of local encryption.
+`~/.vaf/secure_store.kek`). **Without all three this machine stops opening the
+store**, and the way back without that backup is `vaf secure recover`: the
+recovery key plus `data_keys.enc` and `data_keys.recovery.json`, which re-wraps
+the data key under the new machine key. Lose the backup AND the recovery key and the data is gone -
+no vendor can help, which is the honest price of local encryption.
 
 ## What is encrypted
 
@@ -118,8 +120,9 @@ of local encryption.
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix
-is plaintext and is read as-is, which is what lets chats written before this
-existed keep opening forever.
+is plaintext and is read as-is for as long as the store still tolerates
+plaintext (see the switch below), which is what lets chats written before this
+existed keep opening.
 
 ## What is deliberately NOT encrypted
 
@@ -155,19 +158,32 @@ so the next round starts from a number rather than a memory:
 | Email sync (legacy lane) | `<data_dir>/email_sync.db` | Subject, sender, body snippet | Same, plus one legacy `LIKE` fallback (`email_sync_store.py:396`) |
 | Speaker profiles | `~/.vaf/speaker_profiles/<scope>/` | Voice biometrics (`.npy` centroids) and enrolled names | Twelve numpy/JSON I/O sites; the arrays need a binary wrapper, not the text helper |
 | Browser sessions | `~/.vaf/browser_sessions/<scope>/` | Live site cookies and auth tokens | Playwright is handed a PATH and reads the file itself, so it needs decrypt-to-temp and re-encrypt around the run |
+| Legacy gzipped chats | `~/.vaf/sessions/*.json.gz` | Whole chat transcripts written by an older release | Gzip is its own container: the sweep skips `.gz` and the reader keys on the extension. Nothing writes new ones; a pre-existing file only keeps its extension when it is rewritten |
 
-Each is self-contained. None of them is on the chat path, which is why the chat
-path went first.
+Each is self-contained. Apart from the legacy `.gz` chats, which no current code
+path creates, none of them is on the chat path - which is why the chat path went
+first.
 
-## Optional: the switch, and the two embedder modes
+## Optional: the switches, and the two embedder modes
 
 `file_encryption_enabled` (default `true`) decides what NEW writes look like.
-**Reading never depends on it.** That gives three properties:
+`allow_plaintext_at_rest` (default `true`) decides whether a file WITHOUT the
+`VAFENC1` header is still accepted on read. Together they are three ordered
+states, not one switch:
 
-1. plaintext chats from before this feature keep opening, forever;
-2. turning it off writes plaintext again, and files already encrypted still open;
-3. an embedder picks per deployment - encrypt the end user's chats, or don't,
-   because their own storage already does.
+1. **Migrating** (both on): new writes are ciphertext and plaintext chats from
+   before this feature keep opening.
+2. **Enforced**: once a startup pass has re-written everything and found nothing
+   plain left, the sweep sets `allow_plaintext_at_rest` to `false` by itself.
+   From then on a file without the header is refused as a downgrade instead of
+   read, because a tolerant reader that never has to present a ciphertext
+   defeats the AEAD.
+3. **Plaintext by choice**: turning `file_encryption_enabled` off writes
+   plaintext again AND reopens the tolerant read - enforcement is a statement
+   about a fully encrypted store, so it cannot outlive that state. Files already
+   encrypted still open, because the key stays in the ring. An embedder picks
+   per deployment - encrypt the end user's chats, or don't, because their own
+   storage already does.
 
 `cross_chat_hint_enabled`, `cli_password_gate` and `prompt_log_full_enabled`
 compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
@@ -275,7 +291,10 @@ words are not in the bytes, and recovers a deleted machine key.
 On every start (web/tray startup event AND the CLI start path - one lane only is
 how a repair silently never runs), VAF re-writes plaintext files of the five file
 stores as ciphertext, tightens directory modes, prunes context archives past
-`context_archive_max_age_days`, and deletes orphaned sub-agent payloads. It also
+`context_archive_max_age_days`, and deletes orphaned sub-agent payloads. A pass
+that re-writes everything and still finds nothing plain left sets
+`allow_plaintext_at_rest` to `false` (the enforced state above); a single failed
+file keeps the store tolerant rather than locking a record out. It also
 REPORTS, without touching, files that hold readable copies and that no VAF code
 created: a database dump under `~/.vaf/vm-backups/`, and old config backups.
 

@@ -17,9 +17,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   bundles, sub-agent task text and the agent's working memory - is now written
   as AES-256-GCM ciphertext instead of readable JSON. If the laptop is stolen or
   the SSD ends up somewhere else, the passwords, keys and doctor's or lawyer's
-  matters in those chats are not readable. The key is held by the machine, so
-  the agent still starts and works on its own after a reboot; on desktops it
-  lives in the OS keyring, which your login password protects. Chats written
+  matters in those chats are not readable. The key is held by the machine in an
+  owner-only file, so the agent still starts and works on its own after a
+  reboot; on installs that start VAF from inside the desktop session, setting
+  `secure_store_kek_backend = "keyring"` before the first start creates it in
+  the OS keyring instead, which your login password protects. Chats written
   before this keep opening, and are re-written encrypted the next time they are
   saved. `file_encryption_enabled` turns it off for anyone whose storage already
   does this. Full threat table, including what it deliberately does NOT cover:
@@ -35,10 +37,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   GitHub key, the token signing secret and the master key used to sit in
   plaintext in the same file tree as the data they protect, which made
   "encrypted at rest" mean very little. They now live in one encrypted keyring
-  whose master key is in the OS keyring (or an owner-only file on headless
-  installs), and API keys no longer keep a plaintext copy behind either. A
-  one-time `config.json.pre-keyring.bak` is written before anything is removed,
-  so a downgrade stays possible. `vaf secure status` shows where every key is.
+  whose master key is an owner-only file of its own (or the OS keyring, if you
+  opt in with `secure_store_kek_backend`), and API keys no longer keep a
+  plaintext copy behind either. A one-time `config.json.pre-keyring.bak` is
+  written before anything is removed, so a downgrade stays possible.
+  `vaf secure status` shows where every key is.
 - **The terminal asks for your password.** `vaf run`, the TUI and the whole
   `vaf session` group now require the admin password before starting - the web
   UI always did, the terminal never did, and `vaf session export` prints the

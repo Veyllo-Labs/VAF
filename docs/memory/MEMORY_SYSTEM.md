@@ -408,18 +408,25 @@ Memory TEXT is encrypted at rest using AES-256-GCM - both the parent content
 decrypted on read; a startup migration encrypts legacy plaintext rows). The
 user-profile prompt cache on disk is encrypted the same way.
 
-- **Key Generation**: 32-byte random key, minted once on a genuine first run
-  (no `config.json` yet, or a cleanly-parsed config that really has no key)
-  and logged loudly when it happens
-- **Storage**: Key stored Base64-encoded in config (consider using system keyring for production)
+- **Key Generation**: 32-byte random key, resolved in one order - the data
+  keyring first; then a legacy `memory_encryption_key` in `config.json`, which
+  is adopted byte-identically and the plaintext copy blanked; and only a
+  genuine first run (neither) mints, logged loudly when it happens
+- **Storage**: Base64-encoded in the data keyring (`data_keys.enc`), which is
+  envelope-encrypted under a master key that by default lives in an owner-only
+  file or, opt-in via `secure_store_kek_backend`, the OS keyring (with
+  `VAF_MASTER_PASSPHRASE` set it is derived from the passphrase instead and
+  never written to disk). Not in `config.json`
 - **Key safety**: a PRESENT but corrupt/wrong-length key is a hard startup
   error and is never silently replaced - a silent regenerate would
   permanently orphan every encrypted row. The same applies to an UNREADABLE
   config: the key loader re-reads the raw file and refuses to mint while the
   file cannot be parsed (a torn read during a concurrent config write must
-  never look like "no key"). Config saves that omit the key keep the stored
-  value (`PROTECTED_KEYS`), and config writes are atomic (tmp + rename).
-  Back the key up separately.
+  never look like "no key"). A legacy config entry stays protected against a
+  save that omits it (`PROTECTED_KEYS`) until the keyring has adopted it; after
+  that the keyring is the only copy, and a key store that has vanished is an
+  error rather than a first run - the way back is the recovery key, never a
+  fresh key. Back the key up separately.
 - **Nonce**: Unique 12-byte nonce per encryption
 - **Unencrypted by necessity**: embedding vectors (similarity search operates
   on them), tags, dates, and titles (no longer content-derived by default;
@@ -632,7 +639,7 @@ This incident showed that component-level stability can still fail in compositio
 ## Security Considerations
 
 1. **Change default password** in production (`POSTGRES_PASSWORD` in docker-compose)
-2. **Use system keyring** for encryption key storage instead of config file
+2. **Encryption key storage**: the key lives in the data keyring, not in `config.json`. Its master key is an owner-only file by default; set `secure_store_kek_backend` to `keyring` to hold it in the OS keyring on installs that start VAF from inside a desktop session
 3. **Network isolation**: The Docker container only exposes port 5432 to localhost
 4. **Backup encryption keys** separately from data backups
 5. **User isolation - defense in depth, enforced and fail-closed at the database**: `get_db(user_scope_id=...)` sets the per-transaction `app.current_user_scope_id` GUC, and PostgreSQL Row-Level Security on the `memories` table (the `user_isolation_memories` policy) enforces it. The policy is **fail-closed**: a row is visible or writable only when its `user_scope_id` equals the GUC; an unset or empty GUC matches nothing (deny), and a row whose `user_scope_id` is NULL is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application data connection uses a non-superuser role (`vaf_app`, `NOBYPASSRLS`) via `memory_db_url`, so RLS is actually enforced for every memory data path. A separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used for DDL, migrations, global maintenance, and exactly one admin-gated aggregate lane: `get_admin_isolation_metrics()` (served via `GET /api/security/overview`, admin only), which returns cross-scope METADATA only (scope counts, sizes, usernames - never memory content) and must never be exposed on a per-user route. The application-layer scope filter (see [User isolation](#user-isolation-retrieval-is-per-user-and-fails-closed)) remains the first line of defense; database RLS is an independent, fail-closed second guard. `chunks` additionally carries its **own** `user_scope_id` column and the same forced fail-closed policy (`user_isolation_chunks`): chunk rows hold the searchable text and the embedding vectors (which are practically invertible back to text), so relying on the join to `memories` alone would leave direct chunk access unprotected. The column is stamped at ingest and backfilled by DB migration v2. `connections` has no policy of its own - its queries join `memories`.

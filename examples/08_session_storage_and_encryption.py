@@ -157,11 +157,17 @@ def part3_encrypted(store: Path) -> None:
     """One config key. The calling code does not change at all.
 
     `file_encryption_enabled` (the product default is true) decides what NEW
-    writes look like. Reading never depends on it, which buys three properties:
+    writes look like. A second setting, `allow_plaintext_at_rest`, decides
+    whether a file WITHOUT the header is still accepted on read. Together they
+    buy three properties:
 
-      - a plaintext chat written before the switch keeps opening, forever;
+      - a plaintext chat written before the switch keeps opening; the tolerance
+        ends once a startup pass has re-written the store and found nothing
+        plain left, and a file without the header is refused as a downgrade
+        from then on;
       - turning the switch off writes plaintext again without stranding what is
-        already encrypted (the key stays in the ring);
+        already encrypted (the key stays in the ring), and it reopens the
+        tolerant read - a store that writes plaintext must be able to read it;
       - turning it on needs no migration step from you - re-saving a session
         encrypts it, and the product sweeps the store once at startup.
 
@@ -216,9 +222,13 @@ def part4_recovery(store: Path) -> None:
 
       1. the recovery key,
       2. `data_keys.recovery.json`,
-      3. `data_keys.enc` and its `data_keys.key.json` sibling.
+      3. `data_keys.enc`.
 
-    The key alone is not enough, and neither are the files alone.
+    The key alone is not enough, and neither are the files alone. The old
+    machine key and its `data_keys.key.json` wrap are NOT on the list:
+    `vaf secure recover` re-wraps the recovered data key under the NEW machine's
+    key and writes that sibling itself - which is why the run below can delete
+    the machine key and still get back in.
     """
     print("\n4. RECOVERY")
     from vaf.core import data_files, data_keyring, recovery_kit

@@ -9,9 +9,12 @@ the JWT secret, the secure-store KEK - six hand-rolled special cases, and a
 config backup carried all of them next to the data they protect.
 
 Now they live in ONE envelope-encrypted blob (`data_keys.enc`, the same
-SecureBlobStore machinery the credential stores already use), whose KEK sits in
-the OS keyring (encrypted with the user's LOGIN password - which is what makes a
-stolen, powered-off machine safe) or, headless, in a 0600 file. config.json ends
+SecureBlobStore machinery the credential stores already use), whose KEK sits in a
+0600 file beside the config - on every platform, by default - or in the OS keyring
+when `secure_store_kek_backend` is set to "keyring". The keyring is the stronger
+place, because it is encrypted with the user's LOGIN password, and it is opt-in
+because it is unreachable from a VAF started outside the desktop session
+(`secure_store._preferred_kek_backend` carries the measurement). config.json ends
 up holding no key material at all.
 
 Three rules, each guarding real data:

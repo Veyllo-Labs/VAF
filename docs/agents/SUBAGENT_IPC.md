@@ -384,9 +384,17 @@ two inferences at once. Kill-switch: `subagent_concurrent_chat_enabled`. See
         └── {task_id}.txt            # Used when task exceeds command-line limit (~3K chars)
 ```
 
+**At rest:** the queue files and `task_payloads/*.txt` go through the shared
+at-rest primitive (`data_files.write_bytes_atomic` / `write_text_atomic`), so they are
+owner-only (`0600`) and, while `file_encryption_enabled` is on, `VAFENC1:` containers
+rather than readable JSON or text. Read them back through `data_files` (or `ipc.get_task_payload`),
+never with a plain `cat` or `json.load`.
+
 **Mutation serialization:** the queue JSONs are mutated by read-modify-write
-sequences, and the per-file locks inside `_read_json`/`_write_json` only cover a
-single read or write - two concurrent mutators could interleave and silently drop
+sequences, and the per-file lock inside `_read_json` covers a single read while
+`_write_json` takes no lock at all (it hands the payload to
+`data_files.write_bytes_atomic`, whose temp-file-plus-rename replaces the file
+underneath any reader) - two concurrent mutators could interleave and silently drop
 one side's update (live-caught: two concurrent `mark_task_running` calls erased
 each other's active entry, letting two workflow launches both past the duplicate
 guard). Every registry mutation therefore runs inside `SubAgentIPC._mutation_guard()`:
@@ -1227,9 +1235,9 @@ The IPC system uses platform-specific file locking mechanisms:
 
 ### Atomic Write Operations
 
-Write operations are atomic through:
-1. Writing to a temporary file (`.tmp`)
-2. Atomic rename via `Path.replace()`
+Write operations run through `data_files.write_bytes_atomic` and are atomic through:
+1. Writing to a temporary sibling created with `mkstemp` (`.tmp-*.part`, mode `0600`; the suffix is deliberately not `.json`, so a crashed write leaves nothing the queue globs try to parse), then `fsync`
+2. Atomic rename via `os.replace()`
 
 ### Queue Files
 

@@ -268,9 +268,14 @@ One file per session, `~/.vaf/sessions/<session_id>.json`, holding the JSON
 below. **The file itself is encrypted at rest** (`VAFENC1:` ‖ 12-byte nonce ‖
 AES-256-GCM, mode 0600), so `cat` shows ciphertext, not this structure - the
 shape is what `SessionManager.load()` hands back after decrypting. Reading
-tolerates both forms, so a plaintext file written before encryption existed
-still opens and is re-written encrypted on the next save; `file_encryption_enabled
-= false` writes plaintext again. Details, threat model and the recovery path:
+tolerates both forms while the store is still mixed, so a plaintext file
+written before encryption existed still opens and is re-written encrypted on
+the next save; once the startup sweep has re-written everything and found
+nothing plain left it sets `allow_plaintext_at_rest` to false, and from then
+on a file without the header is refused as a downgrade. `file_encryption_enabled
+= false` writes plaintext again and reopens that tolerance, because a store
+that writes plaintext by choice has to be able to read it. Details, threat
+model and the recovery path:
 [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md).
 
 ```json

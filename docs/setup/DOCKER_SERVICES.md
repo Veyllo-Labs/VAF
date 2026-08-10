@@ -31,6 +31,15 @@ docker compose -f docker-compose.memory.yml up -d
 docker compose -f docker-compose.memory.yml up -d
 ```
 
+> **Redis needs `REDIS_PASSWORD`.** The compose file starts Redis with
+> `--requirepass` only when that variable is set, while VAF's client always sends the
+> password it keeps in the data keyring. VAF writes the value into an owner-only,
+> gitignored `.env` beside the compose file (`vaf/core/service_stack.py`) before every
+> `compose up` it drives, and `docker compose` reads that file automatically. Starting
+> the stack by hand on a machine that has never run VAF therefore brings Redis up with
+> no password, and the cache calls then fail to authenticate. Let VAF start the stack
+> once, or export `REDIS_PASSWORD` yourself before running compose.
+
 ### Verify Running Containers
 
 ```bash
@@ -167,6 +176,11 @@ postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory
 ```
 redis://localhost:6379/0
 ```
+
+The password is **not** part of `redis_url`: it lives in the data keyring and is spliced
+into the URL at connect time (`vaf/memory/cache.py`), and handed to the container through
+`REDIS_PASSWORD` in the compose `.env`. A password written into `redis_url` by hand wins
+and is left alone.
 
 ---
 
@@ -381,10 +395,13 @@ curl -X POST http://localhost:5002/synthesize \
 # Test PostgreSQL
 docker exec -it vaf-memory-db psql -U vaf -d vaf_memory -c "SELECT 1;"
 
-# Test Redis
-docker exec -it vaf-redis redis-cli ping
+# Test Redis (the container knows its own password via $REDIS_PASSWORD)
+docker exec -it vaf-redis sh -c 'redis-cli ${REDIS_PASSWORD:+-a "$REDIS_PASSWORD"} ping'
 # Should return: PONG
 ```
+
+A bare `redis-cli ping` answers `NOAUTH Authentication required` whenever the container
+was started with a password.
 
 ---
 

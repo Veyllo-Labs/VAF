@@ -12,23 +12,28 @@ The app log directory is the first of these where a `mkdir` succeeds
 (`vaf/core/log_helper.py get_app_log_dir`):
 
 1. `$VAF_LOG_DIR` (environment variable)
-2. `<repo>/logs` (two levels above `vaf/core/`) - **only in a source checkout
-   or installer layout**, detected by a `requirements.txt` next to the `vaf`
-   package. A pip install skips this candidate, so it never writes into
-   site-packages
+2. `<repo>/logs` (two levels above `vaf/core/`) - **opt-in via `VAF_DEV_LOGS`,
+   and only in a source checkout or installer layout**, detected by a
+   `requirements.txt` next to the `vaf` package. Without `VAF_DEV_LOGS` the
+   candidate is skipped even in a checkout (a repo can sit on an unencrypted
+   disk while home is not), and a pip install skips it in any case, so it
+   never writes into site-packages
 3. `Platform.data_dir()/logs` (Linux `~/.local/share/vaf`, macOS
    `~/Library/Application Support/vaf`, Windows `%LOCALAPPDATA%/vaf`)
 4. `~/.vaf/logs`
 5. package `vaf/logs`, then the current working directory as last resort
 
-The tray pins `VAF_LOG_DIR` to the repo `logs/` at startup, so in a normal
-checkout everything lands there. A few writers use slightly different orders,
-and the ones that keep their own copy of the list (web interface, tray,
-desktop leak diagnostics) still include the repo candidate unconditionally -
-they only ever run from a checkout or an installer layout. Two writers ignore
-`VAF_LOG_DIR` entirely: the sub-agent debug tree (repo `logs/debug/`, else
-`~/.vaf/logs/debug`) and the desktop leak diagnostics. When embedding, set
-`VAF_LOG_DIR` explicitly if you want the files somewhere other than
+The tray pins `VAF_LOG_DIR` to the repo `logs/` only when `VAF_DEV_LOGS` is
+set, so in a normal checkout the files land in `Platform.data_dir()/logs`, not
+next to the code. The writers that used to keep their own copy of the candidate
+list (web interface, desktop leak diagnostics, the agent's debug log dir) now
+all delegate to `get_app_log_dir()`. A few still resolve their own path: the
+tray's `faulthandler.log` and `platform_subprocess_*.log` read `VAF_LOG_DIR`
+but fall back to the repo `logs/` (site-packages on a wheel install) when it is
+unset; the sub-agent debug tree (repo `logs/debug/`, else `~/.vaf/logs/debug`),
+`workflow_*.log` and `vaf_run.log` (both `~/.vaf/logs`) and the HTTPS proxy
+access log (`Platform.data_dir()/logs`) never read it at all. When embedding,
+set `VAF_LOG_DIR` explicitly if you want the files somewhere other than
 `Platform.data_dir()/logs`.
 
 The pytest suite pins `VAF_LOG_DIR` to a temporary directory for the entire
@@ -68,7 +73,7 @@ gates the domain logs, queue metrics, timeline, and channel logs. Notes:
 | `backend_*.log` | Provider/API errors per provider, retries, backend swaps |
 | `server_*.log`, `server_cmd_*.log` | Local llama-server stdout/stderr and the exact launch command; with debug off, see the undated `server_last.log` pair. A failing local model load is visible here, not in Python stderr |
 | `rag_*.log`, `memory_*.log`, `attach_*.log` | RAG search/ingest timing and scope, memory profiler RSS lines, attachment pipeline stages |
-| `prompt_*.log` | The full system prompt as sent (`[SYSTEM_FULL]` blocks) and persona (`[SOUL]`) lines |
+| `prompt_*.log` | Persona (`[SOUL]`) lines. The full system prompt as sent (`[SYSTEM_FULL]` blocks) is behind `prompt_log_full_enabled` (default `false`): it is the richest plaintext copy of the user's data on the machine, so it is written only when a debugging session asks for it |
 | `headless_*.log` | Headless runner startup/lifecycle checkpoints |
 | `tool_use_*.log` | One line per tool call ATTEMPT: timestamp, tool, session id, user scope, 200-char sanitized args preview - the first stop for user-isolation questions. Written by the shared funnel, so it covers chat, workflows, the librarian and embedder-registered tools; a call refused by policy/allowlist/authorizer/gate is logged too (that is the point). The coder's own loop does not go through the funnel and is absent |
 | `tools_*.log` | What individual tools chose to report about themselves, via `BaseTool.log()`: timestamp, tool name, session id, message. Third-party tools land here too |
@@ -86,9 +91,13 @@ Admins can list and tail `.log` files over HTTP: `GET /api/logs` and
 ## Reading a session
 
 Sessions live in `~/.vaf/sessions/<session_id>.json` (atomic writes; ids look
-like `green123456`). Top-level keys: `id`, `name`, `created_at`, `updated_at`,
-`model`, `project_path`, `messages`, `metadata` (carries `user_scope_id`),
-`runtime_state`, `state_version`.
+like `green123456`). **The file is encrypted at rest**, so `cat` shows a
+`VAFENC1:` prefix and binary, not JSON - use `vaf session export <id> --format
+json`, or read it in Python through `SessionManager.load()` /
+`vaf.core.data_files.read_json()`, which decrypt. The keys below are what those
+hand back: `id`, `name`, `created_at`, `updated_at`, `model`, `project_path`,
+`messages`, `metadata` (carries `user_scope_id`), `runtime_state`,
+`state_version`.
 
 To reconstruct a turn: iterate `messages`; an assistant message's
 `tool_calls` pair with the following `role: "tool"` messages via
@@ -97,7 +106,13 @@ proactive bubbles are tagged with `kind` (`thinking` | `nudge` | `timer`).
 
 Per-session working state of the main agent (plan/tasks/notes and tiered tool
 results) is separate, under `<cwd>/.vaf/main/sessions/<session_id>/`. Sub-agent
-IPC state (pending/completed tasks) is under `~/.vaf/subagent_queue/`.
+IPC state (pending/completed tasks) is under `~/.vaf/subagent_queue/`, task
+instructions in its `task_payloads/*.txt`. Both go through the same at-rest
+encryption as the session files, so read them with
+`vaf.core.data_files.read_json()` / `read_text()` rather than opening them
+directly. One exception: the full sub-agent results under that session's
+`results/*.md` are still written as plain text. Format, threat model and
+recovery: [ENCRYPTION_AT_REST.md](security/ENCRYPTION_AT_REST.md).
 
 ## `vaf debug`: LLM-assisted error analysis
 

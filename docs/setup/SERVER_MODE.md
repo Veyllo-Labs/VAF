@@ -97,7 +97,7 @@ To change them you must edit `~/.vaf/config.json` directly and restart the servi
 
 ## Credential Encryption (headless)
 
-Headless servers often have no OS keyring (no Secret Service running), so VAF falls back to an AES-256-GCM encrypted file under the data directory for OAuth tokens and IMAP/SMTP passwords. By default the encryption key is wrapped by a random key stored in `config.json` (owner-only, `0600`).
+Headless servers often have no OS keyring (no Secret Service running), so VAF falls back to an AES-256-GCM encrypted file under the data directory for OAuth tokens and IMAP/SMTP passwords. By default the encryption key is wrapped by a random key stored in its own owner-only (`0600`) file, `secure_store.kek` in `~/.vaf`; no key material is written to `config.json`.
 
 For stronger protection, set a master passphrase so the encryption key is derived from it (scrypt) and never written to disk:
 

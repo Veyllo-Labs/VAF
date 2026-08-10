@@ -200,9 +200,16 @@ agent = Agent(config={"provider": "openai", "api_key_openai": key})
 agent = Agent(config={..., "file_encryption_enabled": False})
 ```
 
-Reading never depends on the setting: a plaintext file is read as plaintext and
-an encrypted one is decrypted, so you can switch either way without a migration
-and without stranding what is already on disk.
+Reading has three states, not two. An encrypted file always decrypts. A
+plaintext file is tolerated on read until a startup pass proves the store holds
+nothing but ciphertext; that pass sets `allow_plaintext_at_rest` to false, and a
+file without the header is refused from then on, because tolerating it forever
+is a downgrade path. That pass runs in VAF's own CLI and web startup, not in an
+embedded `Agent`, so a library-only deployment stays tolerant until you set
+`allow_plaintext_at_rest` to false in the on-disk config. Turning
+`file_encryption_enabled` off reopens the tolerance, since a store that writes
+plaintext by choice has to be able to read it. So you can still switch either
+way without a migration and without stranding what is already on disk.
 
 Two things to know before you pick Mode 1:
 
@@ -1076,8 +1083,11 @@ Stable public surface (safe to build on):
   the section text the engine wraps `memory_context` in is not, and neither is the
   return value beyond the contract in [CORE_AGENT.md](CORE_AGENT.md).
 - `file_encryption_enabled` as the switch between the two at-rest modes, and the
-  promise that reading tolerates BOTH forms regardless of its value. The file
-  format and the key locations are documented but not frozen.
+  promise that turning it off leaves the whole store readable: encrypted files
+  still decrypt, and plaintext is tolerated on read again. A store that is
+  provably all ciphertext stops tolerating plaintext (`allow_plaintext_at_rest`),
+  which is why the promise is stated for the OFF switch and not for both values.
+  The file format and the key locations are documented but not frozen.
 - `cross_chat_hint_enabled` / `cross_chat_hint_k` as the OFF switch for the engine
   reading the caller's other sessions. That the switch exists and turns the
   behaviour off is the promise; the retrieval behind it is not.

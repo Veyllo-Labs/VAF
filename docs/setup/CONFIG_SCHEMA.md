@@ -24,10 +24,12 @@ There are two ways to supply configuration, and they compose:
 > set through the product goes into the same envelope-encrypted store that already holds mail,
 > GitHub and cloud credentials. `config.json` is still READ for `api_key_*`, because installs
 > that predate the move still carry a Base64 value there, and such a key is migrated into the
-> store the first time it is used. Be precise about what the encryption buys: without a master
-> passphrase (the default, and the headless case) the key-encryption key sits in `config.json`
-> itself, which is equivalent to file-permission protection - the gain is that the secret is no
-> longer in the file everything else reads, and no longer travels in a config backup.
+> store the first time it is used, and the plaintext entry is blanked once the store reads the
+> value back. Be precise about what the encryption buys: the master key that opens the store is
+> an owner-only file (`secure_store.kek`, mode 0600) by default, or the OS keyring with
+> `secure_store_kek_backend = "keyring"`. So it protects against a copied directory, a config
+> backup, a support archive and other local accounts, and against a stolen disk only as far as
+> the disk encryption underneath reaches.
 >
 > Two consequences worth knowing. `GET /api/config` therefore answers `api_key_<provider>`
 > with the empty default even when a key is configured; `GET /api/config/api-keys` reports
@@ -203,7 +205,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_db_owner_url` | `""` | Owner/superuser DSN for DDL, migrations and global stats. Empty falls back to `memory_db_url`; set it to the owner role (e.g. `vaf`) when `memory_db_url` is the non-superuser app role. |
 | `memory_db_echo` | `False` | SQLAlchemy echo (debug). |
 | `memory_embedding_model` | `all-MiniLM-L6-v2` | Sentence-transformer embedding model. |
-| `memory_encryption_key` | `""` | Managed; memory-at-rest encryption key (AES-256-GCM, Base64). Minted once when a cleanly-parsed config genuinely lacks it; an unreadable config refuses key resolution instead of minting a replacement. Protected (a save that omits it keeps the stored value) and redacted for non-admins. Losing it orphans every encrypted memory - back it up; recovery from a key rotation: `vaf memory rekey`. |
+| `memory_encryption_key` | `""` | Managed; memory-at-rest encryption key (AES-256-GCM, Base64). Held in the data keyring (`<data_dir>/data_keys.enc`), not in this file: a value left here by an older install is adopted byte-identically on first use and the plaintext entry is then blanked. Minted only when neither the keyring nor a cleanly-parsed config has one; an unreadable config refuses key resolution instead of minting a replacement. Protected (a save that omits it keeps the stored value) and redacted for non-admins. Losing it orphans every encrypted memory - back it up; recovery from a key rotation: `vaf memory rekey`. |
 | `memory_auto_capture` | `False` | Auto-store memories from conversation. |
 | `memory_auto_connect_threshold` | `0.7` | Similarity to auto-link memories. |
 | `memory_chunk_size` | `512` | Chunk size (tokens) for indexing. |
@@ -213,10 +215,10 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_rag_refine_query` | `True` | LLM query refinement before search. |
 | `context_archive_max_age_days` | `14` | Age sweep for the pre-compression conversation snapshots in `~/.vaf/context_archive` (`0` keeps them forever). Their old cleanup only ran on a clean shutdown, so they accumulated indefinitely. |
 | `prompt_log_full_enabled` | `False` | Write the ENTIRE assembled system prompt (user profile, retrieved memories, working memory, contacts) into `prompt_*.log`. Debugging only: it is the richest plaintext copy of the user's data on the machine. |
-| `cli_password_gate` | `True` | The interactive terminal (`vaf run`, the TUI) asks for the admin password before starting. Scripts, `-p`, the tray, the headless runner and automations never do - they run inside the shield. Verified offline against a hash mirrored into the keyring, so a sleeping database does not lock you out. |
+| `cli_password_gate` | `True` | The interactive terminal (`vaf run`, the TUI) and the whole `vaf session` group (`list`, `load`, `export`, `search`, `delete`) ask for the admin password before running. Scripts, `-p`, the tray, the headless runner and automations never do - they run inside the shield. Verified offline against a hash mirrored into the keyring, so a sleeping database does not lock you out. |
 | `secure_store_kek_backend` | `"file"` | Where the master key that opens the keyring is stored. `file` is an owner-only file under `~/.vaf` and works for the tray and any background service. `keyring` uses the OS keyring, which your login password protects - stronger against a stolen machine, but only usable when VAF starts from inside your desktop session. Reading finds the key wherever an earlier version put it. |
 | `allow_plaintext_at_rest` | `True` | Accept files WITHOUT the encryption header when reading. Needed while a store still holds pre-encryption records; the startup sweep turns it off automatically after a pass that found nothing plain left. Left on forever it is a downgrade path: anyone who can write into the store can replace a record with plaintext and the reader takes it. |
-| `file_encryption_enabled` | `True` | Encrypt the file stores at rest (chats, context archives, handoff bundles, sub-agent queue, working memory) with the machine-held key from the data keyring. Reading always accepts BOTH forms, so older plaintext chats keep opening and switching this off does not strand files already encrypted. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md). |
+| `file_encryption_enabled` | `True` | Encrypt the file stores at rest (chats, context archives, handoff bundles, sub-agent queue, working memory) with the machine-held key from the data keyring. It decides what NEW writes look like; whether a file WITHOUT the header is still accepted on read is `allow_plaintext_at_rest` above. Switching this off reopens that tolerance even on a store the sweep has already enforced, because a store that writes plaintext by choice has to be able to read it - so nothing is stranded either way, and files already encrypted keep opening as long as the key is in the keyring. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md). |
 | `cross_chat_hint_enabled` | `True` | Cross Chat Hint: append pointers from this user's other chats below the retrieved memories. Lexical, reads the session files, needs no database. |
 | `cross_chat_hint_k` | `2` | Max cross-chat hints per turn. `0` disables the lane without touching the switch. |
 | `cross_chat_hint_min_terms` | `2` | Distinct query terms a chat must match to qualify; a single term that is rare across the scanned chats also qualifies. |
@@ -325,7 +327,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `local_network_https_port` | `443` | HTTPS port. |
 | `local_network_tls_enabled` | `False` | Enable TLS. |
 | `local_network_ssl_cert` / `_ssl_key` | `""` | TLS cert/key paths (auto-generated if empty). |
-| `local_network_jwt_secret` | `""` | Managed; JWT signing secret. |
+| `local_network_jwt_secret` | `""` | Managed; JWT signing secret. Held in the data keyring, not in this file: a value left here by an older install is adopted on first use and the plaintext entry is then blanked. |
 | `local_network_jwt_expiry_hours` | `24` | JWT lifetime. |
 | `local_network_require_2fa` | `True` | Require 2FA for network logins. |
 | `local_network_rate_limit_attempts` | `5` | Login attempts per window. |
@@ -344,7 +346,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `ux_auto_open_outputs` | `True` | Auto-open finished outputs: HTML reports in the browser, other output files via their folder in the file manager, created project folders (skipped in non-interactive runs). |
 | `ux_auto_open_max_tabs` | `8` | Cap on browser tabs auto-opened per search; clamped to 1-20. |
 | `ux_voice_review` | `False` | Terminal-app voice capture: `False` sends the transcript immediately (classic flow), `True` puts it into the input box for editing first. |
-| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). Toggleable in Settings → Advanced (the Logs page's audit timeline depends on it). Location resolves via `VAF_LOG_DIR`, then repo `logs/`, then the data dir (`~/.vaf/logs/` is a later fallback) - see [DEBUGGING.md](../DEBUGGING.md). |
+| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). Toggleable in Settings → Advanced (the Logs page's audit timeline depends on it). Location resolves via `VAF_LOG_DIR`, then the platform data dir, then `~/.vaf/logs/`; the checkout's own `logs/` is a candidate only when `VAF_DEV_LOGS` is set, so logs stay under the same home as the other stores - see [DEBUGGING.md](../DEBUGGING.md). |
 | `redis_enabled` | `True` | Use Redis (cache/queues). |
 | `redis_url` | `redis://localhost:6379/0` | Redis DSN. |
 | `gc_enabled` | `True` | Background garbage collection of stale data. |
@@ -399,7 +401,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `email_agent_trusted_sender_domains` | `None` | List of sender From-domains that bypass the phishing filter. Note: the From header is not authenticated; use sparingly. Admin-only. |
 | `mail_engine_write_enabled` | `False` | Allow the mail engine to perform server-side writes (flags/move/append). The standalone safety valve for mailbox writes: the engine stays read-only against mailboxes until this is set. Admin-only. |
 | `mail_body_retention_days` | `365` | How long cached message bodies are kept in the per-user mail store. Headers/envelopes are kept forever. Admin-only. |
-| `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; auto-generated on first use. Protected (never overwritten from the UI) and redacted for non-admins. |
+| `mail_store_encryption_key` | `""` | AES key (Base64) for encrypting cached mail bodies at rest; held in the data keyring and auto-generated there on first use, with a value left here by an older install adopted once and the plaintext entry then blanked. Protected (never overwritten from the UI) and redacted for non-admins. |
 | `mail_composer_enabled` | `True` | Offer the Mail Composer (draft / rewrite buttons) in the mail window's compose box. The lane is inert until a user clicks it, makes exactly one model call with NO tools, and only ever fills the textarea - it can never send. Admin-only. |
 | `mail_composer_max_context_chars` | `12000` | Total budget for thread text handed to the Mail Composer, in characters (clamped to 2000-40000). Characters rather than tokens because no real tokenizer exists on this path; at the repo's 2.5-3.6 chars-per-token estimates this is roughly 3.5-4.5k tokens, well inside the 32768 `n_ctx` floor. Bounds how much attacker-controlled mail text reaches a prompt, so admin-only. |
 | `mail_composer_max_message_chars` | `4000` | Per-message cap inside that budget; the message being replied to keeps at least 2000 characters regardless. Admin-only. |

@@ -164,12 +164,12 @@ Rejections from the layers above are recorded in an always-on security event log
 - **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours` or wiring the existing `/api/auth/refresh` flow into the frontend. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
-1. **Config** (`~/.vaf/config.json` or `VAF_CONFIG_DIR`): The JWT secret used to encrypt TOTP secrets must be kept. If this file is missing or the secret is lost (e.g. new install or different user), the server cannot decrypt existing 2FA data.
+1. **Key store** (`<data_dir>/data_keys.enc` plus its master key, by default the `secure_store.kek` file in `~/.vaf` or `VAF_CONFIG_DIR`): the JWT secret that encrypts TOTP secrets lives in the data keyring, not in `config.json`, and both halves must be kept. If either is lost (new install, different user, a backup restored without the keyring), the server cannot decrypt existing 2FA data. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md) for what to back up.
 2. **Database** (PostgreSQL, see `memory_db_url`): User accounts and 2FA state (`requires_2fa_setup`, encrypted `totp_secret`) live in the same DB as RAG memory. If the DB is recreated or the data is lost (e.g. Docker without a persistent volume), users will be asked to set up 2FA again (new QR code) after the next login.
 
 **Staying logged in across a DB restart:** validating `/me` (user + active session) queries PostgreSQL, but a backend/Docker restart leaves Postgres briefly unavailable (`the database system is starting up`). To avoid logging users out on that race, `/me` **retries** the DB for a few seconds and, if it is still not ready, **falls back to JWT-only auth** (the already-verified token) instead of returning 401, so a transient DB restart does not clear your session. Transient PG states (starting up / shutting down / in recovery / too many connections) are treated as retryable. See `auth_routes.py` `_me_user_from_token`.
 
-If you see "2FA was reset (e.g. after config or restart)" when entering your code, the encryption key changed (e.g. config was reset). Use "Back to login", sign in again, and set up 2FA with the new QR code.
+If you see "2FA was reset (e.g. after config or restart)" when entering your code, the encryption key changed (the key store was lost or replaced, so a different JWT secret is in use). Use "Back to login", sign in again, and set up 2FA with the new QR code.
 
 ### Identity vs. Memory Scoping
 
@@ -367,7 +367,7 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_port_frontend` | `int` | `3000` | Frontend port |
 | `local_network_firewall_enabled` | `bool` | `true` | Auto-configure OS firewall rules |
 | `local_network_require_2fa` | `bool` | `true` | Enforce TOTP 2FA for network users |
-| `local_network_jwt_secret` | `string` | `""` | JWT signing secret (auto-generated if empty) |
+| `local_network_jwt_secret` | `string` | `""` | JWT signing secret. It lives in the data keyring, not here: a legacy config value is adopted byte-identically on first use and the plaintext copy is then blanked, so `""` is the normal state. Never regenerate it - the TOTP encryption key is derived from it (`vaf/auth/crypto.py`), so a new secret invalidates every stored second factor. |
 | `local_network_jwt_expiry_hours` | `int` | `24` | Access token TTL in hours |
 | `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts before blocking |
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |

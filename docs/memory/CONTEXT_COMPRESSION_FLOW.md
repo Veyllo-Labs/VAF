@@ -68,7 +68,8 @@ No real tokenization (e.g. tiktoken) is used, only a character-based estimate.
 
 - `_archive_history(history)` is called.
 - **In-memory:** a `ContextSnapshot` (timestamp, history copy, intent, state, token count) is appended to `self.archive`; at most 3 snapshots are kept, the oldest is removed.
-- **On disk:** a JSON file is written under `~/.vaf/context_archive/` (`context_YYYYMMDD_HHMMSS_<hash>.json`) containing the history, intent, state, and token count. Optional; errors are silently ignored.
+- **On disk:** a JSON file is written under `~/.vaf/context_archive/` (`context_YYYYMMDD_HHMMSS_<hash>.json`) containing the history, intent, state, and token count. The write goes through `data_files.write_json_atomic`, so the file is owner-only (`0600`) and, while `file_encryption_enabled` is on, a `VAFENC1:` container rather than readable JSON. Optional; errors are silently ignored.
+- **Retention:** the startup sweep (`vaf/core/at_rest_migration.py`) deletes archives older than `context_archive_max_age_days` (default 14; `0` keeps them forever). `ContextManager.cleanup()` removes only what its own instance wrote and only on a clean shutdown, so it cannot be the retention rule.
 
 ### 4.3 Step 2: Update intent and state from **all** of the history
 

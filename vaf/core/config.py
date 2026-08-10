@@ -901,6 +901,23 @@ class Config:
         # engine choice and its per-call budget are instance spend.
         "ocr_engine",
         "ocr_vision_max_pages_per_call",
+        # At-rest protection and the doors in front of it. Every one of these is
+        # instance-wide security policy, and a per-user write is a way to switch
+        # the protection off from the LAN: `file_encryption_enabled` decides
+        # whether new chats are ciphertext at all, `allow_plaintext_at_rest`
+        # whether a swapped-in plaintext record is still accepted on read,
+        # `cli_password_gate` whether the terminal asks for the password,
+        # `prompt_log_full_enabled` whether the entire assembled prompt (with
+        # decrypted memories) is written to disk, and `secure_store_kek_backend`
+        # where the next master key is placed. `context_archive_max_age_days` is
+        # the retention of conversation snapshots - raising it keeps everyone's
+        # history on disk longer. None of them is a personal preference.
+        "file_encryption_enabled",
+        "allow_plaintext_at_rest",
+        "cli_password_gate",
+        "prompt_log_full_enabled",
+        "secure_store_kek_backend",
+        "context_archive_max_age_days",
     ])
 
     @classmethod

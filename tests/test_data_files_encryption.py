@@ -215,3 +215,45 @@ def test_enforcing_does_not_break_encrypted_records(tmp_path, monkeypatch):
     _enforce(monkeypatch, False)
 
     assert manager.load("chat_a").messages[0].content == SECRET
+
+
+def test_switching_encryption_off_still_reads_what_it_writes(tmp_path, monkeypatch):
+    """The two switches are not independent, and the combination is reachable.
+
+    The sweep sets `allow_plaintext_at_rest = False` by itself after one clean
+    pass, so on any migrated installation an embedder who then sets
+    `file_encryption_enabled = False` writes plaintext that the reader refuses.
+    The documented promise - turn it off and everything keeps working - would be
+    false exactly where it is most likely to be used.
+
+    MUTATION: drop the encryption_enabled() branch in allow_plaintext_at_rest and
+    this goes red with "plaintext ... enforced".
+    """
+    from vaf.core.config import Config
+
+    real = Config.get
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: {
+        "file_encryption_enabled": False,
+        "allow_plaintext_at_rest": False,      # the state the sweep leaves behind
+    }.get(k, real(k, d))))
+
+    manager = SessionManager(storage_dir=str(tmp_path))
+    session = Session(id="plain")
+    session.add_message("user", SECRET)
+    path = manager.save(session)
+
+    assert SECRET.encode() in path.read_bytes()
+    assert manager.load("plain").messages[0].content == SECRET
+
+
+def test_enforcement_still_holds_while_encryption_is_on(tmp_path, monkeypatch):
+    """The escape hatch above must not become a way to disable enforcement."""
+    manager = SessionManager(storage_dir=str(tmp_path))
+    (tmp_path / "swapped.json").write_text(
+        json.dumps({"id": "swapped", "messages": [{"role": "user", "content": "injected"}]}),
+        encoding="utf-8")
+
+    _enforce(monkeypatch, False)          # encryption stays ON, tolerance off
+
+    with pytest.raises(ValueError, match="enforced"):
+        manager.load("swapped")

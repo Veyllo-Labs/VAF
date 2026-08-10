@@ -138,8 +138,19 @@ def allow_plaintext_at_rest() -> bool:
     both, then read-only-ciphertext once a full pass has found nothing plain
     left. The ordered states are the ones the AWS Database Encryption SDK
     defines, and the sweep flips this automatically after a clean pass.
+
+    Except in the mode where plaintext is the POINT. With
+    `file_encryption_enabled = false` every new write is plaintext by choice, so
+    refusing to read plaintext would mean the store cannot read what it just
+    wrote. The two settings are not independent: enforcement is a statement
+    about a store that is fully encrypted, and switching writes back to
+    plaintext ends that state. Without this the documented "switch it off and
+    everything still works" is false on any installation the sweep has already
+    tightened - which, after one clean pass, is all of them.
     """
     try:
+        if not encryption_enabled():
+            return True
         return bool(Config.get("allow_plaintext_at_rest", True))
     except Exception:
         return True

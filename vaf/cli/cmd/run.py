@@ -95,6 +95,12 @@ def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
         # side only would demote the owner wherever the value is stored in a different
         # spelling. Memory search normalises and fails closed on its own.
         bind_identity(a, resolve_owner_identity())
+        # This lane's caller is the machine owner and stays the machine owner, whatever
+        # session is open. `load_session_context` assigns the LOADED session's owner to
+        # the agent, so after `vaf run --session <id>` the bound scope can be another
+        # tenant's. Anything that reads across sessions must follow the caller, not the
+        # open file, and this flag is how it knows which lane it is in.
+        a._identity_is_owner_bound = True
     except Exception:
         # Identity binding must never block the CLI from starting; fall back to defaults.
         pass
@@ -2118,6 +2124,7 @@ Created: {current_session.created_at}
                     continue
             
             # File attachments
+            typed_input = user_input
             if "@" in user_input:
                 import re
                 def replace_file(match):
@@ -2128,13 +2135,17 @@ Created: {current_session.created_at}
                         return f"\n\n--- FILE: {path} ---\n{content}\n----------------\n"
                     except Exception as e:
                         tui.error(f"Failed to attach {path}: {e}")
-                        return match.group(0) 
-                
+                        return match.group(0)
+
                 user_input = re.sub(r'@((?:[A-Za-z]:)?[\w\./\\-]+)', replace_file, user_input)
-            
-            # Add to session
-            current_session.add_message("user", user_input)
-            
+
+            # Add to session: what the user TYPED, not the @file expansion. The web
+            # lane makes the same split (plain input stored, enriched copy passed on).
+            # Storing the expansion writes whole files into the session JSON under
+            # role "user", where every later reader of other chats would treat them
+            # as something this user said.
+            current_session.add_message("user", typed_input)
+
             # Process with agent (user input already visible from input box)
             _process_agent_message(agent, user_input, tui, current_session)
             

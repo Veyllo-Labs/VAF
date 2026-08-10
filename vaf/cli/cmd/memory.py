@@ -6,7 +6,15 @@
 `rekey` recovers from a rotated `memory_encryption_key`: rows written under
 the previous key are decrypted with it and re-encrypted with the current one.
 The old key is read from a config backup FILE and never printed or persisted
-anywhere by this command."""
+anywhere by this command.
+
+`cross-chat` is a dry run of the Cross Chat Hint lane: it prints exactly what a
+turn with that question would put into the prompt, and why. Unit tests cannot
+tell you whether the lane finds the chat you actually meant; this can.
+
+Neither command takes a scope. The CLI has no authentication - the local user is
+the machine owner - so both run under the owner's identity, and a `--scope`
+option would be a purpose-built reader of another tenant's chat text."""
 
 import json
 from pathlib import Path
@@ -25,6 +33,46 @@ def _group():
     Deliberate: without a callback, Typer collapses a one-command app into
     that command, and `vaf memory rekey` would reject "rekey" as an extra
     argument."""
+
+
+@app.command("cross-chat")
+def cross_chat(
+    query: str = typer.Option(..., "--query", "-q", help="The question a turn would ask"),
+    k: int = typer.Option(0, "--limit", "-n", help="Override cross_chat_hint_k (0 = use the config)"),
+):
+    """Show which of your other chats would be hinted for QUERY, and print the block."""
+    from vaf.core.cross_chat import format_hints, hints_for_turn, query_terms
+    from vaf.core.identity_binding import resolve_owner_identity
+
+    owner = resolve_owner_identity()
+    terms = query_terms(query)
+    if not terms:
+        UI.warning("No searchable terms in that question (all stopwords or too short).")
+        raise typer.Exit(0)
+    UI.info(f"Terms: {', '.join(terms)}")
+
+    if k > 0:
+        from vaf.core.config import Config
+        from vaf.core.cross_chat import find_hints
+        hints = find_hints(
+            query,
+            user_scope_id=owner.scope,
+            username=owner.username,
+            k=k,
+            min_terms=max(1, int(Config.get("cross_chat_hint_min_terms", 2) or 1)),
+            max_age_days=max(1, int(Config.get("cross_chat_hint_max_age_days", 30) or 30)),
+        )
+    else:
+        hints = hints_for_turn(query, user_scope_id=owner.scope, username=owner.username)
+
+    if not hints:
+        UI.info("No hints - nothing would be added to the prompt.")
+        return
+    for hint in hints:
+        UI.info(f"{hint.session_id}  score={hint.score}  terms={', '.join(hint.terms)}")
+    UI.info("")
+    UI.info("Block as the model would see it:")
+    UI.info(format_hints(hints))
 
 
 @app.command()

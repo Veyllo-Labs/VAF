@@ -300,7 +300,14 @@ class AgentBridge:
         )
         # Caller-side contract, exactly like the classic loop: the USER message
         # is added here; _process_agent_message adds the assistant half.
-        self.session.add_message("user", expanded)
+        #
+        # What gets STORED is what the user typed, not the @file expansion - the
+        # same split the web lane makes (it saves the plain input and enriches only
+        # the copy handed to the turn). Storing the expansion put whole files into
+        # the session JSON under role "user", and anything that later reads other
+        # chats - Cross Chat Hint, session search, an export - would then be reading
+        # the contents of `@~/.env` as if the user had typed it.
+        self.session.add_message("user", text)
 
         from vaf.cli.cmd.run import _process_agent_message
         self.events.agent_message_start()

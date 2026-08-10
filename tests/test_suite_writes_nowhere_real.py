@@ -363,3 +363,47 @@ def test_the_darwin_store_dirs_honor_a_set_xdg_variable(monkeypatch):
     assert Platform.data_dir() == home / "Library" / "Application Support" / "vaf"
     assert Platform.config_dir() == home / "Library" / "Application Support" / "vaf"
     assert Platform.cache_dir() == home / "Library" / "Caches" / "vaf"
+
+
+def test_the_suite_never_sees_the_real_config_file():
+    """`Config.APP_DIR` is the axis the XDG redirection does NOT cover.
+
+    A suite run once blanked the live `secure_store_kek`, JWT secret and an API
+    key out of the developer's own installation, because key adoption wrote into
+    a temp directory while the follow-up blanking wrote into the real
+    config.json. Both sides have to be isolated, so this asserts on the axis
+    itself rather than on any one consumer.
+    """
+    from pathlib import Path
+
+    from vaf.core.config import Config
+
+    real_home_vaf = Path.home() / ".vaf"
+    assert Path(Config.APP_DIR).resolve() != real_home_vaf.resolve()
+    assert real_home_vaf not in Path(Config.CONFIG_FILE).resolve().parents
+    Config.set("__isolation_probe__", "x")
+    real_config = real_home_vaf / "config.json"
+    if real_config.exists():  # a CI runner has no VAF installation at all
+        assert "__isolation_probe__" not in real_config.read_text(encoding="utf-8")
+
+
+def test_the_kek_never_lands_in_the_real_keyring_or_home():
+    """A minted KEK in the developer's OS keyring would strand every wrapped DEK."""
+    from pathlib import Path
+
+    import vaf.core.secure_store as ss
+
+    assert ss.keyring_available() is False, "tests must not touch the real OS keyring"
+    for probe in (ss._kek_file_path(), ss._kek_marker_path()):
+        assert (Path.home() / ".vaf") not in Path(probe).resolve().parents
+
+
+def test_the_session_store_is_not_the_developers_real_one():
+    """The axis that leaked 42 synthetic chats into a live installation."""
+    from pathlib import Path
+
+    from vaf.core.session import SessionManager, default_sessions_dir
+
+    real = Path.home() / ".vaf" / "sessions"
+    assert Path(default_sessions_dir()).resolve() != real.resolve()
+    assert Path(SessionManager().storage_dir).resolve() != real.resolve()

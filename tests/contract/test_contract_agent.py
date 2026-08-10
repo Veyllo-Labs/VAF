@@ -86,13 +86,22 @@ def _noninteractive_env_restored():
 
 @pytest.fixture
 def tmp_home(tmp_path, monkeypatch):
-    """Session tests write to the DOCUMENTED store ($HOME/.vaf/sessions/);
-    SessionManager resolves Path.home() at call time, so a per-test HOME both
-    isolates the writes and lets the test assert the store location itself."""
+    """Session tests write to the DOCUMENTED store ($HOME/.vaf/sessions/).
+
+    A per-test HOME both isolates the writes and lets the test assert the store
+    location itself. The store now resolves through one named seam rather than
+    Path.home() at each site, so the seam is pointed here too - the repository's
+    own conftest redirects it session-wide, and this fixture has to win for the
+    location assertion to mean anything.
+    """
+    import vaf.core.session as session_module
+
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows: expanduser ignores HOME
+    monkeypatch.setattr(session_module, "default_sessions_dir",
+                        lambda: home / ".vaf" / "sessions")
     return home
 
 
@@ -224,9 +233,12 @@ def test_save_session_persists_to_the_documented_store_and_is_idempotent(
     sid = agent.save_session()
     assert isinstance(sid, str) and sid
     store_file = tmp_home / ".vaf" / "sessions" / f"{sid}.json"
-    assert store_file.exists(), "session JSON not in the documented store location"
+    assert store_file.exists(), "session file not in the documented store location"
     assert agent.save_session() == sid, "second save_session() must reuse the id"
-    data = json.loads(store_file.read_text(encoding="utf-8"))
+    # The location and the record shape are the promise; the bytes are encrypted at
+    # rest unless `file_encryption_enabled` is false, so read through the engine.
+    from vaf.core import data_files
+    data = json.loads(data_files.read_bytes(store_file).decode("utf-8"))
     roles = [m.get("role") for m in data["messages"]]
     assert "system" not in roles, "the system prompt must never be persisted"
     assert "user" in roles and "assistant" in roles

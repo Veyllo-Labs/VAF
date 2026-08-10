@@ -192,12 +192,10 @@ class GarbageCollector:
         for filepath in list(sm.storage_dir.glob("*.json")) + list(sm.storage_dir.glob("*.json.gz")):
             sid = filepath.name.split(".")[0]
             try:
-                if filepath.suffix == ".gz":
-                    with gzip.open(filepath, "rt", encoding="utf-8") as f:
-                        data = json.load(f)
-                else:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                # The one reader outside session.py; it goes through the store's own
+                # seam so encrypted records stay readable here (and a future format
+                # change is not missed by exactly this loop).
+                data = sm._read_session_file(filepath)
                 if (data.get("metadata") or {}).get("source") != "thinking":
                     continue
                 updated = data.get("updated_at") or data.get("created_at") or ""

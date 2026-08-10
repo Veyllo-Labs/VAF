@@ -83,16 +83,16 @@ def _get_fallback_path() -> Path:
 
 
 def _get_or_create_encryption_key() -> bytes:
-    """Get or create 32-byte key for fallback file. Stored in config (base64)."""
-    encoded = Config.get(_CREDENTIALS_KEY, "")
-    if encoded:
-        try:
-            return base64.b64decode(encoded)
-        except Exception:
-            pass
-    new_key = secrets.token_bytes(_KEY_SIZE)
-    Config.set(_CREDENTIALS_KEY, base64.b64encode(new_key).decode())
-    return new_key
+    """The fallback-file key, from the data keyring.
+
+    The legacy config.json value is adopted byte-identically (an existing
+    github_credentials.enc must keep decrypting), then the config copy is
+    blanked. The old path also MINTED a replacement when the stored value was
+    undecodable - which silently orphaned the credential file; the keyring
+    raises instead.
+    """
+    from vaf.core.data_keyring import get_data_key
+    return get_data_key(_CREDENTIALS_KEY, legacy_config_key=_CREDENTIALS_KEY)
 
 
 def _load_fallback_data() -> Dict[str, str]:
@@ -116,15 +116,23 @@ def _load_fallback_data() -> Dict[str, str]:
 
 
 def _save_fallback_data(data: Dict[str, str]) -> None:
-    """Encrypt and write fallback file."""
+    """Encrypt and write fallback file - atomically and owner-only.
+
+    A plain write_bytes left a half-written file on a crash and 0644 modes on
+    a credentials file; the secure-store primitives exist for exactly this.
+    """
+    from vaf.core.secure_store import _atomic_write_bytes, harden_dir, harden_path
+
     path = _get_fallback_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    harden_dir(path.parent)
     key = _get_or_create_encryption_key()
     nonce = secrets.token_bytes(_NONCE_SIZE)
     aes = AESGCM(key)
     payload = json.dumps(data).encode("utf-8")
     ciphertext = aes.encrypt(nonce, payload, None)
-    path.write_bytes(nonce + ciphertext)
+    _atomic_write_bytes(path, nonce + ciphertext)
+    harden_path(path)
 
 
 def get_github_oauth_token(

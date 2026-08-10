@@ -197,10 +197,28 @@ def _migrate_into_store(name: str, key: str) -> None:
     start, because the cause persists. So a failure is left for the next read to retry, and
     nothing records that a migration was attempted: a marker is precisely what turns one
     transient failure into a permanent one.
+
+    MOVE, not copy, since the keyring round. It used to leave the plaintext estate
+    entry in place so a downgrade could still find it - a defensible trade while
+    config.json was where every key lived anyway. Now that it holds none, keeping
+    the API keys there would make it the last plaintext secret in the file and
+    undo the point of the move. The downgrade path is the one-time
+    `config.json.pre-keyring.bak`, which carries these values too.
+
+    The blanking only runs after the store write is CONFIRMED readable back: a
+    failed write plus a cleared estate would lose the key entirely.
     """
     try:
         store_api_key(name, key, is_migration=True)
     except Exception:                                       # noqa: BLE001 - see docstring
+        return
+    try:
+        if (_store().load_strict() or {}).get(name) != key:
+            return  # not safely stored; leave the estate copy alone
+        from vaf.core.secure_store import ensure_pre_migration_backup
+        ensure_pre_migration_backup()
+        clear_estate_entry(name)
+    except Exception:                                       # noqa: BLE001 - never break a read
         pass
 
 
@@ -279,15 +297,18 @@ def _announce_change(name: str) -> None:
 def clear_estate_entry(provider: str) -> None:
     """Blank the `config.json` entry after the key lives in the encrypted store.
 
-    NOT called by the migration, and that is deliberate. TWO reasons, and both have to stay
-    together - whoever later remembers only the first will turn this on and take the second
-    away with it:
+    CALLED BY THE MIGRATION SINCE THE KEYRING ROUND, and the reasoning that used to
+    forbid it is answered rather than forgotten:
 
-      1. It is the only destructive step, and it touches the live file of every user
-         through `vaf update`.
-      2. It is what makes a DOWNGRADE survivable. A user who rolls back to an older VAF
-         finds their keys only in `config.json`; a version without the encrypted store
-         cannot read the new location. While the entry stands, the way back is open.
+      1. It is still the only destructive step, so it runs ONLY after the encrypted
+         store has been read back and confirmed to hold the same key.
+      2. The DOWNGRADE argument stood while `config.json` was where every secret
+         lived anyway - leaving the API keys there cost nothing extra. It no longer
+         is: the memory key, the mail key, the JWT secret and the KEK have all moved
+         out, so an estate entry would be the last plaintext secret in the file and
+         would keep it a target for exactly the theft the move exists to prevent.
+         The rollback path is now the one-time `config.json.pre-keyring.bak`, which
+         is written before the first blanking and carries these values too.
 
     WHEN THE ESTATE READER MAY FINALLY GO - and this is a RELEASE statement with a version
     floor, not a filesystem check: when no supported update path can still bring a

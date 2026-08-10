@@ -490,6 +490,16 @@ class Config:
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
         "memory_rag_k": 5,                                        # Max RAG snippets per query (1-20); applies to chat, gateway, automation
         "memory_rag_threshold": 0.3,                               # Min relevance score (0.0-1.0); only snippets >= this % are in RAG results. 0.3 = 30%
+        # At-rest encryption of the file stores (chats, context archives, handoff
+        # bundles, sub-agent queue, working memory). Reading always tolerates BOTH
+        # forms, so older plaintext chats keep opening and turning this off does not
+        # strand the files already encrypted. Embedders set it per deployment.
+        "cli_password_gate": True,                                 # Interactive terminal (vaf run / TUI) asks for the admin password. Scripts, -p, tray and automations never do
+        "secure_store_kek_backend": "file",                        # Where the master key lives: "file" (0600, works for background services) or "keyring" (OS keyring, needs a desktop session)
+        "allow_plaintext_at_rest": True,                           # Accept files WITHOUT the encryption header on read. Needed while migrating; the sweep turns it off after a clean pass
+        "file_encryption_enabled": True,
+        "prompt_log_full_enabled": False,                          # Log the ENTIRE assembled system prompt (profile, retrieved memories, contacts) to prompt_*.log. Debug only
+        "context_archive_max_age_days": 14,                        # Age sweep for pre-compression conversation snapshots (0 = keep forever)
         "cross_chat_hint_enabled": True,                           # Cross Chat Hint: pointers from this user's OTHER chats, below the RAG snippets
         "cross_chat_hint_k": 2,                                    # Max cross-chat hints per turn (0 disables the lane entirely)
         "cross_chat_hint_min_terms": 2,                            # Distinct query terms a chat must match; a single rare term also qualifies

@@ -900,14 +900,16 @@ class ContextManager:
         # Also save to disk
         archive_file = self.ARCHIVE_DIR / f"context_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(str(datetime.now()).encode()).hexdigest()[:6]}.json"
         try:
-            with open(archive_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "timestamp": snapshot.timestamp,
-                    "history": snapshot.history,
-                    "intent": self.intent.__dict__,
-                    "state": {k: v for k, v in self.state.__dict__.items() if k != 'code_snippets'},
-                    "token_count": snapshot.token_count
-                }, f, indent=2, ensure_ascii=False)
+            # Richer than the chat file it came from: the FULL history right
+            # before compression. Same at-rest treatment as the chat itself.
+            from vaf.core import data_files
+            data_files.write_json_atomic(archive_file, {
+                "timestamp": snapshot.timestamp,
+                "history": snapshot.history,
+                "intent": self.intent.__dict__,
+                "state": {k: v for k, v in self.state.__dict__.items() if k != 'code_snippets'},
+                "token_count": snapshot.token_count
+            }, indent=2)
             self.created_archives.append(archive_file)
         except Exception:
             pass  # Silent fail for disk archive
@@ -932,9 +934,9 @@ class ContextManager:
         try:
             archives = sorted(self.ARCHIVE_DIR.glob("context_*.json"), reverse=True)
             if archives:
-                with open(archives[0], 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get("history", [])
+                from vaf.core import data_files
+                data = data_files.read_json(archives[0], default={}) or {}
+                return data.get("history", [])
         except Exception:
             pass
         
@@ -957,15 +959,15 @@ class ContextManager:
         # Disk archives
         try:
             for f in sorted(self.ARCHIVE_DIR.glob("context_*.json"), reverse=True)[:5]:
-                with open(f, 'r', encoding='utf-8') as fp:
-                    data = json.load(fp)
-                    archives.append({
-                        "file": f.name,
-                        "source": "disk",
-                        "timestamp": data.get("timestamp", "unknown"),
-                        "messages": len(data.get("history", [])),
-                        "tokens": data.get("token_count", 0)
-                    })
+                from vaf.core import data_files
+                data = data_files.read_json(f, default={}) or {}
+                archives.append({
+                    "file": f.name,
+                    "source": "disk",
+                    "timestamp": data.get("timestamp", "unknown"),
+                    "messages": len(data.get("history", [])),
+                    "tokens": data.get("token_count", 0)
+                })
         except Exception:
             pass
         
@@ -975,9 +977,9 @@ class ContextManager:
         """Restore history from a specific archive file."""
         try:
             filepath = self.ARCHIVE_DIR / filename
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get("history", [])
+            from vaf.core import data_files
+            data = data_files.read_json(filepath, default={}) or {}
+            return data.get("history", [])
         except Exception:
             return None
     

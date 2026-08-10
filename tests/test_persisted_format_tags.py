@@ -80,9 +80,12 @@ def test_pre_tag_bundles_still_load(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     b = hb.create(SCOPE, history=None, summary="s", question="q")
     path = tmp_path / "handoff_bundles" / SCOPE / f"{b['id']}.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
+    from vaf.core import data_files
+    data = data_files.read_json(path)
     del data["format"]
-    path.write_text(json.dumps(data), encoding="utf-8")
+    # Written as PLAINTEXT on purpose: a pre-tag bundle also predates encryption,
+    # so this exercises both tolerances at once.
+    path.write_bytes(json.dumps(data).encode("utf-8"))
     loaded = hb.load(SCOPE, b["id"])
     assert loaded is not None and "format" not in loaded
 

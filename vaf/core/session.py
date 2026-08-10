@@ -18,6 +18,18 @@ from dataclasses import dataclass, field, asdict, fields
 # DATA CLASSES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def default_sessions_dir() -> Path:
+    """THE session directory. One function, because there were three copies.
+
+    Also the seam the test suite redirects: the store hangs off `~/.vaf`, which
+    no HOME- or XDG-redirection covered, so suite runs wrote synthetic chats
+    straight into the developer's real installation for as long as the default
+    was spelled out at each site.
+    """
+    from vaf.core.platform import Platform
+    return Path(Platform.vaf_dir()) / "sessions"
+
+
 @dataclass
 class Message:
     """A single message in a conversation."""
@@ -228,7 +240,7 @@ def _generate_session_id() -> str:
     Collisions are unlikely, but we still try a few times against the default storage dir.
     """
     colors = ("yellow", "red", "blue", "green", "purple", "cyan", "orange")
-    sessions_dir = Path.home() / ".vaf" / "sessions"
+    sessions_dir = default_sessions_dir()
 
     for _ in range(20):
         color = random.choice(colors)
@@ -253,7 +265,7 @@ class SessionManager:
         if storage_dir:
             self.storage_dir = Path(storage_dir)
         else:
-            self.storage_dir = Path.home() / ".vaf" / "sessions"
+            self.storage_dir = default_sessions_dir()
         
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self._current: Optional[Session] = None
@@ -328,25 +340,40 @@ class SessionManager:
         # which UTF-8 cannot encode, causing UnicodeEncodeError on file write.
         data = data.encode("utf-8", errors="replace").decode("utf-8")
 
-        # Atomic write: write to a hidden temp file then rename so a crash/interrupt
-        # never leaves a 0-byte or half-written session file on disk.
-        tmp_filepath = self.storage_dir / f".{session.id}.tmp"
-        try:
-            if compress:
+        if compress:
+            # Legacy shape, kept only because a pre-existing .gz keeps its extension
+            # on rewrite (claim_unscoped). Nothing produces new ones.
+            tmp_filepath = self.storage_dir / f".{session.id}.tmp"
+            try:
                 with gzip.open(tmp_filepath, 'wt', encoding='utf-8') as f:
                     f.write(data)
-            else:
-                with open(tmp_filepath, 'w', encoding='utf-8') as f:
-                    f.write(data)
-            tmp_filepath.replace(filepath)  # atomic rename on POSIX
-        except Exception:
-            try:
-                tmp_filepath.unlink()
+                tmp_filepath.replace(filepath)  # atomic rename on POSIX
             except Exception:
-                pass
-            raise
+                try:
+                    tmp_filepath.unlink()
+                except Exception:
+                    pass
+                raise
+            return filepath
 
+        # A chat is the most personal thing VAF stores. Encrypted at rest (unless
+        # file_encryption_enabled is off), written atomically, owner-only.
+        from vaf.core import data_files
+        data_files.write_bytes_atomic(filepath, data.encode("utf-8"))
         return filepath
+
+    def _read_session_file(self, filepath: Path) -> Dict[str, Any]:
+        """Parse one session file, encrypted or not, gz or not.
+
+        THE read seam. Every caller that used to open these files itself goes
+        through here, so "is it encrypted" is answered in exactly one place and
+        a plaintext file from before the change still loads.
+        """
+        if filepath.suffix == '.gz':
+            with gzip.open(filepath, 'rt', encoding='utf-8') as f:
+                return json.load(f)
+        from vaf.core import data_files
+        return json.loads(data_files.read_bytes(filepath).decode("utf-8"))
     
     def load(self, session_id: str, restore_state: bool = True,
              repoint: bool = True) -> Session:
@@ -367,12 +394,7 @@ class SessionManager:
         for ext in [".json", ".json.gz"]:
             filepath = self.storage_dir / f"{session_id}{ext}"
             if filepath.exists():
-                if ext.endswith('.gz'):
-                    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-                        data = json.load(f)
-                else:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                data = self._read_session_file(filepath)
 
                 session = Session.from_dict(data)
                 if repoint:
@@ -415,13 +437,8 @@ class SessionManager:
                 break
                 
             try:
-                if filepath.suffix == '.gz':
-                    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-                        data = json.load(f)
-                else:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                
+                data = self._read_session_file(filepath)
+
                 meta = data.get("metadata") or {}
                 if meta.get("hidden_from_list"):
                     continue  # Hide from list (e.g. thinking session "removed" by user); GC can delete later
@@ -948,12 +965,7 @@ class SessionManager:
             try:
                 if filepath.stat().st_size > max_bytes:
                     continue
-                if filepath.suffix == '.gz':
-                    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-                        data = json.load(f)
-                else:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                data = self._read_session_file(filepath)
             except Exception:
                 continue
             if not isinstance(data, dict):
@@ -1240,12 +1252,7 @@ def _preserve_workspace_title(manager, session_id: str) -> None:
         for ext in (".json", ".json.gz"):
             fp = manager.storage_dir / f"{session_id}{ext}"
             if fp.exists():
-                if ext.endswith(".gz"):
-                    with gzip.open(fp, "rt", encoding="utf-8") as f:
-                        data = json.load(f)
-                else:
-                    with open(fp, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                data = manager._read_session_file(fp)
                 title = str((data or {}).get("name") or "").strip()
                 break
         if title:

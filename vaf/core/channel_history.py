@@ -37,7 +37,9 @@ _sync_mtime_cache: Dict[str, float] = {}
 
 
 def _sessions_dir() -> Path:
-    return Path.home() / ".vaf" / "sessions"
+    """The one session directory (shared seam, not a fourth copy)."""
+    from vaf.core.session import default_sessions_dir
+    return default_sessions_dir()
 
 
 def _session_id(channel: str, chat_id: str) -> str:

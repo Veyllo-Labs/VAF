@@ -21,30 +21,24 @@ _cached_key: Optional[bytes] = None
 
 
 def _load_or_create_key() -> bytes:
-    """Return the 32-byte store key, generating and persisting it on first use."""
+    """The 32-byte store key, from the data keyring.
+
+    A legacy config.json value is adopted byte-identically (existing VMC1 blobs
+    must keep decrypting), then the config copy is blanked. This also closes a
+    gap the config path had: an unreadable config.json used to degrade to
+    DEFAULTS and silently mint a NEW key over a store full of the old one; the
+    keyring refuses instead. The cross-process race is handled inside the ring
+    (setdefault under the store's file lock).
+    """
     global _cached_key
     with _lock:
         if _cached_key is not None:
             return _cached_key
-        from vaf.core.config import Config
-        b64 = (Config.get("mail_store_encryption_key") or "").strip()
-        if b64:
-            key = base64.b64decode(b64)
-            if len(key) != 32:
-                raise ValueError("mail_store_encryption_key must decode to 32 bytes")
-        else:
-            key = os.urandom(32)
-            cfg = Config.load()
-            cfg["mail_store_encryption_key"] = base64.b64encode(key).decode("ascii")
-            Config.save(cfg)
-            # Cross-process race guard: if another process generated and saved a
-            # key concurrently, adopt whatever actually persisted - two workers
-            # must never encrypt with different keys (review finding).
-            persisted = (Config.get("mail_store_encryption_key") or "").strip()
-            if persisted:
-                key = base64.b64decode(persisted)
-        _cached_key = key
-        return key
+        from vaf.core.data_keyring import get_data_key
+        _cached_key = get_data_key(
+            "mail_store_encryption_key", legacy_config_key="mail_store_encryption_key"
+        )
+        return _cached_key
 
 
 def encrypt_blob(data: bytes) -> bytes:

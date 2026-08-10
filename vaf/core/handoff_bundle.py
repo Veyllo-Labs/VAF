@@ -97,21 +97,21 @@ def _sanitize_history(history: Optional[List[dict]]) -> List[dict]:
 
 
 def _write_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / f".{path.name}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-    os.replace(tmp, path)
+    # A bundle carries a background run's whole working history; encrypted at
+    # rest like the chat it came from. The directory name is the raw scope id,
+    # so the mode matters too - the primitive sets 0700/0600.
+    from vaf.core import data_files
+    data_files.write_json_atomic(path, data, indent=2, default=str)
 
 
 def _read(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        from vaf.core import data_files
+        data = data_files.read_json(path, default=None)
         return data if isinstance(data, dict) else None
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, ValueError):
         return None
 
 

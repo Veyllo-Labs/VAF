@@ -28,12 +28,18 @@ _NONCE_SIZE = 12
 
 
 def _get_jwt_secret() -> str:
-    """Get or create JWT secret from config."""
-    secret = Config.get("local_network_jwt_secret", "")
-    if not secret or len(secret) < 32:
-        secret = secrets.token_urlsafe(32)
-        Config.set("local_network_jwt_secret", secret)
-    return secret
+    """The JWT signing secret, from the data keyring.
+
+    The legacy config.json value is adopted UNCHANGED: TOTP secrets are
+    encrypted under a key derived from this very string, so re-minting it
+    would silently invalidate every stored second factor. The old path did
+    exactly that whenever a degraded config read returned "" - the keyring
+    refuses to mint over unreadable state instead.
+    """
+    from vaf.core.data_keyring import get_data_secret
+    return get_data_secret(
+        "local_network_jwt_secret", legacy_config_key="local_network_jwt_secret"
+    )
 
 
 # Public alias used by web_server.py WebSocket handler

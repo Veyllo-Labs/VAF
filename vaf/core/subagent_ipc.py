@@ -220,6 +220,15 @@ class PausedWorkflow:
         return cls(**{k: v for k, v in (data or {}).items() if k in known})
 
 
+def _queue_log(message: str) -> None:
+    """One line into the queue domain log; never raises."""
+    try:
+        from vaf.core.log_helper import append_domain_log
+        append_domain_log("queue", message)
+    except Exception:
+        pass
+
+
 class SubAgentIPC:
     """
     Inter-Process Communication system for VAF sub-agents.
@@ -353,58 +362,54 @@ class SubAgentIPC:
             return []
         
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            # Locking still happens on the raw handle; the CONTENT goes through the
+            # shared at-rest primitive (these files carry task text and results).
+            with open(file_path, 'rb') as f:
                 self._lock_file(f, exclusive=False)
                 try:
-                    content = f.read().strip()
-                    if not content:
-                        return []
-                    return json.loads(content)
+                    raw = f.read()
                 finally:
                     self._unlock_file(f)
-        except (json.JSONDecodeError, IOError):
+            from vaf.core import data_files
+            content = data_files.decrypt_bytes(raw).decode('utf-8').strip()
+            if not content:
+                return []
+            return json.loads(content)
+        except ValueError as e:
+            # "Intact but locked" must NOT read as "empty": every caller here is a
+            # read-modify-write, so an empty answer would write the queue back
+            # without the entries and destroy recoverable ciphertext.
+            if data_files.is_encrypted(raw):
+                raise
+            _queue_log(f"Unreadable queue file {file_path}: {e}")
+            return []
+        except (json.JSONDecodeError, IOError, UnicodeDecodeError):
             return []
     
     def _write_json(self, file_path: Path, data: List[Dict], max_retries: int = 3):
         """Write JSON file with file locking and retry logic (cross-platform)."""
+        from vaf.core import data_files
+
         last_error = None
-        
+        payload = json.dumps(data, indent=2, ensure_ascii=False).encode('utf-8')
+
         for attempt in range(max_retries):
             try:
-                # Write to temp file first, then rename (atomic operation)
-                temp_file = file_path.with_suffix('.tmp')
-                
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    self._lock_file(f, exclusive=True)
-                    try:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
-                    finally:
-                        self._unlock_file(f)
-                
-                # Atomic rename
-                temp_file.replace(file_path)
+                data_files.write_bytes_atomic(file_path, payload)
                 return  # Success
-                
             except (IOError, OSError, PermissionError) as e:
                 last_error = e
                 time.sleep(0.2 * (attempt + 1))  # Exponential backoff
                 continue
             except Exception as e:
-                # Fallback: direct write
-                try:
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
-                    return
-                except:
-                    last_error = e
-        
-        # Final fallback after all retries
+                # A key or crypto failure will not fix itself on a retry, and a
+                # silently dropped queue write loses a running task's result.
+                _queue_log(f"Sub-agent queue write to {file_path} failed: {e}")
+                raise
+
         if last_error:
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-            except:
-                pass  # Silent fail - don't crash
+            _queue_log(f"Sub-agent queue write to {file_path} failed after {max_retries} retries: {last_error}")
+            raise last_error
     
     # ═══════════════════════════════════════════════════════════════════════════
     # MAIN AGENT METHODS
@@ -455,8 +460,9 @@ class SubAgentIPC:
         try:
             self.task_payloads_dir.mkdir(parents=True, exist_ok=True)
             path = self.task_payloads_dir / f"{task_id}.txt"
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(payload)
+            # The complete instruction text, which routinely embeds the user's message.
+            from vaf.core import data_files
+            data_files.write_text_atomic(path, payload)
         except (IOError, OSError):
             pass
 
@@ -465,9 +471,9 @@ class SubAgentIPC:
         try:
             path = self.task_payloads_dir / f"{task_id}.txt"
             if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return f.read()
-        except (IOError, OSError):
+                from vaf.core import data_files
+                return data_files.read_text(path)
+        except (IOError, OSError, ValueError):
             pass
         return None
     

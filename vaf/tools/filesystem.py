@@ -12,7 +12,14 @@ import heapq
 BLOCKED_DIRS = [
     "Windows", "Program Files", "Program Files (x86)", "System32",  # Windows
     "/etc", "/usr", "/sys", "/proc", "/var", "/boot",  # Linux/Mac
-    ".git", ".ssh", "node_modules", ".env", "id_rsa"
+    ".git", ".ssh", "node_modules", ".env", "id_rsa",
+    # The recovery kit is the master key to everything VAF encrypts, and it is
+    # written where the user can find it - which is also where the agent's own
+    # file tools and the attachment indexer look. Without this, VAF reads its
+    # own recovery secret and stores it as a plaintext chunk and an embedding
+    # in the memory database, from which short text is largely recoverable.
+    # Name-based, because the user is told to move the file wherever they like.
+    "VAF-BackThisUp.md",
 ]
 
 # VAF program root - agent must NEVER access this (source code, config, secrets)

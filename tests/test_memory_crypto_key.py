@@ -1,12 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Memory encryption key handling (vaf/memory/crypto.py).
+"""Memory encryption key handling (vaf/memory/crypto.py + vaf/core/data_keyring.py).
 
 Pins the landmine fix: a PRESENT but corrupt/wrong-length key must be a hard
 error, never a silent regenerate (the old behavior overwrote the key and
 permanently orphaned every already-encrypted memory). Only a genuinely
 missing key generates a fresh one.
+
+The key moved OUT of config.json into the data keyring, so these now also pin
+the adoption contract: a legacy config value is taken over BYTE-IDENTICALLY
+(otherwise every encrypted row dies at the moment of the upgrade) and the
+config copy is blanked only afterwards. The refuse-to-mint guards moved with
+it, unchanged in meaning.
 """
 import base64
 import secrets
@@ -43,19 +49,50 @@ def test_corrupt_base64_key_refuses_to_regenerate(monkeypatch):
 
 def test_wrong_length_key_refuses_to_regenerate(monkeypatch):
     saved = _with_key(monkeypatch, base64.b64encode(b"short").decode())
-    with pytest.raises(RuntimeError, match="16|32|bytes"):
+    with pytest.raises(RuntimeError, match="orphan|bytes"):
         MemoryCrypto()
     assert "memory_encryption_key" not in saved
 
 
-def test_missing_key_with_no_config_file_mints_once(monkeypatch, tmp_path, caplog):
+def test_a_legacy_config_key_is_adopted_byte_identically(monkeypatch, tmp_path):
+    """The upgrade must not change the key - existing rows have to keep opening.
+
+    MUTATION: mint instead of adopting, and the ciphertext written before the
+    move stops decrypting after it.
+    """
+    import json as _json
+    from vaf.core.config import Config
+    from vaf.core.data_keyring import peek_data_secret
+
+    real = secrets.token_bytes(32)
+    encoded = base64.b64encode(real).decode()
+    saved = _with_key(monkeypatch, encoded)
+    p = tmp_path / "config.json"
+    p.write_text(_json.dumps({"memory_encryption_key": encoded}), encoding="utf-8")
+    monkeypatch.setattr(Config, "CONFIG_FILE", p)
+
+    before = MemoryCrypto(key=real)
+    ct, nonce = before.encrypt("ein alter verschluesselter satz")
+
+    assert MemoryCrypto()._key == real
+    assert MemoryCrypto().decrypt(ct, nonce) == "ein alter verschluesselter satz"
+    assert peek_data_secret("memory_encryption_key") == encoded
+    # ...and only THEN is the plaintext copy in config.json cleared.
+    assert saved.get("memory_encryption_key") == ""
+
+
+def test_missing_key_with_no_config_file_mints_once_into_the_ring(monkeypatch, tmp_path, caplog):
     import logging
     from vaf.core.config import Config
+    from vaf.core.data_keyring import peek_data_secret
+
     saved = _with_key(monkeypatch, "")
     monkeypatch.setattr(Config, "CONFIG_FILE", tmp_path / "config.json")
-    with caplog.at_level(logging.WARNING, logger="vaf.memory.crypto"):
+    with caplog.at_level(logging.WARNING, logger="vaf.core.data_keyring"):
         c = MemoryCrypto()
-    assert "memory_encryption_key" in saved  # genuine first run persists a key
+
+    assert peek_data_secret("memory_encryption_key")      # persisted in the ring
+    assert "memory_encryption_key" not in saved           # NOT in config.json any more
     assert any("Minted" in r.message for r in caplog.records), "the mint must be loud"
     ct, nonce = c.encrypt("x")
     assert c.decrypt(ct, nonce) == "x"
@@ -65,12 +102,14 @@ def test_missing_key_with_parseable_config_mints(monkeypatch, tmp_path):
     """A cleanly-parsed config that genuinely has no key is the documented
     deliberate reset - minting is allowed."""
     from vaf.core.config import Config
-    saved = _with_key(monkeypatch, "")
+    from vaf.core.data_keyring import peek_data_secret
+
+    _with_key(monkeypatch, "")
     p = tmp_path / "config.json"
     p.write_text('{"provider": "local"}', encoding="utf-8")
     monkeypatch.setattr(Config, "CONFIG_FILE", p)
     MemoryCrypto()
-    assert "memory_encryption_key" in saved
+    assert peek_data_secret("memory_encryption_key")
 
 
 def test_unparseable_config_refuses_to_mint(monkeypatch, tmp_path):
@@ -78,13 +117,16 @@ def test_unparseable_config_refuses_to_mint(monkeypatch, tmp_path):
     (a truncated json made Config.load fall back to DEFAULTS, the old code saw
     "no key" and rotated - orphaning every encrypted row)."""
     from vaf.core.config import Config
+    from vaf.core.data_keyring import peek_data_secret
+
     saved = _with_key(monkeypatch, "")
     p = tmp_path / "config.json"
     p.write_text('{"provider": "loc', encoding="utf-8")  # cut mid-write
     monkeypatch.setattr(Config, "CONFIG_FILE", p)
-    with pytest.raises(RuntimeError, match="orphan"):
+    with pytest.raises(RuntimeError, match="Refusing to mint"):
         MemoryCrypto()
     assert "memory_encryption_key" not in saved
+    assert not peek_data_secret("memory_encryption_key")
 
 
 def test_defaults_fallback_read_recovers_the_real_key(monkeypatch, tmp_path):
@@ -99,7 +141,10 @@ def test_defaults_fallback_read_recovers_the_real_key(monkeypatch, tmp_path):
                  encoding="utf-8")
     monkeypatch.setattr(Config, "CONFIG_FILE", p)
     c = MemoryCrypto()
-    assert "memory_encryption_key" not in saved  # nothing minted
+    assert c._key == real, "the real key on disk must win over the degraded read"
+    # The only write back to config.json is the blanking that follows adoption -
+    # never a freshly minted key.
+    assert saved.get("memory_encryption_key", "") == ""
     ct, nonce = c.encrypt("fact")
     assert c.decrypt(ct, nonce) == "fact"
 

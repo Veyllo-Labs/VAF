@@ -56,71 +56,20 @@ class MemoryCrypto:
         self._aesgcm = AESGCM(self._key)
     
     def _get_or_create_key(self) -> bytes:
+        """The memory key, from the data keyring.
+
+        A legacy config.json value is adopted BYTE-IDENTICALLY on first use
+        (existing encrypted rows must keep decrypting) and the config copy is
+        blanked after the one-time pre-keyring backup. Every refuse-to-mint
+        guard this method used to carry lives in the keyring now: an unreadable
+        ring raises, an unparseable config.json raises, and a malformed stored
+        key raises - none of them mints a replacement, because that would
+        permanently orphan every already-encrypted memory.
         """
-        Get encryption key from config, or generate one on FIRST run only.
-
-        The key is stored Base64-encoded in config for portability.
-
-        A PRESENT but undecodable/wrong-length key is a hard error, never a
-        silent regenerate: overwriting it would permanently orphan every
-        already-encrypted memory without anyone noticing (the old behavior).
-        Recovery is a conscious decision - restore the key from a backup, or
-        explicitly clear `memory_encryption_key` in the config to start fresh.
-        """
-        def _decode_or_raise(encoded: str) -> bytes:
-            try:
-                key = base64.b64decode(encoded, validate=True)
-            except Exception as e:
-                raise RuntimeError(
-                    "memory_encryption_key is set but not valid Base64. Refusing to "
-                    "generate a replacement key because that would permanently orphan "
-                    "all encrypted memories. Restore the key from a backup, or clear "
-                    "the config value explicitly to start with a fresh (empty) store."
-                ) from e
-            if len(key) != self.KEY_SIZE:
-                raise RuntimeError(
-                    f"memory_encryption_key decodes to {len(key)} bytes, expected "
-                    f"{self.KEY_SIZE}. Refusing to silently replace it - restore the "
-                    "correct key or clear the config value explicitly."
-                )
-            return key
-
-        encoded_key = Config.get("memory_encryption_key", "")
-        if encoded_key:
-            return _decode_or_raise(encoded_key)
-
-        # The normal read says "no key". NEVER trust that alone: Config.load()
-        # degrades to DEFAULTS on ANY read error, so a torn read during a
-        # concurrent config write looks exactly like a missing key (live
-        # incident: a silently minted replacement orphaned every encrypted
-        # row). Decide on a STRICT raw read of the file instead.
-        cfg_path = Path(Config.CONFIG_FILE)
-        if cfg_path.exists():
-            try:
-                raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-            except Exception as e:
-                raise RuntimeError(
-                    "config.json exists but could not be parsed while resolving "
-                    "memory_encryption_key. Refusing to mint a replacement key - "
-                    "that would permanently orphan all encrypted memories. Retry "
-                    "after the concurrent config write finishes, or restore "
-                    "config.json from a backup."
-                ) from e
-            stored = str(raw.get("memory_encryption_key") or "")
-            if stored:
-                # The normal read lied (DEFAULTS fallback); use the real key.
-                return _decode_or_raise(stored)
-
-        # Genuine first run (no config file), or a cleanly-parsed config that
-        # really has no key (the documented deliberate reset): mint ONCE, loudly.
-        new_key = secrets.token_bytes(self.KEY_SIZE)
-        Config.set("memory_encryption_key", base64.b64encode(new_key).decode())
-        logger.warning(
-            "Minted a new memory encryption key and persisted it to %s. Back this "
-            "file up - without the key, encrypted memories are unrecoverable.",
-            Config.CONFIG_FILE,
+        from vaf.core.data_keyring import get_data_key
+        return get_data_key(
+            "memory_encryption_key", legacy_config_key="memory_encryption_key"
         )
-        return new_key
     
     def encrypt(self, plaintext: str) -> Tuple[bytes, bytes]:
         """

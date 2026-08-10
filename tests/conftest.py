@@ -47,6 +47,115 @@ ISOLATED_ENV_AXES = (
 )
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_config_and_kek(tmp_path_factory):
+    """`Config.APP_DIR` and the KEK backends are MACHINE-global. Redirect BOTH.
+
+    The XDG redirection above does not reach either of them: `Config.APP_DIR` is
+    `~/.vaf` unless VAF runs in Docker, the KEK file and marker hang off it, and
+    `keyring_available()` probes the developer's real OS keyring.
+
+    This is not theoretical - it happened while the keyring was being built, and
+    the damage is worth recording because the shape repeats. Key resolution
+    ADOPTS a legacy value out of config.json and then BLANKS the plaintext copy.
+    Under test, the adoption wrote into a throwaway directory while the blanking
+    wrote into the developer's REAL config.json, so one suite run stripped the
+    live `secure_store_kek`, the JWT signing secret and an API key out of a
+    working installation and put them nowhere. Restoring them needed the
+    migration's own pre-keyring backup.
+
+    Two lessons in the fixture, both deliberate: a test must never see the real
+    `Config.CONFIG_FILE`, and any code that removes a value from one place after
+    writing it to another must be isolated on BOTH sides at once - isolating the
+    write alone turns a migration into a deletion.
+    """
+    import json
+
+    import vaf.core.secure_store as ss
+    from vaf.core.config import Config
+
+    root = tmp_path_factory.mktemp("vaf-test-appdir")
+    config_file = root / "config.json"
+    config_file.write_text("{}", encoding="utf-8")
+
+    orig_app_dir, orig_config_file = Config.APP_DIR, Config.CONFIG_FILE
+    Config.APP_DIR, Config.CONFIG_FILE = root, config_file
+
+    # `~/.vaf` itself is the last unredirected axis, and it is the one the
+    # SESSION STORE hangs off (SessionManager defaults to Path.home()/".vaf"/
+    # "sessions"). Suite runs had been writing synthetic chats straight into the
+    # developer's real store for as long as that default existed; it only became
+    # visible when those files started being encrypted with a per-test key,
+    # leaving 42 unopenable records behind in a live installation. Same lesson as
+    # the config axis directly above: redirect the DIRECTORY, not each consumer.
+    import vaf.core.session as session_module
+    sessions_root = root / "sessions"
+    sessions_root.mkdir(parents=True, exist_ok=True)
+    orig_sessions_dir = session_module.default_sessions_dir
+    session_module.default_sessions_dir = lambda: sessions_root
+
+    # Modules imported during collection already hold a SessionManager that
+    # captured the real directory in __init__, so patching the seam alone would
+    # leave those singletons pointing at the developer's store.
+    def _repoint_existing_managers(target):
+        import sys
+        for mod_name, attr in (("vaf.core.web_server", "session_mgr"),
+                               ("vaf.core.session", "_manager")):
+            mod = sys.modules.get(mod_name)
+            existing = getattr(mod, attr, None) if mod else None
+            if existing is not None:
+                existing.storage_dir = target
+                target.mkdir(parents=True, exist_ok=True)
+
+    _repoint_existing_managers(sessions_root)
+
+    ss._KEYRING_AVAILABLE = False  # never probe or write the real OS keyring
+    orig_file, orig_marker = ss._kek_file_path, ss._kek_marker_path
+    ss._kek_file_path = lambda: root / "secure_store.kek"
+    ss._kek_marker_path = lambda: root / "secure_store.kek.where"
+    yield
+    session_module.default_sessions_dir = orig_sessions_dir
+    _repoint_existing_managers(orig_sessions_dir())
+    Config.APP_DIR, Config.CONFIG_FILE = orig_app_dir, orig_config_file
+    ss._kek_file_path, ss._kek_marker_path = orig_file, orig_marker
+    ss._KEYRING_AVAILABLE = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_keyring(tmp_path, monkeypatch):
+    """A data keyring per TEST - same class as the provider-key store below.
+
+    `vaf.core.data_keyring` caches one SecureBlobStore over data_dir; without
+    this, a key minted by one test is still there for the next, and a test that
+    triggers legacy adoption would blank values in whatever config the test
+    happens to see. The pre-migration backup writer is pointed at the test's
+    own directory for the same reason.
+    """
+    import vaf.core.data_keyring as dk
+    import vaf.core.secure_store as ss
+    from vaf.core.secure_store import SecureBlobStore
+
+    monkeypatch.setattr(dk, "_store", SecureBlobStore("data_keys", tmp_path / "data_keys.enc"))
+    # The "a ring existed here" marker belongs to the SAME installation as the
+    # ring. It lives beside the config in production so that losing the data
+    # directory alone still trips it; per test it has to move with the ring, or
+    # the first test to mint a key makes every later one look like a machine
+    # whose key store vanished.
+    monkeypatch.setattr(dk, "_established_marker", lambda: tmp_path / "data_keys.established")
+
+    def _test_backup() -> None:
+        from vaf.core.config import Config
+        from pathlib import Path
+        src = Path(Config.CONFIG_FILE)
+        dst = tmp_path / "config.json.pre-keyring.bak"
+        if not dst.exists() and src.exists():
+            dst.write_bytes(src.read_bytes())
+
+    monkeypatch.setattr(ss, "ensure_pre_migration_backup", _test_backup)
+    monkeypatch.setattr(dk, "ensure_pre_migration_backup", _test_backup)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _isolated_provider_keys(tmp_path, monkeypatch):
     """A provider-key store per TEST, not per session.

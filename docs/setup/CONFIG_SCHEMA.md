@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (303 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (309 keys).
 
 ## How configuration is set
 
@@ -211,6 +211,12 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_rag_k` | `5` | Top-k memories retrieved per query. |
 | `memory_rag_threshold` | `0.3` | Min similarity to include. |
 | `memory_rag_refine_query` | `True` | LLM query refinement before search. |
+| `context_archive_max_age_days` | `14` | Age sweep for the pre-compression conversation snapshots in `~/.vaf/context_archive` (`0` keeps them forever). Their old cleanup only ran on a clean shutdown, so they accumulated indefinitely. |
+| `prompt_log_full_enabled` | `False` | Write the ENTIRE assembled system prompt (user profile, retrieved memories, working memory, contacts) into `prompt_*.log`. Debugging only: it is the richest plaintext copy of the user's data on the machine. |
+| `cli_password_gate` | `True` | The interactive terminal (`vaf run`, the TUI) asks for the admin password before starting. Scripts, `-p`, the tray, the headless runner and automations never do - they run inside the shield. Verified offline against a hash mirrored into the keyring, so a sleeping database does not lock you out. |
+| `secure_store_kek_backend` | `"file"` | Where the master key that opens the keyring is stored. `file` is an owner-only file under `~/.vaf` and works for the tray and any background service. `keyring` uses the OS keyring, which your login password protects - stronger against a stolen machine, but only usable when VAF starts from inside your desktop session. Reading finds the key wherever an earlier version put it. |
+| `allow_plaintext_at_rest` | `True` | Accept files WITHOUT the encryption header when reading. Needed while a store still holds pre-encryption records; the startup sweep turns it off automatically after a pass that found nothing plain left. Left on forever it is a downgrade path: anyone who can write into the store can replace a record with plaintext and the reader takes it. |
+| `file_encryption_enabled` | `True` | Encrypt the file stores at rest (chats, context archives, handoff bundles, sub-agent queue, working memory) with the machine-held key from the data keyring. Reading always accepts BOTH forms, so older plaintext chats keep opening and switching this off does not strand files already encrypted. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md). |
 | `cross_chat_hint_enabled` | `True` | Cross Chat Hint: append pointers from this user's other chats below the retrieved memories. Lexical, reads the session files, needs no database. |
 | `cross_chat_hint_k` | `2` | Max cross-chat hints per turn. `0` disables the lane without touching the switch. |
 | `cross_chat_hint_min_terms` | `2` | Distinct query terms a chat must match to qualify; a single term that is rare across the scanned chats also qualifies. |

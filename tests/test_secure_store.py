@@ -8,6 +8,8 @@ import json
 import os
 import threading
 
+import secrets
+
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -164,3 +166,31 @@ def test_legacy_key_migration(env):
     # Wrap file now exists and the plaintext legacy key is gone from config.
     assert store.wrap_path.exists()
     assert (Config.get("email_credentials_key", "") or "") == ""
+
+
+def test_a_stale_dek_cache_cannot_brick_the_store(tmp_path):
+    """The defect behind 34 key writes that left nothing behind.
+
+    The DEK was cached for the lifetime of the process. Another process
+    re-wrapping the store gives it a DIFFERENT DEK, and this one then kept
+    encrypting with the old one: the write succeeds under the lock, nothing
+    looks wrong, and the payload ends up sealed with a key the wrap file no
+    longer names - unreadable to everybody, including its author.
+
+    MUTATION: trust the cache again (drop the stamp check in _get_dek) and this
+    ends in SecureStoreUnreadable.
+    """
+    from vaf.core.secure_store import SecureBlobStore
+
+    path = tmp_path / "probe.enc"
+    holder = SecureBlobStore("probe", path)
+    holder.update(lambda d: d.__setitem__("a", "1"))
+    holder.load_strict()                      # holder now caches the DEK
+
+    other = SecureBlobStore("probe", path)    # a second process
+    other.update(lambda d: d.__setitem__("b", "2"))
+    other._wrap_and_store_dek(secrets.token_bytes(32))   # and it re-wraps
+
+    holder.update(lambda d: d.__setitem__("c", "3"))
+
+    assert SecureBlobStore("probe", path).load_strict(), "the store must stay readable"

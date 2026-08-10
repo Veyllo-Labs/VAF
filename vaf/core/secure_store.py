@@ -111,7 +111,10 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Write bytes atomically: temp file (mode 0600 via mkstemp) + fsync + os.replace."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix)
+    # No .json suffix on the temp file: the session, archive and migration globs
+    # match "*.json", and a crashed write would otherwise leave something they
+    # try to parse as a record.
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".part")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
@@ -169,32 +172,6 @@ def _get_filelock_cls():
 #  KEK helpers
 # ---------------------------------------------------------------------------
 
-def _derive_kek_scrypt(passphrase: str, salt: bytes, n: int, r: int, p: int) -> bytes:
-    kdf = Scrypt(salt=salt, length=_KEY_SIZE, n=n, r=r, p=p)
-    return kdf.derive(passphrase.encode("utf-8"))
-
-
-def _config_kek(create: bool = True) -> Optional[bytes]:
-    """Random KEK persisted in config.json (used when no passphrase is set)."""
-    encoded = Config.get(_CONFIG_KEK_NAME, "") or ""
-    if encoded:
-        try:
-            k = base64.b64decode(encoded)
-            if len(k) == _KEY_SIZE:
-                return k
-        except Exception:
-            pass
-    if not create:
-        return None
-    k = secrets.token_bytes(_KEY_SIZE)
-    Config.set(_CONFIG_KEK_NAME, base64.b64encode(k).decode())
-    return k
-
-
-# ---------------------------------------------------------------------------
-#  Secure blob store
-# ---------------------------------------------------------------------------
-
 class SecureStoreUnreadable(RuntimeError):
     """A payload exists on disk and could not be decrypted.
 
@@ -202,6 +179,310 @@ class SecureStoreUnreadable(RuntimeError):
     matters to callers that would otherwise fall back to a weaker copy - see `load_strict`.
     """
 
+
+def _derive_kek_scrypt(passphrase: str, salt: bytes, n: int, r: int, p: int) -> bytes:
+    kdf = Scrypt(salt=salt, length=_KEY_SIZE, n=n, r=r, p=p)
+    return kdf.derive(passphrase.encode("utf-8"))
+
+
+def _kek_file_path() -> Path:
+    return Path(Config.APP_DIR) / "secure_store.kek"
+
+
+def _kek_marker_path() -> Path:
+    return Path(Config.APP_DIR) / "secure_store.kek.where"
+
+
+PRE_MIGRATION_BACKUP = "config.json.pre-keyring.bak"
+
+
+def ensure_pre_migration_backup() -> None:
+    """One config.json snapshot BEFORE the first secret is blanked out of it.
+
+    Rolling back to an older VAF after the keys moved out of config.json would
+    find them missing and MINT replacements - which orphans every encrypted
+    memory row and mail body. This backup is the documented way back: restore
+    it and the old release reads its keys where it always did. `vaf memory
+    rekey` reads exactly this kind of file. Written once, owner-only, bytes
+    verbatim (never text mode: CRLF configs must survive byte-identical).
+
+    IT IS A PLAINTEXT COPY OF EVERY KEY, sitting next to the data those keys
+    open, so it cancels the protection for as long as it exists. That is a
+    deliberate trade for the migration window only: `drop_pre_migration_backup`
+    removes it once every key has moved, and `vaf secure status` names it while
+    it is still there.
+    """
+    try:
+        src = Path(Config.CONFIG_FILE)
+        dst = Path(Config.APP_DIR) / PRE_MIGRATION_BACKUP
+        if dst.exists() or not src.exists():
+            return
+        _atomic_write_bytes(dst, src.read_bytes())
+        harden_path(dst)
+        logger.info("Wrote pre-keyring config backup: %s", dst)
+    except Exception as e:
+        logger.warning("Could not write pre-keyring config backup: %s", e)
+
+
+def pre_migration_backup_path() -> Path:
+    return Path(Config.APP_DIR) / PRE_MIGRATION_BACKUP
+
+
+def drop_pre_migration_backup() -> bool:
+    """Delete the plaintext rollback copy once it has nothing left to roll back to.
+
+    Only when config.json genuinely carries no key material any more - while a
+    single key is still mid-migration the backup is the way back and must stay.
+    """
+    path = pre_migration_backup_path()
+    if not path.exists():
+        return False
+    leftovers = [k for k in ("secure_store_kek", "memory_encryption_key",
+                             "mail_store_encryption_key", "github_credentials_key",
+                             "local_network_jwt_secret")
+                 if str(Config.get(k, "") or "").strip()]
+    if leftovers:
+        return False
+    # An empty config.json is not proof that the move SUCCEEDED - during the
+    # first real restart it was briefly true while the keyring could not be
+    # written at all, and deleting the rollback copy in that window would have
+    # left no way back. The ring has to open and actually hold the keys.
+    try:
+        from vaf.core.data_keyring import _ring
+        stored = _ring().load_strict()
+    except Exception:
+        return False
+    if not {"memory_encryption_key", "mail_store_encryption_key"} & set(stored):
+        return False
+    try:
+        path.unlink()
+        logger.info("Removed the plaintext pre-keyring config backup; every key has moved.")
+        return True
+    except OSError:
+        return False
+
+
+def _read_kek_marker() -> str:
+    try:
+        return _kek_marker_path().read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _preferred_kek_backend() -> str:
+    """Where a NEW KEK goes. File by default, and that is a correction.
+
+    The OS keyring is the stronger place - it is encrypted with the user's login
+    password, which is what protects a powered-off stolen machine. It is also
+    unreachable from the process that actually runs VAF on a normal install: the
+    tray is started by a supervisor script with no session bus, so a KEK written
+    during an interactive command could not be read by the service afterwards.
+    Measured on a real restart: 295 failed key resolutions and a locked keyring,
+    with the app only recovering once the file backend took over.
+
+    So the default is the file (0600 under APP_DIR, protected by whatever disk
+    encryption sits beneath it), and the keyring is opt-in for installs that
+    start VAF from inside the desktop session. Reading still finds a KEK
+    wherever an earlier version put it.
+    """
+    try:
+        choice = str(Config.get("secure_store_kek_backend", "file") or "file").strip().lower()
+    except Exception:
+        choice = "file"
+    return choice if choice in ("file", "keyring") else "file"
+
+
+def _write_kek(k: bytes) -> str:
+    """Persist the KEK into the configured backend; return which one was used."""
+    encoded = base64.b64encode(k).decode()
+    backend = "file"
+    if _preferred_kek_backend() == "keyring" and keyring_available():
+        try:
+            import keyring as _kr
+            _kr.set_password("vaf", _CONFIG_KEK_NAME, encoded)
+            backend = "keyring"
+        except Exception as e:
+            logger.warning("Could not store KEK in OS keyring, using file: %s", e)
+    if backend == "file":
+        _atomic_write_bytes(_kek_file_path(), encoded.encode("utf-8"))
+        harden_path(_kek_file_path())
+    _atomic_write_bytes(_kek_marker_path(), backend.encode("utf-8"))
+    harden_path(_kek_marker_path())
+    return backend
+
+
+def _kek_from_keyring() -> Optional[bytes]:
+    try:
+        import keyring as _kr
+        encoded = _kr.get_password("vaf", _CONFIG_KEK_NAME) or ""
+        k = base64.b64decode(encoded) if encoded else b""
+        return k if len(k) == _KEY_SIZE else None
+    except Exception:
+        return None
+
+
+def _kek_from_file() -> Optional[bytes]:
+    try:
+        encoded = _kek_file_path().read_text(encoding="utf-8").strip()
+        k = base64.b64decode(encoded) if encoded else b""
+        return k if len(k) == _KEY_SIZE else None
+    except Exception:
+        return None
+
+
+def kek_backend() -> str:
+    """Where the machine KEK lives: 'keyring', 'file', 'config' (legacy) or 'none'."""
+    marker = _read_kek_marker()
+    if marker in ("keyring", "file"):
+        return marker
+    if _kek_file_path().exists():
+        return "file"
+    if Config.get(_CONFIG_KEK_NAME, ""):
+        return "config"
+    return "none"
+
+
+def _legacy_config_kek() -> Optional[bytes]:
+    """The KEK still in config.json, read STRICTLY. None = genuinely absent.
+
+    `Config.load()` degrades an unreadable config.json to DEFAULTS, so the
+    ordinary read answers "" for a key that IS on disk. Minting on that answer
+    would shadow every DEK ever wrapped under the real one, so an unparseable
+    file raises rather than looking empty - the same refusal the memory key has
+    carried since the incident that taught it.
+    """
+    encoded = str(Config.get(_CONFIG_KEK_NAME, "") or "").strip()
+    if not encoded:
+        cfg_path = Path(Config.CONFIG_FILE)
+        if cfg_path.exists():
+            try:
+                raw = json.loads(cfg_path.read_bytes().decode("utf-8"))
+            except Exception as e:
+                raise SecureStoreUnreadable(
+                    "config.json exists but could not be parsed while resolving the "
+                    "secure-store KEK. Refusing to mint a replacement - that would "
+                    "orphan every encrypted store. Repair config.json, or restore "
+                    "config.json.pre-keyring.bak."
+                ) from e
+            if isinstance(raw, dict):
+                encoded = str(raw.get(_CONFIG_KEK_NAME) or "").strip()
+    if not encoded:
+        return None
+    try:
+        k = base64.b64decode(encoded)
+    except Exception as e:
+        raise SecureStoreUnreadable(
+            f"{_CONFIG_KEK_NAME} is set but is not valid base64. Refusing to mint a "
+            f"replacement, which would orphan every encrypted store."
+        ) from e
+    if len(k) != _KEY_SIZE:
+        raise SecureStoreUnreadable(
+            f"{_CONFIG_KEK_NAME} decodes to {len(k)} bytes, expected {_KEY_SIZE}. "
+            f"Refusing to mint a replacement."
+        )
+    return k
+
+
+def _machine_kek(create: bool = True) -> Optional[bytes]:
+    """The machine KEK: OS keyring or 0600 file - no longer config.json.
+
+    THE RULE, and every branch below exists to keep it: never mint while key
+    material for this installation might still exist. A fresh KEK does not fail
+    loudly, it silently shadows every wrapped DEK - credentials, mail, memory
+    and now the data keyring itself - so the resolution order is strict and the
+    default answer to "I cannot tell" is None, not a new key.
+
+    Order:
+      1. the backend the marker names (missing there = hard refusal, not a mint);
+      2. no marker: file, then keyring, then the legacy config.json value;
+      3. only with nothing found anywhere AND nothing to shadow: mint.
+
+    The legacy value is adopted byte-identically - the existing .key.json wraps
+    have to keep opening - and the config copy is blanked only after the
+    one-time backup.
+    """
+    marker = _read_kek_marker()
+
+    if marker == "keyring":
+        k = _kek_from_keyring()
+        if k is not None:
+            return k
+        k = _kek_from_file()
+        if k is not None:
+            logger.warning(
+                "The OS keyring is not reachable from this process; using the "
+                "KEK file copy instead. Set secure_store_kek_backend to 'file' "
+                "if this machine starts VAF outside the desktop session."
+            )
+            return k
+        logger.error(
+            "The secure-store KEK lives in the OS keyring but the keyring is not "
+            "reachable from this process. Credentials and encrypted stores stay "
+            "locked until VAF runs inside the desktop session again (or "
+            "%s is set). Refusing to mint a replacement key.", PASSPHRASE_ENV,
+        )
+        return None
+
+    if marker == "file":
+        k = _kek_from_file()
+        if k is not None:
+            return k
+        logger.error(
+            "The secure-store KEK file (%s) is missing or unreadable. Every "
+            "encrypted store stays locked until it is restored. Refusing to mint "
+            "a replacement key.", _kek_file_path(),
+        )
+        return None
+
+    # No marker yet: this is a fresh install or one that has not migrated. Look
+    # in every place a KEK could be, FILE FIRST - a keyring entry from another
+    # VAF installation (or a stale probe) must never win over key material that
+    # belongs to this one.
+    k = _kek_from_file()
+    if k is not None:
+        _atomic_write_bytes(_kek_marker_path(), b"file")
+        harden_path(_kek_marker_path())
+        return k
+
+    # The legacy config value outranks the OS keyring for the same reason: the
+    # wrapped DEKs on this disk were made with it.
+    legacy = _legacy_config_kek()
+    if legacy is not None:
+        ensure_pre_migration_backup()
+        _write_kek(legacy)
+        try:
+            Config.set(_CONFIG_KEK_NAME, "")
+        except Exception:
+            pass
+        logger.info("Moved secure-store KEK out of config.json (backend: %s)", kek_backend())
+        return legacy
+
+    # The OS keyring is consulted last and only when it is the configured
+    # backend: a keyring entry left by another installation must never outrank
+    # the key material that belongs to THIS one.
+    if _preferred_kek_backend() == "keyring" and keyring_available():
+        k = _kek_from_keyring()
+        if k is not None:
+            _atomic_write_bytes(_kek_marker_path(), b"keyring")
+            harden_path(_kek_marker_path())
+            return k
+
+    if not create:
+        return None
+    k = secrets.token_bytes(_KEY_SIZE)
+    backend = _write_kek(k)
+    logger.info("Minted machine KEK (backend: %s)", backend)
+    return k
+
+
+def _config_kek(create: bool = True) -> Optional[bytes]:
+    """Backward-compatible alias; the KEK moved out of config.json."""
+    return _machine_kek(create=create)
+
+
+# ---------------------------------------------------------------------------
+#  Secure blob store
+# ---------------------------------------------------------------------------
 
 class SecureBlobStore:
     """A single encrypted JSON blob on disk with envelope encryption and locking.
@@ -220,6 +501,7 @@ class SecureBlobStore:
         self.legacy_key_config_name = legacy_key_config_name
         self._tlock = threading.Lock()
         self._dek_cache: Optional[bytes] = None
+        self._wrap_stamp = None  # identity of the wrap file the cached DEK came from
 
     # -- public API ---------------------------------------------------------
 
@@ -247,10 +529,17 @@ class SecureBlobStore:
                 return {}
             return self._load_locked(strict=True)
 
-    def update(self, mutator: Callable[[Dict[str, str]], None]) -> None:
-        """Atomically load -> mutate -> save under both locks (no lost updates)."""
+    def update(self, mutator: Callable[[Dict[str, str]], None], *, strict: bool = False) -> None:
+        """Atomically load -> mutate -> save under both locks (no lost updates).
+
+        `strict=True` refuses when a payload EXISTS but cannot be decrypted.
+        Without it the load answers {} for that case and the save then replaces
+        the whole store with whatever the mutator put in - so one write into an
+        unreadable keyring would discard every other key in it. The check runs
+        inside the same lock as the save, so there is no window between them.
+        """
         with self._tlock, self._file_lock():
-            data = self._load_locked()
+            data = self._load_locked(strict=strict)
             mutator(data)
             self._save_locked(data)
 
@@ -321,12 +610,42 @@ class SecureBlobStore:
 
     # -- DEK / envelope -----------------------------------------------------
 
+    def _wrap_stamp_now(self):
+        """Identity of the wrapped-DEK file, or None when it is absent."""
+        try:
+            st = self.wrap_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
     def _get_dek(self, create: bool) -> Optional[bytes]:
+        """The DEK, with the cache validated against the wrap file every time.
+
+        The cache used to be trusted for the lifetime of the process, and that
+        is wrong across processes: another one re-wrapping the store gives it a
+        DIFFERENT DEK, and this one then keeps encrypting its writes with the
+        old one. The write succeeds, the lock is held, nothing looks wrong - and
+        the payload is now sealed with a key the wrap file no longer names, so
+        the whole store is unreadable to everybody including its author.
+
+        Reproduced standalone before this fix: two stores over one file, one
+        re-wraps, the other writes, result `SecureStoreUnreadable`. On the live
+        machine it showed up as 34 successful key writes that left nothing
+        behind, because each one bricked the store the next read gave up on.
+
+        A stat of the wrap file is enough to notice, and it happens under the
+        same lock as the read-modify-write that follows.
+        """
+        stamp = self._wrap_stamp_now()
         if self._dek_cache is not None:
-            return self._dek_cache
+            if stamp == self._wrap_stamp:
+                return self._dek_cache
+            logger.info("Wrapped DEK for %s changed on disk; re-reading it", self.name)
+            self._dek_cache = None
         dek = self._resolve_dek(create=create)
         if dek is not None:
             self._dek_cache = dek
+            self._wrap_stamp = self._wrap_stamp_now()
         return dek
 
     def _resolve_dek(self, create: bool) -> Optional[bytes]:
@@ -371,6 +690,16 @@ class SecureBlobStore:
             }
         else:
             kek = _config_kek(create=True)
+            if kek is None:
+                # Without this the None reached AESGCM as a TypeError, the write
+                # failed, the store stayed absent - and the very next call minted
+                # ANOTHER key and tried again. A real restart produced 295 of
+                # those; had one write landed in between, everything encrypted
+                # under the previous key would have been unreadable.
+                raise SecureStoreUnreadable(
+                    "The machine key is not reachable, so the key store cannot be "
+                    "written. Refusing to continue rather than minting a second key."
+                )
             meta = {"kdf": "raw"}
         nonce = secrets.token_bytes(_NONCE_SIZE)
         wrapped = AESGCM(kek).encrypt(nonce, dek, None)
@@ -384,6 +713,8 @@ class SecureBlobStore:
         harden_dir(self.wrap_path.parent)
         _atomic_write_bytes(self.wrap_path, json.dumps(doc).encode("utf-8"))
         harden_path(self.wrap_path)
+        self._dek_cache = dek
+        self._wrap_stamp = self._wrap_stamp_now()
 
     def _unwrap_dek(self) -> Optional[bytes]:
         try:

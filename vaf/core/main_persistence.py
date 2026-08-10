@@ -125,7 +125,8 @@ class MainPersistenceManager:
         # User Intent (The North Star)
         intent_path = self.context_dir / USER_INTENT_FILE
         if not intent_path.exists():
-            intent_path.write_text("# USER INTENT\n\n(No intent defined yet.)", encoding="utf-8")
+            from vaf.core import data_files
+            data_files.write_text_atomic(intent_path, "# USER INTENT\n\n(No intent defined yet.)")
             
         # Team State (The Orchestration Layer)
         team_path = self.context_dir / TEAM_STATE_FILE
@@ -139,24 +140,34 @@ class MainPersistenceManager:
             self._save_json(mem_path, {"notes": [], "plan": [], "tasks": []})
 
     def _save_json(self, path: Path, data: Dict):
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        # Encrypted at rest AND atomic - this used to be a bare open('w'), so a
+        # crash mid-write left truncated working memory behind.
+        from vaf.core import data_files
+        data_files.write_json_atomic(path, data, indent=2)
 
     def _load_json(self, path: Path, default: Any = None) -> Any:
         if not path.exists():
             return default
+        from vaf.core import data_files
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            data = data_files.read_json(path, default=default)
+            return default if data is None else data
+        except ValueError:
+            # Encrypted but not decryptable. Returning the default here would let
+            # the next _save_json overwrite intact working memory with an empty
+            # one, so this stays loud.
+            raise
         except Exception:
             return default
 
     # --- USER INTENT ---
     def get_user_intent(self) -> str:
-        return (self.context_dir / USER_INTENT_FILE).read_text(encoding="utf-8")
+        from vaf.core import data_files
+        return data_files.read_text(self.context_dir / USER_INTENT_FILE)
 
     def update_user_intent(self, content: str):
-        (self.context_dir / USER_INTENT_FILE).write_text(content, encoding="utf-8")
+        from vaf.core import data_files
+        data_files.write_text_atomic(self.context_dir / USER_INTENT_FILE, content)
 
     # --- SUBAGENT VALIDATION RETRY COUNT ---
     def _get_validation_data(self) -> dict:

@@ -582,7 +582,8 @@ def test_save_session_persists_and_updates_in_place(monkeypatch, tmp_path):
 
     import json
 
-    data = json.loads((tmp_path / f"{sid}.json").read_text())
+    from vaf.core import data_files
+    data = json.loads(data_files.read_bytes(tmp_path / f"{sid}.json").decode("utf-8"))
     roles = [m["role"] for m in data["messages"]]
     assert "system" not in roles  # prompt is rebuilt on load, never persisted
     assert roles == ["user", "assistant", "tool"]

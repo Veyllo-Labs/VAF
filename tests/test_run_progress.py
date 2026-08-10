@@ -262,7 +262,8 @@ def store(tmp_path):
 def _active(store):
     import json
 
-    return json.loads(store.active_file.read_text(encoding="utf-8"))[0]
+    from vaf.core import data_files
+    return json.loads(data_files.read_bytes(store.active_file).decode("utf-8"))[0]
 
 
 def test_the_heartbeat_stamps_both_counts_or_neither(store) -> None:

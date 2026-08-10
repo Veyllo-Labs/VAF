@@ -490,6 +490,11 @@ class Config:
         "memory_rag_refine_query": True,                           # Refine vague queries (e.g. "who am I") for better RAG hits
         "memory_rag_k": 5,                                        # Max RAG snippets per query (1-20); applies to chat, gateway, automation
         "memory_rag_threshold": 0.3,                               # Min relevance score (0.0-1.0); only snippets >= this % are in RAG results. 0.3 = 30%
+        "cross_chat_hint_enabled": True,                           # Cross Chat Hint: pointers from this user's OTHER chats, below the RAG snippets
+        "cross_chat_hint_k": 2,                                    # Max cross-chat hints per turn (0 disables the lane entirely)
+        "cross_chat_hint_min_terms": 2,                            # Distinct query terms a chat must match; a single rare term also qualifies
+        "cross_chat_hint_min_score": 0.45,                         # Min share of the question's informative terms a chat must cover (0.0-1.0)
+        "cross_chat_hint_max_age_days": 30,                        # Chats older than this are not scanned
         "memory_hybrid_enabled": True,                             # Long-term RAG: enable vector+lexical hybrid fusion (RRF)
         "memory_hybrid_rrf_k": 60,                                 # RRF denominator constant (typical default: 60)
         "memory_hybrid_lexical_k": 20,                             # Max lexical candidates retained before fusion

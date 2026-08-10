@@ -71,7 +71,7 @@ See [Session Compaction (background)](#session-compaction-background) and the `m
 
 ### Chat integration (pre-generation injection)
 
-In chat, retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. When `memory_rag_refine_query` is enabled (default), short queries that look like user-profile questions (e.g. "who am I", "what do you remember") are expanded before search so that profile and compaction memories match more often. The `memory_search` tool is for follow-up short queries only; it must not be given model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
+In chat, retrieval runs in the **input phase** before the LLM is called: the user message is used to run a memory search, and the result is injected as the "Memory context (relevant to this query)" block in the first prompt. Below those snippets the same block can carry **Cross Chat Hint** pointers into the user's other chats - a separate, database-free lane described in [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#cross-chat-hint). When `memory_rag_refine_query` is enabled (default), short queries that look like user-profile questions (e.g. "who am I", "what do you remember") are expanded before search so that profile and compaction memories match more often. The `memory_search` tool is for follow-up short queries only; it must not be given model output (e.g. `<think>` content). See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) for details.
 
 **Note:** This Memory System (RAG) is separate from the main agent’s **working memory** (scratchpad: notes, plan, tasks in `.vaf/main/working_memory.json`). Working memory is per-session state with limits and optional timestamps; see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) for the persistent layer and working memory behaviour.
 
@@ -153,6 +153,11 @@ Additional settings in `~/.vaf/config.json`:
 | `memory_rag_k` | `5` | Max RAG snippets per query (1–20). Configured in Settings → Persona & Memory. |
 | `memory_rag_threshold` | `0.3` | Min relevance score (0.0–1.0). Only snippets with relevance ≥ this value are included (e.g. 0.3 = 30%). Configured as "Min Relevance %" in Settings → Persona & Memory. |
 | `memory_rag_refine_query` | `true` | Expand short user-profile-style queries (e.g. "who am I", "preferences") before search to improve recall. Set to `false` to use the raw user message only. |
+| `cross_chat_hint_enabled` | `true` | Cross Chat Hint: append pointers from this user's other chats below the retrieved snippets. Needs no database. |
+| `cross_chat_hint_k` | `2` | Max cross-chat hints per turn (`0` disables the lane). |
+| `cross_chat_hint_min_terms` | `2` | Distinct query terms a chat must match; a single rare term also qualifies. |
+| `cross_chat_hint_min_score` | `0.45` | Min share of the question's informative terms a chat must cover. |
+| `cross_chat_hint_max_age_days` | `30` | Chats not touched within this many days are not scanned. |
 | `memory_hybrid_enabled` | `true` | Enable long-term RAG hybrid retrieval (vector + lexical) with RRF fusion. |
 | `memory_hybrid_rrf_k` | `60` | Reciprocal Rank Fusion denominator constant (higher values smooth rank impact). |
 | `memory_hybrid_lexical_k` | `20` | Max lexical candidates retained before fusion. |

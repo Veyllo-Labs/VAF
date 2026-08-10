@@ -54,8 +54,15 @@ spoken lines (`voice_greeting`, `voice_greeting_anon`, `voice_tangled`,
 the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
 consumed as a FULL ordered list via `phrasings()`, not `pick()`), and
 `stopwords` - per-language function-word lists (not phrasings) consumed as
-full lists, e.g. by the memory lexical-search query filter; new consumers
-should read them from here instead of hardcoding word lists. `awareness_triggers`
+full lists, e.g. by the memory lexical-search query filter and by Cross Chat
+Hint (`vaf/core/cross_chat.py`, which folds them once for umlaut-tolerant
+comparison); new consumers should read them from here instead of hardcoding
+word lists. Its German list is a **hand-authored seed** since the cross-chat
+round: it started as a machine translation of the English one, and the words
+that round needed were added to it directly, so `source/stopwords.json` now
+carries `de` verbatim. A regeneration copies it rather than replacing it -
+which is the point, because a fresh translation of the English seed would
+silently drop those additions. `awareness_triggers`
 follows the same word/phrase-list pattern: per-language cue phrases ("can you",
 "remind me", "how do i", ...) that the voice reflex policy
 (`vaf/core/voice_policy.py`, see [VOICE_REFLEX.md](../agents/VOICE_REFLEX.md))

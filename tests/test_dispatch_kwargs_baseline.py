@@ -140,7 +140,10 @@ KWARGS_BASELINE = {
     "mark_mail_answered":        ("chat", ["user_scope_id", "username"]),
     "mcp_call":                  ("chat", []),
     "memory_save":               ("chat", ["user_scope_id"]),
-    "memory_search":             ("chat", ["user_scope_id"]),
+    # username was added deliberately: memory_search also searches the caller's other
+    # chats, and the contact lookup that keeps other people's conversations out of that
+    # answer is keyed on the caller's account.
+    "memory_search":             ("chat", ["user_scope_id", "username"]),
     "move_file":                 ("chat", []),
     "project_history":           ("chat", []),
     "project_rollback":          ("chat", []),

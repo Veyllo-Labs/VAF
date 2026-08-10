@@ -182,6 +182,35 @@ last resort when that load fails). For an embedded app you almost always want
 to set `system_prompt` explicitly, so your agent's voice does not depend on
 machine-local state.
 
+### Injecting retrieved context
+
+`system_prompt` is identity and framing. For "here is what I looked up for THIS
+question", the seam is `CoreAgent.chat_step(memory_context=...)`
+([CORE_AGENT.md](CORE_AGENT.md)) - an opaque string that the engine wraps in its
+own `## Memory context (relevant to this query)` section and splices into a copy
+of the first system message.
+
+Two limits to know before you build on it:
+
+- **`vaf.Agent.run()` does not forward it.** Reach for `CoreAgent` when you need
+  per-turn retrieved context; the convenience facade has no parameter for it.
+- **The section text is the engine's, not yours.** You supply the entries; the
+  heading and its guidance sentences come from VAF and may change with a release.
+
+**Your agent reads the user's other chats by default.** With
+`cross_chat_hint_enabled` (default `true`), the engine appends up to
+`cross_chat_hint_k` short pointers into OTHER sessions of the same caller
+underneath the retrieved memories: lexically matched, read straight from the
+session files, no database involved. The same switch also governs the second half
+of the `memory_search` tool, which searches those sessions when the agent asks on
+purpose. Sessions belong to a caller by strict scope
+equality, deleted chats are unreadable rather than filtered, and conversations
+with known contacts are skipped - but if your application stores anything in a
+session that must never surface in a different session of the same user, set
+`cross_chat_hint_enabled` to `false` (or `cross_chat_hint_k` to `0`). VAF does not
+enumerate sessions on the public surface, so this lane is engine-internal by
+design; see [CONTEXT_MANAGEMENT.md](memory/CONTEXT_MANAGEMENT.md#cross-chat-hint).
+
 ---
 
 ## Choosing a backend: local vs API
@@ -995,6 +1024,14 @@ Stable public surface (safe to build on):
 - `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
+- `CoreAgent.chat_step(user_input, ..., memory_context=...)` - the documented turn
+  call, including `memory_context` as the seam for per-turn retrieved context (see
+  "Injecting retrieved context"). The parameter NAMES and defaults are the promise;
+  the section text the engine wraps `memory_context` in is not, and neither is the
+  return value beyond the contract in [CORE_AGENT.md](CORE_AGENT.md).
+- `cross_chat_hint_enabled` / `cross_chat_hint_k` as the OFF switch for the engine
+  reading the caller's other sessions. That the switch exists and turns the
+  behaviour off is the promise; the retrieval behind it is not.
 - `BaseTool` - the tool contract, including the `identity_kwargs` declaration
   and `self.log(message)`.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
@@ -1030,6 +1067,12 @@ Stable public surface (safe to build on):
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
+Two that are easy to mistake for surface because this page names them:
+`vaf.core.cross_chat` (the cross-chat retrieval) and `vaf.core.session.SessionManager`
+(including `iter_owned_sessions` / `list_owned`, the strict per-scope session walk).
+Both are engine-internal by design: VAF exposes no session enumeration on the
+façade, and no embedder has asked for one. If you need it, say so - the export is
+one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver` and
 `vaf.extract_pdf_markdown` are the deliberate exceptions: they live in `vaf.core`
 but are re-exported on the façade, and the façade names are the ones to import.

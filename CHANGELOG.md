@@ -12,6 +12,30 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Cross Chat Hint: the agent can point at your other chats.** Below the memory
+  snippets it now gets up to two short pointers into your OTHER still-existing
+  chats when they match your question by keyword, so "we worked on a PDF the
+  other day" can find the chat where that happened. The long-term memory could
+  never answer this: session summaries are stored without the chat they came
+  from. Matching is lexical and reads the session files directly, so it also
+  works while the memory database is down, and it is umlaut-tolerant and reaches
+  into German compounds (`Reisekostenabrechnung` finds a chat about
+  `Reisekosten`). A single hit on an everyday word produces nothing. Hints come
+  only from chats you own, never from a deleted one, and never from a
+  conversation with a contact; background runs, front-office turns and voice
+  calls get none at all. Visible as its own section in the RAG snippets panel,
+  with the number of hints per turn in Settings -> Persona & Memory, and
+  inspectable with
+  `vaf memory cross-chat --query "..."`. New keys: `cross_chat_hint_enabled`,
+  `cross_chat_hint_k`, `cross_chat_hint_min_terms`, `cross_chat_hint_min_score`,
+  `cross_chat_hint_max_age_days`.
+- **`memory_search` now also searches your other chats.** Asking "when did we talk
+  about X?" or "which chat was that in?" gets a second, clearly separated section
+  listing the chats a topic appears in, with the chat's name and how long ago it
+  was. The saved-facts half could never answer that - stored memories do not
+  record which conversation they came from. Because this half reads the chat files
+  rather than the database, the tool keeps answering when the memory service is
+  down instead of only reporting the outage. The same switch as above turns it off.
 - **Breaking-change contract tests embedders can run in their own CI.** The
   stable embedding surface documented in EMBEDDING.md ("What is and isn't
   stable") is now pinned by an offline, self-contained pytest suite under
@@ -25,6 +49,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `tests/contract/README.md`.
 
 ### Fixed
+- **The memory block no longer piles up inside a single turn.** The retrieved
+  memories were merged into the first system message in place, and for API
+  providers that message is the stored history entry, so every tool round-trip
+  of the same turn appended the whole block again: one archived conversation
+  carried a 145,000-character system message with 24 copies of it. The block is
+  now built into a copy of the message, which leaves the history clean and keeps
+  the prompt the size it looks. The empty-response retry also forwards the
+  memories instead of silently retrying without them.
+- **Session search only searches your own chats.** `vaf session search` walked
+  every session file on the machine with no owner check, so on a shared
+  installation it could print other people's chat text. It now runs under the
+  caller's identity, on the same strict-ownership walker the rest of the session
+  reads use.
+- **The interactive lanes stop writing attached files into the chat record.**
+  Typing `@some/file` inlines that file for the turn, and the expanded text was
+  what got saved as your message, so whole files (an `.env`, a contract) ended up
+  inside the session JSON as if you had typed them. What you typed is what is
+  stored now, exactly as the web lane already did it.
 - **"Remember this" no longer gets flagged as something the agent made up.**
   Asking the agent to save a fact ran the save, stored it, and then tripped
   the anti-confabulation guard: the reply "Saved." was declared unearned and

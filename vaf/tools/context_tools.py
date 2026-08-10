@@ -450,18 +450,33 @@ class MemorySearchTool(BaseTool):
     Search long-term memory for facts about the user or system.
     Use when the user asks 'who am I?', 'what do you remember about me?', or similar.
     Do NOT use memory_save for lookup – memory_save only saves new facts.
+
+    Searches TWO places, because "what do I know about this" has two answers.
+    The vector store holds durable facts but loses where they came from: session
+    compaction ingests its summaries without the originating session id, so it can
+    never answer "which chat did we do that in". The second lane reads the user's
+    other chats directly (vaf/core/cross_chat.py, the same one that injects hints
+    per turn) and answers exactly that, with the chat's name and age. It also needs
+    no database, so a question can still be answered while the memory container is
+    down - which is why the "database unreachable" branch below now reports the
+    chat hits instead of only the outage.
     """
     name = "memory_search"
-    identity_kwargs = ("user_scope_id",)
+    # username: the chat lane needs it to recognise conversations with a CONTACT,
+    # which are that person's chats and not the user's own.
+    identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"
     description = (
-        "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations. "
-        "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'what have you saved about me?', 'what have I told you?'. "
+        "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations, "
+        "AND the user's other chats for where a topic was discussed. "
+        "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'what have you saved about me?', 'what have I told you?', "
+        "and also for 'when did we talk about X?', 'which chat was that in?', 'we worked on X the other day'. "
         "This is like searching a personal knowledge base - it retrieves previously saved information. "
         "It does NOT hold live data: to read the user's actual EMAILS use mail_inbox (NEVER memory_search), "
         "for TELEGRAM use telegram_inbox, for the CALENDAR use the calendar tools. Never call memory_search to look up emails or messages. "
-        "Returns matching snippets from the vector database. If nothing found, tell user you have no stored info yet."
+        "Returns matching snippets from the vector database plus, separately, excerpts from other chats with the chat name. "
+        "If nothing found, tell user you have no stored info yet."
     )
     parameters = {
         "type": "object",
@@ -495,36 +510,62 @@ class MemorySearchTool(BaseTool):
             query = query[:MAX_EMBED_INPUT_CHARS].rstrip()
         k = int(kwargs.get("k") or 5)
         k = max(1, min(k, 20))
-        user_scope_id = kwargs.get("user_scope_id")
+        raw_scope = kwargs.get("user_scope_id")
+        # The vector store keys on a UUID; the session store compares the scope as a
+        # plain string, because real installations carry non-UUID spellings and the
+        # local admin's scope is bound unparsed. So the chat lane gets the RAW value,
+        # never this coerced one - parsing it here would silently return nothing.
+        user_scope_id = raw_scope
         if user_scope_id is not None and isinstance(user_scope_id, str):
             try:
                 user_scope_id = UUID(user_scope_id)
             except (ValueError, TypeError):
                 user_scope_id = None
+
+        chat_section = ""
+        try:
+            from vaf.core.cross_chat import format_matches, search_other_chats
+            chat_section = format_matches(search_other_chats(
+                query, user_scope_id=raw_scope, username=kwargs.get("username"), k=k,
+            ))
+        except Exception:
+            # The chat lane is an addition, never a reason for the tool to fail.
+            chat_section = ""
+
         try:
             from vaf.memory.rag import run_memory_search_sync
             result = run_memory_search_sync(
                 query=query, k=k, user_scope_id=user_scope_id, caller="tool"
             )
-            if not result or not result.strip():
-                # "Empty" has two very different truths, and the search lane
-                # deliberately flattens both to "" (a chat turn must not die
-                # because RAG is down). THIS lane exists to answer the user,
-                # so it must tell them apart: with the memory DB unreachable,
-                # "no stored information" is false and the agent would offer
-                # the user a fresh memory over a database full of one.
-                from vaf.memory.database import check_db_connection_sync
-                if not check_db_connection_sync():
-                    return (
-                        "The memory database is NOT reachable right now - this is a "
-                        "service problem, not an empty memory. Tell the user their "
-                        "long-term memory cannot be read at the moment and that the "
-                        "service stack needs to be running (it starts with the tray "
-                        "or start_vaf.sh). Do NOT claim there are no stored memories."
-                    )
-                return "No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on."
-            return result
+            if result and result.strip():
+                return f"{result}\n\n---\n\n{chat_section}" if chat_section else result
+
+            # "Empty" has two very different truths, and the search lane
+            # deliberately flattens both to "" (a chat turn must not die
+            # because RAG is down). THIS lane exists to answer the user,
+            # so it must tell them apart: with the memory DB unreachable,
+            # "no stored information" is false and the agent would offer
+            # the user a fresh memory over a database full of one.
+            from vaf.memory.database import check_db_connection_sync
+            if not check_db_connection_sync():
+                outage = (
+                    "The memory database is NOT reachable right now - this is a "
+                    "service problem, not an empty memory. Tell the user their "
+                    "long-term memory cannot be read at the moment and that the "
+                    "service stack needs to be running (it starts with the tray "
+                    "or start_vaf.sh). Do NOT claim there are no stored memories."
+                )
+                # The chat lane reads files, not the database, so it can still answer.
+                return f"{chat_section}\n\n{outage}" if chat_section else outage
+            if chat_section:
+                return (
+                    "No saved memories matched, but the topic appears in other chats.\n\n"
+                    + chat_section
+                )
+            return "No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on."
         except Exception as e:
+            if chat_section:
+                return f"{chat_section}\n\n(The long-term memory search failed: {e})"
             return f"Error searching memory: {e}"
 
 

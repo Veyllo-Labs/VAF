@@ -52,7 +52,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `memory_save` | write | Save information to long-term RAG memory. |
-| `memory_search` | read | Search long-term RAG memory. |
+| `memory_search` | read | Search long-term RAG memory, and the caller's other chats for where a topic was discussed (two labelled sections; the chat half needs no database and still answers during an outage). |
 | `add_memory` | write | Add a note to short-term session memory. |
 | `learn_document` | write | Learn a document into long-term memory. |
 | `learn_attached_knowledge` | write | Persist attached Web UI documents into memory. |

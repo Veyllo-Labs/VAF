@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (298 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (303 keys).
 
 ## How configuration is set
 
@@ -211,6 +211,11 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_rag_k` | `5` | Top-k memories retrieved per query. |
 | `memory_rag_threshold` | `0.3` | Min similarity to include. |
 | `memory_rag_refine_query` | `True` | LLM query refinement before search. |
+| `cross_chat_hint_enabled` | `True` | Cross Chat Hint: append pointers from this user's other chats below the retrieved memories. Lexical, reads the session files, needs no database. |
+| `cross_chat_hint_k` | `2` | Max cross-chat hints per turn. `0` disables the lane without touching the switch. |
+| `cross_chat_hint_min_terms` | `2` | Distinct query terms a chat must match to qualify; a single term that is rare across the scanned chats also qualifies. |
+| `cross_chat_hint_min_score` | `0.45` | Min share of the question's informative terms a chat must cover. Raise it if hints feel loosely related, lower it for more recall. |
+| `cross_chat_hint_max_age_days` | `30` | Chats not touched within this many days are not scanned. |
 | `memory_hybrid_enabled` | `True` | Hybrid vector + lexical retrieval. |
 | `memory_hybrid_lexical_k` | `20` | Lexical candidates. |
 | `memory_hybrid_lexical_min_score` | `0.05` | Min lexical score. |

@@ -87,6 +87,21 @@ chat_step(
 Runs one full turn: routing, system-prompt rebuild, context compression, the
 LLM/tool loop (with loop budgets), guardrails, persistence.
 
+**`memory_context` is a string you supply; the section around it is the engine's.**
+The engine wraps it in the `## Memory context (relevant to this query)` heading and
+its guidance sentences, falls back to a "no memories found" variant when you pass
+nothing, and appends its own Cross Chat Hint block underneath when the caller's
+scope has matching other chats (`cross_chat_hint_enabled`). The result is spliced
+into a copy of the first system message, never into `agent.history`.
+
+Nine production sites in this repo hand-roll "retrieve snippets and hand them to a
+prompt", five of them repeating the same `memory_rag_k` clamp, and the headless
+runner splices seven further ad-hoc context blocks inline. That is the measured
+case for a general context-contributor seam on the public surface. It has not been
+built: no feature so far has needed a second labelled sub-block, and until one
+does, a registry would be speculative. The number is recorded here so the decision
+starts from a measurement rather than a hunch.
+
 **Return contract - read this before using the value.** `chat_step` streams
 the real answer; the return value is a status:
 

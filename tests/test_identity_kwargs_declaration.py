@@ -102,7 +102,9 @@ IDENTITY_BASELINE = {
     "mail_inbox": ["user_scope_id", "username"],
     "mark_mail_answered": ["user_scope_id", "username"],
     "memory_save": ["user_scope_id"],
-    "memory_search": ["user_scope_id"],
+    # username added with the cross-chat half of the tool: the contact lookup that keeps
+    # other people's conversations out of the answer is keyed on the caller's account.
+    "memory_search": ["user_scope_id", "username"],
     "python_sandbox": ["user_scope_id"],
     "read_automation": ["user_role", "user_scope_id"],
     "read_discord_chat": ["user_scope_id", "username"],

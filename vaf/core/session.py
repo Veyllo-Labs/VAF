@@ -11,7 +11,7 @@ import gzip
 import random
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict, fields
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -867,37 +867,164 @@ class SessionManager:
         
         return "\n".join(lines)
     
-    def search(self, query: str, limit: int = 10) -> List[Dict]:
-        """Search sessions by content."""
-        query_lower = query.lower()
-        results = []
-        
+    def iter_owned_sessions(
+        self,
+        user_scope_id: Optional[str],
+        *,
+        exclude_session_id: Optional[str] = None,
+        max_age_days: Optional[int] = None,
+        max_files: int = 200,
+        max_candidates: int = 50,
+        max_bytes: int = 2_000_000,
+        include_channel: bool = True,
+        include_thinking: bool = False,
+    ) -> "Iterator[Tuple[Path, Dict[str, Any]]]":
+        """Yield `(path, data)` for the sessions this scope OWNS, newest first.
+
+        THE STRICT OWNERSHIP RULE, and why it is not `list()`'s.
+        `list()` filters leniently on purpose: a session with NO `user_scope_id`
+        is shown to every scope, because a pre-scoping session can only belong to
+        the machine owner and its NAME in a sidebar is harmless. Reading a
+        session's CONTENT is a different question, so this iterator answers the
+        strict one: the caller's scope and the session's scope must both be
+        non-empty and equal. An unowned session belongs to nobody here.
+
+        Scopes are compared as STRINGS, never parsed. `get_local_admin_scope_id()`
+        returns whatever the config holds, the CLI binds it unparsed on purpose,
+        and real stores carry non-UUID spellings; a parse gate would quietly
+        return nothing at all for those installations.
+
+        Being an admin does not widen this. The ownership gate in the web server
+        answers "may this identity act on that session" (for an admin: on all of
+        them), which is not the same question as "is that session this scope's".
+
+        Two independent bounds, because they fail differently: `max_files` caps
+        how many files are EXAMINED (so a big multi-tenant store cannot turn a
+        per-turn call into a full scan) and `max_candidates` caps how many are
+        YIELDED. Capping only the first would return nothing to a user whose
+        newest files all belong to someone else.
+
+        Oversized sessions are skipped rather than parsed (`max_bytes`), and every
+        per-file failure is skipped rather than raised: a chat deleted between the
+        listing and the read is the normal case this is used in, not an error.
+        """
+        # Local import: the channel registry imports back into the core (Rule 2 says
+        # the prefixes have exactly one home, and this is not it).
+        from vaf.core.tool_dispatch import CHANNEL_SESSION_PREFIXES
+
+        target_scope = str(user_scope_id).strip() if user_scope_id else ""
+        if not target_scope:
+            return
+
+        # stat() inside the try as well: a file can vanish between glob and sort,
+        # and that is precisely the "chat deleted mid-scan" case this serves.
+        candidates: List[Tuple[float, Path]] = []
         for filepath in self.storage_dir.glob("*.json*"):
             try:
+                candidates.append((filepath.stat().st_mtime, filepath))
+            except OSError:
+                continue
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        cutoff = None
+        if max_age_days:
+            cutoff = datetime.now().timestamp() - (int(max_age_days) * 86400)
+
+        examined = 0
+        yielded = 0
+        for mtime, filepath in candidates:
+            if examined >= max_files or yielded >= max_candidates:
+                return
+            if cutoff is not None and mtime < cutoff:
+                return  # sorted newest-first, so everything after this is older too
+            sid = filepath.name.split(".json")[0]
+            if exclude_session_id and sid == str(exclude_session_id):
+                continue
+            if not include_channel and sid.startswith(CHANNEL_SESSION_PREFIXES):
+                continue
+            if not include_thinking and sid.startswith("thinking_"):
+                continue
+            examined += 1
+            try:
+                if filepath.stat().st_size > max_bytes:
+                    continue
                 if filepath.suffix == '.gz':
                     with gzip.open(filepath, 'rt', encoding='utf-8') as f:
                         data = json.load(f)
                 else:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                
-                # Search in messages
-                for msg in data.get("messages", []):
-                    if query_lower in msg.get("content", "").lower():
-                        results.append({
-                            "session_id": data.get("id"),
-                            "session_name": data.get("name"),
-                            "match": msg.get("content")[:100],
-                            "role": msg.get("role"),
-                        })
-                        break
-                
-                if len(results) >= limit:
-                    break
-                    
             except Exception:
                 continue
-        
+            if not isinstance(data, dict):
+                continue
+            meta = data.get("metadata") or {}
+            if meta.get("hidden_from_list"):
+                continue
+            if not include_thinking and meta.get("source") == "thinking":
+                continue
+            session_scope = str(meta.get("user_scope_id") or "").strip()
+            if not session_scope or session_scope != target_scope:
+                continue
+            yielded += 1
+            yield filepath, data
+
+    def list_owned(
+        self,
+        limit: int = 50,
+        user_scope_id: str = None,
+        *,
+        include_channel: bool = True,
+        include_thinking: bool = False,
+    ) -> List[Dict]:
+        """`list()`'s rows, but under the STRICT ownership rule of iter_owned_sessions.
+
+        Use this wherever a caller must answer "which sessions are THIS scope's",
+        rather than "which sessions may this scope see listed".
+        """
+        rows = []
+        for _path, data in self.iter_owned_sessions(
+            user_scope_id,
+            max_candidates=limit,
+            max_files=max(limit * 10, 200),
+            include_channel=include_channel,
+            include_thinking=include_thinking,
+        ):
+            rows.append({
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "model": data.get("model"),
+                "message_count": len(data.get("messages", [])),
+                "summary": Session.from_dict(data).summary(),
+                "metadata": data.get("metadata") or {},
+            })
+        return rows
+
+    def search(self, query: str, limit: int = 10, *, user_scope_id: str) -> List[Dict]:
+        """Search the caller's OWN sessions by content, one hit per session.
+
+        `user_scope_id` is mandatory: this reads message text, and the previous
+        version globbed the whole store with no scope at all, so on a multi-user
+        installation it answered with other people's chats.
+        """
+        query_lower = query.lower()
+        results = []
+
+        for _path, data in self.iter_owned_sessions(user_scope_id, max_candidates=max(limit, 1)):
+            for msg in data.get("messages", []):
+                if query_lower in (msg.get("content") or "").lower():
+                    results.append({
+                        "session_id": data.get("id"),
+                        "session_name": data.get("name"),
+                        "match": (msg.get("content") or "")[:100],
+                        "role": msg.get("role"),
+                    })
+                    break
+            if len(results) >= limit:
+                break
+
         return results
 
 
@@ -1359,15 +1486,18 @@ def search_sessions(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results")
 ):
-    """Search sessions by content."""
+    """Search your own sessions by content."""
     from rich.console import Console
     from rich.table import Table
-    
+    from vaf.core.identity_binding import resolve_owner_identity
+
     console = Console()
     manager = get_manager()
-    
-    results = manager.search(query, limit=limit)
-    
+
+    # The CLI has no authentication: the local user is the machine owner, so the
+    # search runs under the owner's scope rather than over the whole store.
+    results = manager.search(query, limit=limit, user_scope_id=resolve_owner_identity().scope)
+
     if not results:
         console.print(f"[yellow]No sessions found matching: {query}[/yellow]")
         return

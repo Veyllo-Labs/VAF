@@ -4815,9 +4815,16 @@ class Agent:
             except Exception:
                 total_tokens += len(self.tools) * 200
 
+        # 3. The memory/context block is spliced into a COPY of the first message
+        # (see _splice_memory_block), so the history walk above cannot see it. Without
+        # this offset the reported usage would drop by the size of the whole block.
+        _injected_chars = int(getattr(self, "_injected_context_chars", 0) or 0)
+        if _injected_chars:
+            total_tokens += int(_injected_chars / 3.6) + 5
+
         # Add small safety buffer
         total_tokens += 50
-        
+
         # Use actual context manager limit if available
         if self.api_backend:
             max_tokens = self.config.get("n_ctx", 128000)
@@ -7257,6 +7264,161 @@ class Agent:
             except Exception:
                 pass
 
+    def _refresh_cross_chat_hints(self, query: str) -> None:
+        """Look up this turn's pointers into the user's OTHER chats. Once per turn.
+
+        Assembled HERE rather than by each caller, because `memory_context` is a
+        parameter and six lanes fill it in their own way while the CLI, the TUI and
+        the embedding facade never fill it at all. A block built in the engine
+        reaches every lane that runs a turn, and adding it to the caller's string
+        would also flip the memory block onto its "found something" branch whenever
+        retrieval came back empty - which is the normal state in the CLI and
+        whenever the memory database is down.
+
+        The gates are the ones the engine already carries:
+        - a background or automation run has nobody to show a hint to;
+        - front-office mode means a STRANGER is driving this turn, and the repo's
+          authoritative filter for that is the from_contact flag the runner sets
+          here, not a session-id prefix;
+        - a voice call without an enrolled speaker profile treats every voice in
+          the room as the owner, and the answer is spoken out loud.
+        """
+        self._cross_chat_hints = []
+        self._cross_chat_block = ""
+        if not query or not str(query).strip():
+            return
+        if getattr(self, "_background_run", False) or getattr(self, "_front_office_mode", False):
+            return
+        if str(getattr(self, "_current_chat_source", "") or "") == "voice_call":
+            return
+        scope = getattr(self, "_current_user_scope_id", None)
+        if getattr(self, "_identity_is_owner_bound", False):
+            # CLI and TUI: the caller is the machine owner. Loading a session assigns
+            # THAT session's owner to the agent, so the bound attribute can point at
+            # another tenant after `vaf run --session <id>`. Reading across sessions
+            # follows the caller, never the file that happens to be open.
+            try:
+                from vaf.core.identity_binding import resolve_owner_identity
+                scope = resolve_owner_identity().scope
+            except Exception:
+                return
+        if not scope:
+            return
+        try:
+            from vaf.core.cross_chat import format_hints, hints_for_turn
+            hints = hints_for_turn(
+                str(query),
+                user_scope_id=scope,
+                current_session_id=getattr(self, "current_session_id", None) or getattr(self, "_session_id", None),
+                username=getattr(self, "_current_username", None),
+            )
+            self._cross_chat_hints = hints
+            self._cross_chat_block = format_hints(hints)
+            # Log the ASKING session, the terms and the scores, not just the answer.
+            # Without them a hint cannot be explained after the fact: the first live
+            # round produced two plausible-looking hints whose real cause (filler words
+            # matching every chat) was invisible here and had to be re-measured.
+            from vaf.core.cross_chat import query_terms
+            _session = getattr(self, "current_session_id", None) or getattr(self, "_session_id", None)
+            if hints:
+                append_domain_log(
+                    "rag",
+                    f"CROSS_CHAT asked_by={_session} hints={len(hints)} "
+                    f"terms={query_terms(str(query))} "
+                    + " ".join(f"[{h.session_id} score={h.score} on={list(h.terms)}]" for h in hints),
+                )
+            else:
+                append_domain_log(
+                    "rag",
+                    f"CROSS_CHAT asked_by={_session} hints=0 terms={query_terms(str(query))}",
+                )
+            # SECURITY (user isolation): a hint carries text out of ANOTHER chat, so this
+            # push goes to the OWNER's connections only and is dropped when the scope is
+            # unknown. The same class of bug once painted one user's RAG snippets into
+            # another user's panel through a global broadcast.
+            # Pushed on every turn the lane runs, empty list included: the panel has to
+            # stop showing the previous turn's hints.
+            try:
+                from vaf.core.cross_chat import relative_age
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().push_update_to_user(scope, {
+                    "type": "cross_chat_hints",
+                    "hints": [
+                        {
+                            "session_id": h.session_id,
+                            "session_name": h.session_name,
+                            "age": relative_age(h.updated_at),
+                            "score": h.score,
+                            "text": h.text,
+                        }
+                        for h in hints
+                    ],
+                })
+            except Exception:
+                pass
+        except Exception as e:
+            self._cross_chat_hints = []
+            self._cross_chat_block = ""
+            try:
+                append_domain_log("rag", f"CROSS_CHAT failed: {e}")
+            except Exception:
+                pass
+
+    def _memory_system_block(self, memory_context) -> str:
+        """The one "## Memory context" block, for every generation path.
+
+        It used to exist twice, byte-identical, in the API and the local branch of
+        the same loop. Cross Chat Hint needs a second labelled part underneath, and
+        two copies of that is how they drift.
+        """
+        if memory_context and str(memory_context).strip():
+            block = (
+                "## Memory context (relevant to this query)\n\n"
+                "Use when relevant; you may cite briefly (e.g. from memory). "
+                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text.\n\n"
+                + str(memory_context).strip()
+            )
+        else:
+            block = (
+                "## Memory context (relevant to this query)\n\n"
+                "(No memories found for this query.) "
+                "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
+                "If the user's question is vague (e.g. 'what is this user' or 'what do you know'), ask them to clarify what they want to know rather than guessing. "
+                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
+                "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
+            )
+        # Underneath the memories, never mixed in with them: a hint is a pointer to
+        # another conversation, not something known about the user.
+        hints = getattr(self, "_cross_chat_block", "") or ""
+        if hints:
+            block = block + "\n\n" + hints
+        return block
+
+    def _splice_memory_block(self, prepared_messages, block_content):
+        """Put the memory block in front of the request WITHOUT touching self.history.
+
+        For API providers `_prepare_messages` hands back the very dicts of
+        self.history (it ends in a bare `return messages`), so rewriting
+        prepared_messages[0]["content"] in place writes the block INTO the history.
+        The generation loop re-splices once per LLM round-trip, so within a single
+        turn the block re-accumulates: an archived context holds one system message
+        of 145k characters with 24 copies of it. Building a fresh first message
+        keeps the block per-request, which is where it belongs.
+
+        Because the block is no longer part of self.history, the token estimate
+        (which walks self.history) cannot see it; `_injected_context_chars` carries
+        its size over to `_estimate_token_usage`.
+        """
+        if not prepared_messages:
+            return prepared_messages
+        self._injected_context_chars = len(block_content or "")
+        if prepared_messages[0].get("role") == "system":
+            merged = (prepared_messages[0].get("content") or "") + "\n\n" + block_content
+            return [{**prepared_messages[0], "content": merged}, *prepared_messages[1:]]
+        # Strict local chat templates reject a second / non-leading system turn, so this
+        # branch only fires when message 0 is not a system message to begin with.
+        return [prepared_messages[0], {"role": "system", "content": block_content}, *prepared_messages[1:]]
+
     def chat_step(
         self,
         user_input: str,
@@ -7321,7 +7483,14 @@ class Agent:
         # exactly the window in which new write actions stay blocked until the user answers.
         if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):
             self._pending_user_question = None
-        
+
+        # Cross Chat Hint: resolved ONCE per turn, from the raw message. The block is
+        # spliced again on every LLM round-trip of this turn, so retrieving it there
+        # would re-read the session store per tool call. The retry lane keeps the
+        # block it already has.
+        if not auto_retry:
+            self._refresh_cross_chat_hints(raw_user_input or user_input)
+
         try:
             append_domain_log("backend", "chat_step_start")
         except Exception:
@@ -8062,30 +8231,13 @@ class Agent:
                     # Prepare messages
                     prepared_messages = self._prepare_messages(self.history)
                     if prepared_messages:
-                        if memory_context and memory_context.strip():
-                            memory_msg = {"role": "system", "content": (
-                                "## Memory context (relevant to this query)\n\n"
-                                "Use when relevant; you may cite briefly (e.g. from memory). "
-                                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text.\n\n"
-                                + memory_context.strip()
-                            )}
-                        else:
-                            memory_msg = {"role": "system", "content": (
-                                "## Memory context (relevant to this query)\n\n"
-                                "(No memories found for this query.) "
-                                "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
-                                "If the user's question is vague (e.g. 'what is this user' or 'what do you know'), ask them to clarify what they want to know rather than guessing. "
-                                "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
-                                "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
-                            )}
                         # Merge the memory context INTO the first system message instead of inserting a
                         # SECOND system message. Strict local chat templates (e.g. Qwen, Gemma) reject a
                         # second / non-leading system turn ("System message must be at the beginning");
                         # a single system turn is also fine for every other provider.
-                        if prepared_messages and prepared_messages[0].get("role") == "system":
-                            prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
-                        else:
-                            prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
+                        prepared_messages = self._splice_memory_block(
+                            prepared_messages, self._memory_system_block(memory_context)
+                        )
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
@@ -8317,30 +8469,13 @@ class Agent:
                         # Prepare messages for specific model quirks (e.g. Gemma)
                         prepared_messages = self._prepare_messages(self.history)
                         if prepared_messages:
-                            if memory_context and memory_context.strip():
-                                memory_msg = {"role": "system", "content": (
-                                    "## Memory context (relevant to this query)\n\n"
-                                    "Use when relevant; you may cite briefly (e.g. from memory). "
-                                    "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text.\n\n"
-                                    + memory_context.strip()
-                                )}
-                            else:
-                                memory_msg = {"role": "system", "content": (
-                                    "## Memory context (relevant to this query)\n\n"
-                                    "(No memories found for this query.) "
-                                    "Use this section to answer 'who am I?' or 'what do you remember?'; if none, say so and offer to remember. "
-                                    "If the user's question is vague (e.g. 'what is this user' or 'what do you know'), ask them to clarify what they want to know rather than guessing. "
-                                    "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
-                                    "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
-                                )}
                             # Merge the memory context INTO the first system message instead of inserting a
                             # SECOND system message. Strict local chat templates (e.g. Qwen, Gemma) reject a
                             # second / non-leading system turn ("System message must be at the beginning");
                             # a single system turn is also fine for every other provider.
-                            if prepared_messages and prepared_messages[0].get("role") == "system":
-                                prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
-                            else:
-                                prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
+                            prepared_messages = self._splice_memory_block(
+                                prepared_messages, self._memory_system_block(memory_context)
+                            )
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
@@ -10594,6 +10729,10 @@ class Agent:
                      stream_callback=stream_callback,
                      auto_retry=True,
                      skip_input=skip_input,
+                     # Forward the retrieved context: without it the retry silently runs
+                     # with an EMPTY memory block, so the one turn that already struggled
+                     # answers with less than the attempt before it.
+                     memory_context=memory_context,
                      thinking_mode=thinking_mode,
                  )
                  

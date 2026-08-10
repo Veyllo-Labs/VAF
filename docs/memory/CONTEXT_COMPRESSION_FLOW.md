@@ -186,11 +186,13 @@ The model receives user-related information in two ways:
 
 The main system prompt therefore includes the current user profile (from `user_identity.json`) and, if present, the cached RAG summary. This is in `history[0]` once `build_prompt()` has run and the result is written into history (every turn when the dynamic prompt is applied).
 
-### 9.2 Second system message: "Memory context (relevant to this query)"
+### 9.2 The "Memory context (relevant to this query)" block
 
-**Location**: `vaf/core/agent.py`, immediately before the LLM call (`api_backend.chat_completion` or server payload).
+**Location**: `vaf/core/agent.py`, immediately before the LLM call (`api_backend.chat_completion` or server payload). Built by `_memory_system_block`, spliced by `_splice_memory_block`.
 
-- `memory_context` is passed into `chat_step(..., memory_context=None)` by the caller (headless runner, gateway, or automation), which runs a RAG search with the **current user message** as the query.
-- The messages sent to the LLM are built as: first the main system prompt (`history[0]`), then a second system message with content `"## Memory context (relevant to this query)\n\n" + (memory_context or a "No memories found" placeholder)`. So the model sees: `[system prompt, memory context message, user, assistant, ...]`.
+- `memory_context` is passed into `chat_step(..., memory_context=None)` by the caller (headless runner, gateway, or automation), which runs a RAG search with the **current user message** as the query. The CLI, the TUI and the embedding facade pass nothing, so there the block carries only its placeholder plus any cross-chat hints.
+- The block is **appended to the first system message**, not sent as a second one: strict local chat templates (Qwen, Gemma) reject a non-leading system turn. So the model sees `[system prompt + memory block, user, assistant, ...]`. A separate system message is only produced when message 0 is not a system message to begin with.
+- It is spliced into a **copy** of that first message. Merging in place wrote it into `self.history`, and the generation loop re-splices once per LLM round-trip, so a single turn stacked the block again and again (measured: 24 copies in one 145k-character system message). Because it is no longer part of the history, its size is added to the token estimate separately.
+- Below the retrieved memories the block can carry **Cross Chat Hint** pointers into the user's other chats; see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md#cross-chat-hint).
 
-The RAG results for this specific query are therefore in a separate system message, not inside the main system prompt string. The model sees both; user-related info comes partly from the prompt (user_identity.json + optional cache) and partly from that second message (query-specific RAG results).
+The query-specific RAG results are therefore appended to the main system prompt rather than living inside its stored text. User-related info comes partly from the prompt (user_identity.json + optional cache) and partly from this appended block.

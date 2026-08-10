@@ -1040,6 +1040,66 @@ class SessionManager:
         return results
 
 
+def session_access_allowed(
+    manager,
+    session_id: str,
+    *,
+    user_scope_id: Optional[str],
+    is_admin: bool,
+    allow_missing: bool = False,
+) -> Tuple[bool, Optional["Session"]]:
+    """May this caller act on this session? The one ownership rule, for every transport.
+
+    The storage layer is scope-agnostic - only `list()` filters - so a caller that names
+    a session id reaches it unless something says no. This is that something, and it lives
+    here rather than inside one transport because the answer must not depend on whether
+    the request arrived over a WebSocket or over HTTP. It grew up as the WebSocket gate;
+    the Context Window's HTTP endpoint needed the same rule and would otherwise have been
+    the second hand-rolled copy of it.
+
+    `manager` is anything with `load()` and `storage_dir` - a plain parameter rather than
+    a method on SessionManager so the gate's tests can hand it a store that raises on
+    demand, which is how the unreadable-file branch below is exercised at all.
+
+    Returns `(allowed, loaded_session_or_None)` so a caller that is about to read the
+    session does not load it twice.
+
+    Policy, strict:
+    - an admin passes (the machine owner must never be locked out of their own store);
+    - otherwise the session's recorded `user_scope_id` must be non-empty and equal to the
+      caller's - a session with NO scope predates isolation and therefore belongs to the
+      local admin alone, not to everyone;
+    - `allow_missing` passes an id that does not exist yet, for the flow where the first
+      message creates the session. It does NOT pass a session that exists but cannot be
+      read: those two used to arrive here as one, and answering them alike let a caller
+      claim a stranger's id whose file was corrupt or empty. Any doubt about whether the
+      file is there resolves to "it is", i.e. to deny.
+    """
+    try:
+        loaded = manager.load(session_id)
+    except Exception:
+        exists = True
+        try:
+            storage_dir = Path(manager.storage_dir)
+            exists = any((storage_dir / f"{session_id}{ext}").exists()
+                         for ext in (".json", ".json.gz"))
+        except Exception:
+            exists = True           # cannot tell -> treat as existing -> restrictive
+        if exists:
+            return (is_admin, None)
+        return (bool(allow_missing) or is_admin, None)
+
+    if is_admin:
+        return (True, loaded)
+    session_scope = (getattr(loaded, "metadata", None) or {}).get("user_scope_id")
+    allowed = (
+        session_scope is not None
+        and str(user_scope_id or "") != ""
+        and str(session_scope) == str(user_scope_id)
+    )
+    return (allowed, loaded)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLI COMMANDS (for session subcommand)
 # ═══════════════════════════════════════════════════════════════════════════════

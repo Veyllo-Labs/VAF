@@ -195,18 +195,12 @@ tray_context = TrayContext()
 def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=False):
     """Ownership gate for WebSocket session commands (chat / load / delete / rename / hide / artifact_edit).
 
-    Returns (allowed: bool, loaded_session_or_None). The storage layer is scope-agnostic (only list()
-    filters by scope), so this is the single enforcement point — a WS command must never act on a session
-    that belongs to another user. Factored out of the original load_session check so every handler shares
-    one rule.
-
-    Policy (strict): a session whose metadata records a different user_scope_id is denied; a session with
-    NO recorded scope is treated as ADMIN-ONLY (legacy/pre-isolation sessions belong to the local admin),
-    not open to everyone. Admin is detected role-aware (connection role == 'admin' OR connection scope ==
-    the local-admin scope) so the desktop/admin is never locked out even when its scope is None. With
-    allow_missing=True a not-yet-created session id passes (the chat first-message-into-a-new-session
-    flow); otherwise a missing/corrupt/0-byte session denies for a non-admin (a mutate command has nothing
-    legitimate to act on).
+    Returns (allowed: bool, loaded_session_or_None). This resolves WHO is asking from the
+    connection; the rule itself is `SessionManager.may_access`, so the HTTP endpoints that
+    name a session id answer identically. Admin is detected role-aware (connection role ==
+    'admin' OR connection scope == the local-admin scope) so the desktop owner is never
+    locked out even when its scope is None. `allow_missing=True` passes a not-yet-created
+    id, for the chat's first-message-into-a-new-session flow.
     """
     from vaf.core.config import get_local_admin_scope_id
     user_scope_id = manager.get_connection_user(websocket)
@@ -214,43 +208,20 @@ def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=Fa
     is_admin = (str(role or "").lower() == "admin") or (
         user_scope_id is not None and str(user_scope_id) == str(get_local_admin_scope_id())
     )
-    if loaded is None:
-        try:
-            loaded = session_mgr.load(session_id)
-        except Exception:
-            # TWO different situations used to arrive here as one, and answering them alike was a
-            # takeover route:
-            #   file is NOT there            -> a not-yet-created id. `allow_missing` may pass it;
-            #                                   that is the chat's first-message-into-a-new-session
-            #                                   flow, and nobody owns it yet.
-            #   file IS there but unreadable -> an EXISTING session whose owner cannot be
-            #                                   established. Passing it let a caller reach the
-            #                                   fallback in set_sidebar_documents, which creates a
-            #                                   minimal session stamped with THAT caller's scope -
-            #                                   so whoever's file was corrupt or 0 bytes lost the id
-            #                                   to a stranger. Ownership of an unreadable file
-            #                                   cannot be determined, so it must not be assumed.
-            # Ordered so "exists" forces the RESTRICTIVE answer: this check and the load() above are
-            # two looks at the same file, so any doubt resolves to "it is there", i.e. deny.
-            # KNOWN, NOT SOLVED HERE: the real owner of a corrupted session is locked out by this
-            # too. That is the correct direction and still a dead end - recovery from a corrupt
-            # session is its own question, and the caller now gets a readable refusal rather than a
-            # silent no-op.
-            _exists = True
-            try:
-                _sdir = session_mgr.storage_dir
-                _exists = any((_sdir / f"{session_id}{ext}").exists()
-                              for ext in (".json", ".json.gz"))
-            except Exception:
-                _exists = True          # cannot tell -> treat as existing -> restrictive
-            if _exists:
-                return (is_admin, None)
-            return (bool(allow_missing) or is_admin, None)
-    if is_admin:
-        return (True, loaded)
-    session_scope = (getattr(loaded, "metadata", None) or {}).get("user_scope_id")
-    allowed = session_scope is not None and str(session_scope) == str(user_scope_id)
-    return (allowed, loaded)
+    if loaded is not None:
+        if is_admin:
+            return (True, loaded)
+        session_scope = (getattr(loaded, "metadata", None) or {}).get("user_scope_id")
+        allowed = session_scope is not None and str(session_scope) == str(user_scope_id)
+        return (allowed, loaded)
+    from vaf.core.session import session_access_allowed
+    return session_access_allowed(
+        session_mgr,
+        session_id,
+        user_scope_id=user_scope_id,
+        is_admin=is_admin,
+        allow_missing=allow_missing,
+    )
 
 # Mount Memory System routes if enabled
 if Config.get("memory_enabled", True):

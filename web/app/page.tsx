@@ -4645,14 +4645,24 @@ function VAFDashboardContent() {
         }
     }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Fetch brain data when the context modal opens
+    // Fetch brain data when the context modal opens.
+    // The session id is REQUIRED: the working memory is stored per chat, and a
+    // request without one used to be served the legacy shared store that
+    // session-less lanes (scheduled automations) write into - so the panel
+    // showed an automation's goal inside an unrelated chat. currentSessionId is
+    // in the dep array for the same reason: switching chats with the modal open
+    // must refetch, not keep the previous chat's brain on screen.
     useEffect(() => {
         if (!isContextModalOpen) return;
-        fetch(`${getApiBase()}/api/agent/brain`, { credentials: 'include' })
+        if (!currentSessionId) { setBrainData(null); return; }
+        let cancelled = false;
+        fetch(`${getApiBase()}/api/agent/brain?session_id=${encodeURIComponent(currentSessionId)}`,
+              { credentials: 'include' })
             .then(r => r.ok ? r.json() : null)
-            .then(d => d && !d.error ? setBrainData(d) : setBrainData(null))
-            .catch(() => setBrainData(null));
-    }, [isContextModalOpen]);
+            .then(d => { if (!cancelled) setBrainData(d && !d.error ? d : null); })
+            .catch(() => { if (!cancelled) setBrainData(null); });
+        return () => { cancelled = true; };
+    }, [isContextModalOpen, currentSessionId]);
 
     // ESC: close context modal
     useEffect(() => {

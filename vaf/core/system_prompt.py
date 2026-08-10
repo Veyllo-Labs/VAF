@@ -1171,7 +1171,13 @@ Then use the results to answer. Do NOT guess from your training data!
 
         full_prompt = "\n".join(parts)
         try:
-            append_domain_log_block("prompt", "[SYSTEM_FULL]", full_prompt.splitlines())
+            # OFF by default, and the gate fails CLOSED. This lane writes the whole
+            # assembled prompt - the user profile, every retrieved memory, working
+            # memory, contacts - in the clear, once per build. It is the richest
+            # plaintext copy of the user's data on the machine and it defeated the
+            # memory store's own encryption, since the decrypted text landed here.
+            if bool(Config.get("prompt_log_full_enabled", False)):
+                append_domain_log_block("prompt", "[SYSTEM_FULL]", full_prompt.splitlines())
         except Exception as e:
             logging.warning("System prompt full log write failed: %s", e)
         return full_prompt

@@ -67,25 +67,15 @@ def _diag_log(msg: str) -> None:
         pass
 
 
-def _resolve_log_dir() -> Path:
-    """Resolve log dir so emit_debug.txt and webui_push_debug.txt land in project logs (e.g. d:\\VAF\\logs)."""
-    candidates = []
-    env_dir = os.environ.get("VAF_LOG_DIR")
-    if env_dir:
-        candidates.append(Path(env_dir))
-    # Prefer repo root / logs so WebUI debug logs sit next to callback_debug.txt, queue.log, etc.
-    repo_logs = Path(__file__).resolve().parents[2] / "logs"
-    candidates.append(repo_logs)
-    candidates.append(Platform.data_dir() / "logs")
-    candidates.append(Platform.vaf_dir() / "logs")
-    candidates.append(Path(__file__).resolve().parents[1] / "logs")
-    for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except Exception:
-            continue
-    return Path.cwd()
+def _resolve_log_dir():
+    """The shared resolver - this used to be a divergent copy.
+
+    Its own candidate list had no source-checkout guard, so on a wheel
+    install it created a logs/ directory inside site-packages.
+    """
+    from vaf.core.log_helper import get_app_log_dir
+    return get_app_log_dir()
+
 
 class WebInterfaceManager:
     """

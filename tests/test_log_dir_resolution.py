@@ -26,15 +26,34 @@ def test_a_wheel_install_gets_no_logs_directory_next_to_the_package(tmp_path):
     assert source_checkout_logs(tmp_path) is None
 
 
-def test_a_source_checkout_keeps_its_repo_logs_directory(tmp_path):
-    """The other half, and the reason the candidate is conditional rather than deleted."""
+def test_a_source_checkout_only_keeps_its_repo_logs_on_request(tmp_path, monkeypatch):
+    """Checkout logs are OPT-IN now, and the reason is where checkouts live.
+
+    Domain logs carry message text - the queue previews, the timeline's tool
+    arguments, the search queries. A checkout can sit on any disk: on the machine
+    where this was found, the repo was on an UNENCRYPTED partition while home and
+    /var were LUKS, so every one of those files lay outside every protection the
+    user had. The default target is the data dir under home; VAF_DEV_LOGS brings
+    the old behaviour back for development.
+    """
     (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
+
+    monkeypatch.delenv("VAF_DEV_LOGS", raising=False)
+    assert source_checkout_logs(tmp_path) is None
+
+    monkeypatch.setenv("VAF_DEV_LOGS", "1")
     assert source_checkout_logs(tmp_path) == tmp_path / "logs"
 
 
-def test_this_checkout_still_resolves_to_the_repo_logs_directory(monkeypatch):
-    """End to end on the real layout, because the probe is only useful if it recognises the
-    repository it is standing in."""
+def test_this_checkout_resolves_into_the_data_dir_by_default(monkeypatch):
+    """End to end on the real layout: logs follow the user's home, not the code."""
+    from vaf.core.platform import Platform
+
     monkeypatch.delenv("VAF_LOG_DIR", raising=False)
+    monkeypatch.delenv("VAF_DEV_LOGS", raising=False)
     repo = Path(__file__).resolve().parent.parent
-    assert get_app_log_dir() == repo / "logs"
+
+    resolved = get_app_log_dir()
+
+    assert resolved != repo / "logs"
+    assert resolved == Platform.data_dir() / "logs"

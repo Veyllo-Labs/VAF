@@ -57,7 +57,10 @@ if sys.stdin is None:
 try:
     repo_log_dir = Path(__file__).resolve().parents[1] / "logs"
     repo_log_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("VAF_LOG_DIR", str(repo_log_dir))
+    # Only when the developer asked for checkout-local logs; otherwise the shared
+    # resolver picks the data dir (see log_helper.get_app_log_dir).
+    if os.environ.get("VAF_DEV_LOGS"):
+        os.environ.setdefault("VAF_LOG_DIR", str(repo_log_dir))
 except Exception:
     pass
 

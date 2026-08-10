@@ -102,7 +102,14 @@ def source_checkout_logs(root: Path) -> Optional[Path]:
     package. Kept as a separate function so both branches can be tested without owning a
     wheel install.
     """
-    return (root / "logs") if (root / "requirements.txt").exists() else None
+    if not (root / "requirements.txt").exists():
+        return None
+    # Opt-in only. A checkout can sit on any disk - on the machine this was found,
+    # the repo lived on an UNENCRYPTED partition while home and /var were LUKS, so
+    # every prompt, queue and timeline log (which carry message text) landed
+    # outside every protection the user had. Default now goes to the data dir,
+    # under the same home the rest of the stores live in.
+    return (root / "logs") if os.environ.get("VAF_DEV_LOGS") else None
 
 
 def get_app_log_dir() -> Path:

@@ -859,8 +859,10 @@ def _start_mem_logger(interval: float = 2.0) -> None:
         _log.warning("[MemLog] psutil unavailable — diagnostic logging disabled")
         return
 
-    log_path = pathlib.Path(__file__).resolve().parents[2] / "logs" / \
-        f"leak_diag_{datetime.date.today().isoformat()}.log"
+    # The shared resolver, not a hardcoded checkout path: this copy ignored
+    # VAF_LOG_DIR completely and wrote diagnostics wherever the code happened to sit.
+    from vaf.core.log_helper import get_app_log_dir
+    log_path = get_app_log_dir() / f"leak_diag_{datetime.date.today().isoformat()}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)   # ensure logs/ exists, else open() fails silently
     proc = psutil.Process()
 

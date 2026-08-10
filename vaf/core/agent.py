@@ -636,20 +636,9 @@ def _match_action_to_tools(action_text: str, tool_names):
 
 
 def _get_debug_log_dir():
-    candidates = []
-    env_dir = os.environ.get("VAF_LOG_DIR")
-    if env_dir:
-        candidates.append(Path(env_dir))
-    candidates.append(Platform.data_dir() / "logs")
-    candidates.append(Platform.vaf_dir() / "logs")
-    candidates.append(Path(__file__).resolve().parents[1] / "logs")
-    for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except Exception:
-            continue
-    return Path.cwd()
+    """The shared resolver - this was a divergent copy of the same candidate list."""
+    from vaf.core.log_helper import get_app_log_dir
+    return get_app_log_dir()
 
 
 # ── Live agents in THIS process ──────────────────────────────────────────────────

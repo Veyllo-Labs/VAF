@@ -1402,6 +1402,10 @@ function VAFDashboardContent() {
     const [contextStats, setContextStats] = useState<any | null>(null); // New X-Ray Stats (Estimated)
     const [realContext, setRealContext] = useState<any | null>(null); // REAL Payload (The Truth)
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
+    // Cross Chat Hint: pointers into the user's other chats. Kept apart from
+    // ragResults.sources on purpose - that list is sorted by score and sliced at 10,
+    // so hints mixed into it would sit in the prompt and be invisible here.
+    const [crossChatHints, setCrossChatHints] = useState<Array<{ session_id?: string; session_name?: string; age?: string; score?: number; text?: string }>>([]);
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
     // Mobile RAG-snippets popover: hover doesn't exist on touch, so a tap toggles it (works on iOS too).
     const [ragSnipOpen, setRagSnipOpen] = useState(false);
@@ -2891,6 +2895,11 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'rag_results') {
                     setRagResults(data);
+                }
+                else if (data.type === 'cross_chat_hints') {
+                    // Sent on every turn the lane runs, empty list included, so the panel
+                    // stops showing the previous turn's hints.
+                    setCrossChatHints(Array.isArray(data.hints) ? data.hints : []);
                 }
                 else if (data.type === 'attachment_indexing' || data.type === 'attachment_indexed' || data.type === 'attachment_index_error' || data.type === 'attachment_index_cancelled') {
                     // Attachment lane indexing status -> Document Viewer header indicator + banner.
@@ -6870,7 +6879,7 @@ function VAFDashboardContent() {
                                             <span className="max-w-[160px] truncate">{workspaceInfo.name}</span>
                                         </span>
                                     )}
-                                    {ragResults?.sources?.length > 0 && (
+                                    {(ragResults?.sources?.length > 0 || crossChatHints.length > 0) && (
                                         <div ref={ragGroupRef} className="group relative inline-flex items-center pt-3">
                                             <span
                                                 tabIndex={0}
@@ -6879,12 +6888,16 @@ function VAFDashboardContent() {
                                                 className="text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-help max-md:cursor-pointer border border-gray-200 bg-transparent leading-none outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-violet-300 group-hover:text-violet-600 group-hover:opacity-100 group-hover:bg-violet-50 group-hover:border-violet-200 group-focus-within:text-violet-600 group-focus-within:opacity-100 group-focus-within:bg-violet-50 group-focus-within:border-violet-200 transition-all"
                                                 title="RAG snippets passed to model this turn"
                                             >
-                                                {tMain('ragHits', { count: ragResults.sources.length })}
+                                                {ragResults?.sources?.length > 0
+                                                    ? tMain('ragHits', { count: ragResults.sources.length })
+                                                    : tMain('crossChatHintsChip', { count: crossChatHints.length })}
                                             </span>
                                             <div className={cn("hidden group-hover:block group-focus-within:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left max-md:!fixed max-md:!inset-x-2 max-md:!bottom-[88px] max-md:!top-auto max-md:!w-auto max-md:!max-h-[55vh]", ragSnipOpen && "max-md:!block")}>
+                                                {ragResults?.sources?.length > 0 && (
                                                 <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
+                                                )}
                                                 <div className="space-y-2">
-                                                    {[...ragResults.sources].sort((a: { score?: number }, b: { score?: number }) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
+                                                    {[...(ragResults?.sources ?? [])].sort((a: { score?: number }, b: { score?: number }) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
                                                         const src = s.metadata?.source;
                                                         const title = s.metadata?.title;
                                                         const displayLabel = title
@@ -6913,6 +6926,22 @@ function VAFDashboardContent() {
                                                         );
                                                     })}
                                                 </div>
+                                                {crossChatHints.length > 0 && (
+                                                    <div className={cn(ragResults?.sources?.length > 0 && "mt-3 pt-3 border-t border-gray-100")}>
+                                                        <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('crossChatHintsTitle')}</div>
+                                                        <div className="space-y-2">
+                                                            {crossChatHints.map((h, i) => (
+                                                                <div key={h.session_id ?? i} className="text-xs text-gray-600 bg-amber-50 p-2 rounded border border-amber-100">
+                                                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                                                        <span className="text-gray-500 truncate text-[10px] max-w-[180px]" title={h.session_name ?? ''}>{h.session_name}</span>
+                                                                        {h.age && <span className="text-gray-400 text-[10px] shrink-0 ml-auto">{h.age}</span>}
+                                                                    </div>
+                                                                    <div className="line-clamp-3">{h.text}</div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}

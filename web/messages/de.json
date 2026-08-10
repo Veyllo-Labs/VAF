@@ -111,6 +111,8 @@
     "indexingError": "Indexierung fehlgeschlagen",
     "ragSnippetsThisTurn": "RAG-Snippets (diese Runde)",
     "ragHits": "RAG: {count} Treffer",
+    "crossChatHintsTitle": "Hinweise aus anderen Chats",
+    "crossChatHintsChip": "Hinweise: {count}",
     "voiceInput": "Spracheingabe",
     "stopRecording": "Aufnahme stoppen (Auto-Stop aktiv)",
     "processing": "Wird verarbeitet…",
@@ -551,7 +553,9 @@
       "minRelevance": "Mindest-Relevanz",
       "ragDesc": "RAG durchsucht Notizen und Dokumente. Anzahl und Relevanz begrenzen die Treffer.",
       "viewGraph": "Graphen anzeigen",
-      "userIdentity": "Benutzeridentität"
+      "userIdentity": "Benutzeridentität",
+      "crossChatHints": "Cross Chat Hints",
+      "crossChatHintsDesc": "Unter den Ausschnitten bekommt der Agent zusätzlich bis zu so viele Verweise auf deine ANDEREN Chats, wenn sie stichwortmässig zu deiner Frage passen. Nur eigene Chats, nie ein gelöschter, und nie ein Verlauf mit einem Kontakt."
     },
     "ai": {
       "provider": "Anbieter",

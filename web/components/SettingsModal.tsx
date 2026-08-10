@@ -2464,6 +2464,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                             </div>
                                             <p className="text-xs text-gray-400 mt-1">{tPersona('ragDesc')}</p>
+                                            <div className="flex flex-wrap items-center gap-4 mt-3">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-gray-700">{tPersona('crossChatHints')}</span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        max={5}
+                                                        value={localConfig.cross_chat_hint_k ?? 2}
+                                                        onChange={(e) => handleChange('cross_chat_hint_k', Math.max(1, Math.min(5, parseInt(e.target.value) || 2)))}
+                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-gray-400 mt-1">{tPersona('crossChatHintsDesc')}</p>
                                             <div className="flex flex-wrap gap-2 mt-3">
                                                 <button
                                                     onClick={() => setShowMemoryModal(true)}

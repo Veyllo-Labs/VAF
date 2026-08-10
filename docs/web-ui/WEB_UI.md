@@ -506,6 +506,22 @@ Sent when the agent calls `replace_editor_selection` or when a text-targeted edi
 }
 ```
 
+```json
+{
+  "type": "cross_chat_hints",
+  "hints": [
+    {
+      "session_id": "green123456",
+      "session_name": "Invoices",
+      "age": "2 days ago",
+      "score": 0.82,
+      "text": "The travel expense report is in that PDF"
+    }
+  ]
+}
+```
+Cross Chat Hint: pointers into the user's **other** chats that were added to this turn's prompt below the retrieved memories. Rendered as its own section in the RAG snippets panel rather than inside `sources`, because that list is sorted by score and sliced at ten, so hints mixed into it would sit in the prompt and be invisible here. Sent on every turn the lane runs, with an empty `hints` list when nothing matched, so the panel stops showing the previous turn's hints. Routed with `push_update_to_user` and dropped when the scope is unknown - it carries text out of another conversation.
+
 ## Configuration
 
 ### Enabling/Disabling Web UI

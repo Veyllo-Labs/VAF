@@ -313,6 +313,39 @@ class MemoryCache:
             return {"available": False, "error": str(e)}
 
 
+def redis_password() -> str:
+    """The Redis password, from the data keyring; minted on first use.
+
+    Kept out of `redis_url` deliberately: that key is admin-writable, is echoed
+    into logs and diagnostics elsewhere, and lives in config.json - which is the
+    one place a secret must no longer be. The URL is assembled at connect time.
+    """
+    try:
+        from vaf.core.data_keyring import get_data_secret
+        return get_data_secret("redis_password", min_length=16)
+    except Exception as e:
+        logger.warning("Redis password unavailable, connecting without one: %s", e)
+        return ""
+
+
+def _redis_url_with_password() -> str:
+    """Config URL + keyring password. An explicit password in the URL wins."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    url = Config.get("redis_url", "redis://localhost:6379/0")
+    password = redis_password()
+    if not password:
+        return url
+    parts = urlsplit(url)
+    if parts.password:
+        return url  # the operator set one by hand; do not override it
+    host = parts.hostname or "localhost"
+    netloc = f":{password}@{host}"
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 def _get_redis_client():
     """Get or create Redis client."""
     global _redis_client, _redis_available
@@ -326,7 +359,7 @@ def _get_redis_client():
     try:
         import redis.asyncio as redis
         
-        redis_url = Config.get("redis_url", "redis://localhost:6379/0")
+        redis_url = _redis_url_with_password()
         
         _redis_client = redis.from_url(
             redis_url,
@@ -336,7 +369,8 @@ def _get_redis_client():
             socket_timeout=2,
         )
         
-        logger.info(f"Redis client created: {redis_url}")
+        # Never log the URL itself any more - it can now carry the password.
+        logger.info("Redis client created")
         return _redis_client
         
     except ImportError:

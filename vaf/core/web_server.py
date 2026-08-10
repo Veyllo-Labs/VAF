@@ -851,6 +851,18 @@ async def startup_event():
         except Exception as e:
             log("WebServer", f"Legacy session claim skipped: {e}")
 
+    if run_claim:
+        # At-rest migration + retention, under the SAME once-per-app gate. The CLI
+        # start path calls this too: a repair wired into one lane only is how a
+        # cleanup once ran for the terminal and never for the web app.
+        try:
+            from vaf.core.at_rest_migration import run_once
+            report = await asyncio.to_thread(run_once)
+            if report and not report.get("skipped"):
+                log("WebServer", f"At-rest migration: {report}")
+        except Exception as e:
+            log("WebServer", f"At-rest migration skipped: {e}")
+
     # Whare Wananga EAGER: opt-in background scanner that proactively trains safe, configured,
     # not-yet-learned tools (off by default; tolerates a not-yet-built agent). Guarded.
     try:

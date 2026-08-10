@@ -216,6 +216,91 @@ def _compose_plugin_missing(stderr: str) -> bool:
     )
 
 
+def _compose_env() -> dict:
+    """Environment for `compose up`, carrying the Redis password from the keyring.
+
+    Redis caches DECRYPTED memory content and persists it, and it shipped with no
+    password, no ACL and no TLS. The password is generated once into the keyring
+    and handed to compose here, so it never reaches config.json or a shell history.
+    """
+    env = dict(os.environ)
+    try:
+        from vaf.memory.cache import redis_password
+        password = redis_password()
+        if password:
+            env["REDIS_PASSWORD"] = password
+    except Exception:
+        pass
+    return env
+
+
+def _write_compose_env_file(project_root, log=None) -> None:
+    """Put REDIS_PASSWORD where `docker compose` itself will read it.
+
+    Passing it through this process's environment only covers the runs VAF
+    starts. `start_vaf.sh`, `run_vaf.sh` and `install.sh` all call compose
+    directly, so Redis would come up with NO password while the client always
+    sends one - authentication errors on every cache call. A compose .env file
+    is the one place both paths agree on. Owner-only: it holds the password.
+    """
+    from pathlib import Path
+
+    try:
+        from vaf.memory.cache import redis_password
+        password = redis_password()
+        if not password:
+            return
+        env_path = Path(project_root) / ".env"
+        line = f"REDIS_PASSWORD={password}\n"
+        existing = ""
+        if env_path.exists():
+            existing = env_path.read_text(encoding="utf-8")
+            if line in existing:
+                _harden(env_path)
+                return
+            existing = "".join(l for l in existing.splitlines(keepends=True)
+                               if not l.startswith("REDIS_PASSWORD="))
+        env_path.write_text(existing + line, encoding="utf-8")
+        _harden(env_path)
+    except Exception as e:
+        _say(log, f"Could not write the compose env file: {e}")
+
+
+def _harden(path) -> None:
+    try:
+        from vaf.core.secure_store import harden_path
+        harden_path(path)
+    except Exception:
+        pass
+
+
+def _warn_about_default_db_password(log=None) -> bool:
+    """Say it out loud when the published default database password is still in use.
+
+    Deliberately a warning and not an auto-rotation: rotating a password the app
+    is mid-connection with, half-succeeding, locks the user out of their own
+    memories. `vaf secure rotate-db` does it as an explicit, verified step.
+    """
+    try:
+        from vaf.core.config import Config
+        dsn = str(Config.get("memory_db_url", "") or "")
+    except Exception:
+        return False
+    if "vaf_dev_secret" not in dsn and "vaf_app_dev_secret" not in dsn:
+        return False
+    _say(log, "SECURITY: the memory database still uses the shipped default password. "
+              "Run `vaf secure rotate-db` to replace it.")
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event(
+            "default_db_password",
+            detail="The memory database is using the published default password",
+        )
+    except Exception:
+        pass
+    return True
+
+
 def find_stack_root() -> Optional[Path]:
     """The directory holding the compose file, or None.
 
@@ -266,6 +351,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
         project_root = find_stack_root()
         if project_root is None:
             return False
+        _warn_about_default_db_password(log)
+        _write_compose_env_file(project_root, log)
         # Two-phase, blocking, exit-checked: bring up the CORE registry-image
         # services first so a failed OPTIONAL build (tts/vaf-browser - e.g. a
         # VM clock skew breaking apt) can never abort the whole 'up' and leave
@@ -276,7 +363,8 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
             ["docker-compose", "-f", COMPOSE_FILENAME, "up", "-d"],
         ):
             try:
-                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True}
+                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True,
+                          "env": _compose_env()}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run(base + list(CORE_SERVICES), timeout=600, **kwargs)

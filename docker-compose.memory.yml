@@ -65,13 +65,20 @@ services:
     volumes:
       - vaf_redis:/data
     # Enable persistence with AOF (Append Only File)
+    # Redis caches DECRYPTED memory content (full RAG responses, chunk text) and
+    # persists it via AOF, so it is not a throwaway. VAF supplies REDIS_PASSWORD
+    # from its keyring before `compose up`; empty keeps the old open behaviour for
+    # anyone driving compose by hand.
     command: >
       redis-server 
       --appendonly yes 
       --maxmemory 256mb 
       --maxmemory-policy allkeys-lru
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping"]
       interval: 10s
       timeout: 5s
       retries: 5

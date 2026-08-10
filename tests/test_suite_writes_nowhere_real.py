@@ -407,3 +407,34 @@ def test_the_session_store_is_not_the_developers_real_one():
     real = Path.home() / ".vaf" / "sessions"
     assert Path(default_sessions_dir()).resolve() != real.resolve()
     assert Path(SessionManager().storage_dir).resolve() != real.resolve()
+
+
+def test_minting_a_key_never_touches_the_real_desktop(tmp_path):
+    """The recovery note is written OUTSIDE the data directory, by design.
+
+    `recovery_kit.kit_path()` resolves `Path.home()/"Desktop"`, and HOME is not
+    one of the redirected axes, so every test that mints a data key used to
+    overwrite the developer's real `VAF-BackThisUp.md` with a note for a
+    throwaway keyring. The note is the only copy of a recovery key and the
+    replacement opens nothing, so that is data loss, not pollution - it cost
+    this machine its genuine recovery key before the redirect existed.
+
+    MUTATION: drop the `kit_path` redirect in conftest and this goes red,
+    because the note lands on the real Desktop instead of the test's tmp dir.
+    """
+    from pathlib import Path
+
+    from vaf.core import recovery_kit
+    from vaf.core.data_keyring import get_data_key
+
+    real_desktop = Path.home() / "Desktop" / recovery_kit.KIT_FILENAME
+    before = real_desktop.stat().st_mtime_ns if real_desktop.exists() else None
+
+    get_data_key("file_store_encryption_key")      # mints, and writes the kit
+
+    after = real_desktop.stat().st_mtime_ns if real_desktop.exists() else None
+    assert after == before, f"a test rewrote the real recovery note at {real_desktop}"
+
+    written = recovery_kit.kit_path()
+    assert written.exists(), "the kit was not written at all - the test proves nothing"
+    assert str(tmp_path) in str(written), f"the kit escaped the test directory: {written}"

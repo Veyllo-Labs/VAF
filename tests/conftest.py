@@ -153,6 +153,25 @@ def _isolated_data_keyring(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ss, "ensure_pre_migration_backup", _test_backup)
     monkeypatch.setattr(dk, "ensure_pre_migration_backup", _test_backup)
+
+    # The recovery note is the ONE artifact of the keyring that is deliberately
+    # written outside the data directory: `recovery_kit.kit_path()` resolves
+    # `Path.home()/"Desktop"`, and HOME is not one of the redirected axes. So
+    # minting a key in a test overwrote the developer's REAL
+    # Desktop/VAF-BackThisUp.md with a note for a throwaway tmp-dir keyring.
+    #
+    # That is not clutter, it is destruction: the note is the only copy of the
+    # recovery key, the wrap it belongs to lives in the data directory, and the
+    # replacement note's key opens neither. It happened on this machine - the
+    # real note was overwritten by a suite run and the genuine key was lost, so
+    # the machine's own recovery path had to be regenerated from the live data
+    # key. A test must never be able to do that again.
+    #
+    # Redirected here rather than in the session fixture because the note has to
+    # follow the per-test ring: a note is only meaningful next to the wrap it
+    # opens, and the wrap already moves with `dk._store` above.
+    import vaf.core.recovery_kit as rk
+    monkeypatch.setattr(rk, "kit_path", lambda: tmp_path / rk.KIT_FILENAME)
     yield
 
 

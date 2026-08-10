@@ -443,7 +443,9 @@
     "ovHeroEventsToday": "{n} blocked today",
     "ovEventsTitle": "Blocked today",
     "ovDescEvents": "Every attempt VAF turned away today: rejected access, refused senders, blocked mail and stopped skill installs. An admin override means someone deliberately stepped past a refusal.",
-    "ovEvFactTotal": "Events today"
+    "ovEvFactTotal": "Events today",
+    "ovEvCliGateFailed": "Failed terminal password attempts",
+    "ovEvDefaultDbPassword": "Database still uses the default password"
   },
   "common": {
     "save": "Save",

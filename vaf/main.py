@@ -297,7 +297,7 @@ set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update, memory
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update, memory, secure
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -336,7 +336,23 @@ app.add_typer(git.app, name="git", help="Git with AI support")
 app.add_typer(update.app, name="update", help="Check for and apply VAF updates")
 
 # Session management
-app.add_typer(session_app, name="session", help="Manage conversations")
+def _terminal_door() -> None:
+    """The same door as the interactive run, in front of the chat-reading groups.
+
+    `vaf session export/search/list/load` prints the very chats the encryption
+    protects, so gating only `vaf run` left the front door locked and the window
+    open. Installed HERE, at the CLI composition point: vaf/core must not import
+    vaf.cli (Rule 0c), and a typer callback is the one place that covers every
+    subcommand of a group at once.
+    """
+    import typer as _typer
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        raise _typer.Exit(1)
+
+
+app.add_typer(session_app, name="session", help="Manage conversations",
+              callback=_terminal_door)
 
 # Snapshot/Undo
 app.add_typer(snapshot_app, name="snapshot", help="Code snapshots and undo")
@@ -356,6 +372,7 @@ app.add_typer(security.app, name="security", help="Run security diagnostics")
 
 # Memory store maintenance (rekey after an encryption-key rotation)
 app.add_typer(memory.app, name="memory", help="Memory store maintenance")
+app.add_typer(secure.app, name="secure", help="Encryption, keys and database credentials")
 
 # Sub-Agent execution (internal use - for separate terminal windows)
 app.add_typer(subagent.app, name="subagent", help="Run sub-agents in separate terminals")

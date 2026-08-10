@@ -898,6 +898,23 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     """Run with modern TUI interface."""
     global global_agent
     
+    # The door into the shield. Interactive terminal only: -p, the tray, the
+    # headless runner and every automation run INSIDE the shield and are never
+    # prompted, so an unattended machine keeps working after a reboot.
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        UI.error("Authentication failed.")
+        raise typer.Exit(1)
+
+    # At-rest migration + retention, on EVERY interactive lane. The modern lane
+    # is not the default on every install, so wiring it there alone would be the
+    # same "one lane only" repair this repo has shipped before.
+    try:
+        from vaf.core.at_rest_migration import run_once
+        run_once()
+    except Exception:
+        pass
+
     try:
         from vaf.cli.tui import TUI
         from vaf.cli.themes import ThemeManager
@@ -954,7 +971,19 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
 
     set_current_session_id(current_session.id)
     cleanup_other_sessions()  # Remove active tasks from previous sessions
-    
+
+    # At-rest migration + retention. The web/tray lane runs the same call from its
+    # startup event; both are wired because a repair that lives in only one of them
+    # simply never happens for users of the other.
+    try:
+        from vaf.core.at_rest_migration import run_once
+        report = run_once()
+        if report and not report.get("skipped") and report.get("sessions"):
+            tui.event("Security", f"Encrypted stored data at rest: {report['sessions']}", style="dim")
+    except Exception as e:
+        tui.event("Warning", f"At-rest migration skipped: {e}", style="warning")
+
+
     # ═══════════════════════════════════════════════════════════════
     # LEHRE-CHAT CLEANUP - Delete all old empty sessions
     # ═══════════════════════════════════════════════════════════════
@@ -2500,6 +2529,23 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
     """Run with classic interface."""
     global global_agent
     
+    # The door into the shield. Interactive terminal only: -p, the tray, the
+    # headless runner and every automation run INSIDE the shield and are never
+    # prompted, so an unattended machine keeps working after a reboot.
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        UI.error("Authentication failed.")
+        raise typer.Exit(1)
+
+    # At-rest migration + retention, on EVERY interactive lane. The modern lane
+    # is not the default on every install, so wiring it there alone would be the
+    # same "one lane only" repair this repo has shipped before.
+    try:
+        from vaf.core.at_rest_migration import run_once
+        run_once()
+    except Exception:
+        pass
+
     # Session support for classic mode
     if session_id:
         UI.info(f"Session restore in classic mode not fully supported.")

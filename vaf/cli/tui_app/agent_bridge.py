@@ -1327,6 +1327,14 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
         boot_tui.error("Git is required. Install it and run `vaf run` again.")
         raise SystemExit(1)
 
+    # The door comes FIRST: everything below this line reads or writes the
+    # user's session records (the stack start, the session claim, the empty-chat
+    # cleanup), and a door behind those has already let the visitor in.
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        boot_tui.info("Authentication failed.")
+        raise SystemExit(1)
+
     # The service stack (memory DB, sandbox, speech): the tray starts it and
     # STOPS it on quit, so a terminal-only start used to run against a dead
     # stack - memory_search then reported an empty memory that was in truth an

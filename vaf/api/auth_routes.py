@@ -259,6 +259,10 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 )
 
             password_hash = hash_password(body.password)
+            # Mirror into the keyring so the terminal door can verify offline
+            # (the auth database is a container and is often down on a desktop).
+            from vaf.cli.gate import mirror_admin_password_hash
+            mirror_admin_password_hash(password_hash)
             new_user = LocalUser(
                 username=username,
                 password_hash=password_hash,
@@ -521,6 +525,19 @@ async def login(body: LoginRequest, request: Request, response: Response):
         if not verify_password(user.password_hash, body.password or ""):
             _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+
+        # Backfill the terminal door's hash copy. Every installation that
+        # predates the door has an admin account whose password was set before
+        # any mirroring existed, so without this the terminal would stay open
+        # forever and tell the user no password was set. A verified login is the
+        # one moment the correct hash and the confirmed identity are both here.
+        try:
+            from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
+            if is_local_admin_account(username=str(user.username or ""),
+                                      user_scope_id=str(user.user_scope_id or "")):
+                mirror_admin_password_hash(user.password_hash)
+        except Exception:
+            pass
 
         # 2FA data may become undecryptable after key/config changes.
         # Repair this state here so login can continue with fresh 2FA setup,

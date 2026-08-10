@@ -443,7 +443,9 @@
     "ovHeroEventsToday": "{n} heute blockiert",
     "ovEventsTitle": "Heute blockiert",
     "ovDescEvents": "Alles, was VAF heute abgewiesen hat: abgelehnte Zugriffe, abgewiesene Absender, blockierte Mails und gestoppte Skill-Installationen. Eine Admin-Freigabe heisst, dass jemand eine Sperre bewusst uebergangen hat.",
-    "ovEvFactTotal": "Ereignisse heute"
+    "ovEvFactTotal": "Ereignisse heute",
+    "ovEvCliGateFailed": "Fehlgeschlagene Passwortversuche im Terminal",
+    "ovEvDefaultDbPassword": "Datenbank nutzt noch das Standardpasswort"
   },
   "common": {
     "save": "Speichern",

@@ -272,10 +272,16 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
             password = data.password or secrets.token_urlsafe(12)
 
             # Create user
+            _hash = hash_password(password)
+            from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
+            if is_local_admin_account(username=str(getattr(data, "username", "") or "")):
+                # Only the machine owner's password opens the terminal door; a
+                # second admin must not silently take that slot over.
+                mirror_admin_password_hash(_hash)
             user = LocalUser(
                 id=uuid_module.uuid4(),
                 username=data.username,
-                password_hash=hash_password(password),
+                password_hash=_hash,
                 role=data.role.lower(),
                 permissions={
                     "email": data.email,
@@ -433,6 +439,10 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
             new_password = secrets.token_urlsafe(12)
             user.password_hash = hash_password(new_password)
+            from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
+            if is_local_admin_account(username=str(user.username or ""),
+                                      user_scope_id=str(user.user_scope_id or "")):
+                mirror_admin_password_hash(user.password_hash)
             user.updated_at = _utc_now_naive()
             await db.commit()
             return {"temporary_password": new_password}

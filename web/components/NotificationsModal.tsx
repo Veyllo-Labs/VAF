@@ -1347,6 +1347,8 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'skill_scan_alert': return t('ovEvSkillAlert');
       case 'skill_quarantined': return t('ovEvSkillQuarantined');
       case 'skill_removed': return t('ovEvSkillRemoved');
+      case 'cli_password_gate_failed': return t('ovEvCliGateFailed');
+      case 'default_db_password': return t('ovEvDefaultDbPassword');
       default: return kind;
     }
   };

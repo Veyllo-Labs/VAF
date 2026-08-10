@@ -69,6 +69,9 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "skill_scan_alert": "Periodic re-scan found a worsened risk level (below high)",
     "skill_quarantined": "Skill quarantined (auto on worsened-to-high, or manual isolate)",
     "skill_removed": "Quarantined skill deleted from the dashboard",
+    # data at rest
+    "cli_password_gate_failed": "Three wrong admin passwords at the interactive terminal",
+    "default_db_password": "The memory database is still using the shipped default password",
 }
 
 _THROTTLE_S = 5.0

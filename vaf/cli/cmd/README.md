@@ -22,6 +22,8 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **debug.py**: AI-powered error analysis (`debug explain`) that parses stack traces and suggests fixes.
 - **generate.py**: AI code generation for snippets, API endpoints, and functions.
 - **ww.py**: Whare Wananga tool self-learning commands (train and inspect per-tool know-how).
+- **secure.py**: Encryption and key management (`secure status` reports where every at-rest key lives and what is still unprotected, `secure recover` restores the data key from the recovery key after a reinstall, `secure rotate-db` replaces the shipped default Postgres password).
+- **memory.py**: Memory store maintenance (`memory rekey` re-encrypts rows after a key rotation, `memory cross-chat` dry-runs the Cross Chat Hint lane for one question).
 
 ## Development Guide
 

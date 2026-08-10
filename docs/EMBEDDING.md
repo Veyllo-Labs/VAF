@@ -182,6 +182,49 @@ last resort when that load fails). For an embedded app you almost always want
 to set `system_prompt` explicitly, so your agent's voice does not depend on
 machine-local state.
 
+### Encryption at rest, and the two modes you can ship
+
+VAF encrypts what it stores - chats, context archives, sub-agent payloads,
+working memory - with a machine-held key, and keeps the key out of
+`config.json`. Nothing is required of you: the key mints itself on first use,
+exactly as the memory key always did, and the agent keeps running unattended
+after a reboot because no human has to supply anything.
+
+You choose per deployment with `file_encryption_enabled`:
+
+```python
+# Mode 1 (default): VAF encrypts the end user's chats and working data.
+agent = Agent(config={"provider": "openai", "api_key_openai": key})
+
+# Mode 2: your storage layer already handles this - keep the files plaintext.
+agent = Agent(config={..., "file_encryption_enabled": False})
+```
+
+Reading never depends on the setting: a plaintext file is read as plaintext and
+an encrypted one is decrypted, so you can switch either way without a migration
+and without stranding what is already on disk.
+
+Two things to know before you pick Mode 1:
+
+- **The key is machine-held.** It protects the data against a stolen disk, a
+  copied directory, a backup and other local accounts. It does not protect
+  against code running as your process - see
+  [ENCRYPTION_AT_REST.md](security/ENCRYPTION_AT_REST.md) for the full table.
+- **Losing the key store loses the data.** `<data_dir>/data_keys.enc`, its
+  `.key.json` sibling and the master key (OS keyring entry `vaf/secure_store_kek`
+  or `~/.vaf/secure_store.kek`) must be backed up together.
+
+The keyring itself is engine-internal and not exported on the facade; no
+embedder has asked for direct key access, and the switch plus the documented
+file locations have covered every case so far.
+
+**Run it rather than read it.**
+[examples/08_session_storage_and_encryption.py](../examples/08_session_storage_and_encryption.py)
+builds a throwaway home and walks all four decisions in one script - plaintext,
+plaintext with several tenants, encrypted (grepping the raw bytes to prove the
+words are not there), and recovering after the machine key is deleted. It needs
+no model, no API key and no network.
+
 ### Injecting retrieved context
 
 `system_prompt` is identity and framing. For "here is what I looked up for THIS
@@ -310,12 +353,15 @@ Two consequences worth knowing before you rely on it:
 
 **Where a key lives when VAF stores one.** Keys set through the product go into the
 same envelope-encrypted store as mail, GitHub and cloud credentials - not into
-`config.json`. Be precise about what that buys: without a master passphrase (the
-default, and the headless case) the key-encryption key sits in `config.json` itself,
-which `secure_store` describes as equivalent to chmod-only protection. The gain is
-that the secret is no longer in the same file as everything else, is not readable by
-eye, and does not travel in a config backup or a screenshot. It is not protection
-against someone who can already read your data directory.
+`config.json`, which now holds no key material at all. The key that opens that
+store sits in a 0600 file (`~/.vaf/secure_store.kek`) by default, or in the OS
+keyring with `secure_store_kek_backend = "keyring"` - which is stronger, because
+the OS keyring is protected by the login password, but only reachable for installs
+that start VAF from inside the desktop session. Be precise about what the default
+buys: protection against a copied directory, a backup, a support archive and other
+local accounts, and against a stolen disk only as far as the disk encryption
+underneath reaches. It is not protection against code already running as you. The
+full table is in [ENCRYPTION_AT_REST.md](security/ENCRYPTION_AT_REST.md).
 
 ### Changing configuration on an agent that is already running
 
@@ -1029,6 +1075,9 @@ Stable public surface (safe to build on):
   "Injecting retrieved context"). The parameter NAMES and defaults are the promise;
   the section text the engine wraps `memory_context` in is not, and neither is the
   return value beyond the contract in [CORE_AGENT.md](CORE_AGENT.md).
+- `file_encryption_enabled` as the switch between the two at-rest modes, and the
+  promise that reading tolerates BOTH forms regardless of its value. The file
+  format and the key locations are documented but not frozen.
 - `cross_chat_hint_enabled` / `cross_chat_hint_k` as the OFF switch for the engine
   reading the caller's other sessions. That the switch exists and turns the
   behaviour off is the promise; the retrieval behind it is not.

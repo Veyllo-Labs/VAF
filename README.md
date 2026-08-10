@@ -271,6 +271,12 @@ vaf session list|load|delete|export|search
 vaf snapshot create|list|restore|undo
 vaf automation list|create|run|enable|disable|delete
 
+vaf secure status       # Where every at-rest key lives, and what is still open
+vaf secure recover      # Restore the data key after a reinstall (recovery key)
+vaf secure rotate-db    # Replace the shipped default Postgres password
+vaf memory cross-chat --query "..."   # What other chats a turn would be hinted
+vaf memory rekey --old-key-file <config-backup.json>
+
 vaf scaffold new <template> <name>   # Project templates
 vaf generate api|function|class|test|component
 vaf automate test|build|lint|format|check

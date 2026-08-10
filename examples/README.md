@@ -18,6 +18,7 @@ venv/bin/python examples/01_hello_agent.py
 | [05_chatbot_with_memory.py](05_chatbot_with_memory.py) | A chatbot that survives restarts: `save_session()` + `Agent(session=...)` |
 | [06_custom_persona.py](06_custom_persona.py) | Give the agent its own voice and instructions with `Agent(system_prompt=...)` |
 | [07_tool_caller_and_authorizer.py](07_tool_caller_and_authorizer.py) | Running a tool with VAF's own rules but no conversation (`ToolCaller`), vetoing a call per user and per argument (`set_tool_authorizer`), and restricting which tools an account may use at all (`set_account_allowlist_resolver`). **Needs no provider, no API key and no network** - it never talks to a model |
+| [08_session_storage_and_encryption.py](08_session_storage_and_encryption.py) | How conversations are stored: plaintext, plaintext with several tenants (`list()` vs `list_owned()`), encrypted at rest with `file_encryption_enabled`, and recovery after the machine key is gone. Greps the raw bytes to prove what is and is not readable on disk. **Needs no provider, no API key and no network**, and runs against a throwaway home directory so your own installation is untouched |
 | [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
 
 ## Prerequisites
@@ -27,8 +28,10 @@ venv/bin/python examples/01_hello_agent.py
 - A working model backend: either an API provider configured in
   `~/.vaf/config.json` (fastest for a first test) or local mode (the first
   run downloads a multi-GB model). The one exception is
-  `07_tool_caller_and_authorizer.py`, which drives the tool layer directly and
-  needs no backend at all - a good first thing to run if you just installed. The examples default to whatever your
+  `07_tool_caller_and_authorizer.py` and
+  `08_session_storage_and_encryption.py`, which drive the tool and storage
+  layers directly and need no backend at all - a good first pair to run if you
+  just installed. The examples default to whatever your
   config says; `01_hello_agent.py` shows how to override the provider inline
   (the same `config={...}` works in every example).
 
@@ -48,3 +51,9 @@ startup (see the entry-point section of
 Example 05 writes its session id into `chat_session_id.txt` in the current
 directory (that file belongs to the example app, not to VAF); the session
 itself lives in VAF's standard store under `~/.vaf/sessions/`.
+
+Example 08 is the opposite: it points `HOME` at a temporary directory **before**
+importing VAF, so the keys it mints, the recovery note it writes and the machine
+key it deletes in the last step all live inside that sandbox. Nothing it does
+touches `~/.vaf`. For the real installation, `vaf secure status` reports the same
+state - see [ENCRYPTION_AT_REST.md](../docs/security/ENCRYPTION_AT_REST.md).

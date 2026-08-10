@@ -12,6 +12,51 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Your chats are encrypted on disk.** Everything VAF stores about a
+  conversation - the chat records, the pre-compression archives, hand-off
+  bundles, sub-agent task text and the agent's working memory - is now written
+  as AES-256-GCM ciphertext instead of readable JSON. If the laptop is stolen or
+  the SSD ends up somewhere else, the passwords, keys and doctor's or lawyer's
+  matters in those chats are not readable. The key is held by the machine, so
+  the agent still starts and works on its own after a reboot; on desktops it
+  lives in the OS keyring, which your login password protects. Chats written
+  before this keep opening, and are re-written encrypted the next time they are
+  saved. `file_encryption_enabled` turns it off for anyone whose storage already
+  does this. Full threat table, including what it deliberately does NOT cover:
+  `docs/security/ENCRYPTION_AT_REST.md`.
+- **A recovery key, so a reinstall is not the end of your chats.** The moment
+  the keys are created, VAF writes `VAF-BackThisUp.md` to your Desktop: one
+  256-bit recovery key plus plain instructions. With it and a copy of two small
+  key files you can open your data on a completely new machine
+  (`vaf secure recover`) - without it, a lost operating-system login means the
+  encrypted chats are gone, and nobody can help. The note says in its first line
+  that it is itself a key and belongs somewhere other than that Desktop.
+- **All encryption keys left `config.json`.** The memory key, the mail key, the
+  GitHub key, the token signing secret and the master key used to sit in
+  plaintext in the same file tree as the data they protect, which made
+  "encrypted at rest" mean very little. They now live in one encrypted keyring
+  whose master key is in the OS keyring (or an owner-only file on headless
+  installs), and API keys no longer keep a plaintext copy behind either. A
+  one-time `config.json.pre-keyring.bak` is written before anything is removed,
+  so a downgrade stays possible. `vaf secure status` shows where every key is.
+- **The terminal asks for your password.** `vaf run`, the TUI and the whole
+  `vaf session` group now require the admin password before starting - the web
+  UI always did, the terminal never did, and `vaf session export` prints the
+  very chats the encryption protects. Scripts, `vaf run -p`, the tray,
+  automations and background workers are never prompted; they run inside the
+  protected area already. Verified against a hash stored locally, so a stopped
+  database cannot lock you out. `cli_password_gate` turns it off.
+- **`vaf secure`** - `status` says where each key lives, what is still
+  unprotected and which files have to be backed up together on THIS machine;
+  `recover` puts the data key back after a reinstall using the recovery key; and
+  `rotate-db` replaces the shipped default database password (verified before it
+  is saved, so a half-finished rotation cannot lock you out).
+- **A runnable example for the storage modes** -
+  `examples/08_session_storage_and_encryption.py` walks the four decisions an
+  embedder makes (plaintext, plaintext with several tenants, encrypted, and
+  recovery after the machine key is deleted) against a throwaway home directory.
+  It needs no model, no API key and no network, and greps the raw bytes to show
+  what is and is not readable on disk.
 - **Cross Chat Hint: the agent can point at your other chats.** Below the memory
   snippets it now gets up to two short pointers into your OTHER still-existing
   chats when they match your question by keyword, so "we worked on a PDF the
@@ -49,6 +94,73 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `tests/contract/README.md`.
 
 ### Fixed
+- **Encrypted stores close behind themselves.** Reading accepted files without
+  the encryption header, so that older chats keep opening - correct during the
+  changeover, and a hole if it stayed on: anyone able to write into the store
+  could put a plain file there and it would be read as if it were yours. Once a
+  startup pass finds nothing unencrypted left, VAF stops accepting plain files
+  (`allow_plaintext_at_rest`). Also: the recovery note is now excluded from the
+  agent's own file tools and indexer, which would otherwise have read the
+  recovery key and stored it in the memory database, and it ships one encoding
+  of that key instead of two - the word list carried fewer bits than the file
+  claimed and had no checksum.
+- **Log files stop collecting your conversations in the clear.** The full
+  assembled system prompt - your profile, retrieved memories, working memory,
+  contacts - was written to `prompt_*.log` on every build, with debug logging on
+  by default. That is off now (`prompt_log_full_enabled`). Logs also default to
+  the data directory beside your other VAF data instead of the source checkout,
+  which on at least one machine meant an unencrypted disk; `VAF_DEV_LOGS=1`
+  brings the old location back for development.
+- **Old conversation snapshots no longer pile up forever.** The pre-compression
+  archives were only cleaned when VAF shut down cleanly, so a crash or a killed
+  tray left them for good - thousands of files, each a fuller copy of a chat
+  than the chat itself. They are now swept by age
+  (`context_archive_max_age_days`, default 14), and finished sub-agent task
+  files are deleted instead of accumulating.
+- **The master key no longer hides where the app cannot reach it.** It defaulted
+  to the operating system's keyring, which is the stronger place - and is
+  unreachable from the background process that actually runs VAF, because the
+  tray is started without a desktop session. The first real restart spent 295
+  failed attempts on it. The default is now an owner-only file beside the other
+  VAF data, protected by whatever disk encryption sits underneath;
+  `secure_store_kek_backend = "keyring"` opts back in for installs that start
+  VAF from the desktop session, and an unreachable keyring now falls back to a
+  file copy instead of locking the app out.
+- **Data could be encrypted with a key that was never saved.** When the
+  read-back after writing a new key did not show it, the code handed out the
+  copy it still held in memory. Whatever was encrypted with it became
+  unreadable the moment that process exited - and the next start found
+  ciphertext it could not open, which correctly stopped the migration and left
+  it stuck. A key that is not in the store is now an error, not a value to use.
+- **A second process could make the key store unreadable while every write
+  reported success.** Each process cached the key that opens the store for its
+  own lifetime. When another one re-wrapped that store - which happens the
+  first time each key is used - the first kept sealing its writes with the
+  outdated key: the write went through, the lock was held, nothing looked
+  wrong, and the result was a store nobody could open, including the process
+  that had just written it. On a live machine that showed up as 34 successful
+  key writes that left nothing behind, and a migration that then refused to run
+  at all. The cache is now checked against the store's key file on every use.
+- **A missing key store is treated as a loss, not as a fresh start.** VAF now
+  records that an installation has a keyring, so if that store later disappears
+  it refuses to create a new key and points at the recovery key. Without
+  that, a lost store looked exactly like a first run - and because the old
+  plaintext copies in `config.json` are cleared during the move, the new key
+  quietly replaced the only one that could still open the encrypted memories.
+  Observed twice in one real start before this landed.
+- **A key that cannot be stored is an error, not a reason to make another one.**
+  When the key store could not be written, every following call minted a fresh
+  key and tried again. Nothing was lost this time because no write ever landed,
+  but one that had would have made everything encrypted before it unreadable.
+  The write now fails loudly, and the "minted a new key" line is written after
+  the key is actually stored rather than before.
+- **The rollback copy of `config.json` survives until the move is proven.** It
+  was deleted as soon as `config.json` held no keys - which is briefly true even
+  when the new store could not be written at all. It now waits until the key
+  store opens and actually contains the keys.
+- **Redis and Postgres.** The cache that holds decrypted memory ran with no
+  password at all; it now gets one from the keyring. VAF also warns when the
+  database still uses the password that ships with the project.
 - **The memory block no longer piles up inside a single turn.** The retrieved
   memories were merged into the first system message in place, and for API
   providers that message is the stored history entry, so every tool round-trip

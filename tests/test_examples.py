@@ -4,13 +4,19 @@
 """CI guard for examples/: they must stay syntactically valid and honest.
 
 Examples are the first code a new developer copies; a bit-rotted example is
-worse than none. We do not RUN them (they need a configured provider), but
-every script must compile, and the example tool package must be a loadable
-BaseTool whose entry-point declaration actually points at the class.
+worse than none. Most of them need a configured provider, so those are only
+compiled. Example 08 needs nothing at all - it drives the session store against
+a throwaway home - so it is actually RUN here, and its output is checked. That
+run is the end-to-end proof of the storage story the docs tell: the chat text is
+not in the encrypted bytes, a plaintext file still opens, and a deleted machine
+key comes back from the recovery key.
 """
 import importlib.util
+import os
 import py_compile
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -21,6 +27,33 @@ def test_every_example_script_compiles(tmp_path):
     assert len(scripts) >= 4, "examples went missing"
     for script in scripts:
         py_compile.compile(str(script), cfile=str(tmp_path / "c.pyc"), doraise=True)
+
+
+def test_the_storage_example_runs_and_tells_the_truth(tmp_path):
+    """MUTATION: write sessions in plaintext, and the "present in the raw bytes"
+    line flips to True; break recovery, and the last line never appears.
+
+    A subprocess on purpose: the script repoints HOME before importing VAF, and
+    doing that in-process would follow every later test into the sandbox.
+    """
+    script = EXAMPLES / "08_session_storage_and_encryption.py"
+    env = {**os.environ, "PYTHONPATH": str(EXAMPLES.parent), "TMPDIR": str(tmp_path)}
+
+    proc = subprocess.run([sys.executable, str(script)], capture_output=True,
+                          text=True, timeout=300, env=env, cwd=str(EXAMPLES.parent))
+
+    assert proc.returncode == 0, f"the example failed:\n{proc.stderr[-2000:]}"
+    out = proc.stdout
+    assert "'apple banana' present in the raw bytes: False" in out
+    assert "'Bank' present in the raw bytes:         False" in out
+    assert "VAFENC1:" in out                                  # part 3 wrote ciphertext
+    assert "Alice owns:    ['Alice: travel']" in out          # part 2 isolation holds
+    assert "nothing, as it should be" in out
+    assert "after recovery: 'the safe combination is 42-17-8'" in out
+
+    # And it stayed inside its own sandbox rather than the developer's home.
+    sandbox = out.splitlines()[0]
+    assert sandbox.startswith("Sandbox home: ") and str(tmp_path) in sandbox
 
 
 def test_example_tool_is_a_valid_basetool():

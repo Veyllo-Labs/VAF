@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import { ReactNode, useLayoutEffect, useRef } from 'react';
+import { Fragment, ReactNode, useLayoutEffect, useRef } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -105,6 +105,20 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
 
     const label = `${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
 
+    // The collapsed row is one dot per step and a long agentic turn has no natural
+    // ceiling, so at ~90 steps it ran to ~1350px, overflowed the bubble and put the
+    // whole chat into horizontal scroll. Cap it at the first ten and the last three,
+    // with an elision between: the head shows how the turn started, the tail what it
+    // is doing now, and the count in the label already carries the total, so nothing
+    // the row was telling the reader is lost. The threshold is HEAD+TAIL+1 - a turn
+    // of exactly thirteen renders whole rather than eliding a single dot.
+    const HEAD = 10, TAIL = 3;
+    const elided = actions.length > HEAD + TAIL + 1;
+    const shownActions = elided
+        ? [...actions.slice(0, HEAD), ...actions.slice(-TAIL)]
+        : actions;
+    const hiddenCount = actions.length - shownActions.length;
+
     return (
         <div className="flex flex-col">
         <div ref={rowRef} className="flex gap-4 max-md:gap-2">
@@ -126,11 +140,21 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 >
                     {!expanded && (
                         <span className="flex items-center gap-1.5">
-                            {actions.map((a) => (
-                                <span
-                                    key={a.key}
-                                    className={cn('inline-block h-[9px] w-[9px] rounded-full border-[1.8px]', circleClass(a))}
-                                />
+                            {shownActions.map((a, i) => (
+                                <Fragment key={a.key}>
+                                    {elided && i === HEAD && (
+                                        <span
+                                            aria-label={`${hiddenCount} more`}
+                                            title={`${hiddenCount} more`}
+                                            className="px-0.5 text-[11px] leading-none text-gray-400 dark:text-[#6b6b6b]"
+                                        >
+                                            &hellip;
+                                        </span>
+                                    )}
+                                    <span
+                                        className={cn('inline-block h-[9px] w-[9px] rounded-full border-[1.8px]', circleClass(a))}
+                                    />
+                                </Fragment>
                             ))}
                         </span>
                     )}

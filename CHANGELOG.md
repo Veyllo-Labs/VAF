@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The Context Window showed another lane's goal, plan and tasks.** The panel
+  asked the backend for "the agent's brain" without naming a chat, and the
+  server then answered from a shared store that scheduled automations and other
+  session-less lanes write into - so an open conversation could display a
+  morning-weather automation's instructions next to an unrelated timer's plan,
+  while its own working memory sat unread. It now asks for the open chat and
+  refetches when you switch chats. The same endpoint had no login check at all,
+  which on a local-network install meant anyone who could reach the port could
+  read the agent's working memory; it now requires a session you own.
+- **A long turn no longer pushes the chat sideways.** The row of step dots under
+  a turn drew one dot per step with no limit, so a turn with ninety steps ran
+  wider than the window and put the whole conversation into horizontal scroll.
+  It now shows the first ten and the last three with the gap marked, and the
+  count beside it still names the total.
+
 ### Added
 - **Your chats are encrypted on disk.** Everything VAF stores about a
   conversation - the chat records, the pre-compression archives, hand-off

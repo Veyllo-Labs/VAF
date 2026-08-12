@@ -49,3 +49,42 @@ jobs:
             echo "  pip-compile --allow-unsafe --generate-hashes --output-file=requirements.lock requirements.txt"
             exit 1
           fi
+
+  narrow-console:
+    # THE WINDOWS FAILURE CLASS, CAUGHT ON A LINUX RUNNER IN A THIRD OF THE TIME.
+    #
+    # On Windows, stdout uses the active code page - cp1252 by default - whenever
+    # it is not a real console, which is every CI run, every redirect and every
+    # captured subprocess. Printing a character that page cannot encode raises
+    # UnicodeEncodeError and kills the process. A documented example died exactly
+    # that way on the first encrypted file it tried to show.
+    #
+    # Nothing else in this pipeline can see it coming: every other Linux job runs
+    # with UTF-8 output, so the crash is unreachable there, and the windows-latest
+    # entry that CAN see it takes 27 minutes. This job re-runs the suite with the
+    # narrow encoding on a fast runner, so the answer arrives with the others.
+    #
+    # It also hides the optional heavyweight packages (a test that quietly needs a
+    # model file the runner never downloaded fails here rather than intermittently
+    # elsewhere) and redirects HOME, which matters less on a throwaway runner than
+    # it does locally but keeps the script honest in both places.
+    #
+    # NOT in the branch ruleset's required checks. Adding a job does not add it
+    # there, so this reports without blocking until someone decides otherwise -
+    # a deliberate first step, not an oversight.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: 'pip'
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-dev
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: Run the suite with a narrow output encoding
+        run: python scripts/hostile_env.py

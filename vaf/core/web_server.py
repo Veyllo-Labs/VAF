@@ -6555,7 +6555,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # All replies are per-connection (websocket.send_json) and all
                 # state is keyed on the connection's user_scope_id (isolation).
                 # ---- Live-Call: voice-agent first layer ----
-                elif type in ("voice_call_start", "voice_call_turn", "voice_call_end"):
+                # The tuple is the OUTER door and must list every voice_call_*
+                # type the branches below handle. A branch whose type is missing
+                # here is dead code that looks alive: the streaming endpointer
+                # lane shipped that way (chunk/reset handled inside, never
+                # admitted), so the browser streamed microphone audio the server
+                # silently discarded while the feature read as available.
+                # tests/test_voice_call_wiring.py pins door and branches together.
+                elif type in ("voice_call_start", "voice_call_turn", "voice_call_end",
+                              "voice_call_chunk", "voice_call_reset"):
                     # ONE door into the voice engine: everything engine-shaped in
                     # this block goes through voice_turn (the same discipline as
                     # agent.py consuming the tool pipeline only through

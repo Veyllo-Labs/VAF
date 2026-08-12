@@ -448,7 +448,11 @@ def test_the_call_lane_has_one_engine_door():
 
     src = pathlib.Path(__file__).resolve().parent.parent / "vaf" / "core" / "web_server.py"
     text = src.read_text(encoding="utf-8")
-    start = text.find('elif type in ("voice_call_start", "voice_call_turn", "voice_call_end")')
+    # Anchor on the door's FIRST type, not the whole tuple: the tuple legitimately
+    # grows when a message type is added (it gained chunk/reset when the streaming
+    # endpointer was made reachable), and a scanner that breaks on every such
+    # addition trains the next reader to re-anchor it without reading what changed.
+    start = text.find('elif type in ("voice_call_start"')
     assert start != -1, "the voice-call lane moved; update this scanner deliberately"
     end = text.find('elif type in ("speaker_enroll_start"', start)
     assert end != -1, "the enroll lane moved; update this scanner deliberately"

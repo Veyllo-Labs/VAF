@@ -31,10 +31,11 @@ public voice surface is deferred until an embedder proves the need. The handler
 being a thin consumer of this object is the acceptance test that the surface would
 suffice when that day comes.
 
-The history-content truncations preserved here are the MEASURED status quo and are
-knowingly inconsistent (see _HISTORY_CAPS); normalizing them is a behavior change
-that belongs to its own change, never to a refactor - the extraction baseline
-(tests/test_voice_call_baseline.py) freezes them.
+History entries are stored under ONE cap (_HISTORY_MAX_CHARS, applied centrally in
+_history_add) - the number the consumer enforces anyway: voice_reply caps every
+entry at 800 when building the prompt. The extraction itself preserved the old
+inconsistent per-site caps; this normalization was a separate, deliberate change
+with a regenerated baseline (tests/test_voice_call_baseline.py).
 """
 from __future__ import annotations
 
@@ -43,11 +44,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 
-# The measured status-quo of history-content truncation, knowingly inconsistent:
-# early exits cap at 200, the model-silence path at 400, the normal path stores the
-# full text, voice_call_speak caps at 800. Named so the next reader sees ONE table
-# instead of magic numbers - and so a deliberate normalization has one place to go.
-_HISTORY_CAPS = {"early": 200, "model_silence": 400, "spoken": 800}
+# ONE history-content cap, applied centrally in _history_add. The extraction had
+# preserved the measured status quo (200 on early exits, 400 on model silence,
+# UNCAPPED on the normal path, 800 in voice_call_speak - four rules, grown one
+# incident at a time); this deliberate normalization uses the number the CONSUMER
+# already enforces: voice_reply caps every history entry at 800 when it builds the
+# prompt, so storing more was waste and storing less threw context away.
+_HISTORY_MAX_CHARS = 800
 _HISTORY_RING = 16          # the call keeps the last N history entries
 _CHIME_RING = 6             # recent chime-ins kept for dedup
 _RECHECK_PENDING_TTL_S = 30.0   # "did you mean me?" answer window
@@ -123,7 +126,10 @@ class VoiceTurnEngine:
     # ── small shared helpers ─────────────────────────────────────────────────
 
     def _history_add(self, role: str, content: str) -> None:
-        self.state["history"].append({"role": role, "content": content})
+        # The cap lives HERE, not at the call sites - four hand-rolled sites is how
+        # the old 200/400/uncapped inconsistency grew in the first place.
+        self.state["history"].append(
+            {"role": role, "content": (content or "")[:_HISTORY_MAX_CHARS]})
         self.state["history"] = self.state["history"][-_HISTORY_RING:]
 
     def note_greeting(self, text: str) -> None:
@@ -133,7 +139,7 @@ class VoiceTurnEngine:
 
     def note_spoken(self, text: str) -> None:
         """voice_call_speak: a server-delivered result was read into the call."""
-        self._history_add("assistant", (text or "")[:_HISTORY_CAPS["spoken"]])
+        self._history_add("assistant", text or "")
 
     def end(self) -> None:
         """Call ended: drop the rolling transcript (it is context, not a record)."""
@@ -375,7 +381,7 @@ class VoiceTurnEngine:
                 if _yn == "yes":
                     _cl = _va.speaker_recheck_confirm_line(_turn_lang, _call["scope"])
                     _call.pop("pending_speaker_check", None)
-                    self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+                    self._history_add("user", _text)
                     self._history_add("assistant", _cl)
                     self._log("voice_call: speaker recheck answered yes but unverified"
                               " -> asked to confirm")
@@ -452,7 +458,7 @@ class VoiceTurnEngine:
                 _pq["asked_at"] = self._clock()
                 _pq["turns_left"] = _vpolA.PENDING_Q_TURNS
                 _call["pending_q"] = _pq
-                self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+                self._history_add("user", _text)
                 self._history_add("assistant", _reask)
                 self._log(f"voice_call: pending-answer REASK text={_text[:50]!r}")
                 return _out("reask", reply=_reask, tts_lang=_turn_lang,
@@ -470,7 +476,7 @@ class VoiceTurnEngine:
             if not _force_reply and _va.wants_addressee_clarification(
                     _text, _label, _call.get("agent_name", "")):
                 _clar = _va.addressee_clarify_line(_turn_lang, _call["scope"])
-                self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+                self._history_add("user", _text)
                 self._history_add("assistant", _clar)
                 self._log(f"voice_call: addressee clarify text={_text[:60]!r}")
                 return _out("clarify", reply=_clar, tts_lang=_turn_lang,
@@ -497,7 +503,7 @@ class VoiceTurnEngine:
                 _call["pending_speaker_check"] = {
                     "text": _text, "asked_at": self._clock()}
                 _call["recheck_cooldown_until"] = self._clock() + _RECHECK_COOLDOWN_S
-                self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+                self._history_add("user", _text)
                 self._history_add("assistant", _rc)
                 self._log(f"voice_call: speaker recheck (did you mean me?) text={_text[:60]!r}")
                 return _out("clarify", reply=_rc, tts_lang=_turn_lang,
@@ -569,7 +575,7 @@ class VoiceTurnEngine:
                         if _remark and not _dup:
                             _chime_recent.append(_remark)
                             _call["chime_recent"] = _chime_recent[-_CHIME_RING:]
-                            self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+                            self._history_add("user", _text)
                             self._history_add("assistant", _remark)
                             try:
                                 _vctx.record(_call["scope"], _session, _remark,
@@ -582,7 +588,7 @@ class VoiceTurnEngine:
                                         tts_follow=True, flags={"chime_in": True}, **base)
             except Exception as _chime_e:
                 self._log(f"voice_call chime-in failed: {_chime_e}")
-            self._history_add("user", _text[:_HISTORY_CAPS["early"]])
+            self._history_add("user", _text)
             self._log(f"voice_call: not engaging ({_gate_reason}) text={_text[:60]!r}")
             return _out("silent", flags={"silent": True}, **base)
 
@@ -651,7 +657,7 @@ class VoiceTurnEngine:
         if _res.get("silent"):
             # Tier 2: the model itself judged this as not addressed to it. Keep the
             # utterance as context, skip TTS, keep listening.
-            self._history_add("user", _text[:_HISTORY_CAPS["model_silence"]])
+            self._history_add("user", _text)
             self._log(f"voice_call: model chose silence text={_text[:60]!r}")
             return _out("silent", flags={"silent": True}, **base)
 
@@ -659,8 +665,8 @@ class VoiceTurnEngine:
         # stays visible in the handler, which fills the reply's `delegated` field.
         _delegate = _res.get("delegate") or None
 
-        # History + rolling transcript for the normal reply. Note: the user text is
-        # stored UNCAPPED on this path - the measured status quo (_HISTORY_CAPS).
+        # History + rolling transcript for the normal reply (the shared 800 cap
+        # applies inside _history_add, like everywhere else).
         self._history_add("user", _text)
         self._history_add("assistant", _res["reply"])
         # Record the agent's own spoken reply into the rolling transcript (label

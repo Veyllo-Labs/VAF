@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from vaf.core.voice_turn import VoiceTurnEngine, _HISTORY_CAPS
+from vaf.core.voice_turn import VoiceTurnEngine, _HISTORY_MAX_CHARS
 
 
 SCOPE = "deadbeef-0000-0000-0000-000000000000"
@@ -178,31 +178,43 @@ def test_llm_failure_writes_nothing(env):
 
 # ── the truncation table (measured status quo) ────────────────────────────────
 
-def test_history_truncation_asymmetry(env):
-    """200 on side-talk, 400 on model silence, UNCAPPED on the normal path - the
-    measured status quo, preserved knowingly (normalizing is its own change).
-    Mutation: change any constant in _HISTORY_CAPS - red here AND in the baseline."""
-    # normal reply: uncapped user text
-    eng = make_engine(env)
-    env["stt"] = (LONG, "de")
-    assert turn(eng).kind == "reply"
-    assert len(env["state"]["history"][-2]["content"]) == len(LONG)
+def test_history_entries_share_one_cap(env):
+    """ONE cap (800) for every stored entry, applied inside _history_add - it
+    matches what voice_reply reads anyway (it caps entries at 800 building the
+    prompt). Replaced the old 200/400/uncapped asymmetry in a deliberate,
+    baseline-regenerating change. Mutation: cap at a call site instead of inside
+    _history_add, or change the constant - red here AND in the baseline."""
+    assert _HISTORY_MAX_CHARS == 800
+    # Above the cap WITHOUT repeating tokens (looks_garbled runs real and flags
+    # repetition - this line is the third time this round that heuristic bit).
+    hyper = LONG + (" ausserdem wollte ich erwaehnen dass der nachbar gestern das "
+                    "geruest abgebaut hat und die einfahrt endlich wieder frei ist "
+                    "der maler kommt uebrigens erst naechsten monat weil sein "
+                    "lieferant die spezielle silikatfarbe nicht rechtzeitig "
+                    "beschaffen konnte was mich ehrlich gesagt ziemlich nervt "
+                    "trotzdem bleibt der zeitplan fuer das dach unveraendert")
 
-    # model silence: 400
+    # normal reply: capped at 800 now (was uncapped)
+    eng = make_engine(env)
+    env["stt"] = (hyper, "de")
+    assert turn(eng).kind == "reply"
+    assert len(env["state"]["history"][-2]["content"]) == _HISTORY_MAX_CHARS
+
+    # model silence: same cap (was 400)
     eng2 = make_engine(env)
     env["reply"] = {"reply": "<silent/>", "delegate": None, "silent": True}
     assert turn(eng2).kind == "silent"
-    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_CAPS["model_silence"]
+    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_MAX_CHARS
 
-    # side-talk silence: 200 (guest, garbled-free side talk)
+    # side-talk silence: same cap (was 200)
     eng3 = make_engine(env)
     env["reply"] = {"reply": "Hallo!", "delegate": None, "silent": False}
     env["profile"] = {"meta": {"display_name": "Alice"}}
     env["resolve"] = {"label": "other", "speaker_ok": False, "confident": "other"}
-    env["stt"] = ("wir gehen dann gleich einkaufen ja " * 20, "de")
+    env["stt"] = ("wir gehen dann gleich einkaufen ja " * 40, "de")
     out = turn(eng3)
     assert out.kind == "silent"
-    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_CAPS["early"]
+    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_MAX_CHARS
 
 
 # ── invariant 1: the speaker_ok DERIVATION with the sticky window ─────────────
@@ -417,4 +429,4 @@ def test_note_greeting_and_spoken_caps(env):
     eng.note_greeting("Hallo!")
     assert env["state"]["history"][-1] == {"role": "assistant", "content": "Hallo!"}
     eng.note_spoken("R" * 2000)
-    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_CAPS["spoken"]
+    assert len(env["state"]["history"][-1]["content"]) == _HISTORY_MAX_CHARS

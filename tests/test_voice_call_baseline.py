@@ -26,6 +26,11 @@ _VOICE_CALLS (history length and per-entry truncation prefix, pending_q /
 pending_speaker_check / chime_recent / engage_guests / last_self_ts), and the
 external calls (TaskQueue.add, speaker_confirm.maybe_request_confirmation).
 
+REGENERATED once, deliberately (2026-08-13): the history-cap normalization
+(one 800-char cap in _history_add instead of the grown 200/400/uncapped mix) is a
+real behavior change, so the literal was re-measured against the CURRENT handler -
+from that change on, this baseline freezes the normalized contract.
+
 DELIBERATELY NOT MEASURED, so the list does not read as complete: greeting audio
 bytes; real STT/LLM/ONNX behavior (tests/test_voice_agent.py owns that); the
 interleaving of state writes vs TTS within one turn (unobservable through the
@@ -575,7 +580,7 @@ VOICE_BASELINE = {'addressee_clarify': {'confirms': 0,
  'model_silence': {'confirms': 0,
                    'record': {'chime_recent': 0,
                               'engage_guests': False,
-                              'history': [('assistant', 'short'), ('user', 400)],
+                              'history': [('assistant', 'short'), ('user', 530)],
                               'last_self_ts': False,
                               'pending_q': False,
                               'pending_speaker_check': False},

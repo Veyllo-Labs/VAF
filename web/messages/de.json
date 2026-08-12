@@ -445,7 +445,7 @@
     "ovDescEvents": "Alles, was VAF heute abgewiesen hat: abgelehnte Zugriffe, abgewiesene Absender, blockierte Mails und gestoppte Skill-Installationen. Eine Admin-Freigabe heisst, dass jemand eine Sperre bewusst uebergangen hat.",
     "ovEvFactTotal": "Ereignisse heute",
     "ovEvCliGateFailed": "Fehlgeschlagene Passwortversuche im Terminal",
-    "ovEvDefaultDbPassword": "Datenbank nutzt noch das Standardpasswort"
+    "ovEvDefaultDbPassword": "Datenbank nutzt noch das Standardpasswort. Bitte deinen Agenten, vaf secure rotate-db auszufuehren, oder tippe es selbst in ein Terminal"
   },
   "common": {
     "save": "Speichern",

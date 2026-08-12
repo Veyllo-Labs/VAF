@@ -51,13 +51,22 @@ def get_database_url() -> str:
     Converts postgresql:// to postgresql+asyncpg:// for async support.
     """
     url = Config.get("memory_db_url", "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory")
+    return normalize_async_dsn(url)
 
-    # Ensure async driver
+
+def normalize_async_dsn(url: str) -> str:
+    """Force the asyncpg driver onto a bare postgres DSN.
+
+    Config stores the bare `postgresql://` form; SQLAlchemy resolves that
+    scheme to the SYNC default driver (psycopg2), which is not installed.
+    Every consumer that opens an async engine from a config DSN must pass it
+    through here - `vaf secure rotate-db` failed live with
+    ModuleNotFoundError precisely because it used the raw config value.
+    """
     if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif not url.startswith("postgresql+asyncpg://"):
-        url = f"postgresql+asyncpg://{url}"
-
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if not url.startswith("postgresql+asyncpg://"):
+        return f"postgresql+asyncpg://{url}"
     return url
 
 

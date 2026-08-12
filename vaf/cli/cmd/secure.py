@@ -62,7 +62,11 @@ def status():
     encrypted = bool(Config.get("file_encryption_enabled", True))
     UI.info(f"Chats and files:  {'encrypted at rest' if encrypted else 'PLAINTEXT (switched off)'}")
 
-    dsn = str(Config.get("memory_db_url", "") or "")
+    # Both DSNs: the owner (DDL) role is the stronger one, and checking only
+    # the app DSN reads "all clear" while the superuser still has the
+    # published secret (exactly the state a half-done rotation left behind).
+    dsn = (str(Config.get("memory_db_url", "") or "")
+           + " " + str(Config.get("memory_db_owner_url", "") or ""))
     if "vaf_dev_secret" in dsn or "vaf_app_dev_secret" in dsn:
         UI.warning("The memory database still uses the shipped default password. "
                    "Run `vaf secure rotate-db`.")
@@ -160,17 +164,24 @@ def rotate_db(
         UI.info("Cancelled.")
         raise typer.Exit(0)
 
-    new_password = secrets.token_urlsafe(24)
+    async def _rotate_dsn(source_dsn: str) -> str:
+        """Rotate the role named in this DSN; return the DSN with the new password.
 
-    async def _rotate() -> str:
+        Each role gets its OWN fresh password: the two DSNs name different
+        roles with different power, and sharing one secret between them would
+        undo the reason they were separated.
+        """
         from urllib.parse import urlsplit, urlunsplit
 
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        parts = urlsplit(dsn)
+        from vaf.memory.database import normalize_async_dsn
+
+        new_password = secrets.token_urlsafe(24)
+        parts = urlsplit(source_dsn)
         role = parts.username or "vaf"
-        engine = create_async_engine(dsn, poolclass=None)
+        engine = create_async_engine(normalize_async_dsn(source_dsn), poolclass=None)
         try:
             async with engine.begin() as conn:
                 # Parameter binding is not allowed in ALTER ROLE; the password is
@@ -186,7 +197,7 @@ def rotate_db(
 
         # Verify BEFORE persisting: a config pointing at a password that does not
         # work is the lockout this command exists to avoid.
-        verify = create_async_engine(rotated, poolclass=None)
+        verify = create_async_engine(normalize_async_dsn(rotated), poolclass=None)
         try:
             async with verify.connect() as conn:
                 await conn.execute(text("SELECT 1"))
@@ -195,15 +206,31 @@ def rotate_db(
         return rotated
 
     try:
-        rotated = asyncio.run(_rotate())
+        rotated = asyncio.run(_rotate_dsn(dsn))
     except Exception as e:
         UI.error(f"Rotation failed, nothing was changed in the config: {type(e).__name__}: {e}")
         raise typer.Exit(1)
 
     Config.set("memory_db_url", rotated)
+
+    # The owner role gets the same treatment, not a warning. A default install
+    # has TWO roles since the RLS cutover - vaf_app for data, vaf as owner for
+    # DDL - and the owner is the more powerful of the two. Rotating only the
+    # app role removes the shipped password from the weaker account and leaves
+    # it on the stronger one; live run 2026-08-13 ended exactly there, with a
+    # superuser still reachable by the published secret. Failure here does not
+    # roll back the app rotation: each DSN is verified before it is persisted,
+    # so the config never points at a password that does not work.
     owner = str(Config.get("memory_db_owner_url", "") or "")
-    if owner and "vaf_dev_secret" in owner:
-        UI.warning("memory_db_owner_url still carries the old default password - "
-                   "update it by hand if you use a separate owner role.")
+    if owner and ("vaf_dev_secret" in owner or "vaf_app_dev_secret" in owner):
+        try:
+            rotated_owner = asyncio.run(_rotate_dsn(owner))
+            Config.set("memory_db_owner_url", rotated_owner)
+            UI.success("Owner role rotated and verified as well.")
+        except Exception as e:
+            UI.error(f"Owner role rotation failed ({type(e).__name__}: {e}). The app "
+                     "role IS rotated; the owner role still has the shipped password. "
+                     "Fix the cause and run this command again.")
+            raise typer.Exit(1)
     UI.success("Database password rotated and verified. Restart VAF so every worker "
                "picks up the new credentials.")

@@ -341,18 +341,33 @@ def _warn_about_default_db_password(log=None) -> bool:
     """
     try:
         from vaf.core.config import Config
-        dsn = str(Config.get("memory_db_url", "") or "")
+        # BOTH DSNs, not just the app one. Since the RLS cutover a default
+        # install has two roles, and the owner (DDL) role is the stronger of
+        # the two - a check that only reads memory_db_url goes silent while
+        # the superuser is still reachable by the published secret. Live run
+        # 2026-08-13: the app role was rotated, the owner role was not, and
+        # this warning would have said "all clear".
+        dsn = (str(Config.get("memory_db_url", "") or "")
+               + " " + str(Config.get("memory_db_owner_url", "") or ""))
     except Exception:
         return False
     if "vaf_dev_secret" not in dsn and "vaf_app_dev_secret" not in dsn:
         return False
     _say(log, "SECURITY: the memory database still uses the shipped default password. "
-              "Run `vaf secure rotate-db` to replace it.")
+              "Tell your agent to run `vaf secure rotate-db` to set a random one, "
+              "or open a terminal and type `vaf secure rotate-db` yourself.")
     try:
         from vaf.core.security_events import log_security_event
+        # The remedy travels INSIDE the event text: this line is read in the
+        # Logs window, far away from any documentation, and a warning that
+        # names a problem without naming the way out just re-fires on every
+        # start until someone goes searching.
         log_security_event(
             "default_db_password",
-            detail="The memory database is using the published default password",
+            detail="The memory database is using the published default password. "
+                   "Tell your agent to run `vaf secure rotate-db` to set a random "
+                   "one, or open a terminal and type `vaf secure rotate-db` "
+                   "yourself.",
         )
     except Exception:
         pass

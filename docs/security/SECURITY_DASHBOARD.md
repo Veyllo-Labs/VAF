@@ -137,7 +137,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
 | `cli_password_gate_failed` | Three wrong admin passwords at the interactive terminal | `vaf/cli/gate.py` |
-| `default_db_password` | The memory database is still using the shipped default password | `service_stack.py` start |
+| `default_db_password` | The memory database is still using the shipped default password; the event text carries the fix (`vaf secure rotate-db`, via the agent or a terminal) | `service_stack.py` start |
 
 Unknown kinds pass through; the registry is a contract for consumers, not a
 validation gate. Auditing must never drop an event because bookkeeping

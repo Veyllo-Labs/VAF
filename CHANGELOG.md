@@ -11,12 +11,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- The "memory database still uses the default password" warning now says how
+  to fix it, right in the log entry and the security dashboard: ask your agent
+  to run `vaf secure rotate-db`, or type it in a terminal yourself. Previously
+  the warning named the problem on every start and left the reader to go
+  searching for the remedy.
+
 ### Fixed
 - Voice call: the assistant no longer denies a capability in the same
   breath as delegating the task ("I can't check your mails, but..."
   spoken while the mail check was already handed to the main agent).
   When a delegation survives, such a denial is replaced by the normal
   short acknowledgement.
+- `vaf secure rotate-db` works now; its first live run found two defects. It
+  crashed before touching anything (the config's plain `postgresql://` address
+  selected a database driver that is not installed), and it rotated only the
+  app role while the more powerful owner role kept the published default
+  password, with the warning reading "all clear" because it only checked the
+  app connection. The command now rotates both roles, each verified before
+  anything is saved, and the warning watches both connections.
 
 ### Added
 - **Developers can now build voice assistants on VAF.** The live-call turn

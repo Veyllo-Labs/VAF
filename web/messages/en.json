@@ -445,7 +445,7 @@
     "ovDescEvents": "Every attempt VAF turned away today: rejected access, refused senders, blocked mail and stopped skill installs. An admin override means someone deliberately stepped past a refusal.",
     "ovEvFactTotal": "Events today",
     "ovEvCliGateFailed": "Failed terminal password attempts",
-    "ovEvDefaultDbPassword": "Database still uses the default password"
+    "ovEvDefaultDbPassword": "Database still uses the default password. Ask your agent to run vaf secure rotate-db, or type it in a terminal yourself"
   },
   "common": {
     "save": "Save",

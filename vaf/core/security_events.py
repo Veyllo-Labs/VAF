@@ -71,7 +71,8 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "skill_removed": "Quarantined skill deleted from the dashboard",
     # data at rest
     "cli_password_gate_failed": "Three wrong admin passwords at the interactive terminal",
-    "default_db_password": "The memory database is still using the shipped default password",
+    "default_db_password": "The memory database is still using the shipped default password; "
+                           "fix: `vaf secure rotate-db` (ask your agent, or type it in a terminal)",
 }
 
 _THROTTLE_S = 5.0

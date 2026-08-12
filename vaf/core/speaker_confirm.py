@@ -45,7 +45,15 @@ _PENDING_TTL_SECONDS = 60 * 60        # unanswered questions expire after an hou
 # Question and acknowledgment texts live in the vocabulary book
 # (vaf/core/vocab, keys speaker_confirm_*) - new languages are added THERE.
 
-_YES_RE = re.compile(r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si)\b", re.I)
+# "natuerlich/klar/genau/sure/of course" added after a live drop (2026-08-12): the
+# agent asked "did you mean me?", the answer was "Natuerlich, meinte ich dich." -
+# twice - and parse_reply returned None both times, so the recovery branch had no
+# verdict and the answer to the agent's OWN question fell through as side-talk
+# silence. Leading-word match only, same shape as before: a sentence merely
+# CONTAINING these words is not consumed as a confirmation.
+_YES_RE = re.compile(
+    r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si|klar|nat[uü]rlich|genau|sicher|"
+    r"selbstverst[aä]ndlich|freilich|of course|sure|certainly|definitely)\b", re.I)
 _NO_RE = re.compile(r"^\s*(nein+|ne+|noe|nö|no+|nope)\b", re.I)
 # "nein, das ist Peter" / "no that's Peter" / "nein das war Peter" ...
 _NAME_RE = re.compile(

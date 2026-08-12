@@ -295,3 +295,18 @@ def test_expired_pending_resolves_gracefully(monkeypatch):
     p.write_text(json.dumps(old))
     res = sc.resolve("scope-a", "yes")
     assert res["ok"] is False and res["outcome"] == "expired"
+
+
+def test_a_natural_german_affirmation_is_a_yes():
+    """Live drop 2026-08-12: the agent asked "did you mean me?", the answer was
+    "Natuerlich, meinte ich dich." - twice - and parse_reply returned None, so the
+    recovery branch had no verdict and the answer to the agent's own question fell
+    through as side-talk silence. Leading affirmations must parse; a sentence merely
+    CONTAINING the word must not be consumed as a confirmation."""
+    from vaf.core.speaker_confirm import parse_reply
+
+    assert parse_reply("Natürlich, meinte ich dich.") == ("yes", None)
+    assert parse_reply("Klar!") == ("yes", None)
+    assert parse_reply("Of course I meant you") == ("yes", None)
+    assert parse_reply("Das ist natürlich Unsinn") is None
+    assert parse_reply("Ich bin sicher, dass es regnet") is None

@@ -97,6 +97,13 @@ def test_corrupt_marker_is_treated_as_missing(monkeypatch, tmp_path):
     assert len(rec.calls) == 1
 
 
+def _linux_only(monkeypatch):
+    monkeypatch.setattr(fw.Platform, "is_windows", lambda *a: False)
+    monkeypatch.setattr(fw.Platform, "is_macos", lambda *a: False)
+    monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: True)
+    monkeypatch.setattr(fw, "_attempted_ports", {})
+
+
 def test_one_elevation_attempt_per_process(monkeypatch):
     """TLS mode runs two lifespans of the same app; both spawn the firewall
     setup within milliseconds. The second call must never reach the platform
@@ -104,13 +111,24 @@ def test_one_elevation_attempt_per_process(monkeypatch):
     start. Mutation: claim the key on success instead of entry - red."""
     calls = []
     monkeypatch.setattr(fw, "_setup_firewall_linux", lambda p, pf: calls.append(p) or True)
-    monkeypatch.setattr(fw.Platform, "is_windows", lambda *a: False)
-    monkeypatch.setattr(fw.Platform, "is_macos", lambda *a: False)
-    monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: True)
-    monkeypatch.setattr(fw, "_attempted_ports", set())
+    _linux_only(monkeypatch)
     assert fw.setup_firewall(8443, 8001) is True
-    assert fw.setup_firewall(8443, 8001) == "present"
+    assert fw.setup_firewall(8443, 8001) is True
     assert calls == [8443], "second call must not re-run the platform setup"
+
+
+def test_a_cancelled_dialog_is_never_reported_as_success(monkeypatch):
+    """The twin lifespan must learn what the FIRST attempt actually did. With a
+    blanket "present" the log said the rule was in place while the port stayed
+    closed, because the user had cancelled the password dialog. Mutation: return
+    "present" for any repeat call - red."""
+    calls = []
+    monkeypatch.setattr(fw, "_setup_firewall_linux", lambda p, pf: calls.append(p) or False)
+    _linux_only(monkeypatch)
+    assert fw.setup_firewall(8443, 8001) is False
+    assert fw.setup_firewall(8443, 8001) is False, \
+        "a failed attempt must not turn truthy for the twin lifespan"
+    assert calls == [8443]
 
 
 def test_engine_detection_never_runs_firewall_cmd(monkeypatch):

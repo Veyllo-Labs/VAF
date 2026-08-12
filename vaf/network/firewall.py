@@ -49,7 +49,7 @@ PRIVATE_CIDRS = [
 # Failures are deliberately not retried in-process: network settings changes
 # restart the app anyway, and a second unprompted dialog is exactly the annoyance
 # this guards against.
-_attempted_ports: set = set()
+_attempted_ports: dict = {}   # {(port, frontend): "present"|"created"|True|False|None}
 _attempt_lock = threading.Lock()
 
 
@@ -67,31 +67,43 @@ def setup_firewall(port: int, port_frontend: int = 3000):
         port_frontend: Frontend port (default 3000)
 
     Returns:
-        Truthy if the rules are in place: the string "present" when nothing had
-        to run (rule already active, or this process already attempted these
-        ports), "created" when the Linux firewalld path actually elevated, True
-        from the other platform paths. False on failure. Callers that only
-        check truthiness keep working.
+        Truthy if the rules are in place: "present" when nothing had to run
+        (the marker says this install already set the rule up), "created" when
+        the Linux firewalld path actually elevated, True from the other
+        platform paths, "in_flight" when a twin lifespan is still on the
+        dialog. False on failure - INCLUDING a repeat call after this process
+        already failed, so a cancelled dialog can never be logged as success.
+        Callers that only check truthiness keep working.
     """
     key = (int(port), int(port_frontend))
     with _attempt_lock:
         if key in _attempted_ports:
-            logger.info("firewall: setup for ports %s already attempted in this process - not asking again", key)
-            return "present"
-        _attempted_ports.add(key)
+            # Report what the first attempt ACTUALLY did, never a blanket
+            # "present": if the user cancelled the dialog, the twin lifespan
+            # would otherwise make the log say the rule is in place when the
+            # port is closed. "in_flight" means the first attempt has not
+            # answered yet (the dialog is still open).
+            prior = _attempted_ports[key]
+            logger.info("firewall: setup for ports %s already attempted in this "
+                        "process (result: %s) - not asking again", key, prior)
+            return prior if prior is not None else "in_flight"
+        _attempted_ports[key] = None
+    result = False
     try:
         if Platform.is_windows():
-            return _setup_firewall_windows(port, port_frontend)
+            result = _setup_firewall_windows(port, port_frontend)
         elif Platform.is_macos():
-            return _setup_firewall_macos(port, port_frontend)
+            result = _setup_firewall_macos(port, port_frontend)
         elif Platform.is_linux():
-            return _setup_firewall_linux(port, port_frontend)
+            result = _setup_firewall_linux(port, port_frontend)
         else:
             logger.warning(f"Unsupported platform for firewall: {Platform.current()}")
-            return False
     except Exception as e:
         logger.error(f"Failed to setup firewall: {e}")
-        return False
+        result = False
+    with _attempt_lock:
+        _attempted_ports[key] = result
+    return result
 
 
 def cleanup_firewall() -> bool:

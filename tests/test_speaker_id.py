@@ -142,6 +142,24 @@ def test_profile_roundtrip_and_scope_isolation():
 # Enrollment session bookkeeping (embeddings mocked; no models needed)
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _engine_present(monkeypatch):
+    """`engine_ready()` needs sherpa-onnx AND a model file it DOWNLOADS on first
+    use, so leaving it real made every test in this file depend on the network
+    and on whatever the machine happened to have cached.
+
+    It passed here for months because this workstation has the model, and went
+    red on one CI runner that did not - reporting `engine_unavailable` where the
+    test expected `too_short`, which reads like a logic bug and is not one. The
+    section header already promised "no models needed"; this makes that true.
+
+    Stubbed rather than skipped: the enrollment accounting these tests cover has
+    nothing to do with whether an engine is installed, and skipping would have
+    quietly stopped testing it on exactly the machines that lack the model.
+    """
+    monkeypatch.setattr(sid, "engine_ready", lambda: True)
+
+
 def _mock_pipeline(monkeypatch, embedding, seg_seconds=4.0):
     monkeypatch.setattr(sid, "_concat_speech", lambda samples: (samples, seg_seconds))
     monkeypatch.setattr(sid, "_embed", lambda seg: embedding)

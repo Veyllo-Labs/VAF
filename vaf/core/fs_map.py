@@ -442,51 +442,11 @@ Current OS: {self.map['os']}
         return f"{file_type.upper()}s by folder: {where} (Total: {sum(n for _, n in counts)})"
 
 
-    def suggest_search_location(self, filename: str) -> Path:
-        """
-        Suggests the best location to search for a file.
-        
-        Args:
-            filename: The file to find (e.g., "report.pdf")
-        
-        Returns:
-            Most likely Path to search in
-        """
-        ext = Path(filename).suffix.lower().lstrip('.')
-        
-        # Extension-based mapping
-        location_map = {
-            'pdf': 'documents',
-            'docx': 'documents',
-            'txt': 'documents',
-            'xlsx': 'documents',
-            'jpg': 'pictures',
-            'jpeg': 'pictures',
-            'png': 'pictures',
-            'gif': 'pictures',
-            'mp4': 'videos',
-            'mov': 'videos',
-            'avi': 'videos',
-            'mp3': 'music',
-            'wav': 'music',
-            'zip': 'downloads',
-            'exe': 'downloads',
-        }
-        
-        suggested_loc = location_map.get(ext, 'documents')
-        
-        # Get the actual path
-        loc_data = self.map['locations'].get(suggested_loc)
-        if loc_data:
-            return Path(loc_data['path'])
-        
-        # Fallback to home
-        return self.home
+    # NOTE: suggest_search_location() was deleted here. It carried the same
+    # extension-implies-folder table (pdf -> documents) that made query_fast()
+    # answer about the wrong folder, and it had ZERO callers - dead code whose
+    # only possible future was someone wiring the conflation back in.
 
-
-# ============================================
-# CACHED VERSION (Faster startup)
-# ============================================
 
 class CachedFilesystemMap(FilesystemMap):
     """Filesystem map with persistent caching for instant loading."""

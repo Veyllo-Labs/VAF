@@ -45,16 +45,54 @@ _PENDING_TTL_SECONDS = 60 * 60        # unanswered questions expire after an hou
 # Question and acknowledgment texts live in the vocabulary book
 # (vaf/core/vocab, keys speaker_confirm_*) - new languages are added THERE.
 
-# "natuerlich/klar/genau/sure/of course" added after a live drop (2026-08-12): the
-# agent asked "did you mean me?", the answer was "Natuerlich, meinte ich dich." -
-# twice - and parse_reply returned None both times, so the recovery branch had no
-# verdict and the answer to the agent's OWN question fell through as side-talk
-# silence. Leading-word match only, same shape as before: a sentence merely
-# CONTAINING these words is not consumed as a confirmation.
-_YES_RE = re.compile(
-    r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si|klar|nat[uü]rlich|genau|sicher|"
-    r"selbstverst[aä]ndlich|freilich|of course|sure|certainly|definitely)\b", re.I)
+# CORE regex only: elongations and clipped forms a word list carries badly
+# (ja+, nein+, jep/jup/jo, nope). The WORD lists live in the vocabulary book
+# (keys confirm_yes / confirm_no, generated like addressee_check) and are
+# matched leading-only in parse_reply - born from a live drop (2026-08-12):
+# "Natuerlich, meinte ich dich." answered the agent's own "did you mean me?"
+# twice and parsed as nothing, because the affirmation lexicon here stopped at
+# ja/yes. Hardcoding more words was the wrong fix - every language the voice
+# stack speaks needs its confirmations, and the vocab book is where matched
+# lexicons live (VOICE_AGENT.md, Spoken strings).
+_YES_RE = re.compile(r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si)\b", re.I)
 _NO_RE = re.compile(r"^\s*(nein+|ne+|noe|nö|no+|nope)\b", re.I)
+
+_confirm_words: Optional[Tuple[tuple, tuple]] = None
+
+
+def _confirm_lexicon() -> Tuple[tuple, tuple]:
+    """(yes_words, no_words) across ALL vocab languages, lowercased, longest first
+    (so "auf keinen fall" wins over a shorter prefix). Cached; fail-open to empty -
+    the regex core above keeps today's behavior when the book cannot load."""
+    global _confirm_words
+    if _confirm_words is None:
+        yes, no = [], []
+        try:
+            from vaf.core import vocab
+            for key, out in (("confirm_yes", yes), ("confirm_no", no)):
+                for lang in vocab.available_languages(key):
+                    for ph in vocab.phrasings(key, lang):
+                        ph = str(ph or "").strip().lower()
+                        if ph:
+                            out.append(ph)
+        except Exception:
+            yes, no = [], []
+        _confirm_words = (tuple(sorted(set(yes), key=len, reverse=True)),
+                          tuple(sorted(set(no), key=len, reverse=True)))
+    return _confirm_words
+
+
+def _leading_word_match(t: str, words: tuple) -> bool:
+    """Leading match only, word-boundary honest: 'natuerlich, ...' yes,
+    'Das ist natuerlich Unsinn' no. The boundary check keeps 'no' from
+    matching inside 'notiere'."""
+    low = t.lower()
+    for w in words:
+        if low.startswith(w):
+            rest = low[len(w):]
+            if not rest or not (rest[0].isalnum() or rest[0] == "_"):
+                return True
+    return False
 # "nein, das ist Peter" / "no that's Peter" / "nein das war Peter" ...
 _NAME_RE = re.compile(
     r"\b(?:(?:das|es|that|it)\s+(?:ist|war|is|was)|that'?s|it'?s)\s+(?:der|die|the\s+)?"
@@ -322,11 +360,13 @@ def parse_reply(text: str) -> Optional[Tuple[str, Optional[str]]]:
     t = _VOICE_PREFIX_RE.sub("", (text or "").strip())
     if not t or len(t) > 120:
         return None
-    if _YES_RE.match(t):
-        return ("yes", None)
-    if _NO_RE.match(t):
+    yes_words, no_words = _confirm_lexicon()
+    # NO before YES: several languages' negations embed an affirmation word.
+    if _NO_RE.match(t) or _leading_word_match(t, no_words):
         m = _NAME_RE.search(t)
         return ("no", m.group(1).strip() if m else None)
+    if _YES_RE.match(t) or _leading_word_match(t, yes_words):
+        return ("yes", None)
     return None
 
 

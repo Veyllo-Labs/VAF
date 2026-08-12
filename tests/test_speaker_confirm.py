@@ -310,3 +310,16 @@ def test_a_natural_german_affirmation_is_a_yes():
     assert parse_reply("Of course I meant you") == ("yes", None)
     assert parse_reply("Das ist natürlich Unsinn") is None
     assert parse_reply("Ich bin sicher, dass es regnet") is None
+
+
+def test_confirmations_come_from_the_vocab_book_in_many_languages():
+    """The lexicon lives in the vocabulary book (confirm_yes/confirm_no, generated like
+    addressee_check), not in a hardcoded regex: a French or Turkish owner answering the
+    agent's own question must parse, exactly like the German one whose drop started
+    this. Mutation: stop loading the vocab in _confirm_lexicon - these turn None."""
+    import vaf.core.speaker_confirm as sc
+
+    sc._confirm_words = None
+    assert sc.parse_reply("Bien sûr") == ("yes", None)
+    assert sc.parse_reply("Tabii ki") == ("yes", None)
+    assert sc.parse_reply("Auf keinen Fall") == ("no", None)

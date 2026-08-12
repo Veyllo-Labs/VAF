@@ -1,0 +1,130 @@
+{
+  "ar": [
+    "لا",
+    "لأ",
+    "إطلاقاً",
+    "خطأ",
+    "هذا خطأ",
+    "سلبي"
+  ],
+  "de": [
+    "nein",
+    "nee",
+    "nö",
+    "auf keinen fall",
+    "falsch",
+    "das stimmt nicht"
+  ],
+  "en": [
+    "no",
+    "nope",
+    "not at all",
+    "wrong",
+    "that is wrong",
+    "negative"
+  ],
+  "he": [
+    "לא",
+    "לא",
+    "בכלל לא",
+    "לא נכון",
+    "זה לא נכון",
+    "שלילי"
+  ],
+  "hr": [
+    "ne",
+    "ma ne",
+    "nimalo",
+    "krivo",
+    "to je krivo",
+    "negativno"
+  ],
+  "hu": [
+    "nem",
+    "dehogy",
+    "egyáltalán nem",
+    "téves",
+    "ez téves",
+    "negatív"
+  ],
+  "ko": [
+    "아니요",
+    "아니",
+    "전혀 아니에요",
+    "틀렸어요",
+    "그건 틀렸어요",
+    "부정"
+  ],
+  "pt": [
+    "não",
+    "não",
+    "de jeito nenhum",
+    "errado",
+    "isso está errado",
+    "negativo"
+  ],
+  "ro": [
+    "nu",
+    "nup",
+    "deloc",
+    "greșit",
+    "e greșit",
+    "negativ"
+  ],
+  "ru": [
+    "нет",
+    "неа",
+    "вовсе нет",
+    "неверно",
+    "это неверно",
+    "отрицательно"
+  ],
+  "sk": [
+    "nie",
+    "nene",
+    "vôbec nie",
+    "zle",
+    "to je zle",
+    "negatívne"
+  ],
+  "sv": [
+    "nej",
+    "näpp",
+    "inte alls",
+    "fel",
+    "det är fel",
+    "negativt"
+  ],
+  "th": [
+    "no",
+    "nope",
+    "not at all",
+    "wrong",
+    "that is wrong",
+    "negative"
+  ],
+  "tr": [
+    "hayır",
+    "yok",
+    "hiç de değil",
+    "yanlış",
+    "bu yanlış",
+    "olumsuz"
+  ],
+  "vi": [
+    "Không",
+    "Không",
+    "Không hề",
+    "Sai",
+    "Thế là sai",
+    "Không"
+  ],
+  "zh": [
+    "no",
+    "nope",
+    "not at all",
+    "wrong",
+    "that is wrong",
+    "negative"
+  ]
+}

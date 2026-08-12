@@ -83,11 +83,13 @@ def kit_path() -> Path:
     return recovery_wrap_path().with_name(KIT_FILENAME)
 
 
-def create_recovery_wrap(dek: bytes) -> str:
-    """Wrap `dek` a second time under a fresh recovery secret. Returns it (base64)."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+def build_recovery_wrap(dek: bytes) -> tuple:
+    """Wrap `dek` under a fresh recovery secret IN MEMORY. Writes nothing.
 
-    from vaf.core.secure_store import _atomic_write_bytes, harden_path
+    Split out from the write so the caller can order the two persistent steps.
+    Which order matters: see `ensure_recovery_kit`.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     secret = secrets.token_bytes(32)
     secret_b64 = base64.b64encode(secret).decode()
@@ -102,9 +104,23 @@ def create_recovery_wrap(dek: bytes) -> str:
         "nonce": base64.b64encode(nonce).decode(),
         "wrapped": base64.b64encode(AESGCM(key).encrypt(nonce, dek, None)).decode(),
     }
+    return secret_b64, doc
+
+
+def persist_recovery_wrap(doc: dict) -> Path:
+    """Write the wrap document, owner-only. Raises if it cannot be written."""
+    from vaf.core.secure_store import _atomic_write_bytes, harden_path
+
     path = recovery_wrap_path()
     _atomic_write_bytes(path, json.dumps(doc).encode("utf-8"))
     harden_path(path)
+    return path
+
+
+def create_recovery_wrap(dek: bytes) -> str:
+    """Wrap `dek` a second time under a fresh recovery secret. Returns it (base64)."""
+    secret_b64, doc = build_recovery_wrap(dek)
+    persist_recovery_wrap(doc)
     return secret_b64
 
 
@@ -185,8 +201,14 @@ It asks for the key and puts it back where VAF looks for it. Verify with:
 `file_encryption_enabled = false` writes new chats in plain text. Files already
 encrypted stay readable, and this recovery key stays the way back to them.
 """
+        # Atomically, and created 0600 from the start. write_text() creates the
+        # file with the default mode and only harden_path() narrows it, so the
+        # plaintext master key sat world-readable for the width of that gap -
+        # on the Desktop, the most-watched directory on the machine.
+        from vaf.core.secure_store import _atomic_write_bytes
+
         path = kit_path()
-        path.write_text(text, encoding="utf-8")
+        _atomic_write_bytes(path, text.encode("utf-8"))
         harden_path(path)
         logger.info("Wrote the recovery kit to %s", path)
         return path
@@ -196,8 +218,45 @@ encrypted stay readable, and this recovery key stays the way back to them.
 
 
 def ensure_recovery_kit(dek: bytes) -> Optional[Path]:
-    """Create the recovery wrap and the note, once. Returns the note's path."""
+    """Create the recovery wrap and the note, once. Returns the note's path.
+
+    THE NOTE IS WRITTEN FIRST, and the wrap only if that succeeded. The obvious
+    order is the dangerous one: the wrap is the durable half, the note is the
+    only copy of the secret that opens it, and writing the wrap first leaves a
+    window in which the secret exists solely in memory. Every reason the note
+    can fail is real and platform-specific - a Desktop that macOS TCC has denied
+    the process, a OneDrive-redirected Desktop that is not materialised, a
+    read-only or full disk - and `write_kit` swallows all of them. The result
+    was a recovery file nothing on earth can open, a guard below that considers
+    the job done forever because it tests the WRAP, and `vaf secure status`
+    reporting "Recovery key set up".
+
+    Reversed, a failed note leaves nothing behind and the next start tries
+    again. The mirror case - note written, wrap not - is self-healing for the
+    same reason: the guard still sees no wrap, so the next start rewrites both
+    as a matching pair.
+
+    The guard cannot test the note instead: the note tells the user to move it
+    off the machine, so its absence is the SUCCESS case, and regenerating on
+    absence would silently invalidate the copy they filed away.
+    """
     if recovery_wrap_path().exists():
         return None
-    secret = create_recovery_wrap(dek)
-    return write_kit(secret)
+    secret, doc = build_recovery_wrap(dek)
+    path = write_kit(secret)
+    if path is None:
+        # Deliberately without naming the directory: resolving it means calling
+        # kit_path() again, and the reason the note failed may BE that call.
+        logger.error(
+            "The recovery note could not be written, so no recovery key was created - "
+            "the encrypted data would be unrecoverable after a reinstall. Nothing was "
+            "stored, and the next start tries again."
+        )
+        return None
+    try:
+        persist_recovery_wrap(doc)
+    except Exception as e:
+        logger.error("Recovery key written to %s but its wrap could not be stored (%s); "
+                     "the next start will replace both.", path, e)
+        return None
+    return path

@@ -376,23 +376,58 @@ def _preferred_kek_backend() -> str:
     return choice if choice in ("file", "keyring") else fallback
 
 
-def _write_kek(k: bytes) -> str:
-    """Persist the KEK into the configured backend; return which one was used."""
+def _write_kek(k: bytes):
+    """Persist the KEK. Returns (backend, key_that_is_now_authoritative).
+
+    The returned key is not always the one passed in. Writing the file is an
+    EXCLUSIVE create, so if another process got there first this one adopts the
+    winner's key instead of overwriting it - and the caller must use what comes
+    back, not what it generated. Overwriting was the bug: two processes minting
+    at the same moment both wrote, the second won the file, and any store the
+    first had already wrapped under its own key became permanently unopenable.
+    That race is not exotic here - a first start brings up the tray and five
+    headless workers at once, and every one of them resolves the KEK.
+    """
     encoded = base64.b64encode(k).decode()
     backend = "file"
     if _preferred_kek_backend() == "keyring" and keyring_available():
         try:
             import keyring as _kr
+            existing = _kek_from_keyring()
+            if existing is not None:
+                return ("keyring", existing)          # another process was first
             _kr.set_password("vaf", _CONFIG_KEK_NAME, encoded)
             backend = "keyring"
         except Exception as e:
             logger.warning("Could not store KEK in OS keyring, using file: %s", e)
     if backend == "file":
-        _atomic_write_bytes(_kek_file_path(), encoded.encode("utf-8"))
-        harden_path(_kek_file_path())
+        path = _kek_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            existing = _kek_from_file()
+            if existing is None:
+                raise SecureStoreUnreadable(
+                    f"{path} exists but holds no usable key. Refusing to replace it - "
+                    f"whatever it was, a new key would orphan everything wrapped under it."
+                )
+            return ("file", existing)                  # another process was first
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(encoded.encode("utf-8"))
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        harden_path(path)
     _atomic_write_bytes(_kek_marker_path(), backend.encode("utf-8"))
     harden_path(_kek_marker_path())
-    return backend
+    return (backend, k)
 
 
 def _kek_from_keyring() -> Optional[bytes]:
@@ -467,7 +502,41 @@ def _legacy_config_kek() -> Optional[bytes]:
     return k
 
 
+def _kek_mint_lock():
+    """Serialise the FIRST resolution of the machine key across processes.
+
+    Only the no-marker path can mint, so only that path needs it, and an
+    established install never pays for the lock. Without filelock installed
+    this is a no-op context - the exclusive create in _write_kek is the second
+    line of defence, and the reason there are two.
+    """
+    cls = _get_filelock_cls()
+    if cls is None:
+        return contextlib.nullcontext()
+    try:
+        path = Path(str(_kek_file_path()) + ".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return cls(str(path), timeout=30)
+    except Exception:
+        return contextlib.nullcontext()
+
+
 def _machine_kek(create: bool = True) -> Optional[bytes]:
+    """Marker-directed paths need no lock; the first resolution does.
+
+    Split so that the common case - an install whose marker already names a
+    backend - stays a plain read, while the one path that can create a key runs
+    under a machine-wide lock and re-checks the marker inside it. A second
+    process arriving during a first start therefore finds the winner's marker
+    and adopts its key instead of minting a rival.
+    """
+    if _read_kek_marker():
+        return _resolve_machine_kek(create)
+    with _kek_mint_lock():
+        return _resolve_machine_kek(create)
+
+
+def _resolve_machine_kek(create: bool = True) -> Optional[bytes]:
     """The machine KEK: OS keyring or 0600 file - no longer config.json.
 
     THE RULE, and every branch below exists to keep it: never mint while key
@@ -542,13 +611,13 @@ def _machine_kek(create: bool = True) -> Optional[bytes]:
     legacy = _legacy_config_kek()
     if legacy is not None:
         ensure_pre_migration_backup()
-        _write_kek(legacy)
+        _backend, stored = _write_kek(legacy)
         try:
             Config.set(_CONFIG_KEK_NAME, "")
         except Exception:
             pass
         logger.info("Moved secure-store KEK out of config.json (backend: %s)", kek_backend())
-        return legacy
+        return stored
 
     # The OS keyring is consulted last and only when it is the configured
     # backend: a keyring entry left by another installation must never outrank
@@ -562,8 +631,7 @@ def _machine_kek(create: bool = True) -> Optional[bytes]:
 
     if not create:
         return None
-    k = secrets.token_bytes(_KEY_SIZE)
-    backend = _write_kek(k)
+    backend, k = _write_kek(secrets.token_bytes(_KEY_SIZE))
     logger.info("Minted machine KEK (backend: %s)", backend)
     return k
 

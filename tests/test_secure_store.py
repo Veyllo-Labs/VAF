@@ -194,3 +194,52 @@ def test_a_stale_dek_cache_cannot_brick_the_store(tmp_path):
     holder.update(lambda d: d.__setitem__("c", "3"))
 
     assert SecureBlobStore("probe", path).load_strict(), "the store must stay readable"
+
+
+def test_a_first_start_mints_exactly_one_machine_key(tmp_path):
+    """Eight processes on a virgin home must agree on ONE master key.
+
+    Not a theoretical race: a first start brings up the tray and five headless
+    workers at once and every one of them resolves the KEK. Two that mint
+    simultaneously used to both write the file, the later one winning - and any
+    store the earlier one had already wrapped under its own key was then
+    permanently unopenable, with no error anywhere.
+
+    Real processes rather than threads, because the defect is cross-process and
+    a threading test would pass against the broken code.
+
+    MUTATION: replace the exclusive create in _write_kek with a truncating open,
+    or drop the lock in _machine_kek, and this goes red - intermittently, which
+    is exactly why it survived review. Three consecutive runs were enough to
+    reproduce it while the fix was reverted.
+    """
+    import collections
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = str(Path(__file__).resolve().parent.parent)
+    home = tmp_path / "home"
+    (home / ".vaf").mkdir(parents=True)
+    (home / ".vaf" / "config.json").write_text("{}", encoding="utf-8")
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home),
+               XDG_DATA_HOME=str(home / ".local" / "share"),
+               VAF_LOG_DIR=str(home / "logs"), PYTHONPATH=repo)
+    code = ("import base64,sys;from vaf.core.secure_store import _machine_kek;"
+            "k=_machine_kek(create=True);"
+            "sys.stdout.write(base64.b64encode(k).decode() if k else 'NONE')")
+
+    procs = [subprocess.Popen([sys.executable, "-c", code], env=env, cwd=repo,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+             for _ in range(8)]
+    keys = [p.communicate(timeout=120)[0].strip() for p in procs]
+
+    assert "NONE" not in keys, "a process failed to resolve the key at all"
+    counts = collections.Counter(keys)
+    assert len(counts) == 1, (
+        f"{len(counts)} different master keys were handed out on one machine: "
+        f"{[(k[:12], n) for k, n in counts.items()]} - every store wrapped under "
+        f"a losing key is now unopenable")
+    on_disk = (home / ".vaf" / "secure_store.kek").read_text(encoding="utf-8").strip()
+    assert keys[0] == on_disk, "the key in use is not the key that survived on disk"

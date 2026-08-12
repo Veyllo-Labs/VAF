@@ -156,7 +156,20 @@ class SemanticTurnJudge:
 
             from transformers import WhisperFeatureExtractor
 
-            self._extractor = WhisperFeatureExtractor(feature_size=128)
+            # Default 80 mel bins - the model's real contract (verified against the
+            # session: input_features ['s6', 80, 800]). The upstream repo docs said
+            # 128, and with 128 every run raised INVALID_ARGUMENT - which the
+            # fail-open then swallowed into a permanent silent "complete". A smoke
+            # inference below makes that class of break LOUD at load time instead.
+            self._extractor = WhisperFeatureExtractor()
+
+            import numpy as np
+            _probe = self._extractor(
+                np.zeros(16000, dtype=np.float32), sampling_rate=16000,
+                return_tensors="np", padding="max_length",
+                max_length=_SMART_TURN_WINDOW_S * 16000, truncation=True,
+            )["input_features"].astype(np.float32)
+            self._session.run(None, {"input_features": _probe})
             return True
         except Exception:
             self._failed = True   # do not retry per turn; a restart retries

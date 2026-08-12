@@ -516,8 +516,22 @@ class AgentBridge:
                 self.events.presence("thinking", "")
             elif etype == "gate_required":
                 self.events.presence("waiting", "needs your permission")
+                # The arguments were dropped here: the modal asked the user to
+                # approve a tool NAME. The preview is already neutralized and
+                # redacted by the gate, and the screen escapes it again.
+                _notes = []
+                if evt.get("args_preview_neutralized"):
+                    _notes.append(f"{evt['args_preview_neutralized']} hidden char(s) shown")
+                if evt.get("args_preview_redacted"):
+                    _notes.append(f"{evt['args_preview_redacted']} secret(s) redacted")
+                if evt.get("args_preview_truncated"):
+                    _notes.append("truncated")
+                if evt.get("command_categories"):
+                    _notes.append(", ".join(evt["command_categories"]))
                 self.events.gate_required(str(evt.get("tool", "")),
-                                          str(evt.get("reason", "")))
+                                          str(evt.get("reason", "")),
+                                          str(evt.get("args_preview", "") or ""),
+                                          "; ".join(_notes))
             elif etype == "gate_decision":
                 self.events.gate_decision(str(evt.get("decision", "")))
             # llm_start/llm_end: enrichment only (local providers emit none) - ignored.

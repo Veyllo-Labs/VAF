@@ -10907,7 +10907,7 @@ class Agent:
             return gate_msg
         return None
 
-    def _ask_user_about_gate(self, name, reason):
+    def _ask_user_about_gate(self, name, reason, preview=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is
         live (pywebview / browser), else prompt the terminal."""
         from vaf.cli.ui import UI
@@ -10922,6 +10922,17 @@ class Agent:
             except Exception:
                 return "cancel"
         UI.event("Security", f"Tool '{name}' requires confirmation. {reason}", style="warning")
+        # The doc promises "tool + command shown"; without this the terminal
+        # asked the user to approve a tool NAME and nothing else.
+        try:
+            if isinstance(preview, dict) and preview.get("text"):
+                from vaf.core.arg_preview import preview_notes
+                UI.event("Security", f"Arguments: {preview['text']}", style="warning")
+                _notes = preview_notes(preview)
+                if _notes:
+                    UI.event("Security", f"({_notes})", style="warning")
+        except Exception:
+            pass
         _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
         return {"o": "allow_once", "once": "allow_once",
                 "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")

@@ -52,7 +52,8 @@ class Recorder:
     def tool_start(self, tool, preview):     self._rec("tool_start", tool, preview)
     def tool_end(self, tool, ok, duration, output=""):
         self._rec("tool_end", tool, ok, duration, output)
-    def gate_required(self, tool, reason):   self._rec("gate_required", tool, reason)
+    def gate_required(self, tool, reason, preview="", notes=""):
+        self._rec("gate_required", tool, reason, preview, notes)
     def gate_decision(self, decision):       self._rec("gate_decision", decision)
     def presence(self, state, detail=""):    self._rec("presence", state)
     def context(self, used, total):          self._rec("context", used, total)
@@ -366,14 +367,22 @@ def test_sink_events_dispatch_to_ui_events(quiet_run_module):
                           "ok": True, "duration_ms": 1500,
                           "result": "17 results found"})
     bridge.on_sink_event({"type": "gate_required", "tool": "run_command",
-                          "reason": "shell access"})
+                          "reason": "shell access",
+                          "args_preview": '{"command": "rm -rf ./x [U+202E]"}',
+                          "args_preview_neutralized": 1,
+                          "command_categories": ["destructive_removal"]})
     bridge.on_sink_event({"type": "gate_decision", "decision": "allow_once"})
     bridge.on_sink_event({"type": "llm_start"})                 # enrichment only
     bridge.on_sink_event({"type": "no_such_event", "x": object()})  # never raises
 
     assert ("tool_start", ("web_search", "query=" + "x" * 24)) in events.calls
     assert ("tool_end", ("web_search", True, "1.5s", "17 results found")) in events.calls
-    assert ("gate_required", ("run_command", "shell access")) in events.calls
+    # The modal must show WHAT is being approved: the bridge used to drop the
+    # arguments and hand the screen a tool name only.
+    _gate = [c for c in events.calls if c[0] == "gate_required"][0][1]
+    assert _gate[0] == "run_command" and _gate[1] == "shell access"
+    assert "rm -rf ./x" in _gate[2], "the arguments no longer reach the gate screen"
+    assert "hidden char" in _gate[3] and "destructive_removal" in _gate[3]
     assert ("gate_decision", ("allow_once",)) in events.calls
     assert bridge._tools_ran is True
 

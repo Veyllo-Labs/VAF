@@ -1361,7 +1361,9 @@ function VAFDashboardContent() {
     const [rawVersion, setRawVersion] = useState<string | null>(null);
     const [lastSeenVersion, setLastSeenVersion] = useState<string | null>(null);
     const [personaLoaded, setPersonaLoaded] = useState(false);
-    const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string } | null>(null);
+    const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string;
+        args_preview_truncated?: boolean; args_preview_neutralized?: number; args_preview_redacted?: number;
+        command_categories?: string[] } | null>(null);
     // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
     // confirmation (gateRequest) shows `permission`. The flash auto-clears after ~one cycle so we
     // never leave an infinite reaction running on the avatar.
@@ -8380,6 +8382,22 @@ function VAFDashboardContent() {
                                 <div>
                                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Arguments</p>
                                     <pre className="text-xs font-mono bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-gray-800">{gateRequest.args_preview}</pre>
+                                    {/* What the preview had to change, so the dialog cannot
+                                        quietly differ from what will execute. */}
+                                    {(gateRequest.args_preview_neutralized || gateRequest.args_preview_redacted || gateRequest.args_preview_truncated) ? (
+                                        <p className="text-[11px] text-amber-600 mt-1">
+                                            {[
+                                                gateRequest.args_preview_neutralized ? `${gateRequest.args_preview_neutralized} hidden character(s) made visible` : null,
+                                                gateRequest.args_preview_redacted ? `${gateRequest.args_preview_redacted} secret(s) redacted` : null,
+                                                gateRequest.args_preview_truncated ? 'arguments truncated' : null,
+                                            ].filter(Boolean).join(' - ')}
+                                        </p>
+                                    ) : null}
+                                    {gateRequest.command_categories?.length ? (
+                                        <p className="text-[11px] text-gray-500 mt-1">
+                                            This command: {gateRequest.command_categories.join(', ').replace(/_/g, ' ')}
+                                        </p>
+                                    ) : null}
                                 </div>
                             )}
                             {gateRequest.reason && (

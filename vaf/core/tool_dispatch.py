@@ -289,12 +289,32 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     ):
         return None
 
+    # The dialog is a security control only while what it renders equals what
+    # will run: hidden/direction-changing characters become visible markers,
+    # credential material is replaced, and a cut says so (measured before this:
+    # a U+202E and a full Bearer token reached the browser unchanged).
     try:
-        preview = json.dumps(make_json_serializable(args or {}), ensure_ascii=False)[:300]
+        from vaf.core.arg_preview import build_preview
+        _pv = build_preview(tool_name, args)
     except Exception:
-        preview = ""
+        _pv = {"text": "", "truncated": False, "neutralized": 0, "redacted": 0}
+    preview = _pv.get("text", "")
     event = {"type": "gate_required", "tool": tool_name, "cwd": str(trust_dir),
-             "reason": reason, "args_preview": preview}
+             "reason": reason, "args_preview": preview,
+             "args_preview_truncated": bool(_pv.get("truncated")),
+             "args_preview_neutralized": int(_pv.get("neutralized") or 0),
+             "args_preview_redacted": int(_pv.get("redacted") or 0)}
+    # For shell lanes the offline classifier already knows WHY a command is
+    # noteworthy; the dialog should say it rather than only that it is gated.
+    try:
+        _cmd = (args or {}).get("command")
+        if isinstance(_cmd, str) and _cmd.strip():
+            from vaf.core.command_policy import classify_command
+            _v = classify_command(_cmd, profile="jailed" if tool_name == "bash" else "host")
+            if _v.categories:
+                event["command_categories"] = list(_v.categories)
+    except Exception:
+        pass
     emit_event(emit, event)
     if callable(on_gate_required):
         try:
@@ -308,7 +328,19 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
 
     # decide(tool_name, reason): the reason is what a terminal prompt shows the person, and
     # only this function knows it - the caller cannot close over a value computed here.
-    choice = decide(tool_name, reason) if callable(decide) else "cancel"
+    # The hardened preview is offered as an OPTIONAL third keyword: a decider that
+    # accepts `preview` gets it (our CLI and TUI do, so the person sees the arguments
+    # they are approving), and every two-argument decider keeps working unchanged -
+    # `decide(tool_name, reason)` is the published contract (docs/EMBEDDING.md).
+    choice = "cancel"
+    if callable(decide):
+        try:
+            import inspect as _inspect
+            _wants_preview = "preview" in _inspect.signature(decide).parameters
+        except (TypeError, ValueError):
+            _wants_preview = False
+        choice = decide(tool_name, reason, preview=dict(_pv)) if _wants_preview \
+            else decide(tool_name, reason)
     if choice == "allow_once":
         # In memory, for this agent only. Persisting a single approval would silently widen
         # it into a standing one.

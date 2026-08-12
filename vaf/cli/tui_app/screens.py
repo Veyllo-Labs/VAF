@@ -49,10 +49,12 @@ class GateScreen(ModalScreen[str]):
         Binding("escape", "answer('cancel')", "cancel"),
     ]
 
-    def __init__(self, tool: str, reason: str) -> None:
+    def __init__(self, tool: str, reason: str, preview: str = "", notes: str = "") -> None:
         super().__init__()
         self._tool = tool
         self._reason = reason
+        self._preview = preview
+        self._notes = notes
 
     def compose(self) -> ComposeResult:
         with Vertical(id="gate-box", classes="modal-box"):
@@ -60,6 +62,10 @@ class GateScreen(ModalScreen[str]):
             yield Static(
                 f"[$text]The tool [bold]{_esc(self._tool)}[/bold] wants to run.[/]\n"
                 f"[$vaf-muted]{_esc(self._reason)}[/]", classes="modal-body")
+            if self._preview:
+                yield Static(f"[$text]{_esc(self._preview)}[/]", classes="modal-body")
+            if self._notes:
+                yield Static(f"[$vaf-muted]({_esc(self._notes)})[/]", classes="modal-body")
             yield Static(
                 "[$text][bold]y[/bold][/] [$vaf-muted]allow once[/]   "
                 "[$text][bold]a[/bold][/] [$vaf-muted]always in this directory[/]   "

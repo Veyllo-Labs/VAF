@@ -151,7 +151,7 @@ class TuiEvents:
     def renderable(self, obj):              self._ui(self._app_call, "add_renderable", obj)
     def tool_start(self, tool, preview):    self._ui(self._app_call, "tool_started", tool, preview)
     def tool_end(self, tool, ok, duration, output=""): self._ui(self._app_call, "tool_ended", tool, ok, duration, output)
-    def gate_required(self, tool, reason):  self._ui(self._app_call, "show_gate", tool, reason)
+    def gate_required(self, tool, reason, preview="", notes=""):  self._ui(self._app_call, "show_gate", tool, reason, preview, notes)
     def gate_decision(self, decision):      self._ui(self._app_call, "gate_decided", decision)
     def presence(self, state, detail=""):   self._ui(self._app_call, "set_presence", state, detail)
     def context(self, used, total):         self._ui(self._app_call, "set_context", used, total)
@@ -594,10 +594,10 @@ class VafApp(App):
                 card.set_output(output)
             card.finish(ok=ok, duration=duration)
 
-    def show_gate(self, tool: str, reason: str) -> None:
+    def show_gate(self, tool: str, reason: str, preview: str = "", notes: str = "") -> None:
         if self._gate_screen is not None:
             return
-        screen = GateScreen(tool, reason)
+        screen = GateScreen(tool, reason, preview, notes)
         self._gate_screen = screen
         self._gate_answered = False
 

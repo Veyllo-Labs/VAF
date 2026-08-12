@@ -271,7 +271,11 @@ services, run a host CLI. Those belong to the **main agent**, not the coder, and
 runs **unsandboxed on the host on purpose**. Its safety is two hard controls, not a sandbox:
 
 1. **`permission_level = "dangerous"`** → the framework's confirmation gate fires: the user
-   approves each run in the Web UI (tool + command shown) before it executes.
+   approves each run before it executes, and sees the command, not just the tool name -
+   in the Web UI, the TUI modal and the terminal prompt alike. The rendered arguments are
+   hardened (`vaf/core/arg_preview.py`): hidden and direction-changing characters become
+   visible markers, credential material is redacted, and a truncation says so, so the
+   approved text cannot differ from the executed one.
 2. **Remote channels are blocked in two layers.** There is no safe way to show the confirmation
    on Telegram/WhatsApp/Discord, so:
    - **`channel_restrictions`** is the policy-layer block (`evaluate_tool_policy`), and

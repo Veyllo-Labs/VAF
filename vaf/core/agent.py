@@ -8866,13 +8866,31 @@ class Agent:
             
             else:
                 # Library Logic (llama-cpp-python) — must handle reasoning_content like server path for VQ1
+                # This lane used to send self.history RAW: no dangling-tool_call
+                # strip, no orphan role:tool removal, no image conversion, no
+                # memory block, and it ignored disable_tools / _force_tool_choice
+                # / the adaptive temperature. Three sibling branches, the safety
+                # pass in two, is the Rule 2 "copies" defect applied to code.
+                # NOT hoisted above the if: the server lane re-prepares per
+                # retry attempt because compression rebinds self.history between
+                # attempts, and a value computed once would defeat that recovery.
+                prepared_messages = self._prepare_messages(self.history)
+                if prepared_messages:
+                    prepared_messages = self._splice_memory_block(
+                        prepared_messages, self._memory_system_block(memory_context)
+                    )
+                _lib_tools = self.TOOLS if not disable_tools else None
+                _lib_tool_choice = "auto" if _lib_tools else "none"
+                if _lib_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
+                    _lib_tool_choice = self._force_tool_choice
+                    self._force_tool_choice_used = True
                 try:
                     stream = self.llm.create_chat_completion(
-                        messages=self.history,
-                        tools=self.TOOLS,
-                        tool_choice="auto",
+                        messages=prepared_messages,
+                        tools=_lib_tools,
+                        tool_choice=_lib_tool_choice,
                         max_tokens=8192,
-                        temperature=target_temp,
+                        temperature=current_temp,
                         stream=True
                     )
                     first_token = True

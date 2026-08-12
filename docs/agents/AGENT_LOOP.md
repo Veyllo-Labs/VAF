@@ -57,8 +57,8 @@ user input
 ╔═════════════════════════════ INNER LOOP ════════════════════╗
 ║   ┌─────────────────────────────────────────────────────┐   ║
 ║   │ 6. LLM CALL (streaming)                             │   ║
-║   │    api_backend / local server / library ·          │   ║
-║   │    parse tool_calls from the stream                 │   ║
+║   │    _prepare_messages -> api_backend / server /      │   ║
+║   │    library · parse tool_calls from the stream       │   ║
 ║   └─────────────────────────────────────────────────────┘   ║
 ║       │                                                      ║
 ║       ▼                                                      ║
@@ -111,7 +111,7 @@ grep the symbol names to find them.
 | 3 | Record input + intent | `main_persistence.update_user_intent` |
 | 4 | Tool router | `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
-| 6 | LLM call (streaming) + parse tool calls | `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
+| 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
 | 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text based on chat_step's reasoning-stripped return value |
 | 8 | Tool dispatch | `execute_tool`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation | `_validate_final_answer` |

@@ -93,8 +93,11 @@ def test_injected_block_still_counts_towards_the_token_estimate():
 def test_no_in_place_merge_survives_in_the_source():
     """Mutation guard: restoring the in-place rewrite at either splice site fails here."""
     assert "prepared_messages[0][\"content\"] =" not in AGENT_SRC
-    # Both generation paths (API backends and the local llama server) go through it.
-    assert AGENT_SRC.count("self._splice_memory_block(") == 2
+    # ALL THREE generation lanes go through it: API backends, the local llama
+    # server, and llama-cpp-python in-process. The third was missing until the
+    # branch-parity fix - it sent the raw history, so the memory block never
+    # reached the model on that lane (see tests/test_generation_branch_parity.py).
+    assert AGENT_SRC.count("self._splice_memory_block(") == 3
 
 
 def test_the_empty_response_retry_forwards_the_memory_context():

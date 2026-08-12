@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **One local mode sent the conversation unrepaired.** Of the three ways VAF
+  reaches a model, the in-process local one (Linux with Python 3.12 and no
+  llama-server, e.g. a fresh Ubuntu install) skipped every pre-send repair: a
+  half-finished tool call could stay in the history, images were never turned
+  into text, the memory context silently vanished, and turns that were meant to
+  run without tools still got them. It now goes through the same preparation as
+  the other two.
 - **The confirmation dialog can no longer show something other than what runs.**
   Arguments went to the dialog raw, so a text-direction control character could
   visually reverse a command, an access token was displayed in full, and a

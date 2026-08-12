@@ -4836,6 +4836,33 @@ class Agent:
 
         return total_tokens, max_tokens
 
+    def _record_turn_spend(self) -> None:
+        """Best-effort spend recording for the CURRENT user, deduplicated per call.
+
+        Called at the tool-turn boundary AND at the end of chat_step: the
+        boundary alone missed every turn without tool calls - the most common
+        kind - so chat-only usage was systematically unbilled. The (input,
+        output) tuple dedup keeps one LLM call from being billed twice when
+        both sites see the same usage; two CONSECUTIVE calls with identical
+        token counts would be under-counted once, which is acceptable for an
+        estimate and stated here rather than hidden.
+        """
+        try:
+            if self.api_backend is None:
+                return
+            from vaf.core.cost import estimate_cost, record_spend
+            _lru = getattr(self.api_backend, "last_request_usage", None) or {}
+            _in = int(_lru.get("input_tokens") or 0)
+            _out = int(_lru.get("output_tokens") or 0)
+            if (_in or _out) and (_in, _out) != getattr(self, "_last_billed_usage", None):
+                self._last_billed_usage = (_in, _out)
+                _est = estimate_cost(getattr(self, "provider", ""),
+                                     getattr(self, "model_display_name", "")
+                                     or getattr(self, "filename", ""), _in, _out)
+                record_spend(getattr(self, "_current_user_scope_id", None), _est)
+        except Exception:
+            pass  # accounting must never break a turn
+
     def get_token_usage(self):
         """
         Calculates a precise token usage by using the model's tokenizer.
@@ -10088,17 +10115,8 @@ class Agent:
                 # or not a cap is set, so the owner can measure before deciding.
                 try:
                     if self.api_backend is not None:
-                        from vaf.core.cost import (budget_exceeded, estimate_cost,
-                                                   record_spend)
-                        _lru = getattr(self.api_backend, "last_request_usage", None) or {}
-                        _in = int(_lru.get("input_tokens") or 0)
-                        _out = int(_lru.get("output_tokens") or 0)
-                        if (_in or _out) and (_in, _out) != getattr(self, "_last_billed_usage", None):
-                            self._last_billed_usage = (_in, _out)
-                            _est = estimate_cost(getattr(self, "provider", ""),
-                                                 getattr(self, "model_display_name", "")
-                                                 or getattr(self, "filename", ""), _in, _out)
-                            record_spend(getattr(self, "_current_user_scope_id", None), _est)
+                        from vaf.core.cost import budget_exceeded
+                        self._record_turn_spend()
                         _over, _spent, _budget = budget_exceeded(
                             getattr(self, "_current_user_scope_id", None))
                         if _over:
@@ -10825,6 +10843,10 @@ class Agent:
             append_domain_log("backend", f"chat_step_complete response_len={len(full_response)}")
         except Exception:
             pass
+
+        # The final LLM call of the turn - and for a turn without tools the
+        # ONLY one - is billed here; the boundary block above never runs then.
+        self._record_turn_spend()
 
         # Return CLEANED response for the UI (Answer Box)
         # The raw response is already stored in history, so we don't lose information.

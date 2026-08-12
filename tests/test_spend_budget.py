@@ -96,12 +96,27 @@ def test_the_budget_key_is_admin_write_only():
     assert Config.filter_for_non_admin({"spend_budget_usd_per_day": 999}) == {}
 
 
+def test_a_turn_without_tools_is_billed_too():
+    """The boundary block runs only inside the tool loop; a plain
+    conversational turn - the most common kind - was never recorded. The tail
+    of chat_step must bill the final (often only) LLM call."""
+    from pathlib import Path
+    src = Path("vaf/core/agent.py").read_text(encoding="utf-8")
+    i = src.index("chat_step_complete")
+    tail = src[i:i + 400]
+    assert "_record_turn_spend()" in tail, \
+        "the no-tool exit no longer records spend - chat-only usage goes unbilled"
+    # And the helper is ONE implementation with two callers, not a copy.
+    assert src.count("def _record_turn_spend") == 1
+    assert src.count("self._record_turn_spend()") == 2
+
+
 def test_the_turn_boundary_carries_the_stop():
     """The cap must be checked where the wall-clock stop is - never mid-tool,
     which would cut between a tool call and its result (Rule 4.1)."""
     from pathlib import Path
     src = Path("vaf/core/agent.py").read_text(encoding="utf-8")
-    i = src.index("from vaf.core.cost import")
+    i = src.index("from vaf.core.cost import budget_exceeded")
     j = src.index("time.monotonic() > _turn_deadline")
     assert 0 < j - i < 2500, "the spend stop drifted away from the turn boundary"
     region = src[i:j]
@@ -110,5 +125,5 @@ def test_the_turn_boundary_carries_the_stop():
     # goes nowhere is the failure mode this pin exists for.
     assert "if _over:" in region, "the budget verdict is computed but not acted on"
     assert "return _sp_msg" in region, "reaching the cap no longer ends the turn"
-    assert "record_spend(getattr(self" in region, \
-        "the estimate is no longer recorded for the calling user"
+    assert "self._record_turn_spend()" in region, \
+        "the boundary no longer records spend before checking the cap"

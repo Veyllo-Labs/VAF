@@ -852,6 +852,13 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
     _today = datetime.now().strftime("%Y-%m-%d")
     _evts = read_security_events(_today, limit=1000)
     security_latest_ts = _evts[-1].get("ts") if _evts else None
+    # The COUNT as well, not just the newest timestamp. The window used to derive
+    # its own number by adding up the firewall, channel and skill module
+    # counters, which silently excluded every event kind that belongs to no
+    # module - so a new kind lit the sidebar dot (which counts the log) while the
+    # window stayed blank and nothing said where the notification came from.
+    # Both now read the same number, so they cannot drift again.
+    security_events_today = len(_evts)
     return {
         "sandbox": sandbox,
         "firewall": firewall,
@@ -860,4 +867,5 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
         "guardrails": guardrails,
         "skills": skills,
         "security_latest_ts": security_latest_ts,
+        "security_events_today": security_events_today,
     }

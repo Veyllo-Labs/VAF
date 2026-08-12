@@ -227,6 +227,7 @@ type SecurityOverview = {
   guardrails?: GuardrailsStatus;
   skills?: SkillsStatus;
   security_latest_ts?: string | null;
+  security_events_today?: number;
 };
 
 type MemoryHealth = {
@@ -2538,13 +2539,20 @@ export default function NotificationsModal({
   const isTimelineView = selectedSource === 'timeline' || selectedSource === 'tooluse';
   const isOverview     = selectedSource === 'overview';
   const isFileView     = selectedSource !== 'activity' && !isOverview && !isTimelineView;
-  // Count of security events recorded today (blocked access, rejections, skill
-  // blocks/overrides/alerts). Drives the pulsing attention marker on the Log
-  // Files section so the admin is nudged to open the security log when
-  // something happened. Recomputed from the aggregator, no extra request.
+  // How many security events were recorded today - the number the security log
+  // actually contains, straight from the aggregator. Drives the pulsing marker
+  // on the Log Files section and on the security row inside it.
+  //
+  // It used to be derived by adding up the firewall, channel and skill module
+  // counters, and that silently excluded every event kind belonging to no
+  // module: the sidebar dot (which counts the log) lit up while this stayed
+  // zero, so the window showed a notification with nothing marked and no way to
+  // tell where it came from. Both sides read the same number now. The module
+  // sum survives only as a floor for a backend that predates the field.
   const securityAlertCount = (() => {
     const s = securityOverview;
     if (!s) return 0;
+    if (typeof s.security_events_today === 'number') return s.security_events_today;
     const fw = s.firewall ? s.firewall.blocked_today + s.firewall.failed_logins_today : 0;
     const ch = s.channels ? s.channels.rejected_today : 0;
     const sk = s.skills ? s.skills.blocked_today + s.skills.overrides_today + s.skills.alerts_today : 0;

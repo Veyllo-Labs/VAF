@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A notification in the Logs window now shows where it came from.** The dot on
+  the sidebar counts everything in the security log, but the window worked out
+  its own number by adding up the firewall, channel and skill counters - so an
+  event belonging to none of them, such as the warning that the memory database
+  still uses the shipped default password, lit the dot outside and marked
+  nothing inside. Both read the same number now, so a new kind of event can
+  never again arrive unannounced.
 - **A first start can no longer mint two different master keys.** Bringing up the
   tray and the background workers at once meant several processes resolving the
   encryption key simultaneously, and two that minted at the same moment both

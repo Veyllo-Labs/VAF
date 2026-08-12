@@ -693,7 +693,12 @@ drain, 90s timeout) reaped the registration mid-run, silently reopening the guar
 for exactly the multi-minute runs it protects and enqueueing a spurious CRASH
 result. It deliberately does NOT use `complete_task`, because its result returns
 synchronously as the tool result and must not ALSO be enqueued for the drain
-(exactly-once delivery); its finally additionally consumes any result another
+(single-delivery INTENT: a result is either returned synchronously or queued for
+the drain, never both. The queue's own uniqueness is best-effort under
+cross-process contention - see "Mutation serialization" above: `_mutation_guard`
+proceeds without its cross-process half after a 5s timeout, and `_lock_file` uses
+LOCK_NB and swallows a failed lock, so the real residual risk is a DOUBLE
+delivery, not a lost one); its finally additionally consumes any result another
 actor (stop-all's `fail_task`, a reaper) queued for its task id while it ran. A
 failed terminal spawn in the async lane cancels its task and falls back to inline
 execution instead of returning the async marker for a run that never started
@@ -1177,7 +1182,8 @@ gate-failing records; novel errors feed the background re-learn). This is the
 reactive know-how lane for ASYNC failures, which never produce an error-shaped
 tool result - see `docs/memory/WHARE_WANANGA.md` (Delivery). The lookup is
 hard fail-safe and runs before `consume_result`, so a Whare Wananga error can
-never break exactly-once delivery.
+never cause a result to be dropped or re-delivered: it cannot abort the drain
+before `consume_result` runs.
 
 ---
 

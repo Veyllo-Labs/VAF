@@ -47,6 +47,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   not mean unobserved.
 
 ### Fixed
+- **A finished answer no longer waits minutes for an invisible check.** After
+  the reply is already on screen, a small internal check decides whether the
+  agent just asked you a question. On API providers that check had no time
+  limit of its own and could sit silently for minutes while the stop button
+  stayed lit (observed live: 343 seconds, with no trace in any log). It is now
+  hard-bounded at a few seconds, falls back to a simple text check when it
+  cannot answer in time, and writes a log line either way.
 - **A confirmation you granted no longer speaks for everyone on the machine.**
   Answering "always" wrote a single shared file, so on a LAN instance that
   permission was armed for every other user too - silently, because a standing

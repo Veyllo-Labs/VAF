@@ -3132,11 +3132,19 @@ class Agent:
             return task or proj
         return ""
 
-    def _run_validation_llm(self, messages: list, max_tokens: int = 150) -> str:
+    def _run_validation_llm(self, messages: list, max_tokens: int = 150,
+                            timeout_s: float | None = None) -> str:
         """One validation completion against whichever backend is active (server/api/local).
         Shared by the sub-agent validator and the per-step workflow validator. Returns the
         response content ("" if the backend produced nothing). Raises on backend errors so the
-        caller can fall back to its heuristic."""
+        caller can fall back to its heuristic.
+
+        ``timeout_s`` bounds the API branch. Without it the call inherits the client's
+        streaming read timeout (600 s, sized for reasoning models) - and a validation
+        answer is a handful of tokens. Live incident 2026-08-10: the turn's text stood on
+        screen at 10:56:20 and QUEUE_CHAT_END came at 11:02:03 - 343 silent seconds inside
+        ONE such call, with nothing in any log to say where the time went. The local-server
+        branch already had its own 30 s bound; the API branch had none."""
         if self.use_server:
             res = requests.post(
                 "http://127.0.0.1:8080/v1/chat/completions",
@@ -3145,12 +3153,29 @@ class Agent:
             ).json()
             return (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
         if self.api_backend:
-            chunks = list(
-                self.api_backend.chat_completion(
-                    messages=messages, max_tokens=max_tokens, temperature=0, stream=False
+            def _ask() -> str:
+                chunks = list(
+                    self.api_backend.chat_completion(
+                        messages=messages, max_tokens=max_tokens, temperature=0, stream=False
+                    )
                 )
-            )
-            return "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+                return "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+
+            if timeout_s and timeout_s > 0:
+                # Bounded wait, house pattern (api_backend.py failover deadline): the
+                # worker thread is abandoned on timeout, the caller falls back to its
+                # heuristic. TimeoutError propagates - "raises so the caller can fall
+                # back" is this method's contract. NO context manager here: `with`
+                # calls shutdown(wait=True) on exit, which would sit out the very hang
+                # the timeout exists to escape (found by the test hanging for the
+                # backend's full 120 s instead of the 0.3 s bound).
+                import concurrent.futures as _cf
+                _ex = _cf.ThreadPoolExecutor(max_workers=1)
+                try:
+                    return _ex.submit(_ask).result(timeout=timeout_s)
+                finally:
+                    _ex.shutdown(wait=False)
+            return _ask()
         if self.llm:
             output = self.llm.create_chat_completion(
                 messages=messages, max_tokens=max_tokens, temperature=0
@@ -3195,11 +3220,27 @@ class Agent:
             "Reply with exactly one word: YES or NO.\n\n"
             f"ASSISTANT REPLY:\n{text[:1500]}"
         )
+        # Hard-bounded and LOGGED. This call sits between "the answer is on the user's
+        # screen" and "the turn is finished" - the stop button stays lit until it
+        # returns. Live incident 2026-08-10: it took 343 s on the API lane (no bound
+        # there) and wrote no line anywhere, so the hang was only attributable by
+        # eliminating everything else. Eight output tokens have no business taking
+        # longer than this; past the bound the "?"-heuristic answers.
         try:
+            import time as _rnu_t
+            _rnu_t0 = _rnu_t.perf_counter()
             out = self._run_validation_llm(
-                [{"role": "user", "content": prompt}], max_tokens=8
+                [{"role": "user", "content": prompt}], max_tokens=8, timeout_s=12.0
             ).strip().lower()
-        except Exception:
+            append_domain_log("backend", f"[ASK_CLASSIFIER] verdict={out[:12]!r} "
+                                         f"took={_rnu_t.perf_counter() - _rnu_t0:.2f}s")
+        except Exception as _rnu_e:
+            try:
+                append_domain_log("backend", f"[ASK_CLASSIFIER] fell back to heuristic "
+                                             f"({type(_rnu_e).__name__}) after "
+                                             f"{_rnu_t.perf_counter() - _rnu_t0:.2f}s")
+            except Exception:
+                pass
             return _heuristic()
         if "yes" in out:
             return True

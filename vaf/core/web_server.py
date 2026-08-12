@@ -906,7 +906,13 @@ async def startup_event():
                     port_frontend = int(Config.get("local_network_port_frontend", 3000) or 3000)
 
                 success = setup_firewall(port, port_frontend)
-                if success:
+                if success == "present":
+                    # No elevation ran: the rule was already active, or the twin
+                    # lifespans of TLS mode already attempted this start. The old
+                    # single "created" message hid this difference, which made a
+                    # nightly password dialog unattributable from the log.
+                    log("WebServer", f"Firewall rule already in place for port {port} - no password dialog needed")
+                elif success:
                     register_cleanup_on_exit()
                     log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
                 else:

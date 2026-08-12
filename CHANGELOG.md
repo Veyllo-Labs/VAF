@@ -19,6 +19,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Linux hosting: starting VAF no longer asks for the root password when the
+  firewall rule already exists. The presence check is retried once before a
+  dialog is raised (a firewall query answering late during startup load used
+  to cost a password prompt), the setup runs at most once per start (TLS mode
+  runs two internal servers and could raise two dialogs), and when a dialog
+  IS needed the log now records exactly why.
 - Voice call: the assistant no longer denies a capability in the same
   breath as delegating the task ("I can't check your mails, but..."
   spoken while the mail check was already handed to the main agent).

@@ -15,6 +15,8 @@ import shlex
 import subprocess
 import logging
 import tempfile
+import threading
+import time
 import atexit
 from pathlib import Path
 from typing import Optional
@@ -39,22 +41,45 @@ PRIVATE_CIDRS = [
 ]
 
 
-def setup_firewall(port: int, port_frontend: int = 3000) -> bool:
+# One elevation attempt per (port, port_frontend) per PROCESS. Deliberate: in TLS
+# mode the same app runs two uvicorn lifespans (8001 + 8005) and both spawn the
+# firewall setup within milliseconds - without this claim the user can face TWO
+# password dialogs for one start, and a CANCELLED dialog chains straight into the
+# twin's dialog. The claim is taken at ENTRY (not on success) so the racing twin
+# is deduplicated even while the first attempt still sits on the open dialog.
+# Failures are deliberately not retried in-process: network settings changes
+# restart the app anyway, and a second unprompted dialog is exactly the annoyance
+# this guards against.
+_attempted_ports: set = set()
+_attempt_lock = threading.Lock()
+
+
+def setup_firewall(port: int, port_frontend: int = 3000):
     """
     Setup OS firewall rules for LAN-only access.
-    
+
     Creates rules that:
     - Allow connections from RFC 1918 private IP ranges
     - Allow localhost connections
     - Block all other incoming connections on the specified ports
-    
+
     Args:
         port: Backend port (default 8001)
         port_frontend: Frontend port (default 3000)
-        
+
     Returns:
-        True if firewall rules were successfully created
+        Truthy if the rules are in place: the string "present" when nothing had
+        to run (rule already active, or this process already attempted these
+        ports), "created" when the Linux firewalld path actually elevated, True
+        from the other platform paths. False on failure. Callers that only
+        check truthiness keep working.
     """
+    key = (int(port), int(port_frontend))
+    with _attempt_lock:
+        if key in _attempted_ports:
+            logger.info("firewall: setup for ports %s already attempted in this process - not asking again", key)
+            return "present"
+        _attempted_ports.add(key)
     try:
         if Platform.is_windows():
             return _setup_firewall_windows(port, port_frontend)
@@ -278,7 +303,7 @@ def _cleanup_firewall_macos() -> bool:
 # LINUX IMPLEMENTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _setup_firewall_linux(port: int, port_frontend: int) -> bool:
+def _setup_firewall_linux(port: int, port_frontend: int):
     """
     Create Linux iptables rules for LAN-only access.
     
@@ -368,13 +393,25 @@ def _firewalld_rich_rule(subnet: str, port: int) -> str:
             f'port port="{port}" protocol="tcp" accept')
 
 
-def _firewalld_rule_present(zone: str, rule: str) -> bool:
+def _firewalld_rule_query(zone: str, rule: str):
+    """(present, detail). The detail string carries rc/stdout/stderr because a
+    swallowed query error is indistinguishable from a genuinely missing rule,
+    and that difference is exactly one root password dialog (live incident: a
+    prompt on every app start while the permanent rule existed the whole time -
+    without this detail in the log the miss could never be attributed)."""
     try:
         r = subprocess.run(['firewall-cmd', '--zone', zone, '--query-rich-rule', rule],
                            capture_output=True, text=True, timeout=5)
-        return r.returncode == 0 and 'yes' in (r.stdout or '').lower()
-    except Exception:
-        return False
+        present = r.returncode == 0 and 'yes' in (r.stdout or '').lower()
+        detail = (f"rc={r.returncode} out={(r.stdout or '').strip()!r} "
+                  f"err={(r.stderr or '').strip()!r}")
+        return present, detail
+    except Exception as e:
+        return False, f"query failed: {e}"
+
+
+def _firewalld_rule_present(zone: str, rule: str) -> bool:
+    return _firewalld_rule_query(zone, rule)[0]
 
 
 def _elevation_argv() -> list:
@@ -387,7 +424,7 @@ def _elevation_argv() -> list:
     return ['sudo', '-n']
 
 
-def _setup_firewall_linux_firewalld(port: int, port_frontend: int) -> bool:
+def _setup_firewall_linux_firewalld(port: int, port_frontend: int):
     """Open ONLY the LAN access port (the integrated HTTPS proxy port, e.g. 8443) for the LAN subnet, via
     a firewalld rich rule in the interface's zone. The backend (8001) and frontend (3000) bind 127.0.0.1
     and are unreachable from the LAN, so they are deliberately NOT opened. Idempotent: if the rule already
@@ -398,9 +435,22 @@ def _setup_firewall_linux_firewalld(port: int, port_frontend: int) -> bool:
         return False
     zone = _firewalld_zone()
     rule = _firewalld_rich_rule(subnet, port)
-    if _firewalld_rule_present(zone, rule):
+    present, detail1 = _firewalld_rule_query(zone, rule)
+    if not present:
+        # One retry before asking for a password: the setup runs during app start,
+        # when uvicorn, the frontend and the docker stack all spin up at once - a
+        # busy firewall-cmd/D-Bus answering late must not cost a root dialog. A
+        # rule that is genuinely missing is still missing two seconds later.
+        time.sleep(2.0)
+        present, detail2 = _firewalld_rule_query(zone, rule)
+    if present:
         logger.info("firewalld: LAN access already open (zone=%s, source=%s, port=%s)", zone, subnet, port)
-        return True
+        return "present"
+    # The miss is real as far as this process can tell - record exactly what the
+    # queries said BEFORE elevating, so the next "why did it ask again?" is
+    # answerable from the log instead of unreproducible.
+    logger.warning("firewalld: rule not found, requesting elevation (zone=%s rule=%s first=[%s] retry=[%s])",
+                   zone, rule, detail1, detail2)
     # Add to BOTH runtime (effective immediately) and permanent (survives reboot) in a SINGLE elevation
     # so the user sees at most one password dialog.
     q = shlex.quote(rule)
@@ -411,7 +461,7 @@ def _setup_firewall_linux_firewalld(port: int, port_frontend: int) -> bool:
         logger.info("firewalld: opening port %s for %s in zone %s via %s", port, subnet, zone, argv[0])
         subprocess.run(argv, check=True, timeout=120)
         logger.info("firewalld: LAN access opened (zone=%s, source=%s, port=%s)", zone, subnet, port)
-        return True
+        return "created"
     except subprocess.TimeoutExpired:
         logger.error("firewalld: elevation timed out (password dialog dismissed?)")
         return False

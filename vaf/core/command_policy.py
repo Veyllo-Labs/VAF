@@ -98,13 +98,21 @@ class CommandVerdict:
         return f"Note: this command {', and '.join(named)}." if named else ""
 
 
-def _split_segments(command: str) -> List[str]:
+def _split_segments(command: str) -> List[tuple]:
     """Split on shell separators OUTSIDE quotes, descending into $( ), ` ` and ( ).
+
+    Returns (connector, segment) pairs, where the connector says how a segment
+    is joined to its predecessor: "pipe" only for a single `|`, everything else
+    ("start", ";", "&&", substitution boundaries) breaks the pipeline. That
+    distinction carries the whole pipe-to-shell judgement: `curl x | bash` is
+    unreviewable, while `curl x > f; python parse.py` is a download followed by
+    a separate, visible command (measured false positive of the first version).
 
     A plain `command.split("|")` would be fooled by `echo "a|b"`, and a regex
     over the whole string never sees what a substitution actually runs.
     """
-    segments: List[str] = []
+    segments: List[tuple] = []
+    connector = "start"
     buf: List[str] = []
     quote = ""       # active quote character, "" when outside quotes
     depth_stack: List[str] = []   # nesting of $( ), ( ) and ` `
@@ -125,7 +133,8 @@ def _split_segments(command: str) -> List[str]:
             if ch == quote:
                 quote = ""
             elif quote == '"' and ch == "$" and nxt == "(":
-                segments.append("".join(buf).strip())
+                segments.append((connector, "".join(buf).strip()))
+                connector = "sub"
                 buf = []
                 depth_stack.append(")")
                 i += 2
@@ -143,13 +152,15 @@ def _split_segments(command: str) -> List[str]:
             i += 2
             continue
         if ch == "$" and nxt == "(":
-            segments.append("".join(buf).strip())
+            segments.append((connector, "".join(buf).strip()))
+            connector = "sub"
             buf = []
             depth_stack.append(")")
             i += 2
             continue
         if ch == "`":
-            segments.append("".join(buf).strip())
+            segments.append((connector, "".join(buf).strip()))
+            connector = "sub"
             buf = []
             if depth_stack and depth_stack[-1] == "`":
                 depth_stack.pop()
@@ -158,30 +169,35 @@ def _split_segments(command: str) -> List[str]:
             i += 1
             continue
         if ch == "(":
-            segments.append("".join(buf).strip())
+            segments.append((connector, "".join(buf).strip()))
+            connector = "sub"
             buf = []
             depth_stack.append(")")
             i += 1
             continue
         if ch == ")" and depth_stack and depth_stack[-1] == ")":
-            segments.append("".join(buf).strip())
+            segments.append((connector, "".join(buf).strip()))
+            connector = "sub"
             buf = []
             depth_stack.pop()
             i += 1
             continue
         if ch in ";\n&|":
-            segments.append("".join(buf).strip())
+            segments.append((connector, "".join(buf).strip()))
             buf = []
-            # && and || are one separator, not two
+            # && and || are one separator, not two - and only a SINGLE | is a
+            # pipe; || is sequencing like ; and &&.
             if nxt == ch:
+                connector = "seq"
                 i += 2
                 continue
+            connector = "pipe" if ch == "|" else "seq"
             i += 1
             continue
         buf.append(ch)
         i += 1
-    segments.append("".join(buf).strip())
-    return [s for s in segments if s]
+    segments.append((connector, "".join(buf).strip()))
+    return [(c, seg) for c, seg in segments if seg]
 
 
 def _tokens(segment: str) -> List[str]:
@@ -238,8 +254,8 @@ def classify_command(command: str, *, profile: str = "host") -> CommandVerdict:
     if not text:
         return verdict
 
-    segments = _split_segments(text)
-    verdict.segments = segments
+    pairs = _split_segments(text)
+    verdict.segments = [seg for _, seg in pairs]
     # `$(echo rm) -rf /` reads as harmless and executes as `rm -rf /`: the
     # substitution supplies the executable, so no reader - human or classifier
     # - can tell from the text what runs.
@@ -251,8 +267,13 @@ def classify_command(command: str, *, profile: str = "host") -> CommandVerdict:
     if opaque:
         cats.append("opaque_command")
 
-    saw_fetch = False
-    for seg in segments:
+    pipeline_fetch = False
+    for connector, seg in pairs:
+        # Only a pipe continues a pipeline. `curl x > f; python parse.py` is a
+        # download followed by a separate, human-visible command - the block is
+        # reserved for the unreviewable direct pipe into an interpreter.
+        if connector != "pipe":
+            pipeline_fetch = False
         toks = _tokens(seg)
         if not toks:
             continue
@@ -260,12 +281,10 @@ def classify_command(command: str, *, profile: str = "host") -> CommandVerdict:
         low = seg.lower()
 
         if exe in _NETWORK_FETCHERS:
-            saw_fetch = True
+            pipeline_fetch = True
             if "network_fetch" not in cats:
                 cats.append("network_fetch")
-        # A shell sink reading from a pipe fed by a fetch, or from a fetch in
-        # the same segment (curl ... | bash splits into two segments).
-        if exe in _SHELL_SINKS and saw_fetch and "pipe_to_shell" not in cats:
+        if exe in _SHELL_SINKS and pipeline_fetch and "pipe_to_shell" not in cats:
             cats.append("pipe_to_shell")
 
         is_device_writer = exe in _DEVICE_WRITERS or exe.startswith("mkfs")

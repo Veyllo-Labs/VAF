@@ -222,7 +222,14 @@ def test_a_first_start_mints_exactly_one_machine_key(tmp_path):
     repo = str(Path(__file__).resolve().parent.parent)
     home = tmp_path / "home"
     (home / ".vaf").mkdir(parents=True)
-    (home / ".vaf" / "config.json").write_text("{}", encoding="utf-8")
+    # The backend is pinned, because the property under test is "one key, not
+    # two" and not where it is placed. Left to the platform default this reads
+    # the key file on POSIX and the Credential Manager on Windows, and the file
+    # assertion below then fails on Windows for a reason that has nothing to do
+    # with the race. The file path is also the one carrying the exclusive-create
+    # half of the fix, so pinning it exercises more, not less.
+    (home / ".vaf" / "config.json").write_text(
+        '{"secure_store_kek_backend": "file"}', encoding="utf-8")
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home),
                XDG_DATA_HOME=str(home / ".local" / "share"),
                VAF_LOG_DIR=str(home / "logs"), PYTHONPATH=repo)

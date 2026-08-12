@@ -208,14 +208,21 @@ def test_a_keyring_backed_kek_that_is_unreachable_fails_loudly(cfg, tmp_path, mo
 # ── what the first real restart taught ──────────────────────────────────────────
 
 def test_a_new_kek_goes_to_the_file_not_the_os_keyring_by_default(cfg, tmp_path, monkeypatch):
-    """The tray has no session bus, so a keyring-only key locks the product out.
+    """On POSIX the tray has no session bus, so a keyring-only key locks it out.
 
     MUTATION: prefer the keyring again and this goes red - which is exactly what
     happened on the first restart: 295 failed key resolutions and an app that
     only recovered once the file backend took over.
+
+    The default is per platform, so this test states the POSIX half and
+    `_on_windows` is pinned rather than left to the runner. Windows genuinely
+    prefers the keyring - `os.chmod` cannot protect a key file there at all -
+    and the test below covers that direction. Running this one unpinned made it
+    fail on the Windows matrix entry for the right reason and the wrong cause.
     """
     import vaf.core.secure_store as ss
 
+    monkeypatch.setattr(ss, "_on_windows", lambda: False)
     monkeypatch.setattr(ss, "_kek_file_path", lambda: tmp_path / "secure_store.kek")
     monkeypatch.setattr(ss, "_kek_marker_path", lambda: tmp_path / "secure_store.kek.where")
     monkeypatch.setattr(ss, "keyring_available", lambda: True)
@@ -231,6 +238,39 @@ def test_a_new_kek_goes_to_the_file_not_the_os_keyring_by_default(cfg, tmp_path,
     assert (tmp_path / "secure_store.kek").exists()
     assert (tmp_path / "secure_store.kek.where").read_text(encoding="utf-8") == "file"
     assert written == [], "the OS keyring must not be written unless it is configured"
+
+
+def test_on_windows_a_new_kek_goes_to_the_credential_manager(cfg, tmp_path, monkeypatch):
+    """The other half of the per-platform default, and the reason for it.
+
+    `os.chmod(path, 0o600)` cannot restrict read access on Windows - CPython
+    documents that only the read-only flag is honoured - so a key file there is
+    protected by nothing VAF sets. The Credential Manager is DPAPI-backed and
+    reachable from the user's Startup-folder autostart, which is how VAF starts
+    on Windows.
+
+    MUTATION: return "file" from _default_kek_backend regardless of platform and
+    this goes red.
+    """
+    import vaf.core.secure_store as ss
+
+    monkeypatch.setattr(ss, "_on_windows", lambda: True)
+    monkeypatch.setattr(ss, "_kek_file_path", lambda: tmp_path / "secure_store.kek")
+    monkeypatch.setattr(ss, "_kek_marker_path", lambda: tmp_path / "secure_store.kek.where")
+    monkeypatch.setattr(ss, "keyring_available", lambda: True)
+    monkeypatch.setattr(ss, "_kek_from_keyring", lambda: None)
+    written = []
+    monkeypatch.setitem(__import__("sys").modules, "keyring",
+                        type("K", (), {"set_password": staticmethod(lambda *a: written.append(a)),
+                                       "get_password": staticmethod(lambda *a: None),
+                                       "delete_password": staticmethod(lambda *a: None)})())
+
+    assert ss._machine_kek(create=True) is not None
+
+    assert written, "the key was not placed in the Credential Manager"
+    assert not (tmp_path / "secure_store.kek").exists(), (
+        "a key file on Windows is protected by nothing VAF can set")
+    assert (tmp_path / "secure_store.kek.where").read_text(encoding="utf-8") == "keyring"
 
 
 def test_opting_in_puts_the_kek_in_the_os_keyring(cfg, tmp_path, monkeypatch):

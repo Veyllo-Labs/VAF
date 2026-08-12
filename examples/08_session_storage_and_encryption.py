@@ -56,6 +56,14 @@ os.environ.update({
 })
 (SANDBOX / ".vaf").mkdir()
 (SANDBOX / "Desktop").mkdir()   # so part 4 shows where the recovery note lands
+# Pin the master key to a FILE, so part 4 can stage "the machine is gone" by
+# deleting it and every platform tells the same story. Left on "auto" this is a
+# file on Linux and macOS but the Credential Manager on Windows, where deleting
+# a file removes nothing and the demonstration quietly proves the opposite of
+# what it says. Your real installation uses the per-platform default - see
+# docs/security/ENCRYPTION_AT_REST.md for which, and why.
+(SANDBOX / ".vaf" / "config.json").write_text(
+    '{"secure_store_kek_backend": "file"}', encoding="utf-8")
 
 import logging  # noqa: E402
 

@@ -140,11 +140,19 @@ def test_the_next_start_retries_after_an_unwritable_desktop(tmp_path, monkeypatc
     assert recovery_kit.unwrap_with_secret(secret) == b"k" * 32
 
 
+@pytest.mark.skipif(os.name == "nt", reason="chmod cannot restrict read access on Windows")
 def test_the_note_is_never_world_readable_even_briefly(tmp_path, monkeypatch):
     """It is a plaintext master key on the Desktop: 0600 from creation, not after.
 
     MUTATION: go back to write_text() + harden_path() and this goes red on any
     machine whose umask leaves the default mode group- or world-readable.
+
+    Skipped rather than weakened on Windows, where the observed mode was 666:
+    `os.chmod` there honours only the read-only flag, so no mode assertion can
+    hold. What protects the file on that platform is the profile ACL, which VAF
+    neither sets nor can verify - which is precisely why the master key does not
+    live in a file there. Asserting a laxer mode everywhere would have thrown
+    away the guarantee on the two platforms that do keep it.
     """
     desktop = tmp_path / "Desktop"
     desktop.mkdir()

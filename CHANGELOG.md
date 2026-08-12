@@ -47,6 +47,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   not mean unobserved.
 
 ### Fixed
+- **Saying the agent's name is never answered with silence any more.** On a
+  live call, a speaker the voice check did not recognize as the owner could
+  address the agent by name - twice - and get nothing back: the small local
+  model ignored its "you were addressed, answer" instruction and the safety
+  net that overrides such silent drops only protected recognized owners. It
+  now covers every turn that clearly addresses the agent; the reply is a short
+  spoken "say that again" that grants nothing (all action rules still require
+  the verified voice). The dropped speaker in the live incident was in fact
+  the owner, mislabeled by a short noisy clip - exactly the case the net is
+  for.
 - **A finished answer no longer waits minutes for an invisible check.** After
   the reply is already on screen, a small internal check decides whether the
   agent just asked you a question. On API providers that check had no time

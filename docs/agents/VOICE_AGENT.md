@@ -191,7 +191,9 @@ measured; a public voice surface waits for a proven embedder need.
    exactly `<silent/>` (silence protocol: no TTS, keep listening) - EXCEPT on a turn
    directed at the owner's agent (`addressed AND speaker_ok`), where the prompt forbids
    silence, so a bare `<silent/>` is overridden to a "say that again" nudge instead of
-   dropping the owner's turn. On an owner turn the model may also emit
+   dropping the turn - for ANY speaker label, matching the Tier-0 pin (the belt was
+   owner-only at first, and a mislabeled owner naming the agent twice was still
+   dropped, live 2026-08-12; the nudge is words and authorizes nothing). On an owner turn the model may also emit
    `<talk_to_guest/>`/`<end_guest/>` to arm/disarm guest engagement (parsed out; the arm
    is gated on a REAL verified self - `speaker_ok AND confident != 'borderline'` - so a
    bridged-borderline turn cannot arm); a deterministic `engage_guest_cmd` command arms

@@ -1065,12 +1065,20 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             # no delegation - the caller just keeps listening.
             remainder = text.replace(_SILENT_MARKER, "")
             if not remainder.strip():
-                if addressed and speaker_ok:
-                    # The turn WAS directed at the owner's agent (wake word / a resolved
-                    # answer to its own question): the prompt forbids silence here, so a
-                    # bare marker is the weak local model disobeying. Nudge to repeat
-                    # instead of silently dropping the owner's turn (live incident T3).
-                    _log.info("voice_agent: overriding silence on an addressed owner turn")
+                if addressed:
+                    # The turn WAS directed at the agent (wake word / a resolved answer
+                    # to its own question / a named address): the Tier-0 prompt pin
+                    # forbids silence here FOR ANY SPEAKER LABEL (VOICE_AGENT.md
+                    # invariant 8), so a bare marker is the weak local model
+                    # disobeying. Nudge to repeat instead of silently dropping the
+                    # turn. This belt used to cover only the owner (live incident T3),
+                    # and a guest saying the agent's NAME twice was still dropped
+                    # (live 2026-08-12: "Ich rede mit dir <name>. <name>?" -> silence;
+                    # the speaker was the mislabeled owner, which is exactly why the
+                    # belt must match the prompt, not the label). A nudge is words -
+                    # it authorizes nothing, the label rules stay in force.
+                    _log.info("voice_agent: overriding silence on an addressed %s turn",
+                              "owner" if speaker_ok else "non-owner")
                     from vaf.core import vocab
                     return {"reply": vocab.pick("voice_tangled", lang), "delegate": None,
                             "engage_guest": False, "end_guest": False}

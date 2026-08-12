@@ -762,10 +762,21 @@ def test_silence_override_on_addressed_owner_turn(monkeypatch):
     res = va.voice_reply("[Alice]: Schatz, Fenster zu?", scope_id="s", lang="de",
                          speaker_ok=True, addressed=False)
     assert res == {"reply": "", "delegate": None, "silent": True}
-    # a guest (speaker_ok False), even if addressed by name -> silence stays
+    # an addressed NON-owner is nudged too, never silently dropped. This line used
+    # to pin the opposite ("a guest, even addressed by name -> silence stays") and
+    # the live 2026-08-12 call showed why that pin was wrong twice over: it
+    # contradicted the Tier-0 invariant (wake word answers FOR ANY LABEL, invariant
+    # 8), and the "guest" it dropped was the mislabeled owner saying the agent's
+    # name twice. The nudge is words - the label rules still lock every action.
     _FakeBackend.script = ["<silent/>"]
     res = va.voice_reply("[anderer_Sprecher]: bla", scope_id="s", lang="de",
                          speaker_ok=False, addressed=True)
+    assert not res.get("silent")
+    assert res["reply"] in vocab.phrasings("voice_tangled", "de")
+    # a NON-addressed guest keeps the silence protocol untouched
+    _FakeBackend.script = ["<silent/>"]
+    res = va.voice_reply("[anderer_Sprecher]: bla", scope_id="s", lang="de",
+                         speaker_ok=False, addressed=False)
     assert res == {"reply": "", "delegate": None, "silent": True}
 
 
@@ -1148,3 +1159,20 @@ def test_strip_speaker_label():
     assert va.strip_speaker_label("[Alice]: was geht") == "was geht"
     assert va.strip_speaker_label("kein prefix") == "kein prefix"
     assert va.strip_speaker_label("") == ""
+
+
+def test_silence_override_also_covers_an_addressed_guest_turn(monkeypatch):
+    """The Tier-0 pin says wake-word turns get an answer FOR ANY SPEAKER LABEL
+    (invariant 8) - the code belt used to rescue only the owner, so a guest (or a
+    MISLABELED owner, the live case: "Ich rede mit dir <name>. <name>?") who named
+    the agent twice was still silently dropped when the weak model emitted a bare
+    silence marker. A nudge is words - it authorizes nothing. Mutation: restore the
+    `and speaker_ok` on the override gate - red."""
+    import vaf.core.voice_agent as va
+
+    out = va._postprocess_reply("<silent/>", lang="de", main_busy=False,
+                                speaker_ok=False, addressed=True)
+    assert out.get("silent") is not True, "an addressed turn must never be silently dropped"
+    assert out.get("reply"), "the nudge must actually say something"
+    assert out.get("delegate") is None and not out.get("engage_guest"), \
+        "the belt speaks - it must never act or arm"

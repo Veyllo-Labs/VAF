@@ -338,8 +338,12 @@ prompt forbids the silence marker, but the weak local model sometimes emitted a 
 `<silent/>` anyway and the owner's turn was dropped. `_postprocess_reply(addressed=...)`
 now overrides a bare `<silent/>` to a spoken "say that again" nudge when `addressed AND
 speaker_ok` - so the owner is never silently ignored. Guests and non-addressed owner
-side-talk keep the silence protocol untouched (the override is scoped to the verified
-owner on an addressed turn).
+side-talk keep the silence protocol untouched. The override covers EVERY addressed
+turn regardless of label since 2026-08-12: it was owner-scoped at first, and the live
+case it then missed was the mislabeled owner ("Ich rede mit dir <name>. <name>?" from
+a confident-other label) - the Tier-0 prompt pin already said "answer, never the
+silence marker" for any label, so the belt now matches the prompt. A nudge is words;
+the label rules still lock every action.
 
 ## Reflex/policy module (local, non-llama)
 

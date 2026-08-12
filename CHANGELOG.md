@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Loop-protection notes no longer look like something you wrote.** When a
+  turn hit its tool budget, the framework appended its stop notice to the
+  conversation as a user message, so it was saved with the session, could
+  become the session's title, counted towards compaction and reappeared as a
+  chat bubble of yours after a reload. It is stored as a system note now; what
+  the model is told is unchanged.
 - **One local mode sent the conversation unrepaired.** Of the three ways VAF
   reaches a model, the in-process local one (Linux with Python 3.12 and no
   llama-server, e.g. a fresh Ubuntu install) skipped every pre-send repair: a

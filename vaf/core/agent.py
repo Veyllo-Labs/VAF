@@ -10111,6 +10111,10 @@ class Agent:
                         for _hlmsg in reversed(self.history):
                             if isinstance(_hlmsg, dict) and _hlmsg.get("role") == "user":
                                 _c = (_hlmsg.get("content") or "")
+                                # Kept for sessions written before the loop
+                                # protection stopped posing as the user: those
+                                # histories still carry "[System: ..." under
+                                # role "user", and this scan reads them back.
                                 if _c and not _c.startswith("[System"):
                                     _hl_intent = _c[:400]
                                     break
@@ -10123,7 +10127,13 @@ class Agent:
                     )
                     UI.event("Emergency", f"Hard stop at {MAX_TOOL_TURNS_PER_STEP} tool turns — asking agent to inform user.", style="bold red")
                     append_domain_log("backend", f"hard_stop_injection at turn {MAX_TOOL_TURNS_PER_STEP}")
-                    self.history.append({"role": "user", "content": _hard_stop_injection})
+                    # role "system", not "user": framework.py persists every
+                    # non-system message, so this loop-protection note used to
+                    # land in the session store, the export and the memory lane
+                    # as if the human had typed it - and session titles, the GC
+                    # heuristic and the compaction intent all read role=="user".
+                    # Every other nudge in this loop already uses "system".
+                    self.history.append({"role": "system", "content": _hard_stop_injection})
                     # Continue so the agent can produce its final response — no more tool calls allowed.
 
                 # Soft reminder at SOFT_LIMIT_TOOL_TURNS — inject goal reminder, agent continues
@@ -10138,6 +10148,10 @@ class Agent:
                         for _hmsg in reversed(self.history):
                             if isinstance(_hmsg, dict) and _hmsg.get("role") == "user":
                                 _c = (_hmsg.get("content") or "")
+                                # Kept for sessions written before the loop
+                                # protection stopped posing as the user: those
+                                # histories still carry "[System: ..." under
+                                # role "user", and this scan reads them back.
                                 if _c and not _c.startswith("[System"):
                                     _original_intent = _c[:400]
                                     break
@@ -10150,7 +10164,9 @@ class Agent:
                     )
                     UI.event("Warning", f"Soft limit reached ({SOFT_LIMIT_TOOL_TURNS} tool turns) — injecting goal reminder...", style="yellow")
                     append_domain_log("backend", f"soft_limit_reminder injected at turn {SOFT_LIMIT_TOOL_TURNS}")
-                    self.history.append({"role": "user", "content": _reminder})
+                    # See the hard-stop note above: a framework nudge is not
+                    # human input and must not be stored as one.
+                    self.history.append({"role": "system", "content": _reminder})
 
                 # Check stop flag after tool finishes — catches "Stop" clicked during tool execution
                 _post_tool_session = getattr(self, 'current_session_id', None) or getattr(self, '_session_id', None)

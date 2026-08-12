@@ -17,10 +17,12 @@ a cheap prefilter, never sufficient on its own. No grounding, no chime-in (this 
 anti-fabrication guard: a bare cue word about something the owner does not care about
 must not make the agent grasp for a reason to speak).
 
-Phase 0 is a SKELETON: it computes the interestingness signal but does NOT yet change
-behavior - `classify()` returns the same three-way verdict as the Tier-1 gate
-(`voice_agent.classify_utterance`). Phase 2 wires the signal into a chime-in upgrade.
-Everything catches and degrades to a safe default (never break the realtime path).
+The signal is WIRED, not a skeleton: `chime_decision()` is what the turn engine asks
+before an unaddressed utterance may become a chime-in, and `answer_verdict()` decides
+whether an utterance answers the agent's own open question. (The stand-in `classify()`
+that once returned the Tier-1 verdict unchanged was deleted once the real consumers
+existed - do not reintroduce a pass-through here.) Everything catches and degrades to
+a safe default (never break the realtime path).
 """
 from __future__ import annotations
 

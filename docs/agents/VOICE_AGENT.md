@@ -224,9 +224,10 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
 ## Invariants (each one exists because a live incident taught it)
 
 1. **Voice-gated delegation (anti-spoofing).** With an enrolled profile, only a
-   VOICE-VERIFIED owner may create main-agent work. `web_server` derives
-   `_speaker_ok` from `speaker_id.resolve_label`, fail-closed (profile present ->
-   False until verified). Verification is STICKY within a call (per-call
+   VOICE-VERIFIED owner may create main-agent work. The turn engine
+   (`vaf/core/voice_turn.py`) derives `speaker_ok` from `speaker_id.resolve_label`,
+   fail-closed (profile present -> False until verified); the handler only wires
+   the outcome to the socket. Verification is STICKY within a call (per-call
    `last_self_ts`): a confident `self` verifies, and for `STICKY_WINDOW_S` a
    following borderline/short/missing score keeps the owner verified, so their own
    quick replies do not flicker to a guest (a clip below ~1.5s scores too noisily to

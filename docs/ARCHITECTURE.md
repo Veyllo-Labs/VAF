@@ -136,8 +136,10 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
 
 - everything else under `vaf.core.*` (including `chat_step` internals,
   `_clean_reasoning`, context/compaction internals, sub-agent IPC, web server).
-  The two names above that live in `vaf.core` but are re-exported on the façade
-  are the deliberate exceptions - import them from `vaf`, not from `vaf.core`.
+  The names above that live in `vaf.core` but are re-exported on the façade
+  (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
+  `extract_pdf_markdown`, `set_account_allowlist_resolver`) are the deliberate
+  exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 
 **What "stable" means during the alpha.** VAF is currently a `0.1.0aN`

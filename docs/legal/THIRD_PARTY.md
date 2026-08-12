@@ -288,8 +288,9 @@ weights carry their own license independent of the code that loads them.
 | Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI - "Whisper's code and model weights are released under the MIT License" (upstream README) |
 | Smart Turn v3 model weights (`smart-turn-v3.2-cpu.onnx`, ~8 MB int8) | downloaded at first use into `models/speaker/` when `voice_semantic_endpoint_enabled` is on (default off); loader `vaf/core/voice_vad.py` | BSD-2-Clause | Pipecat AI - https://huggingface.co/pipecat-ai/smart-turn-v3 (semantic voice turn-end; Whisper-Tiny encoder + linear head) |
 
-All three are MIT, so shipping and commercial use are unrestricted beyond retaining
-the notices above. The licenses were read from the running container
+The three speech-to-text rows are MIT and the Smart Turn v3 weights are BSD-2-Clause,
+so shipping and commercial use are unrestricted beyond retaining the notices above
+(both licenses ask for nothing more). The speech-to-text licenses were read from the running container
 (`/app/LICENCE`, `/app/pyproject.toml`, and the `openai_whisper-*.dist-info`
 license file) rather than from upstream documentation, so this row states what the
 image actually contains.

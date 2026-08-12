@@ -14,7 +14,12 @@ echo "Logs will be written to ./logs/tray_debug.log"
 # Start Docker services (postgres, redis, browser, etc.)
 if command -v docker &>/dev/null && [ -f "$DIR/docker-compose.memory.yml" ]; then
     echo "Starting Docker services..."
-    docker compose -f "$DIR/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
+    # The Redis password lives beside the other secrets, not in the checkout,
+    # so compose has to be told where it is (see service_stack.compose_env_file).
+    VAF_COMPOSE_ENV="$HOME/.vaf/compose.env"
+    VAF_ENV_ARGS=""
+    [ -f "$VAF_COMPOSE_ENV" ] && VAF_ENV_ARGS="--env-file $VAF_COMPOSE_ENV"
+    docker compose $VAF_ENV_ARGS -f "$DIR/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
         && echo "   ✓ Docker services running" \
         || echo "   ⚠ Docker not available — services skipped"
 fi

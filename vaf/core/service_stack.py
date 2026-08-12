@@ -44,6 +44,7 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 COMPOSE_FILENAME = "docker-compose.memory.yml"
+COMPOSE_ENV_FILENAME = "compose.env"
 CORE_SERVICES = ("postgres", "redis", "sandbox", "stt", "gotenberg")
 OPTIONAL_SERVICES = ("tts", "vaf-browser")
 
@@ -234,36 +235,93 @@ def _compose_env() -> dict:
     return env
 
 
+def compose_env_file() -> "Path":
+    """Where the compose password file lives: beside the other secrets, never in the repo.
+
+    It used to be `<checkout>/.env`, and that location was wrong twice over.
+    On Windows the installation directory is frequently outside the user
+    profile (`C:\\VAF`, `D:\\VAF`), where the drive-root ACL grants every local
+    account read - and `harden_path` cannot fix that, because chmod restricts
+    nothing there. The file holds the password to a Redis that caches DECRYPTED
+    memory content, so it was the shortest way around the whole shield.
+
+    The second reason is the working tree itself: editors treat a root `.env`
+    as project configuration. VS Code's Python extension offers to inject it
+    into every integrated terminal, which would put the password into the
+    environment of every process started from the IDE.
+
+    `~/.vaf` is inside the profile on every platform, is the same directory the
+    KEK already uses, and is trivially reachable from the shell launchers as
+    `$HOME/.vaf/compose.env`.
+    """
+    from pathlib import Path
+
+    from vaf.core.config import Config
+    return Path(Config.APP_DIR) / COMPOSE_ENV_FILENAME
+
+
+def _retire_repo_env_file(project_root, log=None) -> None:
+    """Take REDIS_PASSWORD out of any `<checkout>/.env` an older version wrote.
+
+    Only our own line: the file may carry variables that belong to the user, so
+    it is rewritten without ours and removed only if nothing else was in it.
+    Bytes, not text - `write_text` would rewrite every newline in a file we do
+    not own on Windows.
+    """
+    from pathlib import Path
+
+    try:
+        legacy = Path(project_root) / ".env"
+        if not legacy.exists():
+            return
+        kept = [ln for ln in legacy.read_bytes().splitlines(keepends=True)
+                if not ln.startswith(b"REDIS_PASSWORD=")]
+        if len(kept) == len(legacy.read_bytes().splitlines(keepends=True)):
+            return
+        if any(ln.strip() for ln in kept):
+            legacy.write_bytes(b"".join(kept))
+            _say(log, f"Removed REDIS_PASSWORD from {legacy}; it now lives in "
+                      f"{compose_env_file()}")
+        else:
+            legacy.unlink()
+            _say(log, f"Removed {legacy}; the compose password now lives in "
+                      f"{compose_env_file()}")
+    except Exception as e:
+        _say(log, f"Could not retire the repository env file: {e}")
+
+
 def _write_compose_env_file(project_root, log=None) -> None:
     """Put REDIS_PASSWORD where `docker compose` itself will read it.
 
     Passing it through this process's environment only covers the runs VAF
     starts. `start_vaf.sh`, `run_vaf.sh` and `install.sh` all call compose
     directly, so Redis would come up with NO password while the client always
-    sends one - authentication errors on every cache call. A compose .env file
-    is the one place both paths agree on. Owner-only: it holds the password.
+    sends one - authentication errors on every cache call. A file both paths
+    name explicitly is the one place they agree on. Owner-only where that means
+    anything: it holds the password.
     """
-    from pathlib import Path
-
     try:
         from vaf.memory.cache import redis_password
         password = redis_password()
+        env_path = compose_env_file()
+        _retire_repo_env_file(project_root, log)
         if not password:
+            # An unreadable keyring answers "" here. Leaving a stale line behind
+            # would start Redis WITH a password while the client sends none, and
+            # the only trace would be NOAUTH on every cache call.
+            if env_path.exists():
+                env_path.unlink()
             return
-        env_path = Path(project_root) / ".env"
-        line = f"REDIS_PASSWORD={password}\n"
-        existing = ""
-        if env_path.exists():
-            existing = env_path.read_text(encoding="utf-8")
-            if line in existing:
-                _harden(env_path)
-                return
-            existing = "".join(l for l in existing.splitlines(keepends=True)
-                               if not l.startswith("REDIS_PASSWORD="))
-        env_path.write_text(existing + line, encoding="utf-8")
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_secret_write(env_path, f"REDIS_PASSWORD={password}\n".encode("utf-8"))
         _harden(env_path)
     except Exception as e:
         _say(log, f"Could not write the compose env file: {e}")
+
+
+def _atomic_secret_write(path, payload: bytes) -> None:
+    from vaf.core.secure_store import _atomic_write_bytes
+    _atomic_write_bytes(path, payload)
 
 
 def _harden(path) -> None:
@@ -358,9 +416,13 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
         # VM clock skew breaking apt) can never abort the whole 'up' and leave
         # zero containers (incl. the DB). Optional services are best-effort.
         docker = resolve_docker_exe()  # Rancher's docker.exe may be off PATH
+        # --env-file is required now: the password file lives beside the other
+        # secrets instead of in the project directory, so compose no longer
+        # picks it up implicitly.
+        env_args = ["--env-file", str(compose_env_file())] if compose_env_file().exists() else []
         for base in (
-            [docker, "compose", "-f", COMPOSE_FILENAME, "up", "-d", "--quiet-pull"],
-            ["docker-compose", "-f", COMPOSE_FILENAME, "up", "-d"],
+            [docker, "compose", *env_args, "-f", COMPOSE_FILENAME, "up", "-d", "--quiet-pull"],
+            ["docker-compose", *env_args, "-f", COMPOSE_FILENAME, "up", "-d"],
         ):
             try:
                 kwargs = {"cwd": str(project_root), "capture_output": True, "text": True,

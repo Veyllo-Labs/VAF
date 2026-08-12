@@ -169,7 +169,27 @@ include-package-data = true
 include = ["vaf*"]
 
 [tool.setuptools.package-data]
-vaf = ["py.typed", "media/*", "media/**/*"]
+# Runtime assets that live INSIDE the package and are read from
+# Path(__file__).parent at runtime. Measured on the built wheel, not assumed:
+# before this list grew, `pip wheel .` produced 423 files of which exactly 11
+# were non-Python - the vocabulary book, the coder's scaffolds, the tool
+# knowledge cards and the WhatsApp bridge were all missing from an installed
+# VAF. tests/test_wheel_ships_runtime_assets.py rebuilds and checks.
+vaf = [
+    "py.typed",
+    "media/*", "media/**/*",
+    # Every spoken line and every matched lexicon (vocab.__init__ reads
+    # data/<key>.json). Without it the agent falls back to its built-in
+    # patterns and speaks English-only defaults.
+    "core/vocab/data/*.json",
+    # The coder's project scaffolds (TemplateManager reads them from disk).
+    "tools/coder_templates/**/*",
+    # Seeded tool-usage knowledge cards for the learning system.
+    "whare_wananga/knowledge/*.json",
+    # The WhatsApp bridge's node app (its own package.json is the install
+    # manifest the bridge runs npm against).
+    "whatsapp_node/*.json", "whatsapp_node/*.js",
+]
 
 [tool.setuptools.dynamic]
 # Resolved from the plain string literal in vaf/version.py via AST - the

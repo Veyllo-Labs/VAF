@@ -19,6 +19,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Installing VAF from a package gave you an agent with no vocabulary. The
+  built wheel contained the Python code and almost nothing else: the
+  vocabulary book (every spoken line and the yes/no lexicons), the coder's
+  project scaffolds, the seeded tool-knowledge cards and the WhatsApp
+  bridge were all missing, so an installed copy silently fell back to
+  built-in English defaults. Measured on the built artifact, and a test
+  now builds a wheel and checks.
 - Voice call: a confirmation answer is now read in the language it was asked
   in. Since yes and no moved into the multilingual vocabulary, every
   language's words were matched at once - and "da" means yes in Romanian

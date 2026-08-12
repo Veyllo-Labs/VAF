@@ -4,8 +4,9 @@
 """Stage 1 voice reflex policy (vaf/core/voice_policy.py).
 
 Pins: the vocab-backed trigger prefilter, the embedding interest score (mocked so no
-model download), the activity-scaled threshold, and the Phase-0 contract that
-`classify()` mirrors the Tier-1 three-way verdict while exposing the signals.
+model download), the activity-scaled threshold, and that the grounding math exists
+exactly ONCE (`_grounding`, shared by `is_interesting` and `chime_decision` - the two
+used to carry separate copies of the threshold arithmetic, which is how bands drift).
 """
 import vaf.core.voice_policy as vp
 
@@ -58,18 +59,25 @@ def test_is_interesting_requires_grounding(monkeypatch):
     assert vp.is_interesting("wir gehen spazieren", ["arbeit"], activity=0.0) is False
 
 
-def test_classify_phase0_mirrors_tier1_verdict_and_exposes_signals(monkeypatch):
-    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 0.9)
-    # Owner speech -> respond_now (Tier-1), signals populated.
-    r = vp.classify("Kannst du das notieren?", "self", topics=["notizen"], activity=0.5)
-    assert r["verdict"] == "respond_now" and r["reason"] == "ok"
-    assert r["trigger"] and r["interesting"] is True
-    # Guest side-talk still store_only in Phase 0 (no chime-in upgrade yet), even if
-    # the content is flagged interesting - the signal is there for Phase 2.
-    r2 = vp.classify("[anderer_Sprecher]: erinnere mich an den Termin", "other",
-                     topics=["termine"], activity=0.9)
-    assert r2["verdict"] == "store_only" and r2["reason"] == "side_talk"
-    assert r2["interesting"] is True
+def test_the_phase0_skeleton_stayed_deleted():
+    """`classify()` was the Phase-0 skeleton; Phase 2 shipped as `chime_decision` and
+    nothing ever called it. Dead code in the policy that gates who the agent SPEAKS to
+    is a trap - the next reader takes it for the live path - so its absence is pinned."""
+    assert not hasattr(vp, "classify")
+
+
+def test_chime_decision_and_is_interesting_share_one_grounding(monkeypatch):
+    """The threshold math must exist once: mocking the shared `_grounding` has to move
+    BOTH consumers, or one of them has grown its own copy again."""
+    monkeypatch.setattr(vp, "_grounding", lambda *a, **k: (0.77, "cue", True))
+    assert vp.is_interesting("x", ["t"], activity=0.5) is True
+    d = vp.chime_decision("x", "other", recent_labels=["other"], topics=["t"], activity=0.5)
+    assert d["speak"] is True and d["score"] == 0.77 and d["trigger"] == "cue"
+
+    monkeypatch.setattr(vp, "_grounding", lambda *a, **k: (0.05, None, False))
+    assert vp.is_interesting("x", ["t"], activity=0.5) is False
+    d2 = vp.chime_decision("x", "other", recent_labels=["other"], topics=["t"], activity=0.5)
+    assert d2["speak"] is False
 
 
 # ── Phase 2: scene-based internal modes + the one activity dial ────────────────

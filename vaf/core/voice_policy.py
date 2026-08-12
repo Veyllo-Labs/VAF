@@ -128,15 +128,26 @@ def _threshold(activity: float) -> float:
     return _THR_QUIET + (_THR_ACTIVE - _THR_QUIET) * a
 
 
+def _grounding(text: str, topics: Optional[Sequence[str]],
+               activity: float) -> tuple[float, Optional[str], bool]:
+    """The one grounding computation: (score, trigger, interesting). A trigger phrase
+    only LOWERS the bar, never satisfies it alone - no grounding, no chime-in. Shared
+    by `is_interesting` and `chime_decision` so the threshold math exists once; the
+    two used to carry separate copies, which is exactly how bands drift apart."""
+    trig = trigger_match(text)
+    score = interest_score(text, topics) if topics else 0.0
+    thr = _threshold(activity)
+    if trig:
+        thr = max(_GROUND_FLOOR, thr - _TRIGGER_RELAX)
+    return score, trig, score >= thr
+
+
 def is_interesting(text: str, topics: Optional[Sequence[str]] = None,
                    activity: float = 0.5) -> bool:
     """True only when the utterance is GROUNDED in the owner's configured topics above the
     activity-scaled bar. A trigger phrase lowers that bar but is never sufficient alone
     - no grounding, no chime-in. This is the signal a chime-in decision will read."""
-    thr = _threshold(activity)
-    if trigger_match(text):
-        thr = max(_GROUND_FLOOR, thr - _TRIGGER_RELAX)
-    return interest_score(text, topics) >= thr
+    return _grounding(text, topics, activity)[2]
 
 
 # Internal, system-chosen behavior modes (docs/agents/VOICE_REFLEX.md). These are
@@ -203,12 +214,7 @@ def chime_decision(text: str, label: Optional[str], *,
             return {"mode": mode, "scene": scene, "score": 0.0,
                     "interesting": False, "trigger": None, "speak": False}
         eff = _mode_activity(mode, activity)
-        trig = trigger_match(text)
-        score = interest_score(text, topics) if topics else 0.0
-        thr = _threshold(eff)
-        if trig:
-            thr = max(_GROUND_FLOOR, thr - _TRIGGER_RELAX)
-        interesting = score >= thr
+        score, trig, interesting = _grounding(text, topics, eff)
         return {"mode": mode, "scene": scene, "score": round(score, 4),
                 "interesting": interesting, "trigger": trig, "speak": interesting}
     except Exception:
@@ -345,31 +351,7 @@ def answer_verdict(question: str, utterance: str, label: Optional[str], *,
         return {"verdict": CONTINUE, "reason": "error", "guest": False}
 
 
-def classify(text: str, label: Optional[str], agent_name: str = "", *,
-             topics: Optional[Sequence[str]] = None, activity: float = 0.5) -> dict:
-    """The reflex decision. Returns a dict with the three-way `verdict`, the Tier-1
-    `reason`, and the interestingness signals (`trigger`, `score`, `interesting`).
-
-    Phase 0 (skeleton): `verdict` mirrors `voice_agent.classify_utterance` - no chime-in
-    upgrade yet - while the signals are computed so Phase 2 can use them. All local, no
-    LLM, and top-level guarded so a policy hiccup never breaks the realtime path.
-    """
-    try:
-        verdict, reason = voice_agent.classify_utterance(text, label, agent_name)
-        trig = trigger_match(text)
-        score = interest_score(text, topics) if topics else 0.0
-        # Grounding required (see is_interesting): a trigger only lowers the bar.
-        thr = _threshold(activity)
-        if trig:
-            thr = max(_GROUND_FLOOR, thr - _TRIGGER_RELAX)
-        interesting = score >= thr
-        return {
-            "verdict": verdict,
-            "reason": reason,
-            "trigger": trig,
-            "score": round(score, 4),
-            "interesting": interesting,
-        }
-    except Exception:
-        return {"verdict": "ignore", "reason": "error", "trigger": None,
-                "score": 0.0, "interesting": False}
+# NOTE: the Phase-0 `classify()` skeleton that once lived here (mirror the Tier-1
+# verdict + expose the interestingness signals) was deleted: Phase 2 shipped as
+# `chime_decision` instead and nothing ever called it. Unused code in a policy that
+# gates who the agent SPEAKS to is a trap - the next reader takes it for the live path.

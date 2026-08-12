@@ -330,9 +330,16 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
 
 Client -> server: `voice_call_start` (`ui_lang`), `voice_call_turn` (`audio`
 base64 WAV 16 kHz mono, `format:"wav"`, `sessionId`, `main_busy`,
-`pending_task`), `voice_call_end`, `voice_call_speak` (`text` - result
+`pending_task`, plus a `timings` object with the browser's own latency share -
+`endpoint_wait_ms`, `encode_ms`), `voice_call_end`, `voice_call_speak` (`text` - result
 announcements; replies as `speaker_enroll_tts` so the chat TTS handler never
-reacts). Server -> client: `voice_call_started` (`ok`, `lang`, `exclusive`,
+reacts). With `voice_semantic_endpoint_enabled` on (default off) the client also
+streams `voice_call_chunk` (`pcm` base64 int16 16 kHz, ~100 ms frames, never while
+muted) and sends `voice_call_reset` on a mute toggle; the server may push
+`voice_turn_end {reason}` proposing the endpoint (the browser silence timer stays
+as the fallback), and `voice_call_started` carries `server_endpoint` so the
+frontend knows whether to stream at all. `voice_call_reply` carries per-stage
+`timings` (gate/stt/speaker/policy/llm/tts, ms). Server -> client: `voice_call_started` (`ok`, `lang`, `exclusive`,
 and when ok is false `reason: "model_loading"` - local model load kicked,
 the frontend shows a loading state and re-sends `voice_call_start` on the
 `model_state {loaded:true}` push - or `"no_model"`), `voice_call_reply`,

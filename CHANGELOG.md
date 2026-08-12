@@ -12,6 +12,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The voice call got measurably faster, and it now measures itself.** Three
+  independent cuts. Memory lookups behind every turn: the embedding model padded
+  every text to its full width, so a short query cost ~140 ms - now ~7 ms, which
+  also speeds up memory search and document lookups everywhere else. The
+  listening detector: the pause before the agent accepts that you finished
+  dropped by roughly half a second (a smoothing filter meant for visual meters
+  was delaying the decision, background hum no longer counts as speech, and the
+  silence window shrank accordingly). And every call turn now reports where its
+  time went - microphone wait, transcription, speaker check, answer, speech -
+  so the next slow turn is a log line, not a guess.
+- **Optional: the agent can hear that you merely paused (off by default).** With
+  `voice_semantic_endpoint_enabled` the browser streams the microphone to the
+  server during a call and a small local model (Smart Turn v3, 8 MB, runs on
+  CPU, BSD-2 licensed, downloaded on first use) judges from your intonation
+  whether you actually finished the sentence - a mid-sentence thinking pause no
+  longer ends your turn, and a finished one ends it without waiting out the full
+  silence timer. The browser's own timer always remains as the fallback.
 - **You can see, and cap, what the API costs per user.** VAF measured tokens
   for every call and then forgot them; nothing added them up and nothing could
   stop a runaway loop, even though one instance serves several people plus

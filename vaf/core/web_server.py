@@ -6611,6 +6611,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                    # ring of recent chime-ins for dedup.
                                                    "session": (cmd.get("sessionId") or str(_conn_key)),
                                                    "chime_recent": []}
+                        # Server-side semantic endpointing (opt-in): one StreamEndpointer
+                        # PER CALL (per-stream Silero state + the caller's own audio ring,
+                        # Rule 4.4 - never shared). The frontend only streams PCM chunks
+                        # when `server_endpoint` in voice_call_started says the lane is on.
+                        try:
+                            from vaf.core.voice_vad import StreamEndpointer, get_turn_judge
+                            _tj = get_turn_judge()
+                            if _tj is not None:
+                                _VOICE_CALLS[_conn_key]["endpointer"] = StreamEndpointer(judge=_tj)
+                        except Exception:
+                            pass
                         # Pre-warm the speaker-ID extractor in the background: it lazy-loads
                         # on the first score_wav (~seconds), and during that window the owner
                         # scores as 'unsure' and is treated as a guest (formal replies, a
@@ -6728,6 +6739,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # while a delegated task runs.
                             "exclusive": _va.is_exclusive(),
                             "reason": _lane_reason,
+                            # server_endpoint: the semantic turn-end lane is armed for
+                            # this call - the frontend streams mic PCM chunks and lets
+                            # voice_turn_end trigger the stop it would otherwise take
+                            # from its own silence timer (which stays as the fallback).
+                            "server_endpoint": bool(_VOICE_CALLS.get(_conn_key, {}).get("endpointer")),
                         })
                         # Greeting: the agent opens the call (deterministic
                         # line, no LLM round-trip) - also an audio check for
@@ -6781,6 +6797,44 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             pass
                         await websocket.send_json({"type": "voice_call_ended"})
 
+                    elif type == "voice_call_chunk":
+                        # Live mic PCM (16 kHz mono int16, base64) for the server-side
+                        # endpointer. Pure OBSERVATION: the audio that becomes the turn
+                        # still arrives complete via voice_call_turn - this stream only
+                        # decides WHEN. The endpointer keys on the connection's call
+                        # record, so one user's stream can never touch another's state.
+                        _call = _VOICE_CALLS.get(_conn_key)
+                        _ep = (_call or {}).get("endpointer")
+                        if _ep is None:
+                            continue   # lane off or no call: chunks are simply ignored
+                        try:
+                            import base64 as _b64c
+                            _pcm = _b64c.b64decode(cmd.get("pcm") or "")
+                            if not _pcm:
+                                continue
+                            loop = asyncio.get_running_loop()
+                            # Silero + (optionally) the judge run off the event loop,
+                            # like every other blocking step in the live turn.
+                            _verdict = await loop.run_in_executor(None, _ep.feed_pcm, _pcm)
+                            if _verdict == "end":
+                                await websocket.send_json(
+                                    {"type": "voice_turn_end", "reason": "semantic"})
+                            elif _verdict == "hold":
+                                log("WebServer", "voice_call: semantic endpoint HELD an "
+                                                 "unfinished sentence open")
+                        except Exception:
+                            pass   # fail-open: the browser timer still ends the turn
+
+                    elif type == "voice_call_reset":
+                        # Mute toggled / utterance discarded on the client: the stream
+                        # state no longer describes reality - drop it entirely.
+                        _ep = (_VOICE_CALLS.get(_conn_key) or {}).get("endpointer")
+                        if _ep is not None:
+                            try:
+                                _ep.reset()
+                            except Exception:
+                                pass
+
                     elif type == "voice_call_turn":
                         _call = _VOICE_CALLS.get(_conn_key)
                         if _call is None:
@@ -6808,6 +6862,35 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         _wav = _b64v.b64decode(_audio_b64)
                         loop = asyncio.get_running_loop()
+                        # Latency instrumentation: one perf_counter mark per pipeline
+                        # stage, deltas attached to voice_call_reply as `timings` and
+                        # written into the forensic turn line. The browser's own share
+                        # (silence timer + encode) arrives on the request - together
+                        # they account for the WHOLE turn, which no log did before.
+                        import time as _tmod
+                        _tm: dict = {"t0": _tmod.perf_counter()}
+                        _tm_browser = cmd.get("timings") or {}
+
+                        def _tm_mark(name: str) -> None:
+                            _tm[name] = _tmod.perf_counter()
+
+                        def _tm_report() -> dict:
+                            out: dict = {}
+                            try:
+                                keys = [k for k in _tm if k != "t0"]
+                                keys.sort(key=lambda k: _tm[k])
+                                prev = _tm["t0"]
+                                for k in keys:
+                                    out[k + "_ms"] = int((_tm[k] - prev) * 1000)
+                                    prev = _tm[k]
+                                out["total_ms"] = int((prev - _tm["t0"]) * 1000)
+                                for k in ("endpoint_wait_ms", "encode_ms"):
+                                    v = _tm_browser.get(k)
+                                    if isinstance(v, (int, float)) and 0 <= v < 600000:
+                                        out[k] = int(v)
+                            except Exception:
+                                pass
+                            return out
 
                         # 0a. Exclusive-model belt (local time-sharing): while
                         # the main agent holds the ONE local model, a voice
@@ -6839,6 +6922,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # clicks/near-silence never reach STT - Whisper-class
                         # models hallucinate text on silence.
                         _active_s = _va.active_speech_seconds(_wav)
+                        _tm_mark("gate")
                         if _active_s < 0.3:
                             log("WebServer", f"voice_call: turn gated as noise (active={_active_s:.2f}s)")
                             await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
@@ -6857,6 +6941,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             None, lambda: _vsc.transcribe(
                                 _wav, mime="audio/wav", filename="call.wav",
                                 cache_key=_call.get("scope"), default_language=_call.get("lang")))
+                        _tm_mark("stt")
                         if not _text:
                             await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
                             continue
@@ -6962,6 +7047,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception:
                             pass
 
+                        _tm_mark("speaker")
                         # 2a-recover. Speaker recovery (VOICE_REFLEX.md): if we just asked
                         # "did you mean me?" (2c-recheck) and THIS turn re-verifies as the
                         # owner with a REAL confident self (not a bridged borderline), the
@@ -7385,6 +7471,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                               since=_since)
                             except Exception:
                                 _group_ctx = ""
+                        _tm_mark("policy")
                         _res = await loop.run_in_executor(
                             None,
                             lambda: _va.voice_reply(
@@ -7405,6 +7492,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 group_context=_group_ctx,
                             ),
                         )
+                        _tm_mark("llm")
                         if _res is None:
                             await websocket.send_json({"type": "voice_call_error", "error": "llm_failed"})
                             continue
@@ -7426,7 +7514,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             f"voice_call turn: active={_active_s:.1f}s label={_label or '-'} "
                             f"speaker_ok={_speaker_ok} text={_text[:80]!r} -> "
                             f"reply_len={len(_res['reply'])} delegate={'yes' if _res.get('delegate') else 'no'} "
-                            f"reply={_res['reply'][:100]!r}")
+                            f"reply={_res['reply'][:100]!r} timings={_tm_report()}")
 
                         # 4. Delegation -> normal main-agent task in this session
                         _delegated = None
@@ -7472,6 +7560,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _reply_audio = _b64v.b64encode(_audio_out).decode("utf-8")
                         except Exception:
                             _reply_audio = None
+                        _tm_mark("tts")
 
                         _call["history"].append({"role": "user", "content": _text})
                         _call["history"].append({"role": "assistant", "content": _res["reply"]})
@@ -7550,6 +7639,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "reply": _res["reply"],
                             "audio": _reply_audio,
                             "delegated": _delegated,
+                            # Per-stage latency (ms): browser endpoint_wait/encode +
+                            # server gate/stt/speaker/policy/llm/tts. Read by the
+                            # VoiceCallLayer debug line; absent fields simply not shown.
+                            "timings": _tm_report(),
                         })
 
                 elif type in ("speaker_enroll_start", "speaker_enroll_round",

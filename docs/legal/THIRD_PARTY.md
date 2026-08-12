@@ -286,6 +286,7 @@ weights carry their own license independent of the code that loads them.
 | whisper-asr-webservice (the container) | image `onerahmet/openai-whisper-asr-webservice`, service `vaf-stt` in `docker-compose.memory.yml` | MIT | Copyright (c) 2022 Ahmet Oner & Besim Alibegovic - https://github.com/ahmetoner/whisper-asr-webservice |
 | openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI - https://github.com/openai/whisper |
 | Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI - "Whisper's code and model weights are released under the MIT License" (upstream README) |
+| Smart Turn v3 model weights (`smart-turn-v3.2-cpu.onnx`, ~8 MB int8) | downloaded at first use into `models/speaker/` when `voice_semantic_endpoint_enabled` is on (default off); loader `vaf/core/voice_vad.py` | BSD-2-Clause | Pipecat AI - https://huggingface.co/pipecat-ai/smart-turn-v3 (semantic voice turn-end; Whisper-Tiny encoder + linear head) |
 
 All three are MIT, so shipping and commercial use are unrestricted beyond retaining
 the notices above. The licenses were read from the running container

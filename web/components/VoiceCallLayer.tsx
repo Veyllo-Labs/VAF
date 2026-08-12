@@ -33,7 +33,14 @@ interface Props {
 }
 
 const MAX_UTTER_MS = 20000;
-const SILENCE_MS = 1500;
+// 1100, down from 1500: the listen analyser no longer smooths (see listenLoop - the
+// default 0.8 smoothing added ~80 ms of decay lag on top of the timer) and the level
+// is measured on the speech band instead of broadband, so the silence decision fires
+// on a cleaner signal. Below ~1100 an energy timer starts cutting people off inside
+// natural mid-sentence thinking pauses (600-1000 ms) - going lower is the semantic
+// turn-end model's job (server-side endpointing), not this constant's.
+// Mirrored by vaf/core/voice_vad.py _SILENCE_MS; a CI guard keeps the two in sync.
+const SILENCE_MS = 1100;
 // VAD noise gate: level (mean frequency energy) must exceed the USER-SET
 // gate (store.gateLevel, call-bar threshold marker, persisted; old fixed
 // value 20). Everything below is ignored - not spoken over, not recorded.
@@ -98,6 +105,44 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
     // belong to the origin chat (live incident: switching chats mid-call
     // routed the call into the newly opened chat).
     const callSessionRef = useRef<string | null>(null);
+    // Server-side semantic endpointing (opt-in, voice_call_started.server_endpoint):
+    // an AudioWorklet taps the mic as 16 kHz PCM chunks so the server can PROPOSE the
+    // turn end from prosody. serverEndpointRef arms the lane; endpointStopRef holds
+    // the CURRENT listen loop's stop() so a voice_turn_end push triggers exactly the
+    // code path the silence timer would - same stop, different trigger. The timer
+    // stays live as the fallback (a lost chunk stream must never strand a turn).
+    const serverEndpointRef = useRef(false);
+    const endpointStopRef = useRef<(() => void) | null>(null);
+    const pcmCtxRef = useRef<AudioContext | null>(null);
+    const pcmSendRef = useRef(false);   // gate: only stream while the listen loop runs
+
+    // Start the PCM tap once per call (idempotent). Chunks flow only while
+    // pcmSendRef is true AND the mic is not muted/in the unmute grace window -
+    // the server must never read "silence" off a muted track and end a turn.
+    const ensurePcmTap = useCallback(async () => {
+        if (!serverEndpointRef.current || pcmCtxRef.current || !streamRef.current) return;
+        try {
+            const ctx = new AudioContext();
+            pcmCtxRef.current = ctx;
+            await ctx.audioWorklet.addModule('/pcm-tap.worklet.js');
+            const src = ctx.createMediaStreamSource(streamRef.current);
+            const tap = new AudioWorkletNode(ctx, 'vaf-pcm-tap');
+            src.connect(tap);
+            tap.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+                if (!pcmSendRef.current || mutedRef.current
+                    || performance.now() < graceUntilRef.current) return;
+                const bytes = new Uint8Array(e.data);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                ws?.send(JSON.stringify({ type: 'voice_call_chunk', pcm: btoa(bin) }));
+            };
+        } catch {
+            // No worklet, no server endpointing - the local timer carries the call.
+            try { pcmCtxRef.current?.close(); } catch { /* noop */ }
+            pcmCtxRef.current = null;
+            serverEndpointRef.current = false;
+        }
+    }, [ws]);
 
     const later = useCallback((fn: () => void, ms: number) => {
         const id = setTimeout(fn, ms);
@@ -124,6 +169,11 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         playbackTeardownRef.current = () => { /* noop */ };
         try { bargeCtxRef.current?.close(); } catch { /* noop */ }
         bargeCtxRef.current = null;
+        try { pcmCtxRef.current?.close(); } catch { /* noop */ }
+        pcmCtxRef.current = null;
+        pcmSendRef.current = false;
+        endpointStopRef.current = null;
+        serverEndpointRef.current = false;
         pendingTts.current = null;
     }, []);
 
@@ -169,7 +219,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             discardNextRef.current = true;
             try { rec.stop(); } catch { /* noop */ }
         }
-    }, [active, store.muted]);
+        // The server-side endpointer's stream state no longer describes reality
+        // after a mute toggle - tell it to start over (no-op when the lane is off).
+        if (serverEndpointRef.current) {
+            try { ws?.send(JSON.stringify({ type: 'voice_call_reset' })); } catch { /* noop */ }
+        }
+    }, [active, store.muted, ws]);
 
     // Call timer
     useEffect(() => {
@@ -344,13 +399,34 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
+        // No smoothing for the ENDPOINT detector: the analyser default (0.8) is meant
+        // to keep a visual meter from flickering, but here it delays exactly the
+        // falling edge the silence timer waits for (~80 ms of decay from speech level
+        // to below the gate). The barge-in watcher keeps ITS default smoothing on
+        // purpose - there it is the residual-echo guard.
+        analyser.smoothingTimeConstant = 0;
         src.connect(analyser);
         const buf = new Uint8Array(analyser.frequencyBinCount);
+        // Speech band, computed from the ACTUAL context rate (devices differ): with
+        // fftSize 256 a bin is sampleRate/256 wide. Summing only ~300-3400 Hz and
+        // dividing by the FULL bin count keeps the number comparable to the old
+        // broadband mean for speech (voice energy lives in the band, so the reading
+        // barely moves and the user's persisted gateLevel keeps its meaning) while
+        // mains hum and fan noise below/above the band stop counting at all.
+        const binHz = ctx.sampleRate / analyser.fftSize;
+        const bandLo = Math.max(1, Math.round(300 / binHz));
+        const bandHi = Math.min(buf.length - 1, Math.round(3400 / binHz));
         let heardSpeech = false;
         let voicedMs = 0;
         let lastTick = 0;
         let silenceStart = 0;
         let rafId = 0;
+        // Latency instrumentation: when the user last sounded voiced, and when the
+        // endpoint decision fell. The deltas ride on voice_call_turn so the backend
+        // log carries the WHOLE turn, including the part that happens in the browser
+        // - without these two numbers the silence timer's cost is invisible.
+        let lastVoicedAt = 0;
+        let stopDecidedAt = 0;
         const tick = () => {
             if (stopFlag.current) { stop(); return; }
             analyser.getByteFrequencyData(buf);
@@ -358,7 +434,9 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             const dt = lastTick ? now - lastTick : 0;
             lastTick = now;
             const gated = mutedRef.current || now < graceUntilRef.current;
-            const level = gated ? 0 : buf.reduce((a, b) => a + b, 0) / buf.length;
+            let bandSum = 0;
+            for (let i = bandLo; i <= bandHi; i++) bandSum += buf[i];
+            const level = gated ? 0 : bandSum / buf.length;
             const gate = useVoiceCallStore.getState().gateLevel;
             // Only write the store on a REAL transition: this tick runs per
             // animation frame, and every zustand set() re-renders all
@@ -371,10 +449,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             if (nextSpeaker !== prevSpeaker) {
                 useVoiceCallStore.getState().set({ speaker: nextSpeaker });
             }
-            if (level > gate) { heardSpeech = true; voicedMs += dt; silenceStart = 0; }
+            if (level > gate) { heardSpeech = true; voicedMs += dt; silenceStart = 0; lastVoicedAt = now; }
             else if (heardSpeech) {
                 if (!silenceStart) silenceStart = now;
-                else if (now - silenceStart > SILENCE_MS) { stop(); return; }
+                else if (now - silenceStart > SILENCE_MS) { stopDecidedAt = performance.now(); stop(); return; }
             }
             rafId = requestAnimationFrame(tick);
         };
@@ -383,9 +461,20 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         const stop = () => {
             cancelAnimationFrame(rafId);
             clearTimeout(maxId);
+            pcmSendRef.current = false;          // this utterance's stream is over
+            endpointStopRef.current = null;
             try { ctx.close(); } catch { /* noop */ }
             if (recorder.state !== 'inactive') recorder.stop();
         };
+        // Server endpointing: expose THIS loop's stop so a voice_turn_end push can
+        // trigger it, and open the chunk gate. The local silence timer above keeps
+        // running - whichever fires first ends the turn, the other is a no-op
+        // (stop() is idempotent via recorder.state).
+        endpointStopRef.current = () => {
+            if (heardSpeech && voicedMs >= MIN_SPEECH_MS) { stopDecidedAt = performance.now(); stop(); }
+        };
+        pcmSendRef.current = serverEndpointRef.current;
+        void ensurePcmTap();
 
         recorder.onstop = async () => {
             if (stopFlag.current) return;
@@ -415,11 +504,22 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                 const wav = await toWav16k(blob);
                 const b64 = await blobToBase64(wav);
                 const st2 = useVoiceCallStore.getState();
+                const sendAt = performance.now();
                 ws?.send(JSON.stringify({
                     type: 'voice_call_turn', audio: b64, format: 'wav',
                     sessionId: callSessionRef.current ?? sessionId,
                     main_busy: !!st2.mainTask || mainBusyRef.current,
                     pending_task: st2.mainTask || '',
+                    // Browser-side latency, ms. endpoint_wait_ms is what the silence
+                    // timer cost (last voiced frame -> stop decision); encode_ms is
+                    // recorder flush + WAV decode + base64 (stop decision -> send).
+                    // A MAX_UTTER_MS cap or a mute-stop has no decision point, then
+                    // both fall back to 0 rather than lying.
+                    timings: {
+                        endpoint_wait_ms: (stopDecidedAt && lastVoicedAt && stopDecidedAt > lastVoicedAt)
+                            ? Math.round(stopDecidedAt - lastVoicedAt) : 0,
+                        encode_ms: stopDecidedAt ? Math.round(sendAt - stopDecidedAt) : 0,
+                    },
                 }));
                 // reply handled in the WS effect below
             } catch {
@@ -428,7 +528,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         };
         recorder.start();
         rafId = requestAnimationFrame(tick);
-    }, [ws, sessionId, later]);
+    }, [ws, sessionId, later, ensurePcmTap]);
 
     // Speak a server-delivered assistant message DURING a call: the delegated
     // result the user waited for, a fired timer, a reminder, an automation result -
@@ -528,6 +628,17 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                     exclusive: data.exclusive === true,
                     loadingModel: data.ok === false && data.reason === 'model_loading',
                 });
+                // Arm server-side endpointing only when the backend says the lane is
+                // on (config-gated there). The tap itself starts with the next listen
+                // loop; without this flag no PCM ever leaves the browser.
+                serverEndpointRef.current = data.server_endpoint === true;
+            }
+            else if (data.type === 'voice_turn_end') {
+                // The server's semantic endpointer says the speaker finished - trigger
+                // exactly the stop() the silence timer would have reached ~SILENCE_MS
+                // later. Guarded inside the ref: no live loop or too little voiced
+                // audio, and the push is a no-op.
+                endpointStopRef.current?.();
             }
             else if (data.type === 'model_state') {
                 // Self-heal for the "call started before the local model was

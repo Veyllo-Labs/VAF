@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (311 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (312 keys).
 
 ## How configuration is set
 
@@ -309,6 +309,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speaker_id_confirmation_enabled` | `true` | On "unsure": ask the owner to confirm (main messenger, else web card). "No, that's NAME" stores a named third-party profile. |
 | `voice_awareness_activity` | `0.5` | Voice reflex chime-in dial, `0.0`..`1.0` (quiet..active); a single control for how readily the agent chimes in on interesting OVERHEARD talk during a call; at `0.0` it only takes notes and never interrupts. Scales a local policy threshold only (no inference redirect, no billing), so it is user-writable. See [docs/agents/VOICE_REFLEX.md](../agents/VOICE_REFLEX.md). |
 | `voice_awareness_topics` | `[]` | The owner's interest topics (list of short strings). A proactive chime-in must embedding-match one of these to fire, so an empty list means the agent never chimes in unprompted (conservative default). User-writable. |
+| `voice_semantic_endpoint_enabled` | `False` | Server-side semantic turn-end for voice calls: the browser streams mic PCM (16 kHz mono, ~43 kB/s while listening) and the server proposes the endpoint from prosody (Smart Turn v3, 8 MB int8 ONNX, CPU, BSD-2, downloaded on first use) instead of waiting out the fixed silence timer. Off (default) keeps the browser-only silence timer; the timer always remains as the fallback. Admin-only/global. |
 | `speaker_id_adaptive_enabled` | `true` | Owner-approved adaptive learning: a YES answer to the confirmation (authenticated web/messenger channel) feeds the confirmed segment into the owner profile as an adaptive sample (similarity floor, 10-sample FIFO cap, enrollment centroid keeps 70% weight; re-enrollment resets all adaptive state). The voice itself can never trigger a profile write. |
 | `tts_auto_speak` | `False` | Auto-speak replies. |
 

@@ -954,7 +954,17 @@ $player.Close()
 
                 frames = []
                 start_time = time.time()
-                silence_start = None
+                # Turn boundaries come from the shared TurnDetector (voice_vad.py) -
+                # this loop used to carry its own inline silence timer (a bare 1.5s
+                # literal), the THIRD hand-rolled copy of the same decision next to
+                # the browser's SILENCE_MS and the never-called primitive. The energy
+                # measurement (RMS vs the calibrated threshold) stays here; only the
+                # boundary logic moved. min_speech stays 0: this lane's contract keeps
+                # its own timeout for "no speech at all" and treats any voiced audio
+                # as a turn, exactly as the inline version did.
+                from vaf.core.voice_vad import TurnDetector
+                detector = TurnDetector(min_speech_ms=0.0,
+                                        max_utter_ms=max(timeout, 60.0) * 1000.0)
                 has_spoken = False
 
                 while True:
@@ -983,19 +993,16 @@ $player.Close()
                     bar = "█" * min(bar_len, 20)
 
                     # Visual feedback if speaking
+                    voiced = energy > threshold
                     status = "● Recording"
-                    if energy > threshold:
+                    if voiced:
                         status = "● SPEAKING "
                         has_spoken = True
-                        silence_start = None
-                    else:
-                        if has_spoken:
-                            if silence_start is None:
-                                silence_start = time.time()
-                            elif time.time() - silence_start > 1.5: # 1.5s silence = End
-                                break
+                    event = detector.feed(voiced, time.time() * 1000.0)
+                    if has_spoken and event in ("end", "discard"):
+                        break
 
-                    _tell("speaking" if energy > threshold else "recording",
+                    _tell("speaking" if voiced else "recording",
                           energy, threshold)
                     if on_state is None:
                         # Direct stdout for smooth animation without newline

@@ -40,11 +40,18 @@ expensive-and-rare at the bottom.
    detection, turn-end, noise gate, and acoustic echo cancellation. Pure audio/energy
    logic: the browser energy VAD plus Silero VAD (sherpa-onnx, CPU) - both already
    present, today used batch-only.
-2. **Policy / awareness (local, two-stage, ~10-40 ms).** Stage 1: rules + vocab/keyword
+2. **Policy / awareness (local, two-stage).** Stage 1: rules + vocab/keyword
    triggers + embedding similarity against the owner's configured topics. Stage 2: a
    small ONNX classifier for the ambiguous cases. Emits exactly one verdict. It is
    ALWAYS local and non-llama; it never becomes a second inference on the one llama
-   server.
+   server. Cost, measured (2026-08-12, MiniLM via onnxruntime on this machine): a
+   FRESH text costs ~140 ms per embedding, so `chime_decision` lands around 170 ms
+   and `similar_to_any` up to ~600 ms - not the tens of milliseconds this section
+   once claimed. Two things keep that honest in practice: the embedding calls run
+   in the executor (never on the event loop), and they only run on the turns that
+   need them - `chime_decision` sits behind the `side_talk` gate and
+   `answer_verdict` behind an armed `pending_q`, so a normal addressed owner turn
+   embeds nothing.
 3. **Content LLM (only on `respond_now`).** The existing `voice_reply`
    (`vaf/core/voice_agent.py`), one call, `enable_thinking=false`, grounded, never
    fabricating. Reasoning never reaches TTS.
@@ -402,10 +409,22 @@ The reflex system is broadly multilingual, with a few layers that are language-s
 
 ## Phased roadmap
 
-- **Phase 0 - foundation (no behavior change):** streaming-capable VAD wrapper, a
-  durable session/scope-scoped rolling transcript buffer, the three-way verdict
-  (`respond_now`/`store_only`/`ignore`) as a superset of today's `should_engage`, and
-  the local policy module skeleton (conservative defaults so live behavior is unchanged).
+- **Phase 0 - foundation (no behavior change):** a durable session/scope-scoped rolling
+  transcript buffer, the three-way verdict (`respond_now`/`store_only`/`ignore`) as a
+  superset of today's `should_engage`, and the local policy module skeleton
+  (conservative defaults so live behavior is unchanged). The VAD wrapper is WIRED now
+  (the 2026-08 latency round): `voice_vad.TurnDetector` segments the CLI lane
+  (`speech.py` - its inline silence-timer copy was deleted), and the opt-in
+  server-side lane (`voice_semantic_endpoint_enabled`, default off) runs
+  `voice_vad.StreamEndpointer` per call - browser streams mic PCM
+  (`voice_call_chunk`), Silero yields per-frame voicedness, `TurnDetector` finds the
+  boundary, and Smart Turn v3 (`SemanticTurnJudge`, 8 MB int8 ONNX, CPU, BSD-2,
+  downloaded on first use) may VETO a timer end because the speaker only paused
+  mid-sentence. The server then pushes `voice_turn_end`, which triggers the same
+  browser `stop()` the silence timer would; the timer stays as the fallback. A CI
+  guard pins that the browser and server constants cannot drift
+  (`tests/test_voice_endpoint_constants.py`), and per-turn `timings` on
+  `voice_call_turn`/`voice_call_reply` carry the measured stage costs.
 - **Phase 1 - guests:** a guest who addresses the agent gets a spoken (never acting)
   reply with the owner's private context WITHHELD (guest-privacy guardrail); anti-spoofing
   unchanged. Ephemeral guest ids move to Phase 2 (they need diarization).

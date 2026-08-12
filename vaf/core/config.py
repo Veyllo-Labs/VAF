@@ -380,6 +380,7 @@ class Config:
                 # policy threshold and never redirect inference or spend API quota.
                 "voice_awareness_activity": 0.5,       # ONE dial 0..1 (quiet..active): how readily the agent chimes in on interesting overheard talk. At 0 it only takes notes (never interrupts).
                 "voice_awareness_topics": [],          # The owner's interest topics; a proactive chime-in must embedding-match one of these (empty = the agent never chimes in unprompted)
+                "voice_semantic_endpoint_enabled": False,  # Server-side semantic turn-end (Smart Turn v3 ONNX, CPU): the browser streams mic PCM during a call and the server proposes the endpoint from prosody instead of a fixed silence timer. Off = today's browser timer only.
 
                 # Cloud TTS provider lane (mirrors vision_provider). "" = local engine above.
                 "speech_tts_provider": "",             # "" | "elevenlabs" | "openai"

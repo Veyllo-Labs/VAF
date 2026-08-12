@@ -146,7 +146,7 @@ Key rules:
   more, NOT that the run succeeded or failed. The panel must never turn it into either -
   it does not know the outcome, and the real result is in the chat message. `unknown`
   means the question could not be answered for this connection and nothing is changed.
-- **Live call (voice agent):** client sends `voice_call_start` / `voice_call_turn` / `voice_call_end` / `voice_call_speak`; server answers `voice_call_reply` / `voice_call_error` / `speaker_enroll_tts`. Enrollment uses the `speaker_enroll_*` / `speaker_profile_*` family. Payloads, guards and the delegation protocol are documented in [VOICE_AGENT.md](../agents/VOICE_AGENT.md).
+- **Live call (voice agent):** client sends `voice_call_start` / `voice_call_turn` / `voice_call_end` / `voice_call_speak`; server answers `voice_call_reply` / `voice_call_error` / `speaker_enroll_tts`. Enrollment uses the `speaker_enroll_*` / `speaker_profile_*` family. Payloads, guards and the delegation protocol are documented in [VOICE_AGENT.md](../agents/VOICE_AGENT.md). With `voice_semantic_endpoint_enabled` on, the client additionally streams `voice_call_chunk` (16 kHz mono int16 PCM, base64, ~100 ms frames, ~43 kB/s while actively listening, never while muted) and `voice_call_reset` (mute toggled - drop server stream state); the server may push `voice_turn_end {reason}` proposing the endpoint, which triggers the same stop the browser's silence timer would - the timer always remains the fallback. `voice_call_turn` and `voice_call_reply` carry a `timings` object (per-stage latency in ms: browser `endpoint_wait`/`encode`, server `gate`/`stt`/`speaker`/`policy`/`llm`/`tts`).
 
 ## Native DOCX Editor Endpoints
 

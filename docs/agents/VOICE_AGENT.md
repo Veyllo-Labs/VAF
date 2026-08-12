@@ -314,7 +314,15 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    CANNOT use tools" opener as a reason to refuse a weather request instead
    of delegating it (live incident; verified against Qwen3.5-4B that
    weather/mail/news requests delegate while clock questions and small talk
-   do not).
+   do not). The inverse contradiction is caught after the gates: a reply
+   that DENIES the capability while its delegate marker survived every
+   suppression ("I can't check your mails, but..." plus a live delegation)
+   speaks the plain ack line instead - the words follow the deed. The
+   denial lexicon is the vocab key `capability_denial`
+   (`voice_agent.denies_capability`); the belt sits BELOW the busy and
+   speaker suppressions so it can never turn a subsequently-dropped
+   delegation into a spoken promise (live incident: mail check delegated
+   correctly and verbally denied in the same breath).
 10. **Local mode time-shares ONE server, it never runs two inferences.**
    `voice_agent.is_exclusive()` is True whenever voice and main need the
    SAME llama server: inherit + local main (time-share the one model) and

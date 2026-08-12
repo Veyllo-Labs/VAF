@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- Voice call: the assistant no longer denies a capability in the same
+  breath as delegating the task ("I can't check your mails, but..."
+  spoken while the mail check was already handed to the main agent).
+  When a delegation survives, such a denial is replaced by the normal
+  short acknowledgement.
+
 ### Added
 - **Developers can now build voice assistants on VAF.** The live-call turn
   pipeline - noise gate, speech-to-text, speaker verification with the

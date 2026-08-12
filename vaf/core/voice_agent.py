@@ -402,6 +402,31 @@ _ENGAGE_NEG_RE = re.compile(
 )
 
 
+_denial_cache = None
+
+
+def denies_capability(text: str) -> bool:
+    """True when a reply claims the agent CANNOT do something (matched lexicon,
+    vocab key `capability_denial`, all languages combined, cached). Consumed by
+    the delegate belt below: with a SURVIVING delegate such a denial is a
+    self-contradiction - the work IS happening. Fail-open False."""
+    global _denial_cache
+    try:
+        if _denial_cache is None:
+            out = []
+            from vaf.core import vocab
+            for lang in vocab.available_languages("capability_denial"):
+                for ph in vocab.phrasings("capability_denial", lang):
+                    ph = str(ph or "").strip().lower()
+                    if ph:
+                        out.append(ph)
+            _denial_cache = tuple(out)
+        low = (text or "").lower()
+        return any(ph in low for ph in _denial_cache)
+    except Exception:
+        return False
+
+
 def engage_command_match(text: str) -> bool:
     """True if the utterance is an explicit OWNER command to also answer the other
     person in the room ('antworte ihr', 'answer her', 'talk to the other person'),
@@ -1121,6 +1146,20 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             _log.info("voice_agent: delegation blocked (speaker not verified as user): %s",
                       delegate[:80])
             delegate = None
+        if delegate and text and denies_capability(text):
+            # The action and the words contradict each other: the model DID emit a
+            # delegate marker that survived EVERY gate above (the work is
+            # happening) while the spoken text claims it cannot do it (live
+            # incident: "Ich kann deine Mails zwar nicht direkt checken, aber..."
+            # + a surviving delegate). The prompt forbids capability denials
+            # outright; this belt makes the WORDS follow the deed - speak the
+            # standard ack instead. It must sit BELOW the busy/speaker
+            # suppressions: fired earlier, a later-nulled delegate would leave
+            # the ack promising work that is not happening (the empty-text belt
+            # below guards that inverse direction).
+            _log.info("voice_agent: denial contradicted the surviving delegate - ack spoken")
+            from vaf.core import vocab
+            text = vocab.pick("voice_delegate_ack", lang)
         if not text:
             # Empty spoken text: the ack ("one moment") is ONLY correct when a
             # delegation actually survived the gates - otherwise it is a false

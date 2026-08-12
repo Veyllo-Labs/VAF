@@ -1176,3 +1176,40 @@ def test_silence_override_also_covers_an_addressed_guest_turn(monkeypatch):
     assert out.get("reply"), "the nudge must actually say something"
     assert out.get("delegate") is None and not out.get("engage_guest"), \
         "the belt speaks - it must never act or arm"
+
+
+def test_a_denial_never_contradicts_a_surviving_delegate(monkeypatch):
+    """Live 2026-08-13 00:01: "Ich kann deine Mails zwar nicht direkt checken,
+    aber..." PLUS a surviving <delegate>Mails checken</delegate> - the main agent
+    ran the task while the spoken words denied the capability. The belt makes the
+    words follow the deed: with a surviving delegate, a capability denial is
+    replaced by the standard ack. It never fires WITHOUT a delegate (a plain
+    denial may be legitimate small talk) and never invents a delegation.
+    Mutation: remove the denies_capability branch - red."""
+    _cfg(monkeypatch)
+    from vaf.core import vocab
+
+    _FakeBackend.script = ["Ich kann deine Mails zwar nicht direkt checken, aber "
+                           "ich helfe gern.\n<delegate>Mails checken</delegate>"]
+    res = va.voice_reply("Check mal meine Mails", scope_id="s", lang="de",
+                         speaker_ok=True)
+    assert res["delegate"] == "Mails checken"
+    assert res["reply"] in vocab.phrasings("voice_delegate_ack", "de"), \
+        "the spoken words still deny what the delegate is doing"
+
+    # without a delegate the words stay untouched
+    _FakeBackend.script = ["Das kann ich leider nicht möglich machen."]
+    res2 = va.voice_reply("Kannst du fliegen?", scope_id="s", lang="de",
+                          speaker_ok=True)
+    assert res2["delegate"] is None
+    assert "nicht" in res2["reply"]
+
+    # ordering: the belt sits BELOW the speaker gate. An unverified speaker's
+    # delegate is nulled FIRST, so the ack (a promise of work) is never spoken
+    # for work that will not run. Mutation: move the belt above the gate - red.
+    _FakeBackend.script = ["Ich kann deine Mails zwar nicht direkt checken, aber "
+                           "ich helfe gern.\n<delegate>Mails checken</delegate>"]
+    res3 = va.voice_reply("Check mal meine Mails", scope_id="s", lang="de",
+                          speaker_ok=False)
+    assert res3["delegate"] is None
+    assert res3["reply"] not in vocab.phrasings("voice_delegate_ack", "de")

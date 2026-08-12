@@ -9,10 +9,18 @@ Minimal "trusted folders" + user decisions for risky actions:
 - always
 - cancel
 
+PER USER. The store used to be one machine-global file, so a single "always"
+armed that tool for every tenant of a LAN instance - and unobservably, because
+a standing grant short-circuits the gate before any event is emitted. Every
+function therefore takes a ``user_scope_id``; the file lives under a
+scope-keyed name, with the local admin collapsing to "default" the way
+thinking_workspace and reminders already do.
+
 Design goals:
 - OS-independent (Platform.config_dir)
 - No hardcoded paths
 - Safe defaults (ask)
+- One tenant's decision never speaks for another
 """
 
 from __future__ import annotations
@@ -46,12 +54,45 @@ class TrustState:
     tool_policies: dict[str, str]  # tool_name -> "allow" | "ask"
 
 
-def _trust_file() -> Path:
-    return Platform.config_dir() / "trust.json"
+# Format tag for the per-scope files (see docs/security/USER_ISOLATION.md).
+TRUST_FORMAT = "trust-2-b17c4e"
 
 
-def load_trust_state() -> TrustState:
-    path = _trust_file()
+def _scope_key(user_scope_id: Optional[str]) -> str:
+    """Canonical per-user key. Mirrors thinking_workspace._scope_key."""
+    if user_scope_id is None or not str(user_scope_id).strip():
+        return "default"
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        if str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
+            return "default"
+    except Exception:
+        pass
+    return str(user_scope_id).strip()
+
+
+def _trust_file(user_scope_id: Optional[str] = None) -> Path:
+    return Platform.config_dir() / "trust" / f"{_scope_key(user_scope_id)}.json"
+
+
+def _retire_legacy_store() -> None:
+    """Move the old machine-global trust.json aside, exactly once.
+
+    Deliberately NOT migrated into the admin's scope: the entries were granted
+    under a store that could not tell tenants apart, so inheriting them would
+    carry that ambiguity forward. Everyone confirms once more instead.
+    """
+    legacy = Platform.config_dir() / "trust.json"
+    try:
+        if legacy.exists():
+            legacy.rename(legacy.with_suffix(".json.pre-scope"))
+    except Exception:
+        pass
+
+
+def load_trust_state(user_scope_id: Optional[str] = None) -> TrustState:
+    _retire_legacy_store()
+    path = _trust_file(user_scope_id)
     if not path.exists():
         return TrustState(trusted_dirs=set(), tool_policies={})
     try:
@@ -63,17 +104,23 @@ def load_trust_state() -> TrustState:
         return TrustState(trusted_dirs=set(), tool_policies={})
 
 
-def save_trust_state(state: TrustState) -> None:
-    path = _trust_file()
+def save_trust_state(state: TrustState, user_scope_id: Optional[str] = None) -> None:
+    path = _trust_file(user_scope_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
+        "format": TRUST_FORMAT,
         # str() defensively: trusted_dirs must be JSON-serializable strings. A Path here
         # (e.g. from a helper that returns Path) would make json.dumps raise and silently
         # break "allow always" for every dangerous tool.
         "trusted_dirs": sorted(str(d) for d in state.trusted_dirs),
         "tool_policies": state.tool_policies,
     }
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # tmp+rename: two lanes dispatch tools concurrently in one process, and a
+    # half-written store reads as "nothing trusted" - fail-safe, but it would
+    # silently drop a grant the user just gave.
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _norm_dir(p: Path) -> str:
@@ -85,8 +132,8 @@ def _norm_dir(p: Path) -> str:
         return str(p.resolve())
 
 
-def is_trusted_dir(cwd: Path) -> bool:
-    state = load_trust_state()
+def is_trusted_dir(cwd: Path, user_scope_id: Optional[str] = None) -> bool:
+    state = load_trust_state(user_scope_id)
     cur = cwd.resolve()
     while True:
         if _norm_dir(cur) in state.trusted_dirs:
@@ -96,23 +143,24 @@ def is_trusted_dir(cwd: Path) -> bool:
         cur = cur.parent
 
 
-def mark_trusted_dir(cwd: Path) -> None:
-    state = load_trust_state()
+def mark_trusted_dir(cwd: Path, user_scope_id: Optional[str] = None) -> None:
+    state = load_trust_state(user_scope_id)
     state.trusted_dirs.add(_norm_dir(cwd))
-    save_trust_state(state)
+    save_trust_state(state, user_scope_id)
 
 
-def set_tool_policy(tool_name: str, policy: Literal["allow", "deny", "ask"]) -> None:
-    state = load_trust_state()
+def set_tool_policy(tool_name: str, policy: Literal["allow", "deny", "ask"],
+                    user_scope_id: Optional[str] = None) -> None:
+    state = load_trust_state(user_scope_id)
     # We intentionally do NOT persist "deny" (use cancel instead)
     if policy == "deny":
         policy = "ask"
     state.tool_policies[tool_name] = policy
-    save_trust_state(state)
+    save_trust_state(state, user_scope_id)
 
 
-def get_tool_policy(tool_name: str) -> str:
-    state = load_trust_state()
+def get_tool_policy(tool_name: str, user_scope_id: Optional[str] = None) -> str:
+    state = load_trust_state(user_scope_id)
     return state.tool_policies.get(tool_name, "ask")
 
 

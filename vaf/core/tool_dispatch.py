@@ -247,10 +247,29 @@ def with_subagent_debug_mirror(sink):
     return _mirrored
 
 
+def _admin_bypass_active(user_role: str | None, user_scope_id: str | None) -> bool:
+    """Whether this identity may skip confirmations entirely.
+
+    Off by default. It is a CONVENIENCE layer and sits UNDER the funnel's
+    authorization stages: admin_only and the account allowlist have already
+    run, so this can only skip the human question, never widen who may call
+    what. Fail-closed on any error.
+    """
+    try:
+        if not policy_admin_flag(user_role, user_scope_id):
+            return False
+        from vaf.core.config import Config
+        return bool(Config.get("tool_confirmation_bypass_admins", False))
+    except Exception:
+        return False
+
+
 def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               trust_dir, allow_once: set, interactive: bool,
                               decide=None, emit=None, on_gate_required=None,
-                              ignore_standing_grants: bool = False) -> str | None:
+                              ignore_standing_grants: bool = False,
+                              user_scope_id: str | None = None,
+                              user_role: str | None = None) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
@@ -275,6 +294,16 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     directory it was has to be the caller's answer, and the same value must be used for the
     check, the event and the grant.
 
+    ``user_scope_id``/``user_role`` scope the standing grants. They used to be
+    machine-global: one tenant's "always" armed the tool for everyone on the
+    instance, and unobservably, because a standing grant returns before any
+    event is emitted. They also decide the admin bypass
+    (``tool_confirmation_bypass_admins``, admin-writable, default off): with it
+    on, an admin identity skips the dialog - but the bypass is ANNOUNCED as a
+    ``gate_bypassed`` event rather than passing silently, and it can neither
+    widen ``admin_only`` nor the account allowlist, which are decided earlier
+    in the funnel, nor override an authorizer's explicit ``ask()``.
+
     ``ignore_standing_grants=True`` is what an authorizer's ``ask()`` means: a previous
     "always" was an answer to a question nobody is asking any more, so this call is put to a
     person again. Without it, ``ask()`` would be a suggestion rather than a decision - the
@@ -283,11 +312,19 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     """
     from vaf.core.trust import get_tool_policy, is_trusted_dir, mark_trusted_dir, set_tool_policy
 
-    if not ignore_standing_grants and (
-        get_tool_policy(tool_name) == "allow" or is_trusted_dir(trust_dir)
-        or tool_name in allow_once
-    ):
-        return None
+    if not ignore_standing_grants:
+        # Hands-off for the machine owner, when the owner asked for it. Not a
+        # silent one: an unannounced bypass is exactly what made the old
+        # machine-global grants impossible to audit.
+        if _admin_bypass_active(user_role, user_scope_id):
+            emit_event(emit, {"type": "gate_bypassed", "tool": tool_name,
+                              "cwd": str(trust_dir), "reason": reason,
+                              "why": "admin_bypass"})
+            return None
+        if (get_tool_policy(tool_name, user_scope_id) == "allow"
+                or is_trusted_dir(trust_dir, user_scope_id)
+                or tool_name in allow_once):
+            return None
 
     # The dialog is a security control only while what it renders equals what
     # will run: hidden/direction-changing characters become visible markers,
@@ -350,8 +387,8 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     if choice == "allow_always":
         # Both at once, as documented: the directory subtree AND the tool. Outlives the
         # process and is machine-global - the only persistent write on any dispatch path.
-        mark_trusted_dir(trust_dir)
-        set_tool_policy(tool_name, "allow")
+        mark_trusted_dir(trust_dir, user_scope_id)
+        set_tool_policy(tool_name, "allow", user_scope_id)
         emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "allow_always"})
         return None
     emit_event(emit, {"type": "gate_decision", "tool": tool_name, "decision": "cancel"})
@@ -790,6 +827,7 @@ class ToolCaller:
                 name, reason=(verdict.reason if forced_ask else decision.reason), args=args,
                 ignore_standing_grants=forced_ask,
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
+                user_scope_id=self.user_scope_id, user_role=self.user_role,
                 allow_once=self.allow_once, interactive=self.interactive,
                 decide=self.decide, emit=self.on_event,
                 on_gate_required=self.on_gate_required,

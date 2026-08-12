@@ -29,6 +29,10 @@ logger = logging.getLogger("vaf.python_exec")
 
 class PythonExecTool(BaseTool):
     name = "python_exec"
+    # The trust policy is per user now, so the tool must know WHOSE policy to
+    # read: without the declaration it would read the local-admin bucket for
+    # every tenant.
+    identity_kwargs = ("user_scope_id",)
     permission_level = "dangerous"
     channel_restrictions = ["channel", "telegram", "whatsapp", "discord"]
     side_effect_class = "irreversible"
@@ -63,7 +67,7 @@ class PythonExecTool(BaseTool):
             return "[ERROR] python_exec: missing code"
         
         # Check if this tool is explicitly allowed
-        policy = get_tool_policy("python_exec")
+        policy = get_tool_policy("python_exec", kwargs.get("user_scope_id"))
         if policy not in ("allow", "once"):
             logger.warning("python_exec called without explicit trust policy")
             return (

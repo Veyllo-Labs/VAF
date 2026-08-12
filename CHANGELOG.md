@@ -11,7 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Hands-off mode for admins.** A new admin-only setting,
+  `tool_confirmation_bypass_admins` (off by default), lets an admin run
+  confirmation-gated tools without being asked each time. It skips only the
+  question: who may call what is still decided by the admin-only rules and the
+  per-account tool list, an application that explicitly demands a prompt still
+  gets one, and every skipped dialog is recorded as an event, so hands-off does
+  not mean unobserved.
+
 ### Fixed
+- **A confirmation you granted no longer speaks for everyone on the machine.**
+  Answering "always" wrote a single shared file, so on a LAN instance that
+  permission was armed for every other user too - silently, because a standing
+  permission skips the dialog before anything is logged. Permissions are stored
+  per user now. The old shared file is set aside rather than inherited, so the
+  next dangerous tool asks once more, for you alone.
 - **Loop-protection notes no longer look like something you wrote.** When a
   turn hit its tool budget, the framework appended its stop notice to the
   conversation as a user message, so it was saved with the session, could

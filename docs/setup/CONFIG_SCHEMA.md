@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (309 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (310 keys).
 
 ## How configuration is set
 
@@ -178,6 +178,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |
 | `workflow_step_validation_max_retries` | `3` | Retries before accepting the result. |
 | `channel_tools_unrestricted` | `True` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent - `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist (`paired_only` by default) still apply. On by default; set to `False` to restrict channel sessions to non-channel-restricted tools. |
+| `tool_confirmation_bypass_admins` | `False` | Admin-only. Hands-off mode for the machine owner: an identity that counts as admin skips the per-call confirmation dialog. It skips only the QUESTION - `admin_only`, the account allowlist and an authorizer's explicit `ask()` are decided earlier in the funnel and are untouched - and every bypass emits a `gate_bypassed` event, so hands-off never means unobserved. Off by default. |
 | `skills_rescan_interval_hours` | `5` | Periodic skill re-scan (post-install tamper detection): every N hours the security scanner re-checks all installed skills on disk, updates their manifest scan blocks, and raises a security event on the Overview dashboard when a skill's risk level worsened. `0` disables. |
 
 ## Sub-agents & timeouts

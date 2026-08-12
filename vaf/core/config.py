@@ -610,6 +610,8 @@ class Config:
         # session). Admin-only setting; default ON - channel sessions get the same tools as the main
         # agent, gated by the channel whitelist (paired_only) + the per-user admin check.
         "channel_tools_unrestricted": True,
+        "tool_confirmation_bypass_admins": False,           # hands-off for admins: skip the confirmation dialog (never the authorization stages); every bypass emits a gate_bypassed event
+
 
         # Periodic skill re-scan (post-install tamper detection): every N hours the security
         # scanner re-checks ALL installed skills on disk and updates their manifest scan blocks;
@@ -861,6 +863,9 @@ class Config:
         "redis_url", "redis_enabled", "use_docker",
         "local_admin_scope_id", "local_admin_username",
         "channel_ingress_policy", "channel_tools_unrestricted",
+        # Skipping the confirmation dialog is an instance-wide safety decision:
+        # a non-admin LAN user must never be able to turn it on for themselves.
+        "tool_confirmation_bypass_admins",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",

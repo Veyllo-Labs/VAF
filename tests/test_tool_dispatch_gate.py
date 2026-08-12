@@ -37,23 +37,36 @@ REASON = "writes to disk"
 @pytest.fixture
 def trust(monkeypatch):
     """A trust store that records instead of touching the real one on this machine."""
-    state = {"policy": "ask", "trusted": False, "writes": []}
-    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda name: state["policy"])
-    monkeypatch.setattr("vaf.core.trust.is_trusted_dir", lambda p: state["trusted"])
+    # Every accessor is per-user now: the scope reaches the store, so the fakes
+    # record it and a test can prove one tenant's grant does not answer for
+    # another.
+    state = {"policy": "ask", "trusted": False, "writes": [], "scopes": []}
+
+    def _policy(name, user_scope_id=None):
+        state["scopes"].append(user_scope_id)
+        return state["policy"]
+
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", _policy)
+    monkeypatch.setattr("vaf.core.trust.is_trusted_dir",
+                        lambda p, user_scope_id=None: state["trusted"])
     monkeypatch.setattr("vaf.core.trust.mark_trusted_dir",
-                        lambda p: state["writes"].append(("mark_trusted_dir", str(p))))
+                        lambda p, user_scope_id=None: state["writes"].append(
+                            ("mark_trusted_dir", str(p), user_scope_id)))
     monkeypatch.setattr("vaf.core.trust.set_tool_policy",
-                        lambda n, v: state["writes"].append(("set_tool_policy", n, v)))
+                        lambda n, v, user_scope_id=None: state["writes"].append(
+                            ("set_tool_policy", n, v, user_scope_id)))
     return state
 
 
 def _gate(trust_dir=Path("/tmp/project"), allow_once=None, interactive=True,
-          decide=None, events=None, args=None, tool="dangerous_probe"):
+          decide=None, events=None, args=None, tool="dangerous_probe",
+          user_scope_id=None, user_role=None):
     return resolve_confirmation_gate(
         tool, reason=REASON, args=args if args is not None else {"path": "/tmp/x"},
         trust_dir=trust_dir, allow_once=allow_once if allow_once is not None else set(),
         interactive=interactive, decide=decide,
         emit=(events.append if events is not None else None),
+        user_scope_id=user_scope_id, user_role=user_role,
     )
 
 
@@ -157,9 +170,11 @@ def test_allow_always_writes_both_halves_of_the_grant(trust):
     """As documented to embedders: the directory subtree AND the tool policy, at once."""
     once = set()
     assert _gate(allow_once=once, decide=lambda n, r: "allow_always") is None
+    # The scope travels with the grant: it is that tenant's decision, not the
+    # machine's (None here is the local-admin bucket).
     assert trust["writes"] == [
-        ("mark_trusted_dir", str(Path("/tmp/project"))),
-        ("set_tool_policy", "dangerous_probe", "allow"),
+        ("mark_trusted_dir", str(Path("/tmp/project")), None),
+        ("set_tool_policy", "dangerous_probe", "allow", None),
     ]
     assert once == set(), "always must not also fill the turn-local set"
 
@@ -170,7 +185,7 @@ def test_the_directory_that_is_trusted_is_the_one_that_was_checked(trust):
     events = []
     _gate(trust_dir=Path("/srv/work"), decide=lambda n, r: "allow_always", events=events)
     assert events[0]["cwd"] == str(Path("/srv/work"))
-    assert trust["writes"][0] == ("mark_trusted_dir", str(Path("/srv/work")))
+    assert trust["writes"][0] == ("mark_trusted_dir", str(Path("/srv/work")), None)
 
 
 def test_cancel_returns_the_cancelled_marker(trust):

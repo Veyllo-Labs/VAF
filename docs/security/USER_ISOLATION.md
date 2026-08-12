@@ -572,6 +572,7 @@ The `/api/security/*` surface (overview, events, skill actions) is admin-only (`
 | Gateway | Server-side scope extraction, client scope stripped | Transport |
 | Config read (`GET /api/config`) | Secret keys (API keys, OAuth client secrets, JWT/encryption keys, DB URLs) redacted for non-admins; admins get full config | Application |
 | Redis cache | Scope-prefixed cache keys | Caching |
+| Tool confirmation grants | Per-scope trust store `~/.vaf/trust/<scope>.json` (local admin -> `default.json`); one tenant's "always" never answers for another. `tool_confirmation_bypass_admins` (admin-only, default off) lets an admin skip the dialog and emits `gate_bypassed` each time - it cannot widen `admin_only` or the account allowlist | Application |
 | PostgreSQL | Fail-closed RLS policy (ENABLED + FORCED); active enforcement pending the app-role cutover to `vaf_app` (owner role bypasses RLS today) | Database |
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |

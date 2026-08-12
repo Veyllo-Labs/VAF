@@ -23,7 +23,7 @@ def test_norm_dir_returns_a_string():
 
 def test_mark_trusted_dir_roundtrips_as_strings(tmp_path, monkeypatch):
     store = tmp_path / "trust.json"
-    monkeypatch.setattr(trust, "_trust_file", lambda: store)
+    monkeypatch.setattr(trust, "_trust_file", lambda user_scope_id=None: store)
 
     trust.mark_trusted_dir(Path("/tmp"))            # must not raise
     trust.set_tool_policy("host_bash", "allow")     # must not raise
@@ -36,7 +36,7 @@ def test_mark_trusted_dir_roundtrips_as_strings(tmp_path, monkeypatch):
 def test_save_is_robust_if_a_path_sneaks_in(tmp_path, monkeypatch):
     # Belt-and-suspenders: even a Path object in trusted_dirs must not crash the save.
     store = tmp_path / "trust.json"
-    monkeypatch.setattr(trust, "_trust_file", lambda: store)
+    monkeypatch.setattr(trust, "_trust_file", lambda user_scope_id=None: store)
     trust.save_trust_state(TrustState(trusted_dirs={Path("/tmp/x")}, tool_policies={}))
     reloaded = trust.load_trust_state()
     # The save str()s the Path; str(WindowsPath("/tmp/x")) == "\\tmp\\x", so compare against the

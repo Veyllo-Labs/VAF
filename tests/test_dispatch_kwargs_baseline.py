@@ -147,7 +147,10 @@ KWARGS_BASELINE = {
     "move_file":                 ("chat", []),
     "project_history":           ("chat", []),
     "project_rollback":          ("chat", []),
-    "python_exec":               ("chat", ["_agent"]),
+    # DELIBERATE change: the trust store is per user now, and this tool reads
+    # the policy itself (vaf/tools/python_exec.py) - without the declared
+    # identity it would read the local-admin bucket for every tenant.
+    "python_exec":               ("chat", ["_agent", "user_scope_id"]),
     "python_sandbox":            ("chat", ["_agent", "_session_id", "user_scope_id"]),
     "read_automation":           ("chat", ["user_role", "user_scope_id"]),
     "read_discord_chat":         ("chat", ["user_scope_id", "username"]),

@@ -109,6 +109,8 @@ def test_format_identities_are_pinned_literals():
     assert TIMELINE_CHAIN_SEED == "GENESIS:4ad9c39d"
     assert LEGACY_CHAIN_SEED == "GENESIS"
     assert CachedFilesystemMap.CACHE_SCHEMA == "fsmap-v3-aee248"
+    from vaf.core.trust import TRUST_FORMAT
+    assert TRUST_FORMAT == "trust-2-b17c4e"
 
 
 def test_chain_with_versioned_seed_verifies():

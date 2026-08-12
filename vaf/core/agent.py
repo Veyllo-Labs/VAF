@@ -11172,8 +11172,12 @@ class Agent:
         ):
             if "python_exec" in self.tools:
                 cwd = Path.cwd()
-                policy = get_tool_policy("python_exec")
-                trusted = is_trusted_dir(cwd)
+                # Same scope as the funnel's gate: this second, hand-rolled
+                # gate writes the SAME store, so reading it machine-globally
+                # would leak one tenant's "always" to everyone.
+                _gate_scope = getattr(self, "_current_user_scope_id", None)
+                policy = get_tool_policy("python_exec", _gate_scope)
+                trusted = is_trusted_dir(cwd, _gate_scope)
                 allowed_once = "python_exec" in self._allow_once_tools
                 
                 if policy != "allow" and not trusted and not allowed_once:
@@ -11186,8 +11190,8 @@ class Agent:
                         if choice in ("o", "once"):
                             self._allow_once_tools.add("python_exec")
                         elif choice in ("a", "always"):
-                            mark_trusted_dir(cwd)
-                            set_tool_policy("python_exec", "allow")
+                            mark_trusted_dir(cwd, _gate_scope)
+                            set_tool_policy("python_exec", "allow", _gate_scope)
                         else:
                             return result + "\n\n[CANCELLED] Not running unsandboxed."
                     else:

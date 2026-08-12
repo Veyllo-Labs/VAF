@@ -601,9 +601,17 @@ Hard limits you must respect (they are architecture, not fine print):
   one process share process-global state (environment variables written
   during tool calls, singletons, the working-context fallback directory).
   Run one OS process per tenant.
-- **trust.json is per OS user, machine-global**: a `set_tool_policy(...,
-  "allow")` or trusted directory granted while serving one tenant arms that
-  permission for every tenant on the machine.
+- **Standing grants are per user, not per machine**: `set_tool_policy(...,
+  "allow")` and a trusted directory are stored under the caller's
+  `user_scope_id` (`~/.vaf/trust/<scope>.json`; the local admin collapses to
+  `default.json`). One tenant's "always" no longer arms the tool for another.
+  An instance that predates this keeps its old flat `trust.json` as
+  `trust.json.pre-scope` and inherits nothing: those entries were granted under
+  a store that could not tell tenants apart. Note the separate hands-off
+  switch `tool_confirmation_bypass_admins` (admin-writable, default off): it
+  lets an ADMIN identity skip the dialog and emits a `gate_bypassed` event
+  every time; it cannot widen `admin_only`, the account allowlist, or an
+  authorizer's explicit `ask()`.
 - **The on-disk config is shared**: `Config`-routed settings (not passed
   via `config=`) are the same for all tenants.
 - **Do not rely on database-level isolation**: the memory DB's row-level

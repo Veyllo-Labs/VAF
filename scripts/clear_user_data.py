@@ -10,6 +10,12 @@ from sqlalchemy import text
 from vaf.memory.database import get_engine
 from vaf.core.config import Config
 
+# Windows: stdout is the console code page whenever it is redirected, and the
+# checkmarks below are not in cp1252. Without this the script dies mid-run
+# on a piped or CI invocation.
+from vaf.core.console import force_utf8_streams
+force_utf8_streams()
+
 async def clear_data():
     print("🚀 Starting full cleanup of user and RAG data...")
     

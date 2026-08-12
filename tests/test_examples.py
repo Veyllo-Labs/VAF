@@ -37,7 +37,15 @@ def test_the_storage_example_runs_and_tells_the_truth(tmp_path):
     doing that in-process would follow every later test into the sandbox.
     """
     script = EXAMPLES / "08_session_storage_and_encryption.py"
-    env = {**os.environ, "PYTHONPATH": str(EXAMPLES.parent), "TMPDIR": str(tmp_path)}
+    # A DELIBERATELY NARROW console encoding. The example prints raw bytes from
+    # disk, and the first version decoded them with errors="replace", which
+    # produces U+FFFD - a character cp1252 cannot encode. It died on the first
+    # encrypted file, but only on Windows, where that is the console default,
+    # and only after the 27 minutes the Windows matrix entry takes. Forcing
+    # cp1252 here means every Linux run proves the output is ASCII-safe in
+    # seconds. It works precisely because ASCII is a subset of both.
+    env = {**os.environ, "PYTHONPATH": str(EXAMPLES.parent), "TMPDIR": str(tmp_path),
+           "PYTHONIOENCODING": "cp1252"}
 
     proc = subprocess.run([sys.executable, str(script)], capture_output=True,
                           text=True, timeout=300, env=env, cwd=str(EXAMPLES.parent))

@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Output no longer kills a program on Windows.** When output is redirected -
+  into a file, a pipe, or a build log - Windows uses a narrow character set that
+  cannot represent a checkmark, an emoji, or anything a model might reply with.
+  Printing one ended the program. The command line already protected itself;
+  the runnable examples and the maintenance scripts did not, so one of the
+  examples died on the first encrypted file it tried to show. All of them now
+  share one fix, and a test catches the next one in under a second instead of
+  after half an hour on the Windows build.
 - **A notification in the Logs window now shows where it came from.** The dot on
   the sidebar counts everything in the security log, but the window worked out
   its own number by adding up the firewall, channel and skill counters - so an

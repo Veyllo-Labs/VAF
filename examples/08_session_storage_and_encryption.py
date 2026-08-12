@@ -79,9 +79,17 @@ BOB = "bbbb1111-2222-3333-4444-555555555555"
 
 
 def peek(path: Path, label: str) -> None:
-    """Print the start of the file AS IT IS ON DISK - the only honest check."""
-    head = path.read_bytes()[:48]
-    print(f"      {label}: {head.decode('utf-8', 'replace')[:44]!r}")
+    """Print the start of the file AS IT IS ON DISK - the only honest check.
+
+    The BYTES, through repr(), not a decoded string. Decoding ciphertext with
+    errors="replace" produces U+FFFD, and a Windows console running cp1252
+    cannot encode that character - the example died on the first encrypted file
+    it tried to show. bytes.__repr__ is ASCII by construction, and it is the
+    better picture anyway: b'VAFENC1:\x8f\xc2...' says "these are bytes on a
+    disk" in a way a mojibake string never did.
+    """
+    head = path.read_bytes()[:34]
+    print(f"      {label}: {head!r}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

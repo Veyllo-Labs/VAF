@@ -22,6 +22,12 @@ from vaf.memory.embeddings import get_embedding_service, get_model
 from vaf.memory.models import Memory, Chunk
 from sqlalchemy import select
 
+# Windows: stdout is the console code page whenever it is redirected, and the
+# checkmarks below are not in cp1252. Without this the script dies mid-run
+# on a piped or CI invocation.
+from vaf.core.console import force_utf8_streams
+force_utf8_streams()
+
 
 async def reembed_all():
     """Re-embed all chunks with current model."""

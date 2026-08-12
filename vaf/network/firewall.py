@@ -333,12 +333,22 @@ def _setup_firewall_linux(port: int, port_frontend: int):
 # ── firewalld backend (modern Linux): LAN-subnet rich rule + pkexec GUI elevation ────────────────────
 
 def _firewalld_running() -> bool:
-    """True only if firewalld is installed AND running (so we don't try rich rules on an iptables-only box)."""
+    """True only if firewalld is installed AND running (so we don't try rich rules on an iptables-only box).
+
+    Asks systemd, NOT `firewall-cmd --state`. Measured live (openSUSE): even
+    `--state` is polkit action org.fedoraproject.FirewallD1.config, i.e. a root
+    password dialog for an unprivileged caller - it was the last remaining
+    prompt after the query was replaced by the marker file, firing on every
+    start before the marker was even consulted. `systemctl is-active` is a
+    plain status read with no polkit gate. Without systemctl (non-systemd box)
+    this returns False and the iptables/ufw fallback takes over - `sudo -n`
+    there fails fast and never prompts, which is the acceptable direction."""
     try:
         if subprocess.run(['which', 'firewall-cmd'], capture_output=True).returncode != 0:
             return False
-        r = subprocess.run(['firewall-cmd', '--state'], capture_output=True, text=True, timeout=5)
-        return 'running' in ((r.stdout or '') + (r.stderr or '')).lower()
+        r = subprocess.run(['systemctl', 'is-active', '--quiet', 'firewalld'],
+                           capture_output=True, timeout=5)
+        return r.returncode == 0
     except Exception:
         return False
 

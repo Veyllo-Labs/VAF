@@ -111,3 +111,21 @@ def test_one_elevation_attempt_per_process(monkeypatch):
     assert fw.setup_firewall(8443, 8001) is True
     assert fw.setup_firewall(8443, 8001) == "present"
     assert calls == [8443], "second call must not re-run the platform setup"
+
+
+def test_engine_detection_never_runs_firewall_cmd(monkeypatch):
+    """`firewall-cmd --state` is polkit action org.fedoraproject.FirewallD1.config
+    on openSUSE (measured live) - a root password dialog for an unprivileged
+    caller, fired on EVERY start before the marker was even consulted. The
+    running check must ask systemd instead; the only allowed firewall-cmd
+    contact is the `which` lookup. Mutation: put --state back - red."""
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(fw.subprocess, "run", run)
+    assert fw._firewalld_running() is True
+    assert all(a[0] != "firewall-cmd" for a in calls), calls
+    assert any(a[:2] == ["systemctl", "is-active"] for a in calls)

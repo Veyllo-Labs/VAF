@@ -28,6 +28,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   normal start runs no firewall reads at all), a real change elevates exactly
   once with check and add together, and the setup runs at most once per
   start (TLS mode runs two internal servers and could raise two dialogs).
+  Even asking "is firewalld running" turned out to be admin-gated on
+  openSUSE, so that probe now asks systemd instead of firewall-cmd.
 - Voice call: the assistant no longer denies a capability in the same
   breath as delegating the task ("I can't check your mails, but..."
   spoken while the mail check was already handed to the main agent).

@@ -39,6 +39,9 @@ def test_a_stranger_can_run_a_voice_turn_from_the_facade(monkeypatch):
                         lambda *a, **kw: {"reply": "Gerne!", "delegate": None,
                                           "silent": False})
 
+    # EXACTLY the five initial keys EMBEDDING.md promises - if the engine ever
+    # requires a sixth, that is a contract change, not a detail: this test is
+    # the stranger who followed the doc to the letter.
     state = {"history": [], "lang": "de", "scope": "embedder-scope",
              "session": "call-1", "chime_recent": []}
     engine = vaf.VoiceTurnEngine(

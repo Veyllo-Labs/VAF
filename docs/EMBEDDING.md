@@ -859,6 +859,29 @@ if outcome.delegate:
                                    # only DECIDES; enqueueing is the caller's
 ```
 
+What one `TurnOutcome` can be - `kind` decides the handling, and exactly one
+variant flag is ever set:
+
+| `kind` | Meaning | You do |
+|---|---|---|
+| `reply` | a spoken answer (may carry `delegate`) | TTS `reply`, hand `delegate` to your worker |
+| `silent` | side talk / not addressed - kept as room context | nothing; keep listening |
+| `clarify` | the agent asks "did you mean me?" (speaker ambiguity) | TTS `reply` |
+| `reask` | the user asked the agent to repeat its own question | TTS `reply` |
+| `chime_in` | a brief grounded remark on overheard talk (opt-in topics) | TTS `reply` |
+| `busy_local` / `no_speech` / `llm_failed` | `error` is set; nothing was decided | keep listening |
+
+`tts_follow=True` (on `reply` and `chime_in`) means: voice the text in ITS OWN
+language when your TTS can, else fall back to `tts_lang`.
+
+**The state-dict contract, precisely:** the five keys you INITIALIZE are part
+of the promise - `history: []`, `lang`, `scope`, `session`, `chime_recent: []`
+(plus optional `chat_context`, `agent_name`, `agent_soul` for a richer
+persona). Everything the engine ADDS to the dict at runtime (pending
+questions, speaker-window timestamps, ...) is internal bookkeeping and may
+change between releases - hold the dict, do not read its insides. One dict +
+one engine per call; a new call gets fresh ones, never a merge.
+
 The division of labor, stated plainly:
 
 - **You own the transport and the TTS.** The engine never opens a socket and
@@ -1162,9 +1185,10 @@ Stable public surface (safe to build on):
 - `BaseTool` - the tool contract, including the `identity_kwargs` declaration
   and `self.log(message)`.
 - `vaf.VoiceTurnEngine` / `vaf.TurnOutcome` - the voice turn pipeline: the
-  constructor's documented seams, `turn(wav, ...) -> TurnOutcome` and the
-  outcome's documented fields are the promise; the state dict's inner keys
-  are not.
+  constructor's documented seams, `turn(wav, ...) -> TurnOutcome`, the
+  outcome's documented fields and the five INITIAL state-dict keys are the
+  promise; the keys the engine adds at runtime are not - hold the dict,
+  do not read its insides.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains
   exported for tools that need the boundary around something other than a whole `run()`.

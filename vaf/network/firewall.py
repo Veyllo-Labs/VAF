@@ -16,7 +16,6 @@ import subprocess
 import logging
 import tempfile
 import threading
-import time
 import atexit
 from pathlib import Path
 from typing import Optional
@@ -393,25 +392,39 @@ def _firewalld_rich_rule(subnet: str, port: int) -> str:
             f'port port="{port}" protocol="tcp" accept')
 
 
-def _firewalld_rule_query(zone: str, rule: str):
-    """(present, detail). The detail string carries rc/stdout/stderr because a
-    swallowed query error is indistinguishable from a genuinely missing rule,
-    and that difference is exactly one root password dialog (live incident: a
-    prompt on every app start while the permanent rule existed the whole time -
-    without this detail in the log the miss could never be attributed)."""
+def _firewalld_marker_path() -> Path:
+    from vaf.core.config import Config
+    return Config.APP_DIR / "firewalld_lan.json"
+
+
+def _firewalld_marker_matches(zone: str, rule: str) -> bool:
+    """True when this install already put exactly this rule in this zone.
+
+    The marker REPLACES asking firewalld: an unprivileged
+    `firewall-cmd --query-rich-rule` is a CONFIG read, and distros ship that
+    polkit action as auth_admin_keep (measured live on openSUSE:
+    `org.fedoraproject.FirewallD1.config.info` = auth_admin_keep, only the
+    runtime `.info` action is free) - so the presence CHECK itself raised the
+    root password dialog on every app start, which is exactly what this
+    function exists to avoid. The marker can go stale if the rule is removed
+    behind our back; the failure direction is then a CLOSED port (safe), and
+    deleting the marker file or toggling Local Network re-runs the setup."""
     try:
-        r = subprocess.run(['firewall-cmd', '--zone', zone, '--query-rich-rule', rule],
-                           capture_output=True, text=True, timeout=5)
-        present = r.returncode == 0 and 'yes' in (r.stdout or '').lower()
-        detail = (f"rc={r.returncode} out={(r.stdout or '').strip()!r} "
-                  f"err={(r.stderr or '').strip()!r}")
-        return present, detail
+        import json
+        data = json.loads(_firewalld_marker_path().read_bytes().decode("utf-8"))
+        return data.get("zone") == zone and data.get("rule") == rule
+    except Exception:
+        return False
+
+
+def _firewalld_marker_write(zone: str, rule: str) -> None:
+    try:
+        import json
+        p = _firewalld_marker_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(json.dumps({"zone": zone, "rule": rule}).encode("utf-8"))
     except Exception as e:
-        return False, f"query failed: {e}"
-
-
-def _firewalld_rule_present(zone: str, rule: str) -> bool:
-    return _firewalld_rule_query(zone, rule)[0]
+        logger.debug("firewalld: could not write the marker file: %s", e)
 
 
 def _elevation_argv() -> list:
@@ -427,40 +440,39 @@ def _elevation_argv() -> list:
 def _setup_firewall_linux_firewalld(port: int, port_frontend: int):
     """Open ONLY the LAN access port (the integrated HTTPS proxy port, e.g. 8443) for the LAN subnet, via
     a firewalld rich rule in the interface's zone. The backend (8001) and frontend (3000) bind 127.0.0.1
-    and are unreachable from the LAN, so they are deliberately NOT opened. Idempotent: if the rule already
-    exists, nothing runs and no password dialog appears."""
+    and are unreachable from the LAN, so they are deliberately NOT opened. Idempotent without asking
+    firewalld: a local marker file remembers what this install already set up, so the normal start runs
+    zero firewall-cmd config reads and can never raise a password dialog. Only a marker miss (first run,
+    or the subnet/port/zone changed) elevates - once, covering check and add together."""
     subnet = _lan_subnet_cidr()
     if not subnet:
         logger.warning("firewalld: could not determine the LAN subnet; not opening any port")
         return False
     zone = _firewalld_zone()
     rule = _firewalld_rich_rule(subnet, port)
-    present, detail1 = _firewalld_rule_query(zone, rule)
-    if not present:
-        # One retry before asking for a password: the setup runs during app start,
-        # when uvicorn, the frontend and the docker stack all spin up at once - a
-        # busy firewall-cmd/D-Bus answering late must not cost a root dialog. A
-        # rule that is genuinely missing is still missing two seconds later.
-        time.sleep(2.0)
-        present, detail2 = _firewalld_rule_query(zone, rule)
-    if present:
-        logger.info("firewalld: LAN access already open (zone=%s, source=%s, port=%s)", zone, subnet, port)
+    if _firewalld_marker_matches(zone, rule):
+        logger.info("firewalld: LAN access already set up by this install (zone=%s, source=%s, port=%s)",
+                    zone, subnet, port)
         return "present"
-    # The miss is real as far as this process can tell - record exactly what the
-    # queries said BEFORE elevating, so the next "why did it ask again?" is
-    # answerable from the log instead of unreproducible.
-    logger.warning("firewalld: rule not found, requesting elevation (zone=%s rule=%s first=[%s] retry=[%s])",
-                   zone, rule, detail1, detail2)
-    # Add to BOTH runtime (effective immediately) and permanent (survives reboot) in a SINGLE elevation
-    # so the user sees at most one password dialog.
+    logger.warning("firewalld: no marker for this rule, requesting elevation (zone=%s rule=%s)", zone, rule)
+    # ONE elevation covers the check AND the add: query, add to runtime, add to
+    # permanent (survives reboot). Deliberate: the query runs INSIDE the elevated
+    # shell because running it unprivileged is itself an auth_admin polkit action
+    # on common distros - the check would cost the very password dialog it tries
+    # to avoid (live incident: a root dialog on every start for weeks while the
+    # permanent rule existed the whole time; every one of those passwords went
+    # into the CHECK, never into a change).
     q = shlex.quote(rule)
-    inner = (f"firewall-cmd --zone={shlex.quote(zone)} --add-rich-rule={q} && "
-             f"firewall-cmd --permanent --zone={shlex.quote(zone)} --add-rich-rule={q}")
+    z = shlex.quote(zone)
+    inner = (f"firewall-cmd --zone={z} --query-rich-rule={q} || "
+             f"{{ firewall-cmd --zone={z} --add-rich-rule={q} && "
+             f"firewall-cmd --permanent --zone={z} --add-rich-rule={q}; }}")
     argv = _elevation_argv() + ['sh', '-c', inner]
     try:
         logger.info("firewalld: opening port %s for %s in zone %s via %s", port, subnet, zone, argv[0])
         subprocess.run(argv, check=True, timeout=120)
-        logger.info("firewalld: LAN access opened (zone=%s, source=%s, port=%s)", zone, subnet, port)
+        logger.info("firewalld: LAN access ensured (zone=%s, source=%s, port=%s)", zone, subnet, port)
+        _firewalld_marker_write(zone, rule)
         return "created"
     except subprocess.TimeoutExpired:
         logger.error("firewalld: elevation timed out (password dialog dismissed?)")

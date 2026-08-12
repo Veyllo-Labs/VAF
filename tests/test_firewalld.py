@@ -30,59 +30,71 @@ def test_elevation_falls_back_to_noninteractive_sudo_headless(monkeypatch):
 
 
 class _RunRecorder:
-    """Scripted subprocess.run: query-rich-rule answers from a list, elevation
-    calls are recorded. Everything returns rc=0 unless scripted otherwise."""
-    def __init__(self, query_answers):
-        self.query_answers = list(query_answers)
-        self.elevations = []
+    """Records every subprocess.run; elevation calls return rc=0."""
+    def __init__(self):
+        self.calls = []
 
     def __call__(self, argv, **kw):
-        rc = 0
-        if "--query-rich-rule" in argv:
-            rc = 0 if self.query_answers.pop(0) else 1
-        elif argv and argv[0] == "fake-elevate":
-            self.elevations.append(argv)
-        out = "yes" if rc == 0 else "no"
-        return type("R", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+        self.calls.append(argv)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
 
-def _wire_firewalld(monkeypatch, recorder):
+def _wire_firewalld(monkeypatch, recorder, tmp_path):
     monkeypatch.setattr(fw, "_lan_subnet_cidr", lambda: "192.168.2.0/24")
     monkeypatch.setattr(fw, "_firewalld_zone", lambda: "public")
     monkeypatch.setattr(fw, "_elevation_argv", lambda: ["fake-elevate"])
-    monkeypatch.setattr(fw.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fw, "_firewalld_marker_path", lambda: tmp_path / "firewalld_lan.json")
     monkeypatch.setattr(fw.subprocess, "run", recorder)
 
 
-def test_present_rule_never_elevates(monkeypatch):
-    """The idempotence promise (NETWORK_FEATURES.md): rule already active means
-    NO password dialog. Mutation: skip the presence check - red."""
-    rec = _RunRecorder(query_answers=[True])
-    _wire_firewalld(monkeypatch, rec)
+def test_marker_hit_runs_no_firewall_command_at_all(monkeypatch, tmp_path):
+    """The normal start: this install already set the rule up, the marker says
+    so, and NOT ONE firewall-cmd runs - not even a read. Deliberate: the
+    unprivileged --query-rich-rule is an auth_admin polkit action on common
+    distros, so the old presence CHECK was itself the root password dialog the
+    idempotence promise was supposed to prevent (live incident: a dialog on
+    every start for weeks while the permanent rule existed; every password went
+    into the check, never into a change). Mutation: query firewalld before
+    trusting the marker - red."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
+    fw._firewalld_marker_write("public", fw._firewalld_rich_rule("192.168.2.0/24", 8443))
     assert fw._setup_firewall_linux_firewalld(8443, 8001) == "present"
-    assert rec.elevations == []
+    assert rec.calls == []
 
 
-def test_transient_query_miss_retries_before_prompting(monkeypatch):
-    """Setup runs during app start while uvicorn, frontend and docker all spin
-    up - a busy firewall-cmd answering 'no'/late once must not cost a root
-    dialog (live incident: a password prompt on every start while the permanent
-    rule existed). Mutation: remove the retry - red."""
-    rec = _RunRecorder(query_answers=[False, True])
-    _wire_firewalld(monkeypatch, rec)
-    assert fw._setup_firewall_linux_firewalld(8443, 8001) == "present"
-    assert rec.elevations == []
-
-
-def test_real_miss_elevates_exactly_once(monkeypatch):
-    """A genuinely missing rule still elevates - the retry must not turn into
-    fail-open (a subnet change must still open the new subnet's port)."""
-    rec = _RunRecorder(query_answers=[False, False])
-    _wire_firewalld(monkeypatch, rec)
+def test_marker_miss_elevates_once_with_check_and_add_inside(monkeypatch, tmp_path):
+    """First run (or subnet/port/zone changed): exactly ONE elevation, and the
+    query rides INSIDE it together with the runtime and permanent adds - as
+    root all three are free, so one password covers everything and an already
+    existing rule is not added twice."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
     assert fw._setup_firewall_linux_firewalld(8443, 8001) == "created"
-    assert len(rec.elevations) == 1
-    inner = rec.elevations[0][-1]
-    assert "--permanent" in inner, "the permanent half must ride the same elevation"
+    assert len(rec.calls) == 1 and rec.calls[0][0] == "fake-elevate"
+    inner = rec.calls[0][-1]
+    assert "--query-rich-rule" in inner, "the check must run inside the elevation"
+    assert "--add-rich-rule" in inner and "--permanent" in inner
+    # and the success is remembered: the next start is silent
+    assert fw._firewalld_marker_matches("public", fw._firewalld_rich_rule("192.168.2.0/24", 8443))
+
+
+def test_stale_marker_for_other_port_still_elevates(monkeypatch, tmp_path):
+    """A marker for yesterday's port must not silence today's setup - the
+    failure direction of the marker is a CLOSED port, never a skipped opening."""
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
+    fw._firewalld_marker_write("public", fw._firewalld_rich_rule("192.168.2.0/24", 9999))
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) == "created"
+    assert len(rec.calls) == 1
+
+
+def test_corrupt_marker_is_treated_as_missing(monkeypatch, tmp_path):
+    rec = _RunRecorder()
+    _wire_firewalld(monkeypatch, rec, tmp_path)
+    (tmp_path / "firewalld_lan.json").write_bytes(b"not json {")
+    assert fw._setup_firewall_linux_firewalld(8443, 8001) == "created"
+    assert len(rec.calls) == 1
 
 
 def test_one_elevation_attempt_per_process(monkeypatch):

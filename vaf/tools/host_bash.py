@@ -27,7 +27,7 @@ import platform
 import subprocess
 
 from vaf.tools.base import BaseTool
-from vaf.tools.bash import is_command_safe  # shared catastrophic-pattern blocklist
+from vaf.core.command_policy import is_command_safe  # offline classifier, strict profile
 
 
 class HostBashTool(BaseTool):
@@ -73,7 +73,7 @@ class HostBashTool(BaseTool):
         timeout = min(max(10, int(kwargs.get("timeout") or 120)), 300)
 
         # Reisleine: refuse the handful of catastrophic patterns even after confirmation.
-        is_safe, warning = is_command_safe(command)
+        is_safe, warning = is_command_safe(command, profile="host")
         if not is_safe:
             return f"[BLOCKED] {warning}"
 

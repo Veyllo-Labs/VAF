@@ -16,52 +16,12 @@ from pathlib import Path
 logger = logging.getLogger("vaf.bash")
 
 from vaf.tools.base import BaseTool
+from vaf.core.command_policy import is_command_safe
 
 try:
     from vaf.core.platform import Platform
 except ImportError:
     Platform = None
-
-
-# Commands that are blocked for security
-BLOCKED_COMMANDS = [
-    "rm -rf /",
-    "rm -rf /*",
-    ":(){ :|:& };:",  # Fork bomb
-    "dd if=/dev/zero of=/dev/sda",
-    "mkfs",
-    "format c:",
-    "> /dev/sda",
-    "sudo rm -rf",
-    "curl | bash",
-    "wget | bash",
-]
-
-# Commands that need warning
-DANGEROUS_PATTERNS = [
-    "rm -rf",
-    "git reset --hard",
-    "git clean -fd",
-    "drop database",
-    "drop table",
-    "truncate",
-    "fdisk",
-]
-
-
-def is_command_safe(command: str) -> tuple:
-    """Check if command is safe to execute."""
-    cmd_lower = command.lower()
-    
-    for blocked in BLOCKED_COMMANDS:
-        if blocked.lower() in cmd_lower:
-            return False, f"Blocked command pattern: {blocked}"
-    
-    for pattern in DANGEROUS_PATTERNS:
-        if pattern.lower() in cmd_lower:
-            return True, f"⚠️ Warning: '{pattern}' could be dangerous"
-    
-    return True, ""
 
 
 class BashTool(BaseTool):
@@ -130,7 +90,11 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
             return "Error: No command provided"
 
         # Cheap first-line blocklist (defense in depth; the real confinement is the jail).
-        is_safe, warning = is_command_safe(command)
+        # profile="jailed": this lane runs under bubblewrap (--clearenv,
+        # --unshare-net) or a --network none container, so wiping the throwaway
+        # workspace is ordinary work and a network fetch reaches nothing. Only
+        # what would hurt the machine or the jail root is refused.
+        is_safe, warning = is_command_safe(command, profile="jailed")
         if not is_safe:
             return f"Error: {warning}"
 

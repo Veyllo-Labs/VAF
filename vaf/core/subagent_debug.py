@@ -133,7 +133,10 @@ def sanitize_args(tool: str, args: Any) -> Any:
         _sanitize_field("content", 200)
     elif tool in ("python_sandbox", "python_exec"):
         _sanitize_field("code", 250)
-    elif tool == "bash":
+    elif tool in ("bash", "host_bash", "run_command"):
+        # host_bash was missing here: its command is the UNSANDBOXED one, and it
+        # went verbatim into the audit log (served to admins over HTTP) and into
+        # the tool_start event, while the jailed twin was truncated.
         _sanitize_field("command", 300)
     else:
         # Generic fallback: if any known big fields exist, sanitize them

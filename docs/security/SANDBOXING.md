@@ -282,9 +282,16 @@ runs **unsandboxed on the host on purpose**. Its safety is two hard controls, no
 
    **Local Web UI / CLI only.**
 
-A cheap `is_command_safe` blocklist (shared with `bash`) stops the few catastrophic patterns
-even after confirmation, but the real safety is the per-command human approval plus the
-two-layer local-only gate. Both controls are pinned in `tests/test_host_bash.py`.
+An offline classifier (`vaf/core/command_policy.py`, shared with `bash` but run with the
+strict `host` profile) refuses the catastrophic set even after confirmation: code fetched
+from the network and piped into a shell, writes to a block device, a fork bomb, a recursive
+delete of a system or home root, and a command whose executable is built by a substitution
+(there the approved text is not the text that would run). It tokenizes quote-aware and
+descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
+ordinary work while `rm  -rf  /` is not. The verdict carries its categories, which the
+confirmation dialog shows. The real safety is still the per-command human approval plus the
+two-layer local-only gate. The controls are pinned in `tests/test_host_bash.py` and
+`tests/test_command_policy.py`.
 
 > **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
 > use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it

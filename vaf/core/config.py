@@ -869,6 +869,12 @@ class Config:
         # Skipping the confirmation dialog is an instance-wide safety decision:
         # a non-admin LAN user must never be able to turn it on for themselves.
         "tool_confirmation_bypass_admins",
+        # Server-side semantic turn-end: arming it makes every call stream
+        # microphone PCM to the backend and downloads/loads a model there, for
+        # the whole instance. Documented admin-only in CONFIG_SCHEMA.md, and the
+        # doc was the only thing enforcing it (the voice_agent_ prefix does not
+        # cover this spelling).
+        "voice_semantic_endpoint_enabled",
         # A spend cap is instance money: a LAN user must not be able to raise
         # their own (precedent: the learn_ spend keys below).
         "spend_budget_usd_per_day",

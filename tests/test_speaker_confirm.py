@@ -316,10 +316,59 @@ def test_confirmations_come_from_the_vocab_book_in_many_languages():
     """The lexicon lives in the vocabulary book (confirm_yes/confirm_no, generated like
     addressee_check), not in a hardcoded regex: a French or Turkish owner answering the
     agent's own question must parse, exactly like the German one whose drop started
-    this. Mutation: stop loading the vocab in _confirm_lexicon - these turn None."""
+    this. Mutation: stop loading the vocab in _confirm_lexicon - these turn None.
+
+    Deliberate contract change (recorded, not loosened): the answer is now parsed in
+    the language the QUESTION was asked in, so each case names its language. The
+    union of all languages was withdrawn because short affirmations collide across
+    them - see test_a_foreign_yes_word_never_confirms_in_another_language."""
     import vaf.core.speaker_confirm as sc
 
     sc._confirm_words = None
-    assert sc.parse_reply("Bien sûr") == ("yes", None)
-    assert sc.parse_reply("Tabii ki") == ("yes", None)
-    assert sc.parse_reply("Auf keinen Fall") == ("no", None)
+    assert sc.parse_reply("Bien sûr", lang="fr") == ("yes", None)
+    assert sc.parse_reply("Tabii ki", lang="tr") == ("yes", None)
+    assert sc.parse_reply("Auf keinen Fall", lang="de") == ("no", None)
+
+
+def test_a_foreign_yes_word_never_confirms_in_another_language(monkeypatch):
+    """The lexicon is scoped to the language the question was asked in, plus
+    English. Measured before this existed: "da" is yes in Romanian and Serbian,
+    so the German sentence "Da kommt der Bus." answered a pending "was that
+    you?" with YES - and a yes relabels the voice segment AND feeds the owner's
+    profile as an adaptive sample. Mutation: build the lexicon from all
+    languages again - red."""
+    assert sc.parse_reply("Da kommt der Bus.", lang="de") is None
+    assert sc.parse_reply("Da drueben steht er", lang="de") is None
+    # ... while the languages that own the word keep it
+    assert sc.parse_reply("Da, to sam bio ja", lang="sr") == ("yes", None)
+    # the language's own words still work, and English rides along everywhere
+    assert sc.parse_reply("Ja, das war ich", lang="de") == ("yes", None)
+    assert sc.parse_reply("yes", lang="de") == ("yes", None)
+    assert sc.parse_reply("no, that was Alice", lang="de") == ("no", "Alice")
+
+
+def test_an_answer_typed_without_umlauts_still_counts():
+    """A confirmation is often TYPED on a messenger, where umlauts are dropped.
+    The word list carries only the correct spelling, so "natuerlich" matched
+    nothing while _leading_word_match's own docstring claimed it did.
+    Mutation: remove the fold - red."""
+    assert sc.parse_reply("Natuerlich, meinte ich dich", lang="de") == ("yes", None)
+    assert sc.parse_reply("Natürlich, meinte ich dich", lang="de") == ("yes", None)
+    assert sc.parse_reply("Selbstverstaendlich", lang="de") == ("yes", None)
+    # the leading-only contract is unchanged by the fold
+    assert sc.parse_reply("Das ist natuerlich Unsinn", lang="de") is None
+
+
+def test_the_umlaut_fold_works_in_both_directions():
+    """Two mechanisms, one per direction, and each needs its own case or a
+    mutation stays green (measured: removing the input fold left the test above
+    passing, because the lexicon also carries the folded spelling).
+    - word list has the umlaut, user typed none: the LIST's folded variant.
+    - word list has none, user typed the umlaut: the INPUT fold.
+    Mutation: drop either one - the matching half turns red."""
+    assert sc._leading_word_match("natuerlich, meinte ich dich", ("natürlich",)) is False, \
+        "raw comparison: this is what the folded list entry exists for"
+    assert sc._leading_word_match("natürlich, meinte ich dich", ("natuerlich",)) is True, \
+        "input fold missing: an umlaut answer cannot reach an ASCII word list"
+    # and the fold never widens a match past the word boundary
+    assert sc._leading_word_match("natuerlicherweise schon", ("natürlich",)) is False

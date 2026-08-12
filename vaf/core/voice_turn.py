@@ -375,7 +375,11 @@ class VoiceTurnEngine:
                 _yn = None
                 try:
                     from vaf.core import speaker_confirm as _vscR
-                    _p = _vscR.parse_reply(_va.strip_speaker_label(_text))
+                    # The turn's own language, not every language at once: a
+                    # short yes in one language opens ordinary sentences in
+                    # another, and a false yes here relabels a voice segment.
+                    _p = _vscR.parse_reply(_va.strip_speaker_label(_text),
+                                           lang=_turn_lang)
                     _yn = _p[0] if _p else None
                 except Exception:
                     _yn = None

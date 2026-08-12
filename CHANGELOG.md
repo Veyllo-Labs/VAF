@@ -19,6 +19,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Voice call: a confirmation answer is now read in the language it was asked
+  in. Since yes and no moved into the multilingual vocabulary, every
+  language's words were matched at once - and "da" means yes in Romanian
+  and Serbian, so a German sentence starting with "Da ..." answered the
+  agent's "was that you?" with yes, relabelling a voice segment and feeding
+  the speaker profile. Answers typed without umlauts ("natuerlich") now
+  count too.
+- Hosting: `voice_semantic_endpoint_enabled` is admin-only, as its
+  documentation always claimed. It was writable by any account on the
+  network, and arming it makes every call stream microphone audio to the
+  server and download a model there, for the whole instance.
 - Voice call: answering the agent's "did you mean me?" in your own words
   counts as an answer again. The confirmation only recognised a short
   hardcoded list (ja/jo/yes/yep), so a natural "Natuerlich, meinte ich

@@ -57,36 +57,67 @@ _PENDING_TTL_SECONDS = 60 * 60        # unanswered questions expire after an hou
 _YES_RE = re.compile(r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si)\b", re.I)
 _NO_RE = re.compile(r"^\s*(nein+|ne+|noe|nö|no+|nope)\b", re.I)
 
-_confirm_words: Optional[Tuple[tuple, tuple]] = None
+# Per language-set cache: {("de", "en"): (yes_words, no_words)}.
+_confirm_words: Optional[Dict[Tuple[str, ...], Tuple[tuple, tuple]]] = None
 
 
-def _confirm_lexicon() -> Tuple[tuple, tuple]:
-    """(yes_words, no_words) across ALL vocab languages, lowercased, longest first
-    (so "auf keinen fall" wins over a shorter prefix). Cached; fail-open to empty -
-    the regex core above keeps today's behavior when the book cannot load."""
+def _confirm_lexicon(langs: Tuple[str, ...]) -> Tuple[tuple, tuple]:
+    """(yes_words, no_words) for the GIVEN languages, lowercased, longest first
+    (so "auf keinen fall" wins over a shorter prefix). Cached per language set;
+    fail-open to empty - the regex core above keeps today's behavior when the
+    book cannot load.
+
+    Deliberately not the union of all ~14 languages: short affirmations collide
+    across languages, and a collision here is not a missed match but a FALSE
+    confirmation that relabels a voice segment and feeds the owner's profile.
+    Measured: "da" is yes in Romanian and Serbian, so a German "Da kommt der
+    Bus." answered a pending "was that you?" with yes.
+    """
     global _confirm_words
+    key_langs = tuple(langs)
     if _confirm_words is None:
+        _confirm_words = {}
+    hit = _confirm_words.get(key_langs)
+    if hit is not None:
+        return hit
+    yes, no = [], []
+    try:
+        from vaf.core import vocab
+        for key, out in (("confirm_yes", yes), ("confirm_no", no)):
+            have = set(vocab.available_languages(key))
+            for lang in key_langs:
+                if lang not in have:
+                    continue
+                for ph in vocab.phrasings(key, lang):
+                    ph = str(ph or "").strip().lower()
+                    if ph:
+                        out.append(ph)
+                        # the same word as a messenger would type it
+                        out.append(_fold(ph))
+    except Exception:
         yes, no = [], []
-        try:
-            from vaf.core import vocab
-            for key, out in (("confirm_yes", yes), ("confirm_no", no)):
-                for lang in vocab.available_languages(key):
-                    for ph in vocab.phrasings(key, lang):
-                        ph = str(ph or "").strip().lower()
-                        if ph:
-                            out.append(ph)
-        except Exception:
-            yes, no = [], []
-        _confirm_words = (tuple(sorted(set(yes), key=len, reverse=True)),
-                          tuple(sorted(set(no), key=len, reverse=True)))
-    return _confirm_words
+    hit = (tuple(sorted(set(yes), key=len, reverse=True)),
+           tuple(sorted(set(no), key=len, reverse=True)))
+    _confirm_words[key_langs] = hit
+    return hit
+
+
+_UMLAUT_FOLD = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+
+
+def _fold(s: str) -> str:
+    """Lowercase with German umlauts spelled out. A confirmation may be TYPED
+    on a messenger without umlauts ("natuerlich"), and the word list carries
+    only the correct spelling - measured: that answer matched nothing, while
+    the docstring below claimed it did."""
+    return (s or "").lower().translate(_UMLAUT_FOLD)
 
 
 def _leading_word_match(t: str, words: tuple) -> bool:
     """Leading match only, word-boundary honest: 'natuerlich, ...' yes,
     'Das ist natuerlich Unsinn' no. The boundary check keeps 'no' from
     matching inside 'notiere'."""
-    low = t.lower()
+    low = _fold(t)
     for w in words:
         if low.startswith(w):
             rest = low[len(w):]
@@ -351,16 +382,26 @@ def _emit_web_card(rec: Dict, question: str) -> None:
 # Resolution
 # ---------------------------------------------------------------------------
 
-def parse_reply(text: str) -> Optional[Tuple[str, Optional[str]]]:
+def parse_reply(text: str, lang: Optional[str] = None) -> Optional[Tuple[str, Optional[str]]]:
     """Parse a free-text answer into ('yes'|'no', name|None), or None.
 
     Only clearly confirmation-shaped messages are consumed - anything else
     stays a normal chat turn. A name is only honored on a 'no'.
+
+    `lang` is the language this answer is expected in (the pending record's
+    user language, or the voice turn's language); it decides WHICH vocabulary
+    is matched. Omitting it falls back to the user's configured language, never
+    to all languages at once: a short affirmation in one language is an ordinary
+    sentence opener in another, and consuming it as yes relabels a voice segment
+    and feeds the owner's profile. English is always matched alongside, because
+    the built-in pattern already accepts it and mixed-language households answer
+    "yes"/"no" regardless of their interface language.
     """
     t = _VOICE_PREFIX_RE.sub("", (text or "").strip())
     if not t or len(t) > 120:
         return None
-    yes_words, no_words = _confirm_lexicon()
+    _l = (str(lang or "").strip().lower() or _lang())[:2]
+    yes_words, no_words = _confirm_lexicon((_l, "en") if _l != "en" else ("en",))
     # NO before YES: several languages' negations embed an affirmation word.
     if _NO_RE.match(t) or _leading_word_match(t, no_words):
         m = _NAME_RE.search(t)
@@ -435,9 +476,11 @@ def try_consume_channel_reply(scope_id: str, text: str) -> Optional[str]:
     (it must then flow into the normal agent turn). Never raises.
     """
     try:
-        if not scope_id or get_pending(scope_id) is None:
+        _rec = get_pending(scope_id)
+        if not scope_id or _rec is None:
             return None
-        parsed = parse_reply(text)
+        # The answer is expected in the language the QUESTION was asked in.
+        parsed = parse_reply(text, lang=_lang(_rec.get("username")))
         if parsed is None:
             return None
         answer, name = parsed

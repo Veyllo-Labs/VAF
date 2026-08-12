@@ -430,3 +430,35 @@ def test_note_greeting_and_spoken_caps(env):
     assert env["state"]["history"][-1] == {"role": "assistant", "content": "Hallo!"}
     eng.note_spoken("R" * 2000)
     assert len(env["state"]["history"][-1]["content"]) == _HISTORY_MAX_CHARS
+
+
+def test_the_call_lane_has_one_engine_door():
+    """The web handler's voice-call lane consumes the engine through voice_turn
+    ONLY - the same discipline as agent.py consuming the tool pipeline only
+    through tool_dispatch. Reaching back into voice_agent/voice_vad/voice_model/
+    speaker_id/voice_context compiles the harness against engine internals: it
+    works for us and breaks silently on refactor, and a third-party harness
+    could never do the same legitimately. Named boundaries that stay direct,
+    each the handler's own half: Config, auth, SpeechManager (TTS is the
+    caller's job), TaskQueue (the enqueue is the caller's job), tray, and the
+    MAIN-model load thread (vaf.core.backend - product server management, not
+    voice physics). Mutation: re-import voice_agent inside the block - red."""
+    import pathlib
+    import re
+
+    src = pathlib.Path(__file__).resolve().parent.parent / "vaf" / "core" / "web_server.py"
+    text = src.read_text(encoding="utf-8")
+    start = text.find('elif type in ("voice_call_start", "voice_call_turn", "voice_call_end")')
+    assert start != -1, "the voice-call lane moved; update this scanner deliberately"
+    end = text.find('elif type in ("speaker_enroll_start"', start)
+    assert end != -1, "the enroll lane moved; update this scanner deliberately"
+    block = text[start:end]
+
+    engine_backdoors = re.findall(
+        r"from vaf\.core(?:\.\w+)? import [^\n]*|from vaf\.core import [^\n]*", block)
+    allowed = ("voice_turn", "config", "speech import SpeechManager", "task_queue",
+               "backend import")
+    offenders = [i for i in engine_backdoors if not any(a in i for a in allowed)]
+    assert not offenders, (
+        "the voice-call lane reaches past its one engine door again:\n  "
+        + "\n  ".join(offenders))

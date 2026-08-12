@@ -6550,7 +6550,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # state is keyed on the connection's user_scope_id (isolation).
                 # ---- Live-Call: voice-agent first layer ----
                 elif type in ("voice_call_start", "voice_call_turn", "voice_call_end"):
-                    from vaf.core import voice_agent as _va
+                    # ONE door into the voice engine: everything engine-shaped in
+                    # this block goes through voice_turn (the same discipline as
+                    # agent.py consuming the tool pipeline only through
+                    # tool_dispatch). Auth, Config, TTS, TaskQueue and tray
+                    # concerns are the handler's own half and stay direct.
+                    from vaf.core import voice_turn as _vt
                     from vaf.core.config import get_local_admin_scope_id
                     _scope = str(manager.get_connection_user(websocket) or get_local_admin_scope_id())
                     _conn_key = id(websocket)
@@ -6583,7 +6588,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if _vc_sid:
                                 _ok_sess, _sess = _ws_session_owner_ok(websocket, _vc_sid)
                                 if _ok_sess and _sess is not None:
-                                    _chat_ctx = _va.build_chat_digest(
+                                    _chat_ctx = _vt.build_chat_digest(
                                         getattr(_sess, "messages", None) or [])
                         except Exception:
                             _chat_ctx = ""
@@ -6627,10 +6632,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Rule 4.4 - never shared). The frontend only streams PCM chunks
                         # when `server_endpoint` in voice_call_started says the lane is on.
                         try:
-                            from vaf.core.voice_vad import StreamEndpointer, get_turn_judge
-                            _tj = get_turn_judge()
-                            if _tj is not None:
-                                _VOICE_CALLS[_conn_key]["endpointer"] = StreamEndpointer(judge=_tj)
+                            _ep_new = _vt.make_endpointer()
+                            if _ep_new is not None:
+                                _VOICE_CALLS[_conn_key]["endpointer"] = _ep_new
                         except Exception:
                             pass
                         # Pre-warm the speaker-ID extractor in the background: it lazy-loads
@@ -6641,36 +6645,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # now means the very first turn is scored correctly. Best-effort, off
                         # the event loop, only when a profile exists to score against.
                         try:
-                            from vaf.core import speaker_id as _sid_warm
-                            if _sid_warm.is_enabled() and _sid_warm.load_profile(_scope) is not None:
-                                asyncio.get_running_loop().run_in_executor(
-                                    None, _sid_warm.prewarm)
+                            asyncio.get_running_loop().run_in_executor(
+                                None, lambda: _vt.prewarm_speaker(_scope))
                         except Exception:
                             pass
-                        def _any_live_subagents() -> bool:
-                            """A live sub-agent (any session) holds the ONE
-                            local model - no model swap may run then (a swap
-                            mid-inference crashed a sub-agent live)."""
-                            try:
-                                from vaf.core.subagent_ipc import get_ipc as _gi
-                                return bool(_gi().get_active_tasks())
-                            except Exception:
-                                return False
-
-                        _lane_ok = _va.available()
+                        _lane = _vt.lane_status()
+                        _lane_ok = _lane["available"]
                         _lane_reason = None
-                        if _lane_ok and _va.dedicated_local_model() and not _any_live_subagents():
+                        if _lane_ok and _lane["dedicated_model"] and not _vt.subagents_hold_model():
                             # Server up but possibly holding the MAIN model
                             # (e.g. right after a chat): pre-warm the swap so
                             # the first voice turn does not pay it.
                             try:
-                                from vaf.core import voice_model as _vvm_warm
-                                _vvm_warm.ensure_voice_model_async()
+                                _vt.prepare_dedicated_model_async()
                             except Exception:
                                 pass
                         if not _lane_ok:
-                            _vm_ref = _va.dedicated_local_model()
-                            if _any_live_subagents():
+                            _vm_ref = _lane["dedicated_model"]
+                            if _vt.subagents_hold_model():
                                 # Never load/swap while a sub-agent computes
                                 # on the one model: the call opens in the
                                 # busy state and heals after the result.
@@ -6681,7 +6673,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # On success push model_state so the frontend
                                 # self-heal re-sends voice_call_start.
                                 _lane_reason = "model_loading"
-                                from vaf.core import voice_model as _vvm
 
                                 def _vm_ready(ok: bool) -> None:
                                     if not ok:
@@ -6697,8 +6688,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     except Exception:
                                         pass
 
-                                _vvm.ensure_voice_model_async(on_ready=_vm_ready)
-                            elif _va.is_exclusive():
+                                _vt.prepare_dedicated_model_async(on_ready=_vm_ready)
+                            elif _lane["exclusive"]:
                                 # Local mode with the llama server down: load
                                 # the MAIN model directly in a worker thread
                                 # (closes the former headless gap - the tray
@@ -6748,7 +6739,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # exclusive: ONE local model time-shared with the
                             # main agent - the frontend mutes the voice agent
                             # while a delegated task runs.
-                            "exclusive": _va.is_exclusive(),
+                            "exclusive": _lane["exclusive"],
                             "reason": _lane_reason,
                             # server_endpoint: the semantic turn-end lane is armed for
                             # this call - the frontend streams mic PCM chunks and lets
@@ -6761,14 +6752,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # the user. Skipped when the voice lane is deaf.
                         if _lane_ok:
                             try:
-                                _gname = ""
-                                try:
-                                    from vaf.core import speaker_id as _gsid
-                                    _gprof = _gsid.load_profile(_scope)
-                                    _gname = ((_gprof or {}).get("meta") or {}).get("display_name", "")
-                                except Exception:
-                                    pass
-                                _greet = _va.greeting_line(_lang, _gname, scope_id=_scope)
+                                _greet = _vt.greeting_for(_VOICE_CALLS[_conn_key])
                                 from vaf.core.speech import SpeechManager
                                 _gsm = SpeechManager.get_instance()
                                 loop = asyncio.get_running_loop()
@@ -6812,8 +6796,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 if _eng_end is not None:
                                     _eng_end.end()
                                 else:
-                                    from vaf.core import voice_context as _vctx_end
-                                    _vctx_end.clear(_ended.get("scope"), _ended.get("session"))
+                                    _vt.clear_transcript(_ended.get("scope"), _ended.get("session"))
                         except Exception:
                             pass
                         await websocket.send_json({"type": "voice_call_ended"})
@@ -7074,11 +7057,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # invariant 3) and must not pollute the call history either. This
                             # also guards the stuck-local-model case where the streamed
                             # content is thinking-only.
-                            try:
-                                from vaf.core.voice_agent import _strip_reasoning as _srx
-                                _text = _srx(_text)
-                            except Exception:
-                                pass
+                            from vaf.core.voice_turn import strip_spoken_result as _srx
+                            _text = _srx(_text)
                             # A delegated result is being announced: the voice
                             # agent's own call history must know it, or on the
                             # next turn it still believes the task is running

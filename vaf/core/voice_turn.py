@@ -740,3 +740,107 @@ class VoiceTurnEngine:
 
         return _out("reply", reply=_res["reply"], tts_lang=_turn_lang,
                     tts_follow=True, delegate=_delegate, **base)
+
+# ── Call-lifecycle surface (the handler's ONE door into the engine) ───────────
+# The turn pipeline above is the physics; these thin wrappers are the rest of
+# what a call's LIFECYCLE needs from the engine side - lane readiness, the
+# greeting, the semantic endpointer, the speaker prewarm, result sanitizing.
+# They exist so the consumer imports ONE module instead of reaching into
+# voice_agent/voice_vad/voice_model/speaker_id through the back door (the same
+# shape as agent.py consuming the tool pipeline only through tool_dispatch).
+# Each is a deliberate pass-through, not an adapter: no signature invents
+# anything the wrapped function does not have. TTS, auth, the task queue and
+# tray concerns are NOT here - those are the caller's half by design.
+
+def lane_status() -> Dict[str, Any]:
+    """Readiness of the voice lane: {"available", "exclusive", "dedicated_model"}.
+    `exclusive` means ONE local model is time-shared with the main agent (the
+    caller mutes the voice lane while main-agent work runs)."""
+    from vaf.core import voice_agent as _va
+    return {"available": _va.available(),
+            "exclusive": _va.is_exclusive(),
+            "dedicated_model": _va.dedicated_local_model()}
+
+
+def greeting_for(state: Dict[str, Any]) -> str:
+    """The deterministic call-opening line, in the call language, addressed to
+    the enrolled display name when a profile exists (no LLM round-trip)."""
+    name = ""
+    try:
+        from vaf.core import speaker_id as _sid
+        prof = _sid.load_profile(state.get("scope"))
+        name = ((prof or {}).get("meta") or {}).get("display_name", "")
+    except Exception:
+        name = ""
+    from vaf.core import voice_agent as _va
+    return _va.greeting_line(state.get("lang", "de"), name,
+                             scope_id=state.get("scope", ""))
+
+
+def build_chat_digest(messages) -> str:
+    """Compact structural digest of an open chat session (pass-through to
+    voice_agent.build_chat_digest) - the "what does 'here' refer to" context."""
+    from vaf.core import voice_agent as _va
+    return _va.build_chat_digest(messages)
+
+
+def make_endpointer():
+    """A per-call StreamEndpointer when the semantic turn-end lane is armed
+    (voice_semantic_endpoint_enabled + model present), else None."""
+    from vaf.core.voice_vad import StreamEndpointer, get_turn_judge
+    judge = get_turn_judge()
+    return StreamEndpointer(judge=judge) if judge is not None else None
+
+
+def prewarm_speaker(scope: str) -> bool:
+    """True when a profile exists and the extractor prewarm should be kicked
+    (the caller runs speaker prewarm off its own loop). Prewarming matters:
+    during the cold load the owner scores as unsure and is treated as a guest."""
+    from vaf.core import speaker_id as _sid
+    if not (_sid.is_enabled() and _sid.load_profile(scope) is not None):
+        return False
+    _sid.prewarm()
+    return True
+
+
+def prepare_dedicated_model_async(on_ready=None) -> None:
+    """Kick the dedicated voice GGUF load/swap in the background (pass-through
+    to voice_model.ensure_voice_model_async)."""
+    from vaf.core import voice_model as _vvm
+    if on_ready is None:
+        _vvm.ensure_voice_model_async()
+    else:
+        _vvm.ensure_voice_model_async(on_ready=on_ready)
+
+
+def subagents_hold_model() -> bool:
+    """A live sub-agent (any session) holds the ONE local model - no model swap
+    may run then (a swap mid-inference crashed a sub-agent live). The same probe
+    the engine's busy belt uses; exposed so the caller and the engine share one
+    truth. Fail-open False: a broken probe must not block a call."""
+    try:
+        from vaf.core.subagent_ipc import get_ipc
+        return bool(get_ipc().get_active_tasks())
+    except Exception:
+        return False
+
+
+def strip_spoken_result(text: str) -> str:
+    """Remove leaked reasoning from a main-agent result before it is spoken or
+    stored (VOICE_AGENT.md invariant 3) - pass-through to the voice agent's
+    reasoning stripper, fail-open to the original text."""
+    try:
+        from vaf.core.voice_agent import _strip_reasoning
+        return _strip_reasoning(text)
+    except Exception:
+        return text
+
+
+def clear_transcript(scope, session) -> None:
+    """Drop a call's rolling transcript (the engine-less fallback of
+    VoiceTurnEngine.end(), for a record whose engine never initialized)."""
+    try:
+        from vaf.core import voice_context as _vctx
+        _vctx.clear(scope, session)
+    except Exception:
+        pass

@@ -19,6 +19,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Voice call: answering the agent's "did you mean me?" in your own words
+  counts as an answer again. The confirmation only recognised a short
+  hardcoded list (ja/jo/yes/yep), so a natural "Natuerlich, meinte ich
+  dich", a French "Bien sur" or a Turkish "Tabii ki" was treated as side
+  talk and silently ignored. Yes and no now come from the same vocabulary
+  book the rest of the assistant speaks from (16 languages so far, more
+  fill in on a later generator run), while the old pattern stays as the
+  fallback for elongations like "jaaa" and as a safety net if the book
+  cannot load.
 - Linux hosting: starting VAF no longer asks for the root password on every
   start. The culprit was the firewall presence CHECK itself: reading the
   rule configuration is a polkit admin action on common distros, so checking

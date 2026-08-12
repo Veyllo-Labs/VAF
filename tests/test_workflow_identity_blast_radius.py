@@ -100,6 +100,12 @@ NEWLY_IDENTIFIED = {
     # the path pointed - codesearch previously returned file CONTENT from any absolute
     # path when constructed without a base_dir, which is how the main agent has it.
     "codesearch": ('user_role', 'user_scope_id'),
+    # Added with the per-user trust store: this tool reads its own trust policy
+    # (vaf/tools/python_exec.py) and without the declaration it read the local
+    # ADMIN's bucket for every caller, so one machine-wide "always" answered for
+    # everyone. In the workflow lane the step now reads the workflow owner's
+    # policy, which is the point.
+    "python_exec": ('user_scope_id',),
     # Joined 2026-08-01 (Phase 3): the coder declared nothing, so a workflow step calling
     # it spawned a child that ran every inner tool as the machine owner. The identity now
     # crosses the process boundary as data (VAF_USER_SCOPE_ID/VAF_USER_ROLE).

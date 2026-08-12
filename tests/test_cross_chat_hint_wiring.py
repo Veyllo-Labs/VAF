@@ -218,7 +218,10 @@ def test_chat_step_refreshes_the_hints_once_per_turn():
     assert "if not auto_retry:" in AGENT_SRC[call - 200:call]
 
 
-def test_both_generation_paths_build_the_block_through_the_one_builder():
-    assert AGENT_SRC.count("self._memory_system_block(memory_context)") == 2
+def test_all_generation_paths_build_the_block_through_the_one_builder():
+    # Three, not two: the in-process local lane used to send the raw history and
+    # therefore dropped the memory block entirely (see
+    # tests/test_generation_branch_parity.py).
+    assert AGENT_SRC.count("self._memory_system_block(memory_context)") == 3
     # And the literal exists exactly once, in that builder.
     assert AGENT_SRC.count('"## Memory context (relevant to this query)\\n\\n"') == 2  # populated + empty branch

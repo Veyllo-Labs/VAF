@@ -8,9 +8,11 @@ messages, research) is DELEGATED to the main agent through the normal
 TaskQueue; the user keeps talking while the main agent works, and the finished
 result is spoken into the call as an update.
 
-Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
+Read this before changing: `vaf/core/voice_turn.py` (the turn PIPELINE as an
+engine object - see below), `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
 (dedicated voice GGUF + one-server swap), the `voice_call_*` /
-`speaker_enroll_*` handlers in `vaf/core/web_server.py`,
+`speaker_enroll_*` handlers in `vaf/core/web_server.py` (the thin consumer:
+wire, ownership gate, TTS timeouts, the delegation enqueue),
 `web/components/VoiceCallLayer.tsx`, `web/components/VoiceCallBar.tsx`,
 `web/lib/voiceCallStore.ts`, or `vaf/core/speaker_id.py` /
 `vaf/core/speaker_confirm.py`.
@@ -70,6 +72,17 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
   (Settings > Voice). Without one, delegation is not voice-gated.
 
 ## Turn pipeline (server side, `voice_call_turn`)
+
+Since 2026-08 the pipeline below lives in `vaf/core/voice_turn.py`
+(`VoiceTurnEngine.turn()`, one sync call returning one `TurnOutcome`), sharing
+the per-call record in `web_server._VOICE_CALLS` as its state. The WebSocket
+branch is its consumer: the ownership gate, base64 decode, ONE executor hop
+into `turn()`, the TaskQueue delegation enqueue, TTS with the per-variant
+timeouts (30 s short lines, 60 s chime, 130 s reply), and the send_json
+mapping stay in the handler. The extraction is guarded by a frozen baseline
+(`tests/test_voice_call_baseline.py`) measured against the pre-extraction
+handler. Deliberate: no facade export - the handler is the only consumer,
+measured; a public voice surface waits for a proven embedder need.
 
 0. **Exclusive-model belt** (local time-sharing): when
    `voice_agent.is_exclusive()` and the turn carries `main_busy`, the server

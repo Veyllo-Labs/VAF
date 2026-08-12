@@ -4,7 +4,8 @@ Single source of truth for the voice-agent reflex overhaul: barge-in, continuous
 listening with selective chime-in, and awareness of unknown speakers. Read this
 before touching the reflex/policy pieces (`vaf/core/voice_policy.py`, the
 `should_engage`/verdict path and the rolling context buffer in
-`vaf/core/voice_agent.py` + `vaf/core/web_server.py`). It complements, and does not
+`vaf/core/voice_agent.py` + `vaf/core/voice_turn.py`, whose consumer is
+`vaf/core/web_server.py`). It complements, and does not
 replace, [VOICE_AGENT.md](VOICE_AGENT.md), which documents the live-call lane itself.
 
 Status: phased build. Phase 0 (foundation), Phase 1 (guest privacy), Phase 2
@@ -256,7 +257,8 @@ layer replies in the language it is addressed in or the one the owner asks for, 
 told never to claim it cannot speak a language; a hard-coded single-language instruction
 had made the model refuse other languages even though it is fluent in them.)
 It carries NO owner-private data (only the presence of a guest and the behavior), so
-unlike the chat/memory blocks it is safe to show on a guest turn. The web server builds
+unlike the chat/memory blocks it is safe to show on a guest turn. The turn engine
+(`voice_turn.py`) builds
 the `{multi, engage_guests}` scene dict from the current label plus the recent transcript
 labels and passes it as `voice_reply(scene=...)`.
 
@@ -294,7 +296,7 @@ arming reliable AND strictly harder to abuse:
 **Owner recovery when the voice is mislabeled (implemented).** The single biggest live
 blocker was not the engagement logic but SPEAKER-ID: in a multi-person call every
 reliable-length guest turn clears the owner's in-call sticky bridge
-(`web_server` sets `last_self_ts=None` on a confident `other`), so the owner's own short
+(the turn engine sets `last_self_ts=None` on a confident `other`), so the owner's own short
 command can demote to `unsure` and is then treated as a non-owner - an explicit "answer
 her" was silently dropped. Weakening the sticky is NOT the fix: an adversarial trace
 confirmed that preserving it would bridge a guest's SHORT follow-up clip to the owner

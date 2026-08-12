@@ -10082,6 +10082,37 @@ class Agent:
                 # budget, stop NOW (at the boundary, after the last tool finished). Catches a slow provider
                 # grinding many turns (the create_automation "zombie") that the turn-count and 5s-emergency
                 # guards miss. Returns immediately with a clear message — no extra (slow) summarizing turn.
+                # Spend accounting + cap, at the turn boundary next to the
+                # wall-clock stop (never mid-tool: that would cut between a
+                # tool call and its result). The estimate is recorded whether
+                # or not a cap is set, so the owner can measure before deciding.
+                try:
+                    if self.api_backend is not None:
+                        from vaf.core.cost import (budget_exceeded, estimate_cost,
+                                                   record_spend)
+                        _lru = getattr(self.api_backend, "last_request_usage", None) or {}
+                        _in = int(_lru.get("input_tokens") or 0)
+                        _out = int(_lru.get("output_tokens") or 0)
+                        if (_in or _out) and (_in, _out) != getattr(self, "_last_billed_usage", None):
+                            self._last_billed_usage = (_in, _out)
+                            _est = estimate_cost(getattr(self, "provider", ""),
+                                                 getattr(self, "model_display_name", "")
+                                                 or getattr(self, "filename", ""), _in, _out)
+                            record_spend(getattr(self, "_current_user_scope_id", None), _est)
+                        _over, _spent, _budget = budget_exceeded(
+                            getattr(self, "_current_user_scope_id", None))
+                        if _over:
+                            _sp_msg = (f"⚠️ [LOOP_PROTECTION] Daily API budget reached "
+                                       f"(~${_spent:.2f} of ${_budget:.2f} estimated). "
+                                       f"Raise spend_budget_usd_per_day or wait for the next day.")
+                            UI.event("Emergency", _sp_msg, style="bold red")
+                            append_domain_log("backend",
+                                              f"[LOOP_PROTECTION] spend stop at ~${_spent:.4f}")
+                            self.history.append({"role": "assistant", "content": _sp_msg})
+                            return _sp_msg
+                except Exception:
+                    pass  # accounting must never break a turn
+
                 if not _unlimited_loop and time.monotonic() > _turn_deadline:
                     _wc_budget = float(Config.get("chat_step_wall_clock_seconds", 3600) or 3600)
                     _wc_msg = f"⚠️ [LOOP_PROTECTION] Wall-clock stop after ~{_wc_budget:.0f}s in a single turn ({tool_turn_count} tool turns) — task aborted to keep the agent responsive."

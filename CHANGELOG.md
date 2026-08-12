@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **You can see, and cap, what the API costs per user.** VAF measured tokens
+  for every call and then forgot them; nothing added them up and nothing could
+  stop a runaway loop, even though one instance serves several people plus
+  automations and background thinking from your keys. Each call is now
+  estimated and written to a per-user daily ledger, and
+  `spend_budget_usd_per_day` (admin-only, off by default) ends a turn once that
+  user reaches their cap, naming the setting in the message. The figure is an
+  estimate and says so: a model that is not in the price table is deliberately
+  priced high, and the ledger counts how often it had to guess.
 - **Hands-off mode for admins.** A new admin-only setting,
   `tool_confirmation_bypass_admins` (off by default), lets an admin run
   confirmation-gated tools without being asked each time. It skips only the

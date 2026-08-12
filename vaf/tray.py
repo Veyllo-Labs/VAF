@@ -1360,8 +1360,19 @@ def run_headless():
     print("[VAF] Headless mode active. Waiting for termination signal...")
     try:
         import signal as sig_module
-        while True:
-            sig_module.pause()
+        pause = getattr(sig_module, "pause", None)
+        if pause is not None:
+            while True:
+                pause()
+        else:
+            # signal.pause() is POSIX-only. On Windows the AttributeError left
+            # this except clause untouched, killed the main thread, and took
+            # every daemon thread with it - including the uvicorn thread that
+            # had only just begun importing the web server. `vaf start` exited
+            # within seconds and never reached the startup hooks.
+            import time as _time
+            while True:
+                _time.sleep(3600)
     except (KeyboardInterrupt, SystemExit):
         print("[VAF] Shutting down headless mode...")
         quit_app(None)

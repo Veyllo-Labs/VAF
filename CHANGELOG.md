@@ -12,6 +12,41 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Encryption at rest now behaves on Windows and macOS, not only on Linux.**
+  The feature had been designed and tested on one platform, and two of its
+  assumptions were POSIX assumptions. On Windows `chmod` cannot restrict who may
+  read a file at all, so the master key now goes into the Credential Manager
+  there - where your Windows login protects it - instead of into a file VAF
+  cannot protect; Linux and macOS keep the owner-only file, because `chmod` is
+  real there and both OS keyrings can lock the app out of its own data. Renaming
+  a file into place is also not the same operation on Windows: it fails while
+  another program has the file open, which for a virus scanner or a search
+  indexer is routine, so every store write now retries briefly instead of losing
+  a chat. The threat table in the documentation states what holds per platform
+  rather than giving one answer for all three.
+- **A recovery key can no longer be lost the moment it is created.** VAF wrote
+  the key file first and the note that contains the key second, so if the note
+  could not be written - a Desktop macOS has denied access to, a
+  OneDrive-redirected Desktop, a full disk - the result was a recovery file that
+  nothing on earth could open, while `vaf secure status` reported the recovery
+  key as set up and never tried again. The note is written first now, and
+  nothing is stored unless it succeeded.
+- **The Redis password left the installation folder.** It was written to a
+  `.env` beside the program files, which on Windows is frequently outside your
+  user profile and therefore readable by every account on the machine, and which
+  editors offer to load into every terminal they open. It now lives with the
+  other keys in `~/.vaf/compose.env`, and an existing file loses only that line.
+- **Redirecting output no longer walks past the terminal password.**
+  `vaf session export <id> > chat.txt` skipped the prompt entirely, because the
+  gate asked whether output was a terminal as well as input. Exporting your
+  chats is exactly what that gate is for.
+- **The terminal app encrypts existing chats like the other start paths.** The
+  default `vaf run` lane never ran the at-rest migration, so a terminal-only
+  user kept plaintext chats indefinitely while the tray and the other CLI lanes
+  converted theirs.
+- **`vaf start` no longer exits immediately on Windows**, where it waited for a
+  signal in a way that only exists on Unix and took the background service down
+  with it a second later.
 - **The Context Window showed another lane's goal, plan and tasks.** The panel
   asked the backend for "the agent's brain" without naming a chat, and the
   server then answered from a shared store that scheduled automations and other

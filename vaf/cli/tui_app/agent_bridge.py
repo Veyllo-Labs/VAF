@@ -1335,6 +1335,18 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
         boot_tui.info("Authentication failed.")
         raise SystemExit(1)
 
+    # At-rest migration + retention, here too. This is the DEFAULT terminal lane
+    # (tui_mode "app"), and it was the one lane that never ran it while the
+    # modern and classic lanes both did - so a terminal-only user kept plaintext
+    # chats indefinitely and the tolerant read never tightened. The same "one
+    # lane only" repair this repo has shipped before, found by walking the start
+    # paths per platform rather than by anyone hitting it.
+    try:
+        from vaf.core.at_rest_migration import run_once
+        run_once()
+    except Exception as _mig_err:
+        boot_tui.info(f"At-rest migration skipped: {_mig_err}")
+
     # The service stack (memory DB, sandbox, speech): the tray starts it and
     # STOPS it on quit, so a terminal-only start used to run against a dead
     # stack - memory_search then reported an empty memory that was in truth an

@@ -95,9 +95,24 @@ def _stored_hash() -> tuple:
 
 
 def is_interactive() -> bool:
-    """A human at a terminal, able to answer a prompt."""
+    """A human at a terminal, able to answer a prompt.
+
+    STDIN decides, and stdin alone. Requiring stdout to be a tty as well looked
+    like the same question and was a way through the door: with a real terminal
+    in front of them, a caller only had to redirect output -
+    `vaf session export <id> > chat.txt` - and the gate concluded "not
+    interactive" and let the export run unchallenged. That is the exact command
+    the group gate was added for.
+
+    Redirecting output does not stop anyone from answering: getpass reads the
+    terminal directly (/dev/tty on POSIX, the console handle on Windows) and
+    writes its prompt there too, so the pipe stays clean and the question still
+    reaches the human. A pipeline that feeds stdin - `echo x | vaf ...` - has no
+    tty there and is still treated as a script, which is the case this test is
+    actually for.
+    """
     try:
-        return bool(sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty())
+        return bool(sys.stdin and sys.stdin.isatty())
     except Exception:
         return False
 
@@ -134,11 +149,12 @@ def require_admin_password(*, force: bool = False) -> bool:
     stored, unreadable = _stored_hash()
     if unreadable:
         print("VAF: the key store cannot be read, so the password cannot be checked. "
-              "Refusing to start rather than opening the door on an error.")
+              "Refusing to start rather than opening the door on an error.",
+              file=sys.stderr)
         return False
     if not stored:
         print("VAF: no admin password is set yet - open the web UI once to create "
-              "your account, then this terminal will ask for it.")
+              "your account, then this terminal will ask for it.", file=sys.stderr)
         _unlocked = True
         return True
 
@@ -153,7 +169,7 @@ def require_admin_password(*, force: bool = False) -> bool:
         if entered and verify_password(stored, entered):
             _unlocked = True
             return True
-        print(f"Wrong password. {remaining - 1} attempt(s) left.")
+        print(f"Wrong password. {remaining - 1} attempt(s) left.", file=sys.stderr)
 
     try:
         from vaf.core.security_events import log_security_event

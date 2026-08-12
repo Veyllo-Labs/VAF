@@ -304,7 +304,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: Veyllo `veyllo-transcribe`, ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
 | `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Kept in the encrypted store; redacted for non-admin reads. |
 | `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |
-| `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. |
+| `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. Lowering it moves BOTH bars (the unsure floor is `threshold - band`), so it makes it easier for a stranger to pass as the owner - tune it only against measured scores, which the `[SPEAKER_SCORE]` line in `backend_*.log` prints per turn when Debug Logs are on. |
 | `speaker_id_band` | `0.05` | Band below the threshold labeled "unsure" (triggers confirmation). |
 | `speaker_id_confirmation_enabled` | `true` | On "unsure": ask the owner to confirm (main messenger, else web card). "No, that's NAME" stores a named third-party profile. |
 | `voice_awareness_activity` | `0.5` | Voice reflex chime-in dial, `0.0`..`1.0` (quiet..active); a single control for how readily the agent chimes in on interesting OVERHEARD talk during a call; at `0.0` it only takes notes and never interrupts. Scales a local policy threshold only (no inference redirect, no billing), so it is user-writable. See [docs/agents/VOICE_REFLEX.md](../agents/VOICE_REFLEX.md). |

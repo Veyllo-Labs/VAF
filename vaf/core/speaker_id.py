@@ -996,6 +996,22 @@ def score_wav(wav_bytes: bytes, scope_id: str) -> Optional[Dict]:
         result = match_embedding(got["embedding"], profile["centroid"],
                                  load_named_profiles(scope_id))
         result["net_seconds"] = got["net_seconds"]
+        # The score itself, on the record. Only failures were ever logged, so the
+        # one number that decides owner-vs-guest - and therefore whether tuning
+        # speaker_id_threshold would help at all - could not be read from any log:
+        # a threshold change was a blind flight at the anti-spoofing bar. Debug-log
+        # gated like every other domain line, and the SCORE only (no audio, no text).
+        try:
+            from vaf.core.log_helper import append_domain_log
+            _t, _b = _threshold(), _band()
+            append_domain_log("backend",
+                              f"[SPEAKER_SCORE] score={result.get('score')} "
+                              f"label={result.get('label')} "
+                              f"net_s={got['net_seconds']:.2f} "
+                              f"bars: self>={_t:.2f} unsure>={_t - _b:.2f} "
+                              f"clear_other<{_t - _b - _STICKY_FLIP_MARGIN:.2f}")
+        except Exception:
+            pass
         return result
     except Exception as e:
         _log.warning("speaker_id: score_wav failed: %s", e)

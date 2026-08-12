@@ -441,7 +441,12 @@ not the user's.
 
 ## Config
 
-`speaker_id_enabled`, `speaker_id_threshold`, `speaker_id_band`,
+`speaker_id_enabled`, `speaker_id_threshold`, `speaker_id_band`
+(three tiers: `score >= threshold` is the owner, `threshold - band` up to it is
+"unsure", below that a stranger; every scored turn writes its number as
+`[SPEAKER_SCORE]` into `backend_*.log` under Debug Logs, so the bars can be tuned
+against measured values rather than guessed at - lowering the threshold lowers the
+impostor bar with it),
 `speaker_id_confirmation_enabled` (see
 [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane's own keys are
 `voice_agent_provider` and `voice_agent_model` (admin-only, empty = follow

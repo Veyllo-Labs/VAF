@@ -285,7 +285,18 @@ def get_data_secret(
 
 
 def set_data_secret(name: str, value: str) -> None:
-    """Store/overwrite a named secret (e.g. the admin password-hash copy)."""
+    """Store/overwrite a named secret (e.g. the admin password-hash copy).
+
+    The vanished-ring guard runs here too, and it has to. This is the only
+    entry point that WRITES without going through _resolve, and on a machine
+    whose key store is gone `update` would happily create a fresh one: a ring
+    that looks healthy, opens nothing, and silences the guard for every later
+    read. The realistic path is not exotic - restore a backup that missed the
+    data directory, then set a password in the web UI, and the hash mirror
+    lands here first.
+    """
+    _refuse_if_the_ring_vanished()
+
     def _put(payload):
         payload[name] = value
 

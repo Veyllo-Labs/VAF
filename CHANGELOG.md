@@ -12,6 +12,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A first start can no longer mint two different master keys.** Bringing up the
+  tray and the background workers at once meant several processes resolving the
+  encryption key simultaneously, and two that minted at the same moment both
+  wrote it - the later one winning. Anything the earlier one had already
+  encrypted was then unreadable for good, with no error anywhere. The key is
+  created once now, under a machine-wide lock, and a process that loses the race
+  adopts the winner's key instead of overwriting it.
+- **Setting a password can no longer paper over a lost key store.** Writing the
+  admin password's offline copy went straight into the key store without the
+  check every other write performs, so on a machine whose store had gone missing
+  it quietly created a fresh one - after which everything looked healthy while
+  the keys that open the actual data were gone. It now refuses, and points at the
+  recovery key.
 - **Encryption at rest now behaves on Windows and macOS, not only on Linux.**
   The feature had been designed and tested on one platform, and two of its
   assumptions were POSIX assumptions. On Windows `chmod` cannot restrict who may

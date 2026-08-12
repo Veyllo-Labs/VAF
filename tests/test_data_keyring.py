@@ -364,3 +364,36 @@ def test_a_key_that_is_not_in_the_store_is_never_handed_out(cfg, monkeypatch):
 
     with pytest.raises(RuntimeError, match="not persisted|not in the key store"):
         dk.get_data_key("file_store_encryption_key")
+
+
+def test_writing_a_secret_cannot_resurrect_a_vanished_ring(tmp_path, monkeypatch):
+    """The one write path that bypassed the guard, and what it cost.
+
+    `set_data_secret` is the only entry point that writes without going through
+    `_resolve`, so it never ran `_refuse_if_the_ring_vanished`. On a machine
+    whose key store is gone, `update` creates a new one - and from that moment
+    the ring exists again, so every later read passes the guard while the keys
+    that open the actual data are gone for good. The path is ordinary: restore
+    a backup that missed the data directory, then set a password in the web UI,
+    and the admin-hash mirror is the first thing that lands here.
+
+    MUTATION: drop the guard call from set_data_secret and this goes red - a
+    ring file appears where there must be none.
+    """
+    import vaf.core.data_keyring as dk
+    from vaf.core.secure_store import SecureBlobStore
+
+    ring_path = tmp_path / "data_keys.enc"
+    monkeypatch.setattr(dk, "_store", SecureBlobStore("data_keys", ring_path))
+    marker = tmp_path / "data_keys.established"
+    marker.write_text("1", encoding="utf-8")
+    monkeypatch.setattr(dk, "_established_marker", lambda: marker)
+
+    assert not ring_path.exists(), "precondition: the store is gone"
+
+    with pytest.raises(RuntimeError, match="The key store is gone"):
+        dk.set_data_secret("admin_password_hash", "$argon2id$fake")
+
+    assert not ring_path.exists(), (
+        "a fresh ring was created on a machine that had lost its own - every "
+        "later read now passes the guard while the real keys are unrecoverable")

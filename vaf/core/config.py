@@ -495,7 +495,7 @@ class Config:
         # forms, so older plaintext chats keep opening and turning this off does not
         # strand the files already encrypted. Embedders set it per deployment.
         "cli_password_gate": True,                                 # Interactive terminal (vaf run / TUI) asks for the admin password. Scripts, -p, tray and automations never do
-        "secure_store_kek_backend": "file",                        # Where the master key lives: "file" (0600, works for background services) or "keyring" (OS keyring, needs a desktop session)
+        "secure_store_kek_backend": "auto",                        # Where the master key lives: "auto" (keyring on Windows where chmod protects nothing, file elsewhere), "file" (0600), or "keyring" (OS keyring)
         "allow_plaintext_at_rest": True,                           # Accept files WITHOUT the encryption header on read. Needed while migrating; the sweep turns it off after a clean pass
         "file_encryption_enabled": True,
         "prompt_log_full_enabled": False,                          # Log the ENTIRE assembled system prompt (profile, retrieved memories, contacts) to prompt_*.log. Debug only

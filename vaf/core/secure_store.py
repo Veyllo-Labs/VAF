@@ -12,16 +12,16 @@ Provides envelope encryption:
   - The DEK is wrapped by a Key Encryption Key (KEK):
       * with a master passphrase (VAF_MASTER_PASSPHRASE env or set_passphrase()):
         KEK = scrypt(passphrase, salt), so nothing on disk holds the key;
-      * without a passphrase (the default): KEK is a random key persisted in a
-        0600 file beside the config (secure_store.kek), or in the OS keyring when
-        secure_store_kek_backend is set to "keyring" - see _preferred_kek_backend
-        for why the file is the default on every platform. A KEK left in
+      * without a passphrase (the default): the KEK is a random key placed where
+        the platform can actually protect it - the OS keyring on Windows, a 0600
+        file beside the config (secure_store.kek) on Linux and macOS. See
+        _default_kek_backend for the evidence behind each. A KEK left in
         config.json by an older version is adopted byte-identically and that copy
         is then blanked. Upgrading to a passphrase later stays seamless (only the
         small wrapped-DEK file is re-encrypted).
 
 All on-disk artifacts (payload .enc, wrapped-DEK .key.json, the KEK file) are chmod
-0600. Read-modify-write is serialized with a process-local threading.Lock plus a
+0600 where chmod means anything - on Windows it does not, see harden_path. Read-modify-write is serialized with a process-local threading.Lock plus a
 cross-process filelock.FileLock to prevent lost updates between separate processes
 (e.g. backend and CLI).
 """
@@ -34,6 +34,7 @@ import os
 import secrets
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -95,19 +96,79 @@ def _get_passphrase() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def harden_path(path) -> None:
-    """Restrict a file to owner-only (0600). No-op on platforms without chmod."""
+    """Restrict a file to owner-only (0600) on POSIX. ON WINDOWS THIS DOES NOTHING.
+
+    Not "may not support chmod" - it succeeds and protects nothing. CPython's
+    docs are explicit: on Windows chmod can only set the read-only flag and
+    "All other bits are ignored". 0o600 has the write bit set, so the call does
+    not even mark the file read-only, and no exception is ever raised for the
+    caller to notice.
+
+    What protects these files on Windows is therefore the profile directory's
+    own ACL, which excludes other standard users but not an administrator - and
+    that only holds for files inside the profile. It is the reason the master
+    key defaults to the Credential Manager there instead of a file
+    (see _default_kek_backend), and the reason the threat table in
+    docs/security/ENCRYPTION_AT_REST.md states the mechanism per platform rather
+    than claiming "owner-only" everywhere.
+    """
     try:
         os.chmod(str(path), 0o600)
     except OSError:
-        pass  # Windows may not support chmod
+        pass
 
 
 def harden_dir(path) -> None:
-    """Restrict a directory to owner-only (0700). No-op where unsupported."""
+    """Restrict a directory to owner-only (0700) on POSIX. No effect on Windows.
+
+    Directories cannot even be made read-only there, so this is a no-op with a
+    success return - same caveat as harden_path above.
+    """
     try:
         os.chmod(str(path), 0o700)
     except OSError:
         pass
+
+
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF_S = 0.05
+
+
+def _on_windows() -> bool:
+    """Its own function so a test can assert the Windows path from a POSIX box.
+
+    Reading os.name at the call site would force a test to patch os.name
+    globally, and pathlib decides its flavour from that - patching it breaks
+    Path itself before the code under test ever runs.
+    """
+    return os.name == "nt"
+
+
+def _replace_with_retry(tmp: str, path: Path) -> None:
+    """os.replace, with a bounded retry that only Windows ever needs.
+
+    On POSIX, renaming onto an open file always succeeds. On Windows it does
+    not: MoveFileEx fails with a sharing violation while ANY other handle is
+    open on the destination without FILE_SHARE_DELETE, which Python's own
+    open() does not request. Nothing about that is exotic - Defender scanning
+    the file we just wrote, the Search indexer, a backup agent, or one of VAF's
+    own concurrent readers is enough, and the cross-chat lane alone opens up to
+    200 session files per turn.
+
+    Every store in the at-rest path writes through here, so an unretried
+    failure is a lost chat save or, worse, a lost keyring write. The holders
+    above are all transient, so a short bounded retry converts the common case
+    into a delay; a genuine permission problem still raises after the last
+    attempt rather than being swallowed.
+    """
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if not _on_windows() or attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S * (attempt + 1))
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -123,7 +184,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)  # atomic on POSIX and Windows
+        _replace_with_retry(tmp, path)
     except Exception:
         try:
             os.unlink(tmp)
@@ -272,27 +333,47 @@ def _read_kek_marker() -> str:
         return ""
 
 
-def _preferred_kek_backend() -> str:
-    """Where a NEW KEK goes. File by default, and that is a correction.
+def _default_kek_backend() -> str:
+    """Where a NEW KEK goes when the config does not say. Per platform, on evidence.
 
-    The OS keyring is the stronger place - it is encrypted with the user's login
-    password, which is what protects a powered-off stolen machine. It is also
-    unreachable from the process that actually runs VAF on a normal install: the
-    tray is started by a supervisor script with no session bus, so a KEK written
-    during an interactive command could not be read by the service afterwards.
-    Measured on a real restart: 295 failed key resolutions and a locked keyring,
-    with the app only recovering once the file backend took over.
+    The OS keyring is the stronger place wherever it is reachable: it is bound
+    to the user's login credentials, which is what protects a powered-off stolen
+    machine. Whether it IS reachable, and whether the file alternative protects
+    anything at all, differ per platform, so one answer for all three was wrong.
 
-    So the default is the file (0600 under APP_DIR, protected by whatever disk
-    encryption sits beneath it), and the keyring is opt-in for installs that
-    start VAF from inside the desktop session. Reading still finds a KEK
-    wherever an earlier version put it.
+    **Windows: the keyring.** os.chmod cannot restrict read access there - the
+    CPython docs are explicit that only the read-only flag is honoured and "all
+    other bits are ignored" - so a KEK file gets no protection from us at all,
+    only whatever the profile directory's ACL happens to give it. The Credential
+    Manager is DPAPI-backed, per user, and reachable from any process running as
+    that user; VAF's own autostart is the user's Startup folder
+    (Platform.set_autostart), so the tray always runs in that user's logon
+    session. The Linux objection below has no Windows counterpart.
+
+    **Linux: the file.** Measured, not assumed: the Secret Service needs a
+    session bus, and a tray started by a supervisor script has none. A real
+    restart produced 295 failed key resolutions and a locked keyring, and only
+    recovered once the file backend took over. chmod 0600 is real here.
+
+    **macOS: the file.** chmod is real, and the login Keychain is the riskier
+    choice: an item's ACL is bound to the requesting binary's identity, so an
+    unsigned interpreter out of a venv is re-prompted - or refused - after a
+    routine interpreter upgrade, which for the KEK means a locked installation.
+
+    An existing install is unaffected whatever this returns: the marker records
+    where its KEK already lives and _machine_kek reads that first.
     """
+    return "keyring" if _on_windows() else "file"
+
+
+def _preferred_kek_backend() -> str:
+    """The configured backend, else the platform default. Never an unknown value."""
+    fallback = _default_kek_backend()
     try:
-        choice = str(Config.get("secure_store_kek_backend", "file") or "file").strip().lower()
+        choice = str(Config.get("secure_store_kek_backend", "") or "").strip().lower()
     except Exception:
-        choice = "file"
-    return choice if choice in ("file", "keyring") else "file"
+        choice = ""
+    return choice if choice in ("file", "keyring") else fallback
 
 
 def _write_kek(k: bytes) -> str:
@@ -419,11 +500,19 @@ def _machine_kek(create: bool = True) -> Optional[bytes]:
                 "if this machine starts VAF outside the desktop session."
             )
             return k
+        # No file copy exists for a keyring-FIRST install, and deliberately so:
+        # on Windows the keyring is chosen precisely because a key file there is
+        # protected by nothing we can set. So this is the end of the line, and
+        # the message has to name every way out rather than implying a fallback.
         logger.error(
             "The secure-store KEK lives in the OS keyring but the keyring is not "
-            "reachable from this process. Credentials and encrypted stores stay "
-            "locked until VAF runs inside the desktop session again (or "
-            "%s is set). Refusing to mint a replacement key.", PASSPHRASE_ENV,
+            "reachable from this process, and a keyring-first install keeps no "
+            "file copy. Encrypted stores stay locked - nothing is being minted, "
+            "because a replacement key would orphan them permanently. Three ways "
+            "back: run VAF inside the desktop session that owns the keyring; set "
+            "%s; or, if the keyring entry is gone for good, restore from the "
+            "recovery key with `vaf secure recover`. To place future keys in a "
+            "file instead, set secure_store_kek_backend to 'file'.", PASSPHRASE_ENV,
         )
         return None
 

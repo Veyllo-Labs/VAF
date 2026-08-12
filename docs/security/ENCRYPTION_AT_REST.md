@@ -17,22 +17,55 @@ The model is a shield around the running instance:
 
 ## What this protects against, and what it does not
 
-| Situation | Protected? |
-|---|---|
-| Disk removed, or the machine powered off and stolen | **Depends on where the master key is.** With the default file backend, only as far as the disk encryption underneath reaches (`/home` on LUKS, BitLocker, FileVault). With `secure_store_kek_backend = "keyring"` the key is protected by your login password and the disk alone is useless - but that mode needs VAF to start from your desktop session. |
-| A backup, a copied directory, a support archive, cloud sync | **Yes** - the files are ciphertext and the key is not among them. |
-| Another local account on the same machine | **Yes** - directory modes 0700, file modes 0600, and the key is not readable by them. |
-| The machine is running and someone has your session | **No.** The shield is open from the inside; that is what makes unattended operation possible. |
-| Code running AS you (a hostile skill, a compromised dependency) | **No.** Same reason. |
-| Someone who knows the admin password | **No** for the terminal and the web UI; that is authentication, not encryption. |
+The answer differs per operating system, because the mechanism does. Where a row
+says "depends", the platform section below it says on what.
+
+| Situation | Windows | macOS | Linux |
+|---|---|---|---|
+| Disk removed, or the machine powered off and stolen | **Yes** - the master key is in the Credential Manager, encrypted under your Windows login. The disk alone is useless. | **Depends** - the key is a file, so only as far as FileVault reaches. | **Depends** - the key is a file, so only as far as LUKS reaches. |
+| A backup, a copied directory, a support archive | **Yes** for the data. **But** a whole-home backup that includes the key directory carries the key with it - see "back these up together". | Same, and Time Machine backs up `$HOME` by default, so the key travels with the data unless the backup disk is itself encrypted. | Same for any `rsync` of `$HOME`. |
+| Cloud sync | **Yes for the chats.** **No for the recovery note** if OneDrive Known Folder Backup has your Desktop: the note is a plaintext key and it is uploaded. Move it off the machine, which the note tells you to do. | Same, with iCloud "Desktop and Documents". | Yes - nothing here is cloud-synced by default. |
+| Another local account on the same machine | **Yes for the key** (it is not on disk at all) and **yes in practice for the files**, because they sit under your profile, whose ACL excludes other standard users. But **VAF does not set that ACL** and cannot: `chmod` on Windows only toggles the read-only flag. A local **administrator** can read everything. | **Yes** - `0700` directories and `0600` files, set by VAF and honoured. | **Yes** - same. |
+| The machine is running and someone has your session | **No.** The shield is open from the inside; that is what makes unattended operation possible. | **No.** | **No.** |
+| Code running AS you (a hostile skill, a compromised dependency) | **No.** Same reason. | **No.** | **No.** |
+| Someone who knows the admin password | **No** for the terminal and the web UI; that is authentication, not encryption. | **No.** | **No.** |
+
+### Why the mechanism differs
+
+`os.chmod(path, 0o600)` is the whole of VAF's file containment, and on Windows it
+does nothing: the CPython documentation states that only the read-only flag can
+be set there and "all other bits are ignored", and because `0o600` carries the
+write bit the call does not even set that. It raises no error, so nothing in the
+process learns the hardening did not happen.
+
+Two consequences, both deliberate. The master key defaults to the **Credential
+Manager on Windows** instead of a file, because a file VAF cannot protect is the
+worst place for the one piece of plaintext key material in the system - and
+Windows autostart runs VAF from your own Startup folder, so the Credential
+Manager is always reachable. On **Linux and macOS** the key stays a `0600` file:
+`chmod` is real there, and both OS keyrings can lock the app out of its own data
+(Linux measured: a tray started by a supervisor script has no session bus; macOS
+binds a Keychain item to the requesting binary, so an interpreter upgrade
+re-prompts or refuses).
+
+**Out-of-profile files are the Windows gap that remains.** Two paths are not
+under your profile and therefore not covered by its ACL: the `.env` holding the
+Redis password, written next to the compose file in the installation directory,
+and the per-chat working memory under the working directory. On Windows those
+are readable by other local accounts. Neither contains chat text, and the Redis
+instance they guard listens on localhost only, but the honest statement is that
+they are not protected there.
 
 ## Where the keys live
 
 ```
-~/.vaf/secure_store.kek  (mode 0600, the default)   <- protected by disk encryption
-   (opt-in: OS keyring entry vaf / secure_store_kek, protected by your LOGIN password;
-    only for installs that start VAF inside the desktop session - a tray started by a
-    supervisor script cannot reach it, and a key it cannot read is a lockout)
+THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
+   Windows   OS keyring entry vaf / secure_store_kek        <- Credential Manager (DPAPI),
+                                                               encrypted under your login
+   Linux     ~/.vaf/secure_store.kek  (mode 0600)           <- protected by disk encryption
+   macOS     ~/.vaf/secure_store.kek  (mode 0600)           <- protected by FileVault
+   (Set the key to "file" or "keyring" to override. Reading finds a KEK wherever an
+    earlier version put it, so an existing install is never relocated behind your back.)
         |
         v  wraps
    <data_dir>/data_keys.key.json                <- one wrapped DEK
@@ -98,12 +131,18 @@ every encrypted row silently stops opening.
 
 ### Back these up together
 
-`data_keys.enc`, `data_keys.key.json` and the master key (the OS keyring entry or
-`~/.vaf/secure_store.kek`). **Without all three this machine stops opening the
-store**, and the way back without that backup is `vaf secure recover`: the
+`data_keys.enc`, `data_keys.key.json` and the master key (the OS keyring entry on
+Windows, `~/.vaf/secure_store.kek` on Linux and macOS). **Without all three this
+machine stops opening the store**, and the way back without that backup is `vaf secure recover`: the
 recovery key plus `data_keys.enc` and `data_keys.recovery.json`, which re-wraps
 the data key under the new machine key. Lose the backup AND the recovery key and the data is gone -
 no vendor can help, which is the honest price of local encryption.
+
+One consequence of a whole-home backup: on macOS, Time Machine's default job
+includes `$HOME`, and so does any `rsync -a ~` on Linux, so those backups carry
+the key directory alongside the ciphertext. The backup is then only as protected
+as the medium it lands on. That is a reason to encrypt the backup disk, not a
+reason to skip the backup - losing the keys is the unrecoverable direction.
 
 ## What is encrypted
 

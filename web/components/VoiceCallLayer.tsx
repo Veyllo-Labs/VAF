@@ -408,14 +408,19 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         src.connect(analyser);
         const buf = new Uint8Array(analyser.frequencyBinCount);
         // Speech band, computed from the ACTUAL context rate (devices differ): with
-        // fftSize 256 a bin is sampleRate/256 wide. Summing only ~300-3400 Hz and
-        // dividing by the FULL bin count keeps the number comparable to the old
-        // broadband mean for speech (voice energy lives in the band, so the reading
-        // barely moves and the user's persisted gateLevel keeps its meaning) while
-        // mains hum and fan noise below/above the band stop counting at all.
+        // fftSize 256 a bin is sampleRate/256 wide. The level is the MEAN OF THE BAND
+        // (divide by the band's own bin count), not the band sum over all 128 bins.
+        // The first build divided by 128 and the mic went completely deaf live: the
+        // analyser bytes are dB-mapped magnitudes, so band-sum/128 read ~7x lower
+        // than the old broadband mean and the user's persisted gate (default 20) was
+        // never crossed again. The band MEAN sits at or slightly above the old
+        // broadband mean for speech (out-of-band bins used to dilute it), so the
+        // gate errs toward triggering - the safe direction - while mains hum (50 Hz,
+        // below the band) and fan hiss stop counting.
         const binHz = ctx.sampleRate / analyser.fftSize;
         const bandLo = Math.max(1, Math.round(300 / binHz));
         const bandHi = Math.min(buf.length - 1, Math.round(3400 / binHz));
+        const bandCount = Math.max(1, bandHi - bandLo + 1);
         let heardSpeech = false;
         let voicedMs = 0;
         let lastTick = 0;
@@ -436,7 +441,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             const gated = mutedRef.current || now < graceUntilRef.current;
             let bandSum = 0;
             for (let i = bandLo; i <= bandHi; i++) bandSum += buf[i];
-            const level = gated ? 0 : bandSum / buf.length;
+            const level = gated ? 0 : bandSum / bandCount;
             const gate = useVoiceCallStore.getState().gateLevel;
             // Only write the store on a REAL transition: this tick runs per
             // animation frame, and every zustand set() re-renders all

@@ -26,10 +26,13 @@ and dict shape are a hard external contract (the tray's model-keepalive probe
 intersects its keys with the live sockets; tests pin the teardown pops), so the
 extraction shares the dict instead of replacing it.
 
-Deliberate: NO facade export. The web handler is the only consumer, measured; a
-public voice surface is deferred until an embedder proves the need. The handler
-being a thin consumer of this object is the acceptance test that the surface would
-suffice when that day comes.
+Exported on the facade (``from vaf import VoiceTurnEngine, TurnOutcome``) since
+2026-08-13. Deliberate: the deferral boundary ("no public surface until proven
+need") had its acceptance criterion met from day one - the web handler is a thin
+consumer of this exact object, which is the proof the surface suffices - and the
+module level is pure stdlib, so the export costs the slim base nothing. The embedder
+contract lives in docs/EMBEDDING.md ("Running a voice turn yourself") and
+tests/contract/test_contract_voice_turn.py.
 
 History entries are stored under ONE cap (_HISTORY_MAX_CHARS, applied centrally in
 _history_add) - the number the consumer enforces anyway: voice_reply caps every

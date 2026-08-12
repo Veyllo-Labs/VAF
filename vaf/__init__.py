@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from .tools.filesystem import user_jail
 
 __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest",
-           "extract_pdf_markdown", "markers", "set_account_allowlist_resolver", "user_jail"]
+           "TurnOutcome", "VoiceTurnEngine", "extract_pdf_markdown", "markers",
+           "set_account_allowlist_resolver", "user_jail"]
 
 
 def __getattr__(name):
@@ -41,6 +42,17 @@ def __getattr__(name):
         # dispatcher to have set it. See docs/EMBEDDING.md.
         from .tools.filesystem import user_jail
         return user_jail
+    if name in ("VoiceTurnEngine", "TurnOutcome"):
+        # The live-call turn pipeline as an object: audio bytes in, ONE decided
+        # TurnOutcome back - noise gate, STT, speaker verification with the
+        # anti-spoofing rules, the reflex policy, the first-layer reply, the
+        # delegate DECISION. The embedder owns the transport and the TTS (the
+        # outcome carries text + language), and injects its own STT via the
+        # `transcribe` seam. Exported after the web handler became a thin
+        # consumer of this exact object - that consumer is the proof the
+        # surface suffices. Pure stdlib at module level (slim-base safe).
+        from .core.voice_turn import VoiceTurnEngine, TurnOutcome
+        return {"VoiceTurnEngine": VoiceTurnEngine, "TurnOutcome": TurnOutcome}[name]
     if name == "ToolRequest":
         # What an authorizer is handed: the caller's identity, which is trustworthy, and the
         # model's arguments, which are not. Exported so an application can type-annotate its

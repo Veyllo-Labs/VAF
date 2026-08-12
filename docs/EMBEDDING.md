@@ -829,6 +829,66 @@ Two limits, stated plainly:
 
 ---
 
+## Running a voice turn yourself: `VoiceTurnEngine`
+
+The live-call turn pipeline as an object - for a car assistant, a home speaker,
+your own call transport. Audio bytes in, ONE decided `TurnOutcome` back: noise
+gate, STT, speaker verification with the anti-spoofing rules, the reflex policy
+(side-talk, chime-in, "did you mean me?"), the first-layer reply, and the
+delegate DECISION. It is **the same object VAF's own web call runs on** - the
+handler is a thin consumer of it, which is the proof this surface suffices.
+
+```python
+from vaf import VoiceTurnEngine
+
+state = {"history": [], "lang": "de", "scope": "your-tenant-scope",
+         "session": "call-1", "chime_recent": []}
+engine = VoiceTurnEngine(
+    state,
+    transcribe=my_stt,            # (wav_bytes, **kw) -> (text, detected_lang)
+    lane_speaks=lambda lang: True # which languages YOUR tts can speak
+)
+outcome = engine.turn(wav_bytes, session_id="call-1",
+                      main_busy=False, pending_task="", username="alice")
+if outcome.error:
+    ...                            # busy_local | no_speech | llm_failed
+elif not outcome.flags.get("silent"):
+    audio = my_tts(outcome.reply, outcome.tts_lang)   # TTS is YOURS
+if outcome.delegate:
+    ...                            # hand the task to your worker - the engine
+                                   # only DECIDES; enqueueing is the caller's
+```
+
+The division of labor, stated plainly:
+
+- **You own the transport and the TTS.** The engine never opens a socket and
+  never speaks; `outcome.reply` + `outcome.tts_lang` (and `tts_follow`, when the
+  reply should be voiced in its own language) are yours to synthesize. VAF's own
+  handler applies per-variant TTS timeouts (30 s short lines, 60 s chime, 130 s
+  reply) - a sane starting point.
+- **You bring the STT.** The `transcribe` seam is where your recognizer plugs
+  in; the default reaches for VAF's speech stack (`vaf[speech]` extra plus its
+  Docker lane), which an embedded process usually does not want.
+- **The reply layer needs an LLM.** `voice_reply` runs on the configured
+  provider (API key or the one local server), like every other engine call.
+- **Speaker security works, or fails open, exactly as documented.** With no
+  enrolled voice profile every speaker is the owner (documented fail-open).
+  With one, only a voice-verified owner can produce `outcome.delegate`; guests
+  get guarded spoken replies with the owner's private context withheld. The
+  sticky-window and arm-gate rules are unit-tested
+  (`tests/test_voice_turn_engine.py`).
+- **State is a plain dict you hold.** One engine per call; a new call gets a
+  fresh dict and a fresh engine, never a merge. `engine.end()` clears the
+  rolling transcript.
+- It is **sync**, like every engine object - run it in your own executor.
+
+Runnable version: [examples/08_voice_turn.py](../examples/08_voice_turn.py)
+(injects a scripted STT, prints instead of speaking; needs only a configured
+provider). The full pipeline semantics - every gate, every outcome kind - are
+documented in [docs/agents/VOICE_AGENT.md](agents/VOICE_AGENT.md).
+
+---
+
 ## Deciding about a tool call: `set_tool_authorizer`
 
 VAF answers three questions before a tool runs: may this caller use it at all
@@ -1101,6 +1161,10 @@ Stable public surface (safe to build on):
   behaviour off is the promise; the retrieval behind it is not.
 - `BaseTool` - the tool contract, including the `identity_kwargs` declaration
   and `self.log(message)`.
+- `vaf.VoiceTurnEngine` / `vaf.TurnOutcome` - the voice turn pipeline: the
+  constructor's documented seams, `turn(wav, ...) -> TurnOutcome` and the
+  outcome's documented fields are the promise; the state dict's inner keys
+  are not.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains
   exported for tools that need the boundary around something other than a whole `run()`.

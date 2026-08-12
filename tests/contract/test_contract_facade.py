@@ -20,6 +20,8 @@ EXPORTED = [
     "CoreAgent",
     "ToolCaller",
     "ToolRequest",
+    "TurnOutcome",
+    "VoiceTurnEngine",
     "__version__",
     "extract_pdf_markdown",
     "markers",

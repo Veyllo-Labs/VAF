@@ -81,8 +81,10 @@ into `turn()`, the TaskQueue delegation enqueue, TTS with the per-variant
 timeouts (30 s short lines, 60 s chime, 130 s reply), and the send_json
 mapping stay in the handler. The extraction is guarded by a frozen baseline
 (`tests/test_voice_call_baseline.py`) measured against the pre-extraction
-handler. Deliberate: no facade export - the handler is the only consumer,
-measured; a public voice surface waits for a proven embedder need.
+handler. The engine is on the public facade (`from vaf import VoiceTurnEngine,
+TurnOutcome`; embedder contract in [EMBEDDING.md](../EMBEDDING.md)) - the
+handler being a thin consumer of the same object is the proof the surface
+suffices.
 
 0. **Exclusive-model belt** (local time-sharing): when
    `voice_agent.is_exclusive()` and the turn carries `main_busy`, the server

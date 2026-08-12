@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Developers can now build voice assistants on VAF.** The live-call turn
+  pipeline - noise gate, speech-to-text, speaker verification with the
+  anti-spoofing rules, the reflex policy, the reply layer and the delegation
+  decision - is available as a library object: `from vaf import
+  VoiceTurnEngine, TurnOutcome`. You bring the microphone, the transport and
+  the text-to-speech (and your own recognizer via the `transcribe` seam); the
+  engine returns one decided outcome per utterance. It is the exact object
+  VAF's own web call runs on. Contract and runnable example: EMBEDDING.md
+  ("Running a voice turn yourself") and examples/08_voice_turn.py.
 - **The voice call got measurably faster, and it now measures itself.** Three
   independent cuts. Memory lookups behind every turn: the embedding model padded
   every text to its full width, so a short query cost ~140 ms - now ~7 ms, which

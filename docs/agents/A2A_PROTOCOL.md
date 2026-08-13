@@ -54,8 +54,8 @@ Two consequences worth stating before anything else:
 | `v` | Protocol major version. A frame with another major is not for you (rule 4). |
 | `id` | Unique per frame. Deduplication happens on this and nothing else. |
 | `room` | The room this frame belongs to. A frame naming another room is refused. |
-| `seq` | Per-sender counter, gapless, starting at 0. Derived from the sender's own log directory, never from a counter in memory. |
-| `lamport` | Logical clock: `1 + max(seen)`. This is what ordering reads. |
+| `seq` | Per-sender counter, gapless, **starting at 1**. Derived from the sender's own log directory, never from a counter in memory. |
+| `lamport` | Logical clock: `1 + max(seen)`, so the first frame in a room carries 1. This is what ordering reads. |
 | `ts` | Wall clock. **ADVISORY.** Never used for ordering. |
 | `from` | The sender's room-local handle. **Assigned by the room, never believed as it arrives.** |
 | `role` | The sender's role, likewise assigned rather than believed. |
@@ -159,8 +159,9 @@ gap in a transcript is noticed, a wrong timestamp is believed.
 
 ### Guaranteed
 
-1. **Per sender: FIFO, gapless, once in the store.** A reader holding `005` and `007`
-   KNOWS `006` is missing and says so.
+1. **Per sender: FIFO, gapless from 1, once in the store.** A reader holding `005`
+   and `007` KNOWS `006` is missing and says so. `seq` and `lamport` are both
+   one-based, and a frame carrying zero for either is refused as malformed.
 2. **Causal order** via `lamport = 1 + max(seen)`.
 3. **A deterministic total order** every reader derives without coordination.
 4. **At-least-once delivery, idempotent on `id`, and reading is NOT destructive.** Every

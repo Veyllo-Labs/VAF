@@ -783,3 +783,53 @@ def test_the_tools_do_not_assemble_an_invitation_of_their_own():
     assert "from vaf.core.a2a.invite import invitation" in source
     for gone in ("mint_ticket", "vaf a2a wait", "ca_fingerprint"):
         assert gone not in source, f"the tool is assembling an invitation by hand: {gone}"
+
+
+def test_the_agent_can_actually_reach_the_room_tools():
+    """MUTATION: rename the module, or drop a class out of it.
+
+    Registration is by DISCOVERY - `pkgutil.iter_modules` over vaf/tools/, then every
+    BaseTool subclass in each module - and discovery was ASSUMED here rather than
+    checked, which is the sort of assumption that holds right up until it does not. A
+    tool the agent cannot see is a tool that does not exist, and nothing else in the
+    suite would notice: every other test in this file instantiates the classes
+    directly.
+
+    It also pins the five names, because the failure a live run produced was an agent
+    reporting it had no way into a room at all.
+    """
+    import inspect
+    import os
+    import pkgutil
+
+    import vaf.tools
+    from vaf.tools.base import BaseTool
+
+    seen = set()
+    for _finder, name, _ispkg in pkgutil.iter_modules([os.path.dirname(vaf.tools.__file__)]):
+        try:
+            module = __import__(f"vaf.tools.{name}", fromlist=["*"])
+        except Exception:
+            continue
+        for _n, obj in inspect.getmembers(module):
+            if inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool:
+                declared = getattr(obj, "name", "")
+                if isinstance(declared, str) and declared.startswith("room_"):
+                    seen.add(declared)
+
+    assert seen == {"room_open", "room_invite", "room_join", "room_send", "room_read"}, (
+        f"the agent's way into a room changed: {sorted(seen)}")
+
+
+def test_the_room_tools_are_not_excluded_from_the_main_agent():
+    """The other half of reachable: discovered AND not filtered out again.
+
+    The registration loop drops a handful of tools from the main agent by name, and a
+    room tool landing in that list would vanish for the one caller that needs it while
+    every direct-instantiation test here stayed green.
+    """
+    source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    excluded = source.split("MAIN_AGENT_EXCLUDED_TOOLS = [")[1].split("]")[0]
+
+    for tool in ("room_open", "room_invite", "room_join", "room_send", "room_read"):
+        assert tool not in excluded, f"{tool} is hidden from the main agent"

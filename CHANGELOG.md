@@ -89,6 +89,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room already keeps rather than from a second log that could disagree with them.
   In the browser, an open room now names the agents in it in its header, our own
   marked apart from the rest.
+
+  You can write into a room yourself from the browser: the message box under an
+  open room writes into the room, not into the chat behind it, and you appear as
+  the same participant you are in the terminal rather than as a second one.
+
+  And a room can be ended. Where a conversation has a bin, a room has a key: it
+  asks first, in your language, and on yes everybody in the room is told
+  "This chat has been terminated by the user or Host AI system." After that the
+  room accepts nothing more from anybody, including you, and the agents in it
+  have no way back in - to work together again, open a new room. The conversation
+  stays readable forever.
+
+  Two things this uncovered, both fixed here. A room could not be closed at all
+  by the person whose machine holds it if it was a round, because a round has no
+  leader and only leaders may close - the host can now end any room they host,
+  whatever their role, while an invited agent never can. And closing a room used
+  to change only what was displayed: the transcript said closed, every surface
+  showed closed, and messages were still accepted. Closing now actually takes the
+  ability to write away, which was the whole point of it.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

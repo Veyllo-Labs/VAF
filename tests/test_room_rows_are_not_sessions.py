@@ -328,3 +328,99 @@ def test_bookkeeping_is_not_rendered_as_something_somebody_said():
 
     assert "const bookkeeping = m.kind === 'join'" in block
     assert "if (bookkeeping) {" in block
+
+
+# ── closing a room, and writing into one ───────────────────────────────────
+
+def test_a_room_row_offers_closing_and_not_deleting():
+    """MUTATION: give the room row the chat's bin.
+
+    They are not the same act. A conversation is DELETED and gone; a room is CLOSED -
+    it stays readable forever and only stops accepting writes. An icon that promised
+    removal would be a promise the store deliberately does not keep.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
+
+    assert "KeyRound" in branch, "the room row has no way to close the room"
+    assert "Trash2" not in branch and "delete_session" not in branch, (
+        "a room row is offering deletion")
+    assert "setRoomToClose(s)" in branch, "the key acts immediately instead of asking"
+
+
+def test_closing_never_happens_on_one_click():
+    """MUTATION: send close_room straight from the icon.
+
+    Closing cannot be undone and it takes access away from agents that are not in
+    front of this screen to object. It asks first, in the user's own language.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    dialog = source.split("{roomToClose && (")[1].split("{/* Trust Gate Dialog")[0]
+
+    assert "type: 'close_room'" in dialog
+    for key in ("roomCloseTitle", "roomCloseBody", "roomCloseConfirm", "roomCloseCancel"):
+        assert f"tMain('{key}')" in dialog, f"the dialog hardcodes {key} instead of translating it"
+
+
+def test_the_confirmation_is_translated_in_every_language_we_ship():
+    """MUTATION: add the English strings and forget the catalogue.
+
+    next-intl falls back to the key name, so a missing translation renders as
+    "roomCloseBody" - visible, but only to somebody running that language.
+    """
+    import json
+
+    keys = {"roomCloseTitle", "roomCloseBody", "roomCloseConfirm", "roomCloseCancel",
+            "roomClosedNote"}
+    for name in ("en", "de"):
+        catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
+        missing = keys - set(catalogue.get("main", {}))
+        assert not missing, f"{name}.json is missing {sorted(missing)}"
+
+
+def test_the_composer_writes_into_the_room_it_is_showing():
+    """MUTATION: let the box send into the conversation underneath.
+
+    The room is where the composer visibly sits, so a message typed there must land
+    there. Sending it to the chat behind the room is the worst of the three possible
+    behaviours - worse than refusing, because nothing tells the user it happened.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    body = source.split("const sendMessage = async (")[1][:2500]
+
+    assert "if (roomView) {" in body
+    assert "type: 'room_say'" in body
+    assert body.index("if (roomView) {") < body.index("expectNewAssistantRef"), (
+        "the room branch runs after the message was already added to the chat")
+
+
+def test_the_browser_acts_on_the_human_lane_and_not_a_lane_of_its_own():
+    """MUTATION: add a "web" participant lane.
+
+    The lanes separate the HUMAN from the AGENT. A browser and a terminal in front of
+    the same person are the same actor, and a lane of its own would derive a second
+    handle - splitting one person into two members of one room, so that whoever spoke
+    last would look like somebody else.
+    """
+    from vaf.core.a2a.room import PARTICIPANT_LANES
+
+    assert "web" not in PARTICIPANT_LANES
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split('elif type in ("room_say", "close_room"):')[1].split("elif type ==")[0]
+    assert 'participant_key("cli", user_scope_id)' in block
+
+
+def test_writing_and_closing_answer_from_the_store():
+    """MUTATION: echo the message back optimistically instead of re-reading.
+
+    A room has N writers. A browser that repainted from what it ASSUMED had happened
+    would drift from the transcript the moment anybody else wrote at the same time,
+    and the drift would be invisible until somebody compared two screens.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split('elif type in ("room_say", "close_room"):')[1].split("elif type ==")[0]
+
+    assert "_send_room_transcript" in block
+    # one builder for all three commands, so they cannot describe the room differently
+    assert source.count("async def _send_room_transcript") == 1
+    assert source.count("_send_room_transcript(") >= 3

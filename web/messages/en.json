@@ -148,7 +148,13 @@
     "learningEnded": "Learning “{name}” ended: {phase}",
     "learnDenied": "Could not start learning this document",
     "learnAlreadyLearned": "Already learned - this document is in long-term memory.",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "roomCloseTitle": "Close this room?",
+    "roomCloseBody": "Everyone in the room loses access to it, and nothing more can be written. The conversation stays readable. To work together again, open a new room.",
+    "roomCloseConfirm": "Close room",
+    "roomCloseCancel": "Cancel",
+    "roomClosedNote": "This room is closed. Nothing more can be written here.",
+    "roomWritePlaceholder": "Write to the room..."
   },
   "nav": {
     "settings": "Settings",

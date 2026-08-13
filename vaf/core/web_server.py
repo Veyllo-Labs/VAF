@@ -112,6 +112,50 @@ ROOM_TRANSCRIPT_LIMIT = 500
 # but luck.
 
 
+async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -> None:
+    """The room as the browser reads it, from the store, every time.
+
+    One place, because three commands answer with it - opening a room, writing into
+    one, closing one - and a browser that repainted from what it ASSUMED had happened
+    would drift from the transcript the moment anything else wrote at the same time.
+    The room has N writers; only the store knows what is in it.
+    """
+    from vaf.core.a2a.room import describe
+    from vaf.core.session import _room_rows
+
+    row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
+    entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
+    await websocket.send_json({
+        "type": "room_transcript",
+        "room": {
+            "id": row.get("id") or f"room:{room.room_id}",
+            "roomId": room.room_id,
+            "title": row.get("name") or room.manifest.get("topic") or room.room_id,
+            "roomKind": room.kind,
+            "role": row.get("role"),
+            "closed": bool(room.closed),
+            "members": len(room.members()),
+            # Which peer is us, so the view can tell our own agent apart from the
+            # strangers in the room.
+            "me": row.get("peer"),
+            # Who is in it, by the name the ROOM resolved. A header that listed join
+            # names would show two agents called "Codex" and no way to tell which is
+            # which, which is the same reason the tag exists at all.
+            "members_list": [
+                {"peer": peer, "label": label, "role": room.role_of(peer) or ""}
+                for peer, label in sorted(room.labels().items(), key=lambda kv: kv[1])
+            ],
+        },
+        "messages": [
+            {"id": e["id"], "peer": e["peer"], "label": e["label"],
+             "role": e["role"], "kind": e["kind"],
+             "text": describe(e), "ts": e["ts"],
+             "lamport": e["lamport"], "to": e.get("to") or {}}
+            for e in entries
+        ],
+    })
+
+
 def session_list_payload(rows: List[Dict]) -> List[Dict]:
     """The sidebar list in the shape the browser reads it.
 
@@ -3434,43 +3478,72 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "error", "message": "Access denied"})
                             continue
 
-                        room = Room.open(wanted)
-                        entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
-                        await websocket.send_json({
-                            "type": "room_transcript",
-                            "room": {
-                                "id": row["id"],
-                                "roomId": wanted,
-                                "title": row["name"],
-                                "roomKind": row.get("room_kind"),
-                                "role": row.get("role"),
-                                "closed": bool(row.get("closed")),
-                                "members": row.get("members"),
-                                # Which peer is us, so the view can tell our own agent
-                                # apart from the strangers in the room.
-                                "me": row.get("peer"),
-                                # Who is in it, by the name the ROOM resolved. A header
-                                # that listed join names would show two agents called
-                                # "Codex" and no way to tell which is which, which is
-                                # the same reason the tag exists at all.
-                                "members_list": [
-                                    {"peer": peer, "label": label,
-                                     "role": room.role_of(peer) or ""}
-                                    for peer, label in sorted(
-                                        room.labels().items(), key=lambda kv: kv[1])
-                                ],
-                            },
-                            "messages": [
-                                {"id": e["id"], "peer": e["peer"], "label": e["label"],
-                                 "role": e["role"], "kind": e["kind"],
-                                 "text": describe(e), "ts": e["ts"],
-                                 "lamport": e["lamport"], "to": e.get("to") or {}}
-                                for e in entries
-                            ],
-                        })
+                        await _send_room_transcript(websocket, room=Room.open(wanted),
+                                                   user_scope_id=user_scope_id)
                     except Exception as e:
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
+
+                elif type in ("room_say", "close_room"):
+                    # The person at the browser acting in a room themselves, rather
+                    # than their agent doing it for them. They act on the CLI lane and
+                    # not on a lane of their own, deliberately: the lanes separate the
+                    # HUMAN from the AGENT, and a browser and a terminal in front of
+                    # the same person are the same actor. A "web" lane would derive a
+                    # second handle and split one person into two members of the same
+                    # room, so that whoever spoke last would look like somebody else.
+                    user_scope_id = manager.get_connection_user(websocket)
+                    wanted = str(cmd.get("room_id") or "")
+                    try:
+                        from vaf.core.a2a.room import (Room, RoomError, derive_peer_id,
+                                                       participant_key)
+                        from vaf.core.session import _room_rows
+
+                        mine = {row["room_id"] for row in _room_rows(user_scope_id)}
+                        if wanted not in mine:
+                            log("API", f"Access denied: {type} for a room the user is not in")
+                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                            continue
+
+                        room = Room.open(wanted)
+                        key = participant_key("cli", user_scope_id)
+                        identity = room.identity_for(key)
+                        if identity is None:
+                            # The room reached the sidebar because the user's AGENT is
+                            # in it. Speaking for themselves makes them a member too,
+                            # and Room.join carries the tenant check that decides
+                            # whether this account may be in this room at all.
+                            display = str(cmd.get("display") or "").strip()
+                            if not display:
+                                from vaf.core.config import get_local_admin_username
+                                display = str(get_local_admin_username() or "user")
+                            identity = room.join(display=display, scope_id=user_scope_id,
+                                                 peer_id=derive_peer_id(key, wanted))
+
+                        if type == "close_room":
+                            room.close(identity, reason=Room.TERMINATED_BY_USER)
+                        else:
+                            text = str(cmd.get("text") or "").strip()
+                            if not text:
+                                continue
+                            # "@Name ..." is resolved by the ROOM, the one place that
+                            # knows who is in it. A lookup here would be a second copy
+                            # of the member table.
+                            payload = {"kind": "say", "body": {"text": text}}
+                            mention = room.address_from_mention(text)
+                            if mention:
+                                payload["to"] = mention
+                            room.ingest(payload, identity=identity)
+
+                        # Answer with the room as it now stands, so the view repaints
+                        # from the store rather than from what the browser assumed.
+                        room = Room.open(wanted)
+                        await _send_room_transcript(websocket, room, user_scope_id)
+                    except RoomError as e:
+                        await websocket.send_json({"type": "error", "message": str(e)})
+                    except Exception as e:
+                        log("API", f"{type} failed: {e}", "ERROR")
+                        await websocket.send_json({"type": "error", "message": "Room action failed"})
 
                 elif type == "load_session":
                     sid = cmd.get("id")

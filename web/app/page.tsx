@@ -12,7 +12,7 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users
+    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, KeyRound
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -1025,9 +1025,10 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onClose }: {
+function RoomConversation({ view, onClose, closedNote }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onClose: () => void;
+    closedNote: string;
 }) {
     return (
         <>
@@ -1070,6 +1071,13 @@ function RoomConversation({ view, onClose }: {
             {view.messages.length === 0 && (
                 <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-400">
                     Nothing said yet.
+                </div>
+            )}
+            {view.room.closed && (
+                <div className="flex justify-center py-2">
+                    <span className="text-[11px] text-gray-400 dark:text-[#6a6a6a]">
+                        {closedNote}
+                    </span>
                 </div>
             )}
 
@@ -1321,6 +1329,9 @@ function VAFDashboardContent() {
     // history to load, and sharing the renderer would put the path almost every user
     // is on at risk for the sake of a view a few users open.
     const [roomView, setRoomView] = useState<{ room: RoomView; messages: RoomMessage[] } | null>(null);
+    // The room a user has asked to close, pending their confirmation. Closing is
+    // irreversible - a room never reopens - so it never happens on one click.
+    const [roomToClose, setRoomToClose] = useState<Session | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     const pendingSendRef = useRef<{ text: string } | null>(null);
@@ -4887,6 +4898,25 @@ function VAFDashboardContent() {
         const textToSend = overrideText ?? combined;
         const imagesToSend = [...attachedImages];
         if (!textToSend.trim() || !ws) return;
+
+        // A room is open: the composer writes into the ROOM, not into the conversation
+        // underneath it. Without this the box would look like it belonged to what is on
+        // screen and quietly send somewhere else - the worst of the three possible
+        // behaviours, worse than refusing. The room repaints from the store rather than
+        // from an optimistic local echo, because a room has N writers and only the
+        // store knows the order they landed in.
+        if (roomView) {
+            // A closed room takes nothing more. The backend refuses it too, and that
+            // refusal is the one that counts - this only spares the user watching
+            // their sentence disappear into an error.
+            if (roomView.room.closed) return;
+            ws.send(JSON.stringify({
+                type: 'room_say', room_id: roomView.room.roomId, text: textToSend,
+            }));
+            setInput('');
+            return;
+        }
+
         // Block prompting while attachments are still being indexed for retrieval.
         if (isIndexing) return;
 
@@ -5885,10 +5915,24 @@ function VAFDashboardContent() {
                                         <span className={cn("truncate text-sm", s.closed ? "text-gray-400 line-through" : "text-gray-600")}>
                                             {s.title}
                                         </span>
-                                        <span className="text-[10px] text-gray-400 shrink-0 pl-2 tabular-nums">
-                                            {s.members ?? 0}
-                                            {(s.unread || 0) > 0 ? ` · ${s.unread}` : ''}
-                                        </span>
+                                        <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                                            <span className="text-[10px] text-gray-400 tabular-nums">
+                                                {s.members ?? 0}
+                                                {(s.unread || 0) > 0 ? ` · ${s.unread}` : ''}
+                                            </span>
+                                            {/* Where a conversation has a bin, a room has a key.
+                                                It is not the same act: a chat is DELETED, a room is
+                                                CLOSED - it stays readable forever and only stops
+                                                accepting writes, so the icon has to promise
+                                                revoked access rather than removal. */}
+                                            {!s.closed && (
+                                                <span title={tMain('roomCloseTitle')}
+                                                    onClick={(e) => { e.stopPropagation(); setRoomToClose(s); }}
+                                                    className="opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
+                                                    <KeyRound size={12} className="text-gray-400 hover:text-red-600" />
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             ) : (
@@ -6119,7 +6163,8 @@ function VAFDashboardContent() {
                                     attempts got this wrong by building a surface of their own, first a
                                     narrow dialog and then a full-screen layer that covered the sidebar. */}
                                 {roomView ? (
-                                    <RoomConversation view={roomView} onClose={() => setRoomView(null)} />
+                                    <RoomConversation view={roomView} onClose={() => setRoomView(null)}
+                                        closedNote={tMain('roomClosedNote')} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -8561,6 +8606,44 @@ function VAFDashboardContent() {
                     onSubmit={createAutomationSubmit}
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
+            )}
+            {/* Closing a room. A dialog IS right here, unlike for reading one: this is a
+                decision, it cannot be undone, and it takes access away from agents that
+                are not in front of this screen to object. */}
+            {roomToClose && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setRoomToClose(null)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                                <KeyRound className="w-5 h-5 text-red-500" />
+                            </div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">
+                                {tMain('roomCloseTitle')}
+                            </div>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-[#8a8a8a] mb-5">
+                            {tMain('roomCloseBody')}
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setRoomToClose(null)}
+                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-sm text-gray-700 dark:text-[#c8c8c8] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors"
+                            >
+                                {tMain('roomCloseCancel')}
+                            </button>
+                            <button
+                                onClick={() => {
+                                    ws?.send(JSON.stringify({ type: 'close_room', room_id: roomToClose.roomId }));
+                                    setRoomToClose(null);
+                                }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
+                            >
+                                {tMain('roomCloseConfirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
             {/* Trust Gate Dialog — shown when agent needs confirmation for a risky tool */}
             {gateRequest && (

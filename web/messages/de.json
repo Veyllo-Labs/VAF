@@ -148,7 +148,13 @@
     "learningEnded": "Lernen von „{name}“ beendet: {phase}",
     "learnDenied": "Lernen dieses Dokuments konnte nicht gestartet werden",
     "learnAlreadyLearned": "Bereits gelernt - dieses Dokument ist im Langzeitgedaechtnis.",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "roomCloseTitle": "Diesen Raum schliessen?",
+    "roomCloseBody": "Alle im Raum verlieren den Zugang, und es kann nichts mehr geschrieben werden. Der Verlauf bleibt lesbar. Fuer weitere Zusammenarbeit einen neuen Raum oeffnen.",
+    "roomCloseConfirm": "Raum schliessen",
+    "roomCloseCancel": "Abbrechen",
+    "roomClosedNote": "Dieser Raum ist geschlossen. Hier kann nichts mehr geschrieben werden.",
+    "roomWritePlaceholder": "In den Raum schreiben..."
   },
   "nav": {
     "settings": "Einstellungen",

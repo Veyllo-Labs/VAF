@@ -755,3 +755,130 @@ def test_a_broken_timestamp_renders_as_nothing_not_as_a_wrong_time(tmp_path):
     assert len(frame_clock(1765000000.0)) == 5
     for bad in (None, "", "nope", float("nan"), object()):
         assert frame_clock(bad) == ""
+
+
+# ── the host may end a room whatever its role ──────────────────────────────
+
+def test_the_host_can_close_a_round_it_has_no_role_to_close(tmp_path):
+    """MUTATION: leave closing to the capability table alone.
+
+    A round has NO leader by design, and only a leader may emit `close`. Without a
+    host rule the person whose machine stores the room could never end a conversation
+    living in their own files - which is exactly the state the first live round was
+    in: "round, you are peer", and no way out.
+    """
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-host")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+
+    assert room.role_of("p-host") == "peer"
+    assert not room.may("peer", "close"), "a peer gained the capability instead"
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+    assert room.closed
+
+
+def test_a_guest_can_never_close_the_room_it_was_invited_into(tmp_path):
+    """MUTATION: key the host rule on anything a guest controls.
+
+    A redeemed ticket sets the guest's scope to None on purpose. The host check reads
+    the TENANT, so nothing a stranger presents can make it true - and a guest that
+    could close the room could end everybody else's work on its way out.
+    """
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-guest")
+    room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-guest")
+
+    assert room.is_host(guest) is False
+    with pytest.raises(NotPermitted):
+        room.close(guest, reason="bye")
+    assert not room.closed
+
+
+def test_a_room_with_no_owner_has_no_host(tmp_path):
+    """Fail closed: an unowned room does not hand the host power to whoever asks."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-anon")
+    someone = room.join(display="A", scope_id="scope-a", peer_id="p-a")
+
+    assert room.is_host(someone) is False
+
+
+def test_a_leader_still_closes_its_own_chain(tmp_path):
+    """The host rule is an addition, not a replacement."""
+    room = Room.create(kind="chain", owner_scope=None, base=tmp_path, room_id="room-lead")
+    leader = room.join(display="L", scope_id="scope-x", peer_id="p-l")
+    room.close(leader, reason="done")
+    assert room.closed
+
+
+def test_everyone_reads_the_same_sentence_when_a_user_ends_it(tmp_path):
+    """MUTATION: let each surface phrase the closing reason itself.
+
+    It is the last line anybody reads in that transcript, and it reaches agents that
+    are not on this machine. Three wordings would mean three different accounts of why
+    their access stopped.
+    """
+    from vaf.core.a2a.room import describe
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-last-word")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    last = room.transcript()[-1]
+    assert last["kind"] == "close"
+    assert Room.TERMINATED_BY_USER in describe(last)
+    assert "terminated by the user or Host AI system" in Room.TERMINATED_BY_USER
+
+
+def test_a_closed_room_takes_nothing_more(tmp_path):
+    """The point of closing, from the agents' side: their access to write is gone."""
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-shut")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-guest")
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    with pytest.raises(RoomError):
+        room.say(guest, "still here?")
+
+
+def test_closing_is_what_actually_revokes_the_ability_to_write(tmp_path):
+    """MUTATION: compute `closed` and never check it.
+
+    That was the real state until this test asked what closing STOPPED: the transcript
+    said closed, every surface showed closed, the CLI help promised "nothing more can
+    be written" - and writes were still accepted. A room that tells its participants
+    their access is gone while leaving it exactly where it was is worse than one that
+    never claimed to close at all.
+    """
+    from vaf.core.a2a.room import RoomClosed
+
+    room = Room.create(kind="chain", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-revoked")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    worker = room.join(display="Codex", scope_id=None, peer_id="p-w")
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    for act in (lambda: room.say(worker, "still here?"),
+                lambda: room.ingest({"kind": "report", "body": {"text": "done"}},
+                                    identity=worker),
+                lambda: room.say(host, "and me?")):
+        with pytest.raises(RoomClosed):
+            act()
+
+    # and it stays READABLE, which is the other half of the promise
+    assert [r["kind"] for r in room.transcript()][-1] == "close"
+
+
+def test_a_closed_room_cannot_be_closed_twice(tmp_path):
+    from vaf.core.a2a.room import RoomClosed
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-twice-shut")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    with pytest.raises(RoomClosed):
+        room.close(host, reason="again")
+    assert sum(1 for r in room.transcript() if r["kind"] == "close") == 1

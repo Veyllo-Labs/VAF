@@ -169,6 +169,15 @@ class TicketInvalid(RoomError):
     """A join ticket is unknown, spent, expired, or minted for another room."""
 
 
+class RoomClosed(RoomError):
+    """The room has been closed. It stays readable; it accepts nothing more.
+
+    Its own kind rather than a plain refusal, because a caller usually wants to say
+    something different about it: a refused directive is a mistake to correct, a closed
+    room is a conversation that is over.
+    """
+
+
 class Identity:
     """Who is acting, as the ROOM sees them.
 
@@ -338,6 +347,24 @@ class Room:
                 f"rooms are off by default"
             )
 
+    def is_host(self, identity: "Identity") -> bool:
+        """Whether this participant is the account whose machine holds the room.
+
+        Deliberately keyed on the TENANT and not on the role: an invited agent has no
+        scope at all (a redeemed ticket sets it to None), so no guest can ever be the
+        host no matter what it presents, while the same account arriving from another
+        of its own machines still is. That is the same line `_check_tenant` already
+        draws, read the other way round.
+        """
+        owner = self.manifest.get("owner_scope")
+        scope = getattr(identity, "scope_id", None)
+        return bool(owner) and bool(scope) and str(scope) == str(owner)
+
+    # What every participant sees when a human ends the room. One wording, because a
+    # closing reason is the last thing anybody reads in a transcript and three
+    # surfaces would otherwise each phrase it their own way.
+    TERMINATED_BY_USER = "This chat has been terminated by the user or Host AI system."
+
     def heartbeat(self, identity: "Identity") -> None:
         """Refresh this peer's lease. Only ever writes the peer's OWN file."""
         record = self.store.member(identity.peer_id) or {}
@@ -414,11 +441,29 @@ class Room:
         if not role:
             raise NotAMember(f"{identity.peer_id!r} has not joined room {self.room_id!r}")
 
+        # A closed room takes nothing more, from anybody, including the host that
+        # closed it. Closing was a displayed flag and nothing else until a test asked
+        # what it actually stopped: the transcript said "closed", every surface showed
+        # it, and writes went on being accepted. Revoking the ability to write IS the
+        # act - without this, closing a room told the participants their access was
+        # gone while leaving it exactly where it was.
+        if self.closed:
+            raise RoomClosed(
+                f"room {self.room_id!r} is closed; it stays readable and takes nothing more"
+            )
+
         if self.kind == "round" and kind == "directive":
             raise WrongRoomKind(
                 "a round has no command direction; nobody may issue a directive here"
             )
-        if kind in KINDS and not self.may(role, kind):
+        # Closing is the ONE act the host may perform whatever its role, and it is not
+        # a role power that leaked. The capability table answers "what may a peer do IN
+        # the conversation"; ending the room is a different question, answered by whose
+        # machine is storing it. Without this a round could never be closed at all -
+        # a round has no leader by design, so its own host would be locked out of
+        # ending a conversation living in their own files.
+        host_closing = kind == "close" and self.is_host(identity)
+        if kind in KINDS and not host_closing and not self.may(role, kind):
             raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
 
         frame = Frame.new(

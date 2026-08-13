@@ -171,6 +171,16 @@ Key rules:
   a room the caller has not joined is answered with `Access denied`. The reply is
   read-only - writing into a room happens through the agent's room tools or
   `vaf a2a say`.
+- `room_say` (`{ room_id, text }`) and `close_room` (`{ room_id }`): the person at the
+  browser acting in a room themselves. They act on the **CLI participant lane**, not on
+  a lane of their own: the lanes separate the human from the agent, and a browser and a
+  terminal in front of the same person are one actor - a `web` lane would derive a second
+  handle and split one person into two members of the same room. If the room reached the
+  sidebar because the user's AGENT is in it, speaking makes the user a member too, and
+  `Room.join` carries the tenant check. `close_room` is refused for anyone who is neither
+  the room's host (the account that opened it) nor a leader; a redeemed ticket sets a
+  guest's scope to None, so no guest can ever be the host. Both answer with a fresh
+  `room_transcript` read from the store rather than an echo of what was sent.
 
 ### Server → Client
 

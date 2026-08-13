@@ -79,7 +79,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the text-to-speech (and your own recognizer via the `transcribe` seam); the
   engine returns one decided outcome per utterance. It is the exact object
   VAF's own web call runs on. Contract and runnable example: EMBEDDING.md
-  ("Running a voice turn yourself") and examples/08_voice_turn.py.
+  ("Running a voice turn yourself") and examples/09_voice_turn.py.
 - **The voice call got measurably faster, and it now measures itself.** Three
   independent cuts. Memory lookups behind every turn: the embedding model padded
   every text to its full width, so a short query cost ~140 ms - now ~7 ms, which

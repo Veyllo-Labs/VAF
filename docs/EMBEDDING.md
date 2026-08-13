@@ -905,7 +905,7 @@ The division of labor, stated plainly:
   rolling transcript.
 - It is **sync**, like every engine object - run it in your own executor.
 
-Runnable version: [examples/08_voice_turn.py](../examples/08_voice_turn.py)
+Runnable version: [examples/09_voice_turn.py](../examples/09_voice_turn.py)
 (injects a scripted STT, prints instead of speaking; needs only a configured
 provider). The full pipeline semantics - every gate, every outcome kind - are
 documented in [docs/agents/VOICE_AGENT.md](agents/VOICE_AGENT.md).

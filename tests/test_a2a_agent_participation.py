@@ -866,3 +866,44 @@ def test_the_invitation_result_says_the_job_is_done(wired):
     assert "not a task to start" in out, (
         "an unreachable agent still reads as work to pick up")
     assert "----- copy from here -----" in out
+
+
+def test_the_tools_answer_to_the_words_a_person_actually_uses():
+    """MUTATION: describe them in the protocol's own vocabulary only.
+
+    That WAS the state, and it cost a whole session. Asked to "create an A2A chat so
+    you can work with Claude", the agent read A2A as the open protocol it knows from
+    outside, searched the project workspace, pulled a document out of retrieval,
+    concluded it needed a backend to call an API, and called the coding agent to build
+    one. It never came near room_open, because neither "A2A" nor "chat" appeared
+    anywhere in what it could see.
+
+    A tool is only reachable through the words its description contains. These are the
+    words a person says.
+    """
+    from vaf.tools.room_tools import (RoomInviteTool, RoomJoinTool, RoomOpenTool,
+                                      RoomReadTool, RoomSendTool)
+
+    for tool in (RoomOpenTool(), RoomInviteTool(), RoomJoinTool(), RoomSendTool(),
+                 RoomReadTool()):
+        described = f"{tool.description} {tool.__doc__ or ''}".lower()
+        assert "a2a" in described, f"{tool.name} never says A2A"
+        assert "chat" in described, f"{tool.name} never says chat"
+
+    opener = RoomOpenTool().description.lower()
+    for agent in ("claude", "codex", "opencode"):
+        assert agent in opener, f"room_open does not mention {agent}"
+
+
+def test_opening_a_room_rules_out_building_one():
+    """MUTATION: drop the "already exists" line.
+
+    The failure was not that the agent picked a worse tool - it picked NO tool and
+    started a project. Saying what the tool does is not enough when the model's own
+    knowledge of the term points at something it would have to implement.
+    """
+    from vaf.tools.room_tools import RoomOpenTool
+
+    described = RoomOpenTool().description
+    assert "ALREADY EXISTS" in described
+    assert "never build" in described and "coding agent" in described

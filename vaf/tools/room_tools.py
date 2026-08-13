@@ -89,8 +89,10 @@ class RoomJoinTool(BaseTool):
     """
     name = "room_join"
     description = (
-        "Join an agent-to-agent room by id so you can read and write in it. "
-        "Use when the user asks you to enter or take part in a room."
+        "Join an existing A2A chat (agent-to-agent room, group chat with other agents) "
+        "by id, so you can read and write in it. Use when the user asks you to enter "
+        "or take part in one, or gives you a room id. To START one instead, use "
+        "room_open."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
@@ -169,7 +171,9 @@ class RoomSendTool(BaseTool):
     """
     name = "room_send"
     description = (
-        "Write a message into an agent-to-agent room you have joined. "
+        "Write a message into an A2A chat (agent room) you have joined. This is the "
+        "ONLY way the other agents can read you - text you write outside a tool call "
+        "goes to your own user instead. "
         "kind: say (normal message), ask (a question), answer (a reply), "
         "report (result of a task, with a status), directive (an instruction, "
         "leaders only, and never in a round)."
@@ -250,8 +254,8 @@ class RoomReadTool(BaseTool):
     """
     name = "room_read"
     description = (
-        "Read new messages from an agent-to-agent room, or list your rooms and how "
-        "many unread messages each has when no room_id is given."
+        "Read new messages from an A2A chat (agent room), or list your A2A chats and "
+        "how many unread messages each has when no room_id is given."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "read"
@@ -334,9 +338,14 @@ class RoomOpenTool(BaseTool):
     """
     name = "room_open"
     description = (
-        "Open a new agent-to-agent room and join it. kind: 'round' for a conversation "
+        "START AN A2A CHAT (agent-to-agent chat, agent room, group chat with other "
+        "agents) and join it yourself. THIS ALREADY EXISTS - never build, code or "
+        "install anything for it, and never use the coding agent: opening the chat is "
+        "this one call. Use it whenever the user asks for an A2A chat, an agent room, "
+        "a group chat with another agent, or to work together with Claude, Claude "
+        "Code, Codex, OpenCode or any other agent. kind: 'round' for a conversation "
         "among equals where nobody gives orders, 'chain' when you lead and the agents "
-        "you invite report to you. Use when the user asks you to start a room."
+        "you invite report to you."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
@@ -407,12 +416,12 @@ class RoomInviteTool(BaseTool):
     """
     name = "room_invite"
     description = (
-        "Create an invitation for one more agent to join a room you are in, and return "
-        "the ready-made briefing to hand over. Call it again for each further agent. "
-        "Use when the user asks you to invite somebody into a room - including agents "
-        "that are not VAF, such as Claude Code, Codex or OpenCode. Inviting is just "
-        "this call plus showing the text: nothing to install, no API key, no setup, "
-        "and you never join on the other agent's behalf."
+        "Invite another agent into an A2A chat (agent room) you are in, and return the "
+        "ready-made briefing to hand over. Call it again for each further agent. Use "
+        "when the user asks you to invite somebody - including agents that are not "
+        "VAF, such as Claude, Claude Code, Codex or OpenCode. INVITING IS THIS CALL "
+        "PLUS SHOWING THE TEXT: nothing to install, no API key, no account, no setup, "
+        "no code, and you never join on the other agent's behalf."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"

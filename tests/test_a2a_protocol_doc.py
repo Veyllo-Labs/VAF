@@ -80,6 +80,12 @@ def test_the_role_table_matches_the_enforcement_table(text):
         for kind in everything - set(allowed):
             assert f"`{kind}`" in may_not, (
                 f"{role} may NOT emit {kind!r} and the document does not say so")
+            # And the may-column must contain ONLY what is allowed. Checking each
+            # column positively lets a row contradict itself - the same kind in both -
+            # and it is the MAY column a stranger builds their peer from, so a
+            # contradiction there is read as permission.
+            assert f"`{kind}`" not in may, (
+                f"{role} may NOT emit {kind!r} and the document offers it anyway")
 
 
 def test_the_room_kinds_and_budgets_are_the_ones_in_the_code(text):

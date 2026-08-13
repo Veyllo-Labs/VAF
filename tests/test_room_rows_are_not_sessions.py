@@ -731,3 +731,57 @@ def test_the_confirmation_says_it_cannot_be_undone():
         body = catalogue["main"]["roomCloseBody"]
         assert phrase in body, f"{name}: the warning does not say it is permanent"
         assert "vaf a2a export" in body, f"{name}: no way to keep a copy is offered"
+
+
+# ── a room the AGENT opens has to appear without a reload ──────────────────
+
+def test_opening_or_joining_a_room_tells_the_browser():
+    """MUTATION: leave the tools silent.
+
+    Everything else that changes a room happens inside a WebSocket command, which can
+    answer on the spot. A room OPENED by the agent has no socket command in flight, so
+    nothing looked at the store and the row was missing until the entire interface was
+    reloaded by hand - reported exactly that way, and the third time in this round that
+    a change to the STORE was not a change to what somebody sees.
+    """
+    source = (ROOT / "vaf" / "tools" / "room_tools.py").read_text(encoding="utf-8")
+
+    assert "def _announce(" in source
+    assert "notify_rooms_changed" in source
+    # every path that makes a row appear or change
+    assert source.count("_announce(") >= 4, (
+        "a tool that changes the room list is not announcing it")
+
+
+def test_the_signal_carries_no_sidebar_payload():
+    """MUTATION: build the session list inside the engine's notifier.
+
+    That would point the dependency the wrong way round - the engine importing the web
+    server's projection - to save one round trip. The browser already knows how to ask.
+    """
+    source = (ROOT / "vaf" / "core" / "web_interface.py").read_text(encoding="utf-8")
+    block = source.split("def notify_rooms_changed")[1].split("\ndef ")[0]
+
+    assert '"type": "rooms_changed"' in block
+    assert "session_list_payload" not in block and "list_ui" not in block
+    assert "web_server" not in block, "the engine is importing the harness"
+
+
+def test_the_browser_answers_the_signal_by_asking():
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("else if (data.type === 'rooms_changed') {")[1].split("else if")[0]
+
+    assert "type: 'get_sessions'" in block
+    assert "wsSocketRef.current" in block, (
+        "the captured ws state is null on the first connect; that trap is documented "
+        "in this file and cost a silent failure once already")
+
+
+def test_a_signal_without_a_user_goes_nowhere():
+    """The terminal, an automation and a channel run through the same tools. A notifier
+    that raised, or broadcast to everybody, would turn a sidebar nicety into a failed
+    tool call for something the user never asked about."""
+    from vaf.core.web_interface import notify_rooms_changed
+
+    notify_rooms_changed(None)
+    notify_rooms_changed("")

@@ -3494,6 +3494,14 @@ function VAFDashboardContent() {
                         }
                     }
                 }
+                else if (data.type === 'rooms_changed') {
+                    // The agent opened or joined a room. A signal, not a list: the
+                    // engine does not build the sidebar payload, so it says the answer
+                    // changed and the browser asks the question it already knows how
+                    // to ask. Without this a new room was invisible until the whole
+                    // interface was reloaded by hand.
+                    wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
+                }
                 else if (data.type === 'room_transcript') {
                     // Already in canonical order when it arrives: the backend sorts by
                     // (lamport, sender, seq) so that every surface shows the same

@@ -151,6 +151,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation says so and points at `vaf a2a export` for keeping a copy.
   Ending a conversation WITHOUT removing it is still there as `vaf a2a close`,
   and `vaf a2a delete` does the same as the bin from a terminal.
+
+  A room your agent opens appears in the list straight away. It used to need the
+  whole interface reloaded by hand before the new room showed up.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

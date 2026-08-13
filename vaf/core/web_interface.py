@@ -713,6 +713,39 @@ def internal_api_base() -> str:
     return "http://127.0.0.1:8005" if tls_on else "http://127.0.0.1:8001"
 
 
+def notify_rooms_changed(user_scope_id: Optional[str] = None) -> None:
+    """Tell a browser that this user's ROOM list changed, so it refetches.
+
+    A SIGNAL and not the list itself, deliberately. Building the sidebar payload here
+    would mean this module - the engine's - importing the web server's projection, and
+    the dependency would point the wrong way round for the sake of saving one round
+    trip. The browser already knows how to ask (`get_sessions`); it only ever needed to
+    be told that the answer changed.
+
+    It exists because a room appearing is the one change nothing announced. Closing,
+    renaming and deleting all happen inside a WebSocket command, which can answer on
+    the spot - but a room is OPENED by the agent, in a tool call, with no socket
+    command in flight and nothing looking at the store. The row simply was not there
+    until the whole interface was reloaded by hand.
+
+    Safe with no Web session at all (Telegram, an automation, the terminal): it
+    returns without doing anything.
+    """
+    if not user_scope_id:
+        return
+    try:
+        wi = get_web_interface()
+        loop = wi._get_dispatch_loop()
+        if not loop:
+            return
+        asyncio.run_coroutine_threadsafe(
+            wi.broadcast_to_user(str(user_scope_id), {"type": "rooms_changed"}), loop)
+    except Exception:
+        # A sidebar that did not refresh is a nuisance; an exception raised into a tool
+        # result is a failed tool call for something the user never asked about.
+        pass
+
+
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None,
                         turn_id: Optional[str] = None) -> None:
     """

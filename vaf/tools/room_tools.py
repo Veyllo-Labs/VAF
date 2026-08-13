@@ -31,6 +31,21 @@ def _acting_key(user_scope_id: Optional[str]) -> str:
         return "agent:local"
 
 
+def _announce(user_scope_id) -> None:
+    """A room row appeared or changed: tell the browser to refetch its list.
+
+    Everything else that changes a room happens inside a WebSocket command, which
+    answers on the spot. A room OPENED or JOINED by the agent has no socket command in
+    flight, so nothing looked at the store and the row was missing until the whole
+    interface was reloaded by hand.
+    """
+    try:
+        from vaf.core.web_interface import notify_rooms_changed
+        notify_rooms_changed(user_scope_id)
+    except Exception:
+        pass
+
+
 def _card(skills: str = "") -> Dict[str, Any]:
     """What this agent tells the room about itself.
 
@@ -128,6 +143,7 @@ class RoomJoinTool(BaseTool):
         existing = room.identity_for(key)
         if existing is not None:
             room.set_mode(existing, mode)
+            _announce(kwargs.get("user_scope_id"))
             return (f"Already a member of '{room_id}' as {existing.display} "
                     f"({existing.role}); mode is now {mode}.")
         try:
@@ -138,6 +154,7 @@ class RoomJoinTool(BaseTool):
             )
         except RoomError as e:
             return f"Could not join '{room_id}': {e}"
+        _announce(kwargs.get("user_scope_id"))
         return (f"Joined room '{room_id}' as {identity.display} ({identity.role}), "
                 f"mode {mode}. Members: "
                 f"{', '.join(m['display'] for m in room.members().values())}.")
@@ -373,6 +390,7 @@ class RoomOpenTool(BaseTool):
         except RoomError as e:
             return f"Could not open the room: {e}"
 
+        _announce(scope)
         return (f"Opened room '{room.room_id}' ({kind}"
                 f"{f', about: {topic}' if topic else ''}) and joined it as "
                 f"{identity.display} ({identity.role}). "

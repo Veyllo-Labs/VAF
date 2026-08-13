@@ -1738,7 +1738,7 @@ class Agent:
             pending = unread_frames(key)
             if not pending:
                 return None
-            room, identity, frames = pending[0]
+            room, identity, frames, context = pending[0]
             mode = room.mode_of(identity.peer_id)
             self._room_reply_streak[room.room_id] = (
                 self._room_reply_streak.get(room.room_id, 0) + 1)
@@ -1746,15 +1746,24 @@ class Agent:
             # would move the damage rather than remove it.
             self._room_unattended_report(room, identity)
             members = room.members()
+            waking_ids = {f.id for f in frames}
             lines = []
-            for frame in frames[-12:]:
+            for frame in context[-12:]:
                 who = (members.get(frame.sender) or {}).get("display") or frame.sender
                 text = str((frame.body or {}).get("text") or "")
                 label = f"{who} [{frame.role}]"
                 if frame.kind not in ("say",):
                     label += f" ({frame.kind})"
+                if frame.id not in waking_ids:
+                    # Addressed to somebody else. It is SHOWN, because a reply written
+                    # blind to what the others were just told is worse than no reply,
+                    # and it is LABELLED, because the difference between "you were
+                    # asked" and "you overheard" is the whole point of addressing.
+                    target = str((frame.to or {}).get("peer") or "")
+                    named = (members.get(target) or {}).get("display") or target or "someone else"
+                    label += f" -> {named}, NOT you: read along, do not answer"
                 lines.append(f"{label}: {text}".rstrip())
-            highest = max(f.lamport for f in frames)
+            highest = max(f.lamport for f in context)
 
             def _advance() -> None:
                 room.store.set_cursor(identity.peer_id, highest)
@@ -1776,7 +1785,8 @@ class Agent:
                   "other niceties. End an exchange that carries no new information."
             )
             return {"room_id": room.room_id, "mode": mode, "peer_id": identity.peer_id,
-                    "prompt": prompt, "advance": _advance, "count": len(frames)}
+                    "prompt": prompt, "advance": _advance, "count": len(frames),
+                    "context_count": len(context)}
         except Exception:
             return None
 

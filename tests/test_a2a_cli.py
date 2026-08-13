@@ -354,3 +354,59 @@ def test_bookkeeping_frames_read_as_sentences_not_empty_lines(rooms):
     assert "Worker [worker] (join): joined" in out
     assert "(hire): opened room-" in out and "for log reading" in out
     assert not any(line.rstrip().endswith(":") for line in out.splitlines()), out
+
+
+# ── addressing ─────────────────────────────────────────────────────────────
+
+def test_a_leading_mention_addresses_one_member(rooms):
+    """MUTATION: resolve the name in the CLI instead of asking the room.
+
+    Only the room knows who is in it, and a lookup here would be a second copy of the
+    member table that drifts the moment somebody joins.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    room, bob = _guest(room_id, rooms, display="Bob")
+
+    assert runner.invoke(a2a_cmd.app, ["say", room_id, "@Bob can you look"]).exit_code == 0
+
+    said = [f for f in room.store.frames() if f.kind == "say"][-1]
+    assert said.to == {"peer": bob.peer_id}
+
+
+def test_a_mention_in_the_middle_stays_a_message_to_everyone(rooms):
+    """MUTATION: match a mention anywhere.
+
+    "ask @Bob about it" is a sentence ABOUT Bob said to the room. Turning it into a
+    private aside would hide it from everyone the writer meant to tell.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    room, _bob = _guest(room_id, rooms, display="Bob")
+
+    runner.invoke(a2a_cmd.app, ["say", room_id, "ask @Bob about it"])
+
+    said = [f for f in room.store.frames() if f.kind == "say"][-1]
+    assert said.to == {"room": True}
+
+
+def test_an_explicit_to_wins_over_a_mention(rooms):
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    room, bob = _guest(room_id, rooms, display="Bob")
+
+    runner.invoke(a2a_cmd.app, ["say", room_id, "@Bob hi", "--to", "p-codex"])
+    said = [f for f in room.store.frames() if f.kind == "say"][-1]
+    assert said.to == {"peer": "p-codex"}
+
+
+def test_the_log_marks_who_a_line_was_aimed_at(rooms):
+    """MUTATION: drop the arrow from the human view.
+
+    The transcript shows everything to everyone - that is deliberate - so the only way
+    to tell an aside from a broadcast is to say so.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    room, bob = _guest(room_id, rooms, display="Bob")
+    runner.invoke(a2a_cmd.app, ["say", room_id, "@Bob the logs"])
+
+    out = runner.invoke(a2a_cmd.app, ["log", room_id]).stdout
+    assert "-> Bob" in out
+    assert "the logs" in out

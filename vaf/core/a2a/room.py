@@ -576,6 +576,41 @@ class Room:
         self.store.put_member(identity.peer_id, record)
         return mode
 
+    def peer_by_display(self, name: str) -> Optional[str]:
+        """The peer behind a display name, or None if it is unknown or ambiguous.
+
+        Lives HERE and nowhere else: only the room knows who is in it, and a resolver
+        in the CLI or the terminal app would be a second copy of the member table that
+        drifts the first time somebody joins while it is cached.
+
+        Ambiguity is refused rather than guessed. Two members called "Codex" and a
+        message addressed at one of them is a message that must not be delivered to a
+        coin toss.
+        """
+        wanted = str(name or "").strip().lstrip("@").lower()
+        if not wanted:
+            return None
+        hits = [peer for peer, record in self.members().items()
+                if str(record.get("display") or "").strip().lower() == wanted]
+        if len(hits) == 1:
+            return hits[0]
+        # A peer id addresses itself, which is what a machine consumer will use.
+        return name if name in self.roles() else None
+
+    def address_from_mention(self, text: str) -> Optional[Dict[str, Any]]:
+        """The ``to`` a leading "@Name" asks for, or None.
+
+        Only a mention at the START addresses a message. "@Bob can you look" is aimed
+        at Bob; "ask @Bob about it" is a sentence ABOUT Bob, said to the room, and
+        turning that into a private aside would quietly hide it from everyone else.
+        """
+        stripped = str(text or "").lstrip()
+        if not stripped.startswith("@"):
+            return None
+        name = stripped[1:].split(None, 1)[0].rstrip(",:;")
+        peer = self.peer_by_display(name)
+        return {"peer": peer} if peer else None
+
     def transcript(self, since_lamport: int = 0) -> List[Dict[str, Any]]:
         """The room as a group chat: who said what, in canonical order.
 
@@ -597,6 +632,10 @@ class Room:
                 "ts": frame.ts,
                 "id": frame.id,
                 "reply_to": frame.reply_to,
+                # Carried so a renderer can mark who a line was aimed at. Without it
+                # every surface would have to re-read the frame to answer a question
+                # the transcript already knows.
+                "to": dict(frame.to or {}),
                 "known": frame.kind_known,
             })
         return rows
@@ -668,8 +707,8 @@ def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, I
 BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
 
 
-def unread_frames(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity, List[Any]]]:
-    """Frames addressed to this participant that it has not read yet.
+def unread_frames(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity, List[Any], List[Any]]]:
+    """What has arrived for this participant: (room, identity, WAKING, CONTEXT).
 
     Its OWN frames are excluded: an agent must not be woken by its own voice, which
     is the loop that turns a two-agent room into a runaway conversation. Membership
@@ -680,12 +719,31 @@ def unread_frames(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, 
         if room.closed:
             continue
         cursor = room.store.cursor(identity.peer_id)
-        fresh = [
+        unread = [
             frame for frame in room.store.read_since(cursor)
             if frame.sender != identity.peer_id
             and frame.kind not in BOOKKEEPING_KINDS
-            and frame.addresses(identity.peer_id, identity.role)
         ]
-        if fresh:
-            pending.append((room, identity, fresh))
+        # Two lists, and the difference between them is the whole addressing rule.
+        # WAKING: only what is aimed at this peer. A message for somebody else must not
+        # cost a turn, or "@Bob" would wake the entire room to read a note for Bob.
+        # CONTEXT: everything unread, so a peer that IS woken sees the conversation it
+        # is joining rather than one line out of it - a reply written blind to what the
+        # others were just told is worse than no reply.
+        waking = [f for f in unread if f.addresses(identity.peer_id, identity.role)]
+        if waking:
+            pending.append((room, identity, waking, unread))
     return pending
+
+
+def unread_counts(key: str, *, base: Optional[Path] = None) -> Dict[str, int]:
+    """How many messages are waiting for this participant, per room.
+
+    Its own function because four surfaces asked the same question with the same
+    comprehension - the CLI listing, the terminal app, the classic lane and the agent's
+    room_read - and a four-way copy of an unpacking is four places to fix when the shape
+    changes. It changed once already, which is how this got written.
+    """
+    return {room.room_id: len(waking) for room, _identity, waking, _context
+            in unread_frames(key, base=base)}
+

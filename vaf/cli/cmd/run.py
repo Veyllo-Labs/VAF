@@ -1953,7 +1953,7 @@ Tab             - Autocomplete
                     # rendered with this lane's own primitives. A room is not a
                     # session: it is shown, never switched to.
                     try:
-                        from vaf.core.a2a.room import Room, joined_rooms, unread_frames
+                        from vaf.core.a2a.room import Room, joined_rooms, unread_counts
                         from vaf.core.a2a.store import StoreError, UnsafeName
                         from vaf.core.config import get_local_admin_scope_id
                         _key = str(get_local_admin_scope_id() or "local")
@@ -1962,7 +1962,7 @@ Tab             - Autocomplete
                             if not _rooms:
                                 tui.info("No agent rooms yet - `vaf a2a create` opens one")
                             else:
-                                _pending = {r.room_id: len(f) for r, _i, f in unread_frames(_key)}
+                                _pending = unread_counts(_key)
                                 tui.list_items(
                                     [f"{r.room_id} ({r.kind}) as {i.role}"
                                      f" - {_pending.get(r.room_id, 0)} unread"

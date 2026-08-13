@@ -136,6 +136,14 @@ def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
     payload = {"kind": kind, "body": body}
     if to_peer:
         payload["to"] = {"peer": to_peer}
+    else:
+        # "@Name ..." addresses one member. The ROOM resolves it - a lookup here would
+        # be a second copy of the member table, and it would drift the moment somebody
+        # joins. Only a LEADING mention counts: "ask @Bob about it" is a sentence about
+        # Bob said to everyone, and turning it into a private aside would hide it.
+        mention = room.address_from_mention(text)
+        if mention:
+            payload["to"] = mention
     if reply_to:
         payload["reply_to"] = reply_to
     try:
@@ -172,9 +180,9 @@ def create(
 @app.command(name="list")
 def list_rooms() -> None:
     """List the rooms on this machine you are a member of."""
-    from vaf.core.a2a.room import joined_rooms, unread_frames
+    from vaf.core.a2a.room import joined_rooms, unread_counts
     key = _key()
-    pending = {r.room_id: len(f) for r, _i, f in unread_frames(key)}
+    pending = unread_counts(key)
     for room, identity in joined_rooms(key):
         _emit({"room": room.room_id, "kind": room.kind, "topic": room.manifest.get("topic", ""),
                "role": identity.role, "peer": identity.peer_id,
@@ -498,11 +506,16 @@ def log(room_id: str = typer.Argument(...),
 
     from vaf.core.a2a.room import describe
 
+    members = {peer: record["display"] for peer, record in room.members().items()}
+
     def _print(rows) -> int:
         for entry in rows:
             label = f"{entry['display']} [{entry['role']}]"
             if entry["kind"] not in ("say",):
                 label += f" ({entry['kind']})"
+            aimed = str((entry.get("to") or {}).get("peer") or "")
+            if aimed:
+                label += f" -> {members.get(aimed, aimed)}"
             typer.echo(f"{label}: {describe(entry)}".rstrip())
         return len(rows)
 

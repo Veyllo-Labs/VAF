@@ -543,3 +543,135 @@ def test_the_gates_fallback_is_the_shared_default_and_not_a_copy():
     tools = (ROOT / "vaf" / "tools" / "room_tools.py").read_text(encoding="utf-8")
     assert 'kwargs.get("mode") or DEFAULT_MODE' in tools
     assert 'kwargs.get("mode") or "' not in tools
+
+
+# ── addressing: who is woken, and who reads along ──────────────────────────
+
+def test_a_message_for_somebody_else_does_not_wake_you(tmp_path):
+    """MUTATION: drop the addresses() filter from the waking list.
+
+    THE test of the whole feature. Without it "@Bob, can you check the logs" wakes every
+    agent in the room to read a note for Bob - each one a model turn, each one paid for,
+    and each one tempted to answer.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-at")
+    key = "scope-mine"
+    mine = derive_peer_id(key, "room-at")
+    room.join(display="Mine", scope_id="s", peer_id=mine)
+    bob = room.join(display="Bob", scope_id="s", peer_id="p-bob")
+    other = room.join(display="Other", scope_id="s", peer_id="p-other")
+
+    room.ingest({"kind": "say", "to": {"peer": "p-bob"}, "body": {"text": "for Bob only"}},
+                identity=other)
+
+    assert unread_frames(key, base=tmp_path) == [], "a note for Bob woke somebody else"
+
+
+def _wake(room, key, base):
+    """The (waking, context) pair for one participant, or (None, None)."""
+    for r, _identity, waking, context in unread_frames(key, base=base):
+        if r.room_id == room.room_id:
+            return waking, context
+    return None, None
+
+
+def test_an_addressed_peer_is_woken_and_the_others_are_not(tmp_path):
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-at2")
+    mine_key, bob_key = "scope-mine", "scope-bob"
+    room.join(display="Mine", scope_id="s", peer_id=derive_peer_id(mine_key, "room-at2"))
+    room.join(display="Bob", scope_id="s", peer_id=derive_peer_id(bob_key, "room-at2"))
+    other = room.join(display="Other", scope_id="s", peer_id="p-other")
+
+    bob_peer = derive_peer_id(bob_key, "room-at2")
+    room.ingest({"kind": "say", "to": {"peer": bob_peer}, "body": {"text": "for Bob"}},
+                identity=other)
+
+    waking_bob, _ = _wake(room, bob_key, tmp_path)
+    waking_mine, _ = _wake(room, mine_key, tmp_path)
+
+    assert waking_bob and [f.body["text"] for f in waking_bob] == ["for Bob"]
+    assert waking_mine is None, "an unaddressed peer was woken"
+
+
+def test_a_woken_peer_reads_the_aside_with_a_label(tmp_path):
+    """MUTATION: drop the label, or drop the aside from the context.
+
+    Both halves are the decision. Showing it unlabelled invites an answer to a question
+    that was not asked; hiding it means replying blind to what everyone else just read.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-at3")
+    mine_key = "scope-mine"
+    mine_peer = derive_peer_id(mine_key, "room-at3")
+    room.join(display="Mine", scope_id="s", peer_id=mine_peer)
+    room.join(display="Bob", scope_id="s", peer_id="p-bob")
+    other = room.join(display="Other", scope_id="s", peer_id="p-other")
+
+    room.ingest({"kind": "say", "to": {"peer": "p-bob"}, "body": {"text": "Bob, the logs"}},
+                identity=other)
+    room.say(other, "and everyone: we ship at five")
+
+    waking, context = _wake(room, mine_key, tmp_path)
+    assert [f.body["text"] for f in waking] == ["and everyone: we ship at five"]
+    assert [f.body["text"] for f in context] == ["Bob, the logs", "and everyone: we ship at five"]
+
+    class _Waker:
+        # Both methods, because collect_room_wake calls the reporter and swallows every
+        # exception - an incomplete stand-in returns None and looks like a code defect.
+        from vaf.core.agent import Agent as _Real
+        collect_room_wake = _Real.collect_room_wake
+        _room_unattended_report = _Real._room_unattended_report
+
+        def __init__(self):
+            self._current_user_scope_id = "s"
+            self._current_username = "owner"
+            self._room_reply_streak = {}
+
+    import vaf.core.a2a.room as room_mod
+    original = room_mod.unread_frames
+    try:
+        room_mod.unread_frames = lambda key, base=None: [
+            (room, room.identity_for(mine_key), waking, context)]
+        wake = _Waker().collect_room_wake()
+    finally:
+        room_mod.unread_frames = original
+
+    assert wake is not None
+    assert "Bob, the logs" in wake["prompt"], "the aside was hidden"
+    assert "NOT you" in wake["prompt"] and "do not answer" in wake["prompt"], (
+        "the aside is shown without saying it was not for this agent")
+
+
+def test_the_room_resolves_a_name_and_refuses_an_ambiguous_one(tmp_path):
+    """MUTATION: resolve names in the CLI instead.
+
+    Only the room knows who is in it. A resolver anywhere else is a second copy of the
+    member table, and it drifts the first time somebody joins.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-names")
+    room.join(display="Alice", scope_id="s", peer_id="p-alice")
+    room.join(display="Bob", scope_id="s", peer_id="p-bob")
+
+    assert room.peer_by_display("Alice") == "p-alice"
+    assert room.peer_by_display("@alice") == "p-alice"
+    assert room.peer_by_display("nobody") is None
+
+    room.join(display="Bob", scope_id="s", peer_id="p-bob2")
+    assert room.peer_by_display("Bob") is None, (
+        "two members share a name and one of them was picked anyway")
+
+
+def test_only_a_leading_mention_addresses_a_message(tmp_path):
+    """MUTATION: match a mention anywhere in the text.
+
+    "@Bob can you look" is aimed at Bob. "ask @Bob about it" is a sentence ABOUT Bob,
+    said to the room - turning that into a private aside would hide it from everyone
+    else, which is the opposite of what the writer meant.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-mention")
+    room.join(display="Bob", scope_id="s", peer_id="p-bob")
+
+    assert room.address_from_mention("@Bob can you look") == {"peer": "p-bob"}
+    assert room.address_from_mention("  @Bob: the logs") == {"peer": "p-bob"}
+    assert room.address_from_mention("ask @Bob about it") is None
+    assert room.address_from_mention("@nobody hello") is None
+    assert room.address_from_mention("plain text") is None

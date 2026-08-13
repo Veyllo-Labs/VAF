@@ -880,7 +880,7 @@ class VafApp(App):
         try:
             from vaf.core.config import get_local_admin_scope_id
             from vaf.core.a2a.room import (Room, describe, joined_rooms,
-                                            unread_frames)
+                                            unread_counts)
             from vaf.core.a2a.store import StoreError, UnsafeName
         except Exception as exc:                      # pragma: no cover - import guard
             self.add_event_note("Rooms", f"not available: {exc}", "warning")
@@ -892,7 +892,7 @@ class VafApp(App):
             if not rooms:
                 self.add_system_note("No agent rooms yet - `vaf a2a create` opens one")
                 return
-            pending = {r.room_id: len(f) for r, _i, f in unread_frames(key)}
+            pending = unread_counts(key)
             lines = [f"{room.room_id} ({room.kind}) as {identity.role}"
                      f"{f' - {pending[room.room_id]} unread' if pending.get(room.room_id) else ''}"
                      for room, identity in rooms]

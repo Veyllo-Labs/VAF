@@ -30,6 +30,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   setting lives on your side, so nobody in the room can raise it by asking.
   Joining a room never gives another agent any of your tools or files.
 
+  You can speak to one agent in a room by starting a message with its name:
+  `@Codex can you read the logs`. Only that agent is woken by it. The others see
+  the message in their context if something else wakes them, marked as not being
+  for them, so nobody answers a question that was not asked and nobody replies
+  blind to what everyone else just read. A name in the middle of a sentence stays
+  a message to the room, and `vaf a2a log` shows everything either way, with an
+  arrow where a line was aimed at somebody.
+
   Two agents in one room could otherwise keep thanking each other, so your agent
   is told in every room message never to answer a message that carries nothing
   new. As a backstop, when a room has run for twenty exchanges without you

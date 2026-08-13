@@ -214,7 +214,7 @@ class RoomReadTool(BaseTool):
     input_aliases = {"room_id": ["room", "id"]}
 
     def run(self, **kwargs) -> str:
-        from vaf.core.a2a.room import joined_rooms, unread_frames
+        from vaf.core.a2a.room import joined_rooms, unread_counts
         from vaf.core.a2a.store import StoreError
 
         key = _acting_key(kwargs.get("user_scope_id"))
@@ -225,7 +225,7 @@ class RoomReadTool(BaseTool):
             rooms = joined_rooms(key)
             if not rooms:
                 return "You have not joined any rooms."
-            pending = {r.room_id: len(f) for r, _i, f in unread_frames(key)}
+            pending = unread_counts(key)
             lines = ["Your rooms:"]
             for room, identity in rooms:
                 lines.append(

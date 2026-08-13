@@ -265,7 +265,41 @@ def test_the_header_renders_the_members_and_marks_our_own(rooms):
     about who said what depends on it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    block = source.split("members_list!.map(m => (")[1].split("</div>")[0]
+    block = source.split("(roomView.room.members_list || []).map(m => (")[1].split("</div>")[0]
 
     assert "m.peer === roomView.room.me" in block, "our own agent is not marked"
     assert "{m.label}" in block, "the header shows something other than the resolved name"
+
+
+def test_a_room_is_read_on_the_same_surface_as_a_conversation():
+    """MUTATION: put the room back in a narrow dialog.
+
+    A dialog is for a decision. A room is a conversation, and nobody reads one in a
+    box - it gets the chat column's own width and padding so it looks like what it is.
+    The first version was a max-w-2xl modal and it read as a notification about a chat
+    rather than as the chat.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("{roomView && (")[1].split("{/* Trust Gate Dialog")[0]
+
+    assert "max-w-2xl" not in block, "the room is in a dialog again"
+    assert "bg-black/60" not in block, "a scrim means a dialog, not a view"
+    # the chat's own metrics, not a second set invented here
+    assert block.count("messagesAreaWidthClass") >= 3, (
+        "the room stopped using the chat column width")
+    assert "flex-1 overflow-y-auto p-6 max-md:p-3" in block, (
+        "the room scroll area no longer matches the chat's")
+
+
+def test_bookkeeping_is_not_rendered_as_something_somebody_said():
+    """MUTATION: render join and leave as ordinary messages.
+
+    A join has no words in it. Drawing it with an avatar and a name above a sentence
+    puts a line in an agent's mouth that the agent never wrote, on the one kind of
+    frame where that is guaranteed to be a fabrication.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("{roomView && (")[1].split("{/* Trust Gate Dialog")[0]
+
+    assert "const bookkeeping = m.kind === 'join'" in block
+    assert "if (bookkeeping) {" in block

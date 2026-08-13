@@ -8436,14 +8436,19 @@ function VAFDashboardContent() {
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
             )}
-            {/* Agent room, read-only. Opened from the room rows at the top of the
-                sidebar; the conversation underneath stays exactly where it was. */}
+            {/* An agent room, read-only, on the SAME full-screen surface the chat uses.
+                It is a conversation, so it gets a conversation's proportions: the chat
+                column width, the chat's padding, one row per speaker. It was built as a
+                narrow dialog first, and that was wrong - a dialog is for a decision, and
+                nobody reads a group chat in a box. What differs from the chat below it
+                is only what a room has and a chat does not: several speakers, each with
+                a name and an avatar of their own, and no composer, because writing into
+                a room happens through the agent or the terminal. */}
             {roomView && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/60" onClick={() => setRoomView(null)} />
-                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-200 dark:border-[#2a2a2a] animate-in fade-in zoom-in-95 duration-200">
+                <div className="fixed inset-0 z-[80] flex flex-col bg-white dark:bg-[#181818]">
 
-                        <div className="flex items-center gap-3 p-5 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
+                    <div className="shrink-0 border-b border-gray-200 dark:border-[#2a2a2a]">
+                        <div className={cn(messagesAreaWidthClass, "mx-auto w-full flex items-center gap-3 px-6 py-4 max-md:px-3")}>
                             <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
                                 <Users className="w-5 h-5 text-white dark:text-[#181818]" />
                             </div>
@@ -8453,50 +8458,64 @@ function VAFDashboardContent() {
                                 </div>
                                 <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
                                     {roomView.room.roomKind}
-                                    {roomView.room.role ? ` · you are ${roomView.room.role}` : ''}
-                                    {roomView.room.members ? ` · ${roomView.room.members} agents` : ''}
-                                    {roomView.room.closed ? ' · closed' : ''}
+                                    {roomView.room.role ? ` \u00b7 you are ${roomView.room.role}` : ''}
+                                    {roomView.room.members ? ` \u00b7 ${roomView.room.members} agents` : ''}
+                                    {roomView.room.closed ? ' \u00b7 closed' : ''}
                                 </div>
-                                {/* Who is in the room, by the name the room resolved.
-                                    Join names alone would show two agents called
-                                    "Codex" with no way to tell them apart, which is
-                                    what the tag exists for. */}
-                                {(roomView.room.members_list?.length || 0) > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-1.5">
-                                        {roomView.room.members_list!.map(m => (
-                                            <span key={m.peer}
-                                                title={m.role}
-                                                className={cn(
-                                                    "text-[10px] px-1.5 py-0.5 rounded-full",
-                                                    m.peer === roomView.room.me
-                                                        ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
-                                                        : "bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]")}>
-                                                {m.label}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
+                            </div>
+                            {/* Who is in the room, by the name the room resolved. Join
+                                names alone would show two agents called "Codex" with no
+                                way to tell them apart, which is what the tag is for. */}
+                            <div className="flex flex-wrap gap-1 justify-end max-md:hidden">
+                                {(roomView.room.members_list || []).map(m => (
+                                    <span key={m.peer}
+                                        title={m.role}
+                                        className={cn(
+                                            "text-[10px] px-1.5 py-0.5 rounded-full",
+                                            m.peer === roomView.room.me
+                                                ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                                : "bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]")}>
+                                        {m.label}
+                                    </span>
+                                ))}
                             </div>
                             <button onClick={() => setRoomView(null)}
                                 className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
                                 <X size={16} />
                             </button>
                         </div>
+                    </div>
 
-                        <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
+                    <div className="flex-1 overflow-y-auto p-6 max-md:p-3">
+                        <div className={cn(messagesAreaWidthClass, "mx-auto space-y-5 pb-10")}>
                             {roomView.messages.length === 0 && (
-                                <div className="text-sm text-gray-400 text-center py-8">Nothing said yet.</div>
+                                <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-400">
+                                    Nothing said yet.
+                                </div>
                             )}
                             {roomView.messages.map(m => {
                                 // Our own agent against everybody else. A stranger's
                                 // agent is a full agent of its own and is shown as one,
                                 // never as a second voice of ours.
                                 const mine = !!roomView.room.me && m.peer === roomView.room.me;
-                                const addressed = m.to?.peer;
+                                const bookkeeping = m.kind === 'join' || m.kind === 'leave'
+                                    || m.kind === 'role' || m.kind === 'ack';
+                                if (bookkeeping) {
+                                    // A join is not something somebody SAID. Rendering it
+                                    // as a message would put words in an agent's mouth on
+                                    // the one line that has none.
+                                    return (
+                                        <div key={m.id} className="flex justify-center">
+                                            <span className="text-[11px] text-gray-400 dark:text-[#6a6a6a]">
+                                                {m.label} {m.text}
+                                            </span>
+                                        </div>
+                                    );
+                                }
                                 return (
                                     <div key={m.id} className="flex gap-3">
                                         <div className={cn(
-                                            "w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium",
+                                            "w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5",
                                             mine
                                                 ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
                                                 : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
@@ -8504,16 +8523,16 @@ function VAFDashboardContent() {
                                         </div>
                                         <div className="min-w-0 flex-1">
                                             <div className="flex items-baseline gap-2 flex-wrap">
-                                                <span className="text-xs font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
+                                                <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
                                                 <span className="text-[10px] text-gray-400">{m.role}</span>
                                                 {m.kind !== 'say' && (
                                                     <span className="text-[10px] text-gray-400">({m.kind})</span>
                                                 )}
-                                                {addressed && (
+                                                {m.to?.peer && (
                                                     <span className="text-[10px] text-gray-400">to one peer</span>
                                                 )}
                                             </div>
-                                            <div className="text-sm text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
+                                            <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
                                                 {m.text}
                                             </div>
                                         </div>
@@ -8521,9 +8540,11 @@ function VAFDashboardContent() {
                                 );
                             })}
                         </div>
+                    </div>
 
-                        <div className="p-4 border-t border-gray-200 dark:border-[#2a2a2a] shrink-0 text-xs text-gray-400">
-                            Read-only here. Write into the room from the agent or with `vaf a2a say`.
+                    <div className="shrink-0 border-t border-gray-200 dark:border-[#2a2a2a]">
+                        <div className={cn(messagesAreaWidthClass, "mx-auto w-full px-6 py-4 max-md:px-3 text-xs text-gray-400")}>
+                            Read-only here. Write into the room from the agent, or with `vaf a2a say`.
                         </div>
                     </div>
                 </div>

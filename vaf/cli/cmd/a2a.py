@@ -71,6 +71,20 @@ def _key() -> str:
         return "cli:local"
 
 
+def _display() -> str:
+    """The name this machine's owner appears under, when they did not give one.
+
+    It used to be the literal "terminal", which is a lane and not a person - so the
+    room showed the machine owner as "terminal" beside agents that had names. The
+    account already knows what to call them.
+    """
+    try:
+        from vaf.core.config import get_local_admin_username
+        return str(get_local_admin_username() or "").strip() or "terminal"
+    except Exception:
+        return "terminal"
+
+
 def _scope() -> str:
     """The TENANT this terminal acts for, which is what a room records as its owner.
 
@@ -196,7 +210,7 @@ def create(
         # host at all - its own opener cannot close it and cannot remove anybody.
         room = Room.create(kind=kind, owner_scope=_scope(), topic=topic,
                            room_id=room_id or None)
-        me = room.join(display=display or "terminal",
+        me = room.join(display=display or _display(),
                        peer_id=derive_peer_id(_key(), room.room_id), scope_id=_scope(),
                        card=_self_card(skills))
     except (RoomError, StoreError) as e:
@@ -272,7 +286,7 @@ def join(
             identity = room.redeem_ticket(ticket, display=display or "guest", mode=mode,
                                           card=_self_card(skills))
         else:
-            identity = room.join(display=display or "terminal",
+            identity = room.join(display=display or _display(),
                                  peer_id=derive_peer_id(_key(), room_id),
                                  scope_id=_key(), mode=mode)
     except TicketInvalid as e:

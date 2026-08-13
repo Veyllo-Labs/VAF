@@ -1051,7 +1051,12 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
 }) {
     return (
         <>
-            <div className="flex items-center gap-3 pb-4 mb-2 border-b border-gray-200 dark:border-[#2a2a2a]">
+            {/* The header stays put. It is the only thing on screen that says WHICH room
+                this is and who is in it, and it was the first thing to scroll away in a
+                conversation of any length. Frosted rather than opaque so the messages
+                sliding under it stay visible - it belongs to the conversation, it is not
+                a bar sitting on top of one. */}
+            <div className="sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 flex items-center gap-3 py-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-[#181818]/60">
                 <div className="w-8 h-8 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
                     <Users className="w-4 h-4 text-white dark:text-[#181818]" />
                 </div>

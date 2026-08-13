@@ -268,8 +268,9 @@ def test_the_room_payload_names_its_members(rooms):
     listed = sorted(room.labels().values())
 
     assert len(listed) == 2
-    assert all(label != label.rstrip("0123456789") for label in listed), (
-        "a member is listed without its tag, so two agents could share a name")
+    # Both are unique here, so both keep their names as they are. A number appears when
+    # two people share a name and not before - it answers a collision.
+    assert sorted(listed) == ["Codex", "VAF"]
 
 
 def test_the_header_renders_the_members_and_marks_our_own(rooms):
@@ -827,3 +828,20 @@ def test_a_room_scrolls_with_the_chat_s_own_autoscroll():
     # and the effect fires for a room's messages too
     assert "}, [messages, loading, roomView?.messages.length]);" in source, (
         "new room messages do not trigger the scroll")
+
+
+def test_the_room_header_stays_on_screen():
+    """MUTATION: let it scroll away with the messages.
+
+    It is the only thing that says WHICH room this is and who is in it, and it was the
+    first thing gone in a conversation of any length. Frosted rather than opaque so the
+    messages sliding under it stay visible: it belongs to the conversation rather than
+    sitting on top of one.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("function RoomConversation(")[1].split("\nfunction ")[0]
+
+    assert "sticky top-0" in block
+    assert "backdrop-blur" in block
+    assert "supports-[backdrop-filter]" in block, (
+        "no fallback where the browser cannot blur, so the header would be see-through")

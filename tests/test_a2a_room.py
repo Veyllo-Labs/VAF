@@ -1190,3 +1190,70 @@ def test_deleting_an_already_closed_room_does_not_close_it_twice(tmp_path):
     room.close(host, reason=Room.TERMINATED_BY_USER)
 
     assert room.delete(host) is True
+
+
+# ── a name only gets a number when it collides ─────────────────────────────
+
+def test_a_unique_name_is_left_alone(tmp_path):
+    """MUTATION: tag every name.
+
+    That WAS the rule, and it made "Nobel" into "Nobel88" for no reason a reader could
+    see - the name was already the only one in the room. A tag answers a COLLISION, so
+    it shows up when there is one and not before.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-solo")
+    room.join(display="Nobel", scope_id=None, peer_id="p-n")
+    room.join(display="Claude", scope_id=None, peer_id="p-c")
+
+    assert room.label_for("p-n") == "Nobel"
+    assert room.label_for("p-c") == "Claude"
+
+
+def test_a_collision_is_numbered_from_one(tmp_path):
+    """Small numbers rather than a digest: a person reads them back to somebody else,
+    and "@Codex2" survives being said out loud."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-two")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb")
+    room.join(display="Nobel", scope_id=None, peer_id="p-ccc")
+
+    labels = room.labels()
+    assert sorted(labels[p] for p in ("p-aaa", "p-bbb")) == ["Codex1", "Codex2"]
+    assert labels["p-ccc"] == "Nobel", "an uninvolved name was renamed by somebody else's clash"
+
+
+def test_a_numbered_name_still_resolves_a_mention(tmp_path):
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-mention2")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb")
+
+    label = room.label_for("p-aaa")
+    assert room.address_from_mention(f"@{label} look at this") == {"peer": "p-aaa"}
+
+
+def test_a_later_arrival_does_not_rename_the_ones_already_talking(tmp_path):
+    """Stable because the order comes from the handles, which do not move. Renaming a
+    peer somebody is mid-conversation with would break every mention aimed at it."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-grow")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb")
+    before = dict(room.labels())
+
+    room.join(display="Codex", scope_id=None, peer_id="p-zzz")
+    after = room.labels()
+    assert after["p-aaa"] == before["p-aaa"] and after["p-bbb"] == before["p-bbb"]
+    assert after["p-zzz"] == "Codex3"
+
+
+def test_the_terminal_appears_under_the_account_name():
+    """MUTATION: keep the literal "terminal".
+
+    That is a LANE, not a person, so the machine owner sat in the room called
+    "terminal" beside agents that had names. The account already knows what to call
+    them.
+    """
+    source = (ROOT / "vaf" / "cli" / "cmd" / "a2a.py").read_text(encoding="utf-8")
+
+    assert "def _display()" in source
+    assert 'display=display or "terminal"' not in source
+    assert source.count("_display()") >= 3

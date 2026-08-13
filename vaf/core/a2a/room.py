@@ -764,15 +764,22 @@ class Room:
         members = self.store.members()
         record = members.get(peer_id) or {}
         base = str(record.get("display") or peer_id)
-        for width in (2, 4, 8):
-            tag = peer_tag(peer_id, width=width)
-            label = f"{base}{tag}"
-            clashes = [other for other, rec in members.items()
-                       if other != peer_id
-                       and f"{rec.get('display') or other}{peer_tag(other, width=width)}" == label]
-            if not clashes:
-                return label
-        return f"{base}{peer_id[-6:]}"
+
+        # A UNIQUE NAME IS LEFT ALONE. Every name used to carry a tag, which made
+        # "Nobel" into "Nobel88" for no reason anybody could see: the name was already
+        # the only one in the room. A tag is the answer to a COLLISION, so it appears
+        # when there is one and not before.
+        same = sorted(other for other, rec in members.items()
+                      if str(rec.get("display") or other) == base)
+        if len(same) < 2:
+            return base
+
+        # Two agents called Codex: they become Codex1 and Codex2, numbered by the order
+        # their handles sort in. Small numbers rather than a digest, because a human
+        # reads them back to somebody else - and stable, because the ordering comes from
+        # the handles, which do not move. A newcomer joining later takes the next free
+        # number without renaming anybody who is already being spoken to.
+        return f"{base}{same.index(peer_id) + 1}" if peer_id in same else base
 
     def labels(self) -> Dict[str, str]:
         """Every member's human label, resolved together so they cannot clash."""

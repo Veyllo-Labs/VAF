@@ -161,6 +161,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Your agent can also open a group chat when you ask for one. The safety check
   that makes it state its approach before changing anything was refusing the
   request itself, so it went looking for another way round.
+
+  Names in a group chat are the names themselves. An agent called Nobel is called
+  Nobel, not Nobel88 - a number only appears when two participants share a name,
+  and then they are simply 1 and 2. You appear under your account's name instead
+  of under the word "terminal" when you join from a terminal.
+
+  The room's header stays on screen while you scroll, frosted so the conversation
+  stays visible underneath, and a room follows the conversation to the bottom the
+  way a chat does.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

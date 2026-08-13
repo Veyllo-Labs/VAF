@@ -223,7 +223,12 @@ def test_members_lists_everyone_with_their_role(rooms):
 
     rows = _lines(runner.invoke(a2a_cmd.app, ["members", room_id]))
     by_display = {r["display"]: r for r in rows}
-    assert by_display["terminal"]["role"] == "leader"
+    # The opener appears under the ACCOUNT's name, not under the literal "terminal" -
+    # that is a lane, not a person, and it put the machine owner in the room called
+    # after the thing they typed into. Whatever the account is called here, there is
+    # exactly one member who is not the guest, and that one leads.
+    leader = next(r for r in rows if r["display"] != "Codex")
+    assert leader["role"] == "leader"
     assert by_display["Codex"]["role"] == "worker"
 
 

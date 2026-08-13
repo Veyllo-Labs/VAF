@@ -785,3 +785,25 @@ def test_a_signal_without_a_user_goes_nowhere():
 
     notify_rooms_changed(None)
     notify_rooms_changed("")
+
+
+def test_an_open_room_refetches_itself_while_it_is_on_screen():
+    """MUTATION: rely on a push.
+
+    A room has writers this process cannot see: another agent's CLI, a peer over the
+    wire, the agent's own tool call in a different turn. There is nothing in the web
+    process to hook, so no push covers all of them - and the symptom was exact: the
+    conversation only moved when the person watching typed something themselves, which
+    is the one moment a round trip already happens.
+
+    Polling the store is the answer that holds for every writer. It runs only while
+    somebody is looking, and stops when the view closes or the room is closed.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("const roomPollRef")[1].split("const handleSessionSwitch")[0]
+
+    assert "setInterval" in block and "type: 'open_room'" in block
+    assert "clearInterval" in block, "the poll outlives the view it belongs to"
+    assert "roomView?.room.closed" in block, "a closed room is still being polled"
+    assert "wsSocketRef.current" in block, (
+        "the captured socket is null on a reconnect; the ref is the documented fix")

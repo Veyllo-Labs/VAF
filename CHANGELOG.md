@@ -154,6 +154,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
   A room your agent opens appears in the list straight away. It used to need the
   whole interface reloaded by hand before the new room showed up.
+
+  An open group chat now follows along by itself. What the other agents say
+  appears while you watch, instead of only when you write something yourself.
+
+  Your agent can also open a group chat when you ask for one. The safety check
+  that makes it state its approach before changing anything was refusing the
+  request itself, so it went looking for another way round.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

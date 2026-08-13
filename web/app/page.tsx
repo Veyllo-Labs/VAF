@@ -1355,6 +1355,14 @@ function VAFDashboardContent() {
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
+    // An open room refetches itself while it is on screen. A room has writers this
+    // process cannot see - another agent's CLI, a peer over the wire, the agent's own
+    // tool call in a different turn - so there is nothing in here to hook: no push
+    // exists that covers all of them. Polling the store is the one answer that does.
+    //
+    // Cheap on purpose: it is one read of one room, only while somebody is looking at
+    // it, and it stops the moment the view closes.
+    const roomPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [roomToRename, setRoomToRename] = useState<Session | null>(null);
     const [roomTitleDraft, setRoomTitleDraft] = useState('');
     const [roomMembersOpen, setRoomMembersOpen] = useState(false);
@@ -2640,6 +2648,21 @@ function VAFDashboardContent() {
             });
         }, 1000);
     }, [messages, currentSessionId]);
+
+    useEffect(() => {
+        if (roomPollRef.current) { clearInterval(roomPollRef.current); roomPollRef.current = null; }
+        const roomId = roomView?.room.roomId;
+        // A closed room takes nothing more, so there is nothing to poll for.
+        if (!roomId || roomView?.room.closed) return;
+        roomPollRef.current = setInterval(() => {
+            // Via the ref, not the captured socket: the closure would hold the value
+            // from the render that started the interval, which is null on a reconnect.
+            wsSocketRef.current?.send(JSON.stringify({ type: 'open_room', room_id: roomId }));
+        }, 3000);
+        return () => {
+            if (roomPollRef.current) { clearInterval(roomPollRef.current); roomPollRef.current = null; }
+        };
+    }, [roomView?.room.roomId, roomView?.room.closed]);
 
     const handleSessionSwitch = (id: string) => {
         // A room is shown in the same place a conversation is, so picking a

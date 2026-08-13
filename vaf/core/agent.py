@@ -1474,7 +1474,8 @@ class Agent:
                 self._plan_gate_blocks = 0
                 return None
             # Workflow launches: seed the plan FROM the call and allow (see docstring).
-            if name in ("execute_workflow", "create_agent_workflow"):
+            if name in ("execute_workflow", "create_agent_workflow",
+                        "room_open", "room_join"):
                 _seed = self._derive_workflow_plan_seed(name, tool_args)
                 if _seed:
                     try:
@@ -1546,6 +1547,24 @@ class Agent:
         Pure so tests can pin it."""
         try:
             a = tool_args if isinstance(tool_args, dict) else {}
+            # Opening or joining an A2A chat: the CALL IS THE PLAN, the same shape a
+            # workflow launch already had. The gate exists so state changes are not
+            # made on the way to somewhere else - but "open a chat with Claude" is the
+            # whole request, arriving as one call, and bouncing it produced exactly
+            # what the gate is meant to prevent: the agent went looking for another way
+            # round, wrote the invitation into a file in the workspace, and lost track
+            # of its own work. Read from a live transcript, not reasoned about.
+            if name == "room_open":
+                topic = str(a.get("topic") or "").strip()
+                kind = str(a.get("kind") or "round").strip() or "round"
+                return [f"Open an A2A chat ({kind})"
+                        + (f" about: {topic[:120]}" if topic else "")
+                        + " and take part in it"]
+            if name == "room_join":
+                room = str(a.get("room_id") or "").strip()
+                if not room:
+                    return None
+                return [f"Join the A2A chat '{room[:60]}' and take part in it"]
             if name == "execute_workflow":
                 wf = str(a.get("workflow_id") or "").strip()
                 if not wf:
@@ -8443,8 +8462,13 @@ class Agent:
         # Tool Loop Protection: Max number of tool-result cycles in one interaction
         # Normal interactions usually need 1-3 tool turns.
         tool_turn_count = 0
-        SOFT_LIMIT_TOOL_TURNS = 50   # Inject goal-reminder, agent continues
-        MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
+        # Loop-protection budgets. The hard cap is admin-configurable
+        # (max_tool_turns_per_step, GLOBAL_CONFIG_KEYS: a tenant must not raise
+        # their own budget); the soft goal-reminder keeps its distance below it,
+        # which at the default 75 lands on the historical 50. The unlimited
+        # switch is tool_loop_unlimited, honoured at the enforcement sites.
+        MAX_TOOL_TURNS_PER_STEP = max(5, int(Config.get("max_tool_turns_per_step", 75) or 75))
+        SOFT_LIMIT_TOOL_TURNS = max(1, min(50, MAX_TOOL_TURNS_PER_STEP - 3))
         # A BACKGROUND thinking run must not churn the way the main chat may — it is a short
         # gather/decide/act pass, so cap it far tighter (default 15) to stop tool-spin loops.
         if self._is_thinking_run():
@@ -10494,11 +10518,18 @@ class Agent:
                                     _original_intent = _c[:400]
                                     break
                     _intent_hint = f'\n\nThe original goal of the user was: "{_original_intent}"' if _original_intent else ""
+                    # With the unlimited switch on there IS no hard stop, and a
+                    # reminder that promises one would be the message lying.
+                    _budget_line = (
+                        f"You have {MAX_TOOL_TURNS_PER_STEP - SOFT_LIMIT_TOOL_TURNS} more tool calls left before a hard stop is triggered.]"
+                        if not _unlimited_loop else
+                        "There is no hard stop configured, so pace yourself: finish, or tell the user where you are stuck.]"
+                    )
                     _reminder = (
                         f"[System: You have already made {SOFT_LIMIT_TOOL_TURNS} tool calls and have not completed the task yet.{_intent_hint}\n\n"
                         f"Rethink your strategy: are you still on the right track? "
                         f"Focus on what is essential and complete the task as directly as possible. "
-                        f"You have {MAX_TOOL_TURNS_PER_STEP - SOFT_LIMIT_TOOL_TURNS} more tool calls left before a hard stop is triggered.]"
+                        f"{_budget_line}"
                     )
                     UI.event("Warning", f"Soft limit reached ({SOFT_LIMIT_TOOL_TURNS} tool turns) — injecting goal reminder...", style="yellow")
                     append_domain_log("backend", f"soft_limit_reminder injected at turn {SOFT_LIMIT_TOOL_TURNS}")
@@ -11526,8 +11557,18 @@ class Agent:
                 policy = get_tool_policy("python_exec", _gate_scope)
                 trusted = is_trusted_dir(cwd, _gate_scope)
                 allowed_once = "python_exec" in self._allow_once_tools
-                
-                if policy != "allow" and not trusted and not allowed_once:
+                # The hands-off switch, decided by the SAME helper as the funnel's
+                # gate - a second reading of "who may skip the question" here would
+                # be the two-enforcement-points drift this file already fought once.
+                # Announced, never silent.
+                from vaf.core.tool_dispatch import _bypass_reason
+                _bypass_why = _bypass_reason(getattr(self, "_current_user_role", None), _gate_scope)
+                if _bypass_why is not None:
+                    emit({"type": "gate_bypassed", "tool": "python_exec",
+                          "cwd": str(cwd), "reason": "python_sandbox blocked; unsandboxed run",
+                          "why": _bypass_why})
+
+                if _bypass_why is None and policy != "allow" and not trusted and not allowed_once:
                     # Check if running as sub-agent (cannot handle interactive prompts reliably for security)
                     is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
                     
@@ -11544,8 +11585,11 @@ class Agent:
                     else:
                         return result + "\n\n[INFO] python_exec is available but requires interactive confirmation (not available in sub-agent mode)."
                 
-                # Execute unsandboxed python if allowed
-                if get_tool_policy("python_exec") == "allow" or is_trusted_dir(cwd) or ("python_exec" in self._allow_once_tools):
+                # Execute unsandboxed python if allowed. Read with the SAME scope the
+                # answer was written under: an unscoped read lands in the default
+                # scope, so the owner's one "always" would open execution for every
+                # tenant while a tenant's own "always" would never be found at all.
+                if _bypass_why is not None or get_tool_policy("python_exec", _gate_scope) == "allow" or is_trusted_dir(cwd, _gate_scope) or ("python_exec" in self._allow_once_tools):
                     code = (args or {}).get("code", "")
                     # Convert args to JSON-serializable format (OS-independent)
                     python_exec_args = make_json_serializable({"timeout": 30})

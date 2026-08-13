@@ -353,3 +353,51 @@ def test_waiting_for_reply_ttl_zero_disables(tmp_path, monkeypatch):
     data[tm._key(scope)]["question_sent_at_ts"] = _time.time() - 100 * 3600
     tm._save_waiting(data)
     assert tm.get_waiting_for_reply(scope) is not None  # TTL off -> kept
+
+
+# ── plan gate: opening an A2A chat carries its own plan ─────────────────────
+# Live incident, read from the transcript: asked to open an A2A chat with Claude,
+# room_open was bounced by the gate. The agent then looked for a way round, wrote the
+# invitation text into a file in the session workspace, and lost track of its own
+# work. The gate exists so a state change is not made on the way to somewhere else -
+# and "open a chat with Claude" is not on the way anywhere. It IS the request.
+
+def test_derive_plan_seed_from_opening_a_room():
+    seed = Agent._derive_workflow_plan_seed(
+        "room_open", {"topic": "Release besprechen", "kind": "chain"})
+    assert seed and "chain" in seed[0] and "Release besprechen" in seed[0]
+
+
+def test_opening_a_room_without_a_topic_still_carries_a_plan():
+    """A room with no topic is still a whole request. Returning None here would bounce
+    the very call the incident was about, since the topic is optional."""
+    seed = Agent._derive_workflow_plan_seed("room_open", {})
+    assert seed and "A2A chat" in seed[0]
+
+
+def test_derive_plan_seed_from_joining_a_room():
+    seed = Agent._derive_workflow_plan_seed("room_join", {"room_id": "room-abc"})
+    assert seed and "room-abc" in seed[0]
+
+    # Nothing to join is nothing to plan: the normal bounce applies.
+    assert Agent._derive_workflow_plan_seed("room_join", {}) is None
+
+
+def test_the_gate_lets_the_room_calls_seed_themselves():
+    """MUTATION: seed a plan the gate never consults.
+
+    The seeding helper is pure and easy to test; the wiring is the half that was paid
+    for once already in this file's own incident. A seed no branch reads changes
+    nothing.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    # The branch that decides which calls may seed, read where it is written rather
+    # than by a distance from the message it prints - the message moved once already.
+    branch = source.split("if name in (\"execute_workflow\", \"create_agent_workflow\",")[1] \
+                   .split("_seed")[0]
+
+    assert '"room_open"' in branch and '"room_join"' in branch, (
+        "the gate does not let a room call seed its own plan")

@@ -16,6 +16,7 @@ The fix ties the timer to visibility (Textual's Timer.pause/resume, and the
 frequency, same states, same white eye. Only the invisible ones stop drawing.
 """
 import asyncio
+import time
 
 from textual.app import App, ComposeResult
 
@@ -135,7 +136,17 @@ def test_the_oneshot_state_still_reverts_after_reshow() -> None:
             m.set_avatar_visible(False)
             m.avatar.set_state("success")
             m.set_avatar_visible(True)
-            await asyncio.sleep(1.8)          # 14 ticks at 10 Hz
+            # Poll to a deadline instead of sleeping a fixed span: the revert
+            # needs 14 ticks at 10 Hz, and a loaded CI runner delivers them
+            # late (measured: green on 3.11/3.12/3.13 and red on 3.10 in the
+            # same run, green 5/5 locally). The assertion is about the state
+            # reverting AT ALL, so waiting longer costs nothing and a real
+            # regression still fails - it never reverts.
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                if m.avatar._state not in ("success", "error"):
+                    break
+                await asyncio.sleep(0.1)
             assert m.avatar._state not in ("success", "error"), (
                 f"one-shot state never reverted: {m.avatar._state}")
 

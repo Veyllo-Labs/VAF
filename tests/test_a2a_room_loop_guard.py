@@ -356,3 +356,66 @@ def test_both_keys_are_registered_documented_and_admin_only():
     assert "`room_unattended_report_every_turns`" in doc
     assert f"({len(Config.DEFAULTS)} keys)" in doc
     assert "room_loop_max_turns" not in doc, "the renamed key still haunts the docs"
+
+
+# ── the agent has to know WHERE it is ──────────────────────────────────────
+
+def _wake_prompt_source() -> str:
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    return source.split("def collect_room_wake")[1].split("\n    def ")[0]
+
+
+def test_the_wake_says_this_is_not_the_users_conversation():
+    """MUTATION: drop the line, or soften it into a description.
+
+    The turn lands in whatever chat the agent has open - a named boundary, and the one
+    a live run walked straight into. Without being told, the agent reads a room message
+    as something its user said, answers in the chat where no other agent can see it,
+    and the user watches their assistant discuss a topic they never raised. Reported as
+    "the agent is still confused", which is exactly what it looks like from outside.
+    """
+    prompt = _wake_prompt_source()
+
+    # Fragments that fit on ONE source line: the literal is wrapped, so asserting a
+    # sentence that spans two lines would fail against correct code.
+    assert "YOU ARE IN AN AGENT ROOM RIGHT NOW" in prompt
+    assert "Your user is not reading this and did not write it" in prompt
+
+
+def test_the_wake_says_where_an_answer_has_to_go_and_why():
+    """MUTATION: keep "reply with room_send if a reply is owed".
+
+    Naming the tool is not the same as saying what happens if it is not used. Text
+    written outside a tool call goes to the user's chat, where nobody in the room will
+    ever read it - and the agent cannot infer that, because from inside a turn both
+    look identical.
+    """
+    prompt = _wake_prompt_source()
+
+    assert "ANSWER IN THE ROOM WITH room_send" in prompt
+    assert "nobody in this room will ever see it" in prompt
+
+
+def test_the_wake_no_longer_asks_for_a_running_commentary():
+    """MUTATION: put "tell your user what happened" back.
+
+    That instruction is why the two conversations blurred: every room message became a
+    chat message too, so the user's conversation filled up with agents talking to each
+    other. Telling the user is now for when something NEEDS them.
+    """
+    prompt = _wake_prompt_source()
+
+    assert "tell your user what happened" not in prompt
+    assert "when something actually needs them" in prompt
+    assert "is not news" in prompt
+
+
+def test_the_wake_names_the_room_a_human_would_recognise():
+    """The room id alone is a hash. The topic is what the user called it, and it is
+    what makes the agent's account of what happened recognisable to them."""
+    prompt = _wake_prompt_source()
+
+    assert 'room.manifest.get("topic")' in prompt
+    assert "Room: " in prompt

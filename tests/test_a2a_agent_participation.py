@@ -833,3 +833,36 @@ def test_the_room_tools_are_not_excluded_from_the_main_agent():
 
     for tool in ("room_open", "room_invite", "room_join", "room_send", "room_read"):
         assert tool not in excluded, f"{tool} is hidden from the main agent"
+
+
+def test_inviting_is_handing_over_text_and_the_tool_says_so():
+    """MUTATION: leave the result at "give this to that agent".
+
+    A live run turned "invite Claude" into an installation project: the agent went
+    looking for a `claude` binary, checked for an Anthropic key, found an OpenAI one,
+    offered to install Node packages, and asked the user which way to proceed. Every
+    step was competent and none of it had anything to do with an invitation.
+
+    Naming what to DO is not enough when the obvious-looking alternative is a whole
+    project. The result rules it out by name: nothing is installed, no key is needed,
+    and the other agent redeems the invitation itself wherever it already runs.
+    """
+    from vaf.tools.room_tools import RoomInviteTool
+
+    tool = RoomInviteTool()
+    for phrase in ("not VAF", "no API key", "nothing to install",
+                   "never join on the other agent"):
+        assert phrase in tool.description, f"the description does not rule out: {phrase}"
+
+
+def test_the_invitation_result_says_the_job_is_done(wired):
+    from vaf.tools.room_tools import RoomInviteTool, RoomOpenTool
+
+    room_id = RoomOpenTool().run(user_scope_id="scope-a").split("'")[1]
+    out = RoomInviteTool().run(room_id=room_id, display="Claude", user_scope_id="scope-a")
+
+    assert "YOUR JOB IS DONE" in out
+    assert "no key is needed" in out
+    assert "not a task to start" in out, (
+        "an unreachable agent still reads as work to pick up")
+    assert "----- copy from here -----" in out

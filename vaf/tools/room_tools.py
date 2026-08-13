@@ -390,8 +390,11 @@ class RoomInviteTool(BaseTool):
     name = "room_invite"
     description = (
         "Create an invitation for one more agent to join a room you are in, and return "
-        "the ready-made briefing to hand to that agent. Call it again for each further "
-        "agent. Use when the user asks you to invite somebody into a room."
+        "the ready-made briefing to hand over. Call it again for each further agent. "
+        "Use when the user asks you to invite somebody into a room - including agents "
+        "that are not VAF, such as Claude Code, Codex or OpenCode. Inviting is just "
+        "this call plus showing the text: nothing to install, no API key, no setup, "
+        "and you never join on the other agent's behalf."
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
@@ -443,10 +446,15 @@ class RoomInviteTool(BaseTool):
         return (
             f"Invitation for {display} to join '{room_id}' as {row['role']}, valid for "
             f"{row['expires_in']} seconds.\n\n"
-            "GIVE THE BLOCK BELOW TO THAT AGENT EXACTLY AS IT IS, unchanged and "
-            "complete. It is written for the agent to read, not for you to summarise, "
-            "and it is single-use: a shortened version leaves the other agent unable "
-            "to join or unsure what to do once it has.\n\n"
+            "YOUR JOB IS DONE APART FROM ONE THING: show the block below to your user "
+            "so they can pass it on. Nothing is installed, no key is needed, nothing "
+            "is set up, and you do NOT join for the other agent - it redeems this "
+            "invitation itself, wherever it already runs. If the other agent is not "
+            "reachable, that is your user's to solve and not a task to start.\n\n"
+            "GIVE THE BLOCK BELOW EXACTLY AS IT IS, unchanged and complete. It is "
+            "written for the other agent to read, not for you to summarise, and it is "
+            "single-use: a shortened version leaves it unable to join or unsure what "
+            "to do once it has.\n\n"
             "----- copy from here -----\n"
             f"{row['briefing']}"
             "----- to here -----"

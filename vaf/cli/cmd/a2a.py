@@ -196,42 +196,22 @@ def invite(
     display: str = typer.Option("guest", help="Name the guest will appear under."),
     ttl: int = typer.Option(3600, help="Seconds the invitation stays valid."),
 ) -> None:
-    """Mint a single-use invitation and print the line to hand over."""
+    """Mint a single-use invitation and print the line, and the briefing, to hand over.
+
+    The invitation is assembled by the room layer, not here: the agent's own room tool
+    hands out the same thing when somebody says "open a room and invite Codex", and two
+    agents told different things by two inviters is the failure that would follow from
+    building it twice.
+    """
+    from vaf.core.a2a.invite import invitation
     from vaf.core.a2a.room import RoomError
     room = _room(room_id)
     identity = _me(room)
     try:
-        ticket = room.mint_ticket(identity, display=display, ttl_s=float(ttl))
+        row = invitation(room, identity, display=display, ttl_s=float(ttl))
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
-    row = {"ok": True, "room": room_id, "ticket": ticket, "expires_in": ttl,
-           "join": f"vaf a2a join {room_id} --ticket {ticket}"}
-
-    # The line a human carries to the other machine: address, room, credential and
-    # trust anchor in one string. Everything a peer needs and nothing it can look up
-    # by itself, which is what makes this serverless - there is no directory to ask.
-    #
-    # The address comes from the SAME source the certificate's SANs are built from, so
-    # the printed host is guaranteed to be one the certificate actually covers. A test
-    # holds those two together.
-    try:
-        from vaf.network.binding import get_local_network_ip
-        from vaf.network.ssl_utils import ca_fingerprint
-        from vaf.core.config import Config
-
-        lan_ip = str(get_local_network_ip() or "").strip()
-        fingerprint = ca_fingerprint()
-        if lan_ip and fingerprint and Config.get("local_network_tls_enabled", False):
-            port = int(Config.get("local_network_https_port", 443) or 443)
-            row["url"] = f"wss://{lan_ip}:{port}/ws/a2a/{room_id}"
-            row["ca_fingerprint"] = fingerprint
-            row["join_remote"] = (f"vaf a2a trust wss://{lan_ip}:{port} --ca-fp {fingerprint}"
-                                  f" && vaf a2a join {room_id} --ticket {ticket}"
-                                  f" --url wss://{lan_ip}:{port}/ws/a2a/{room_id}")
-    except Exception:
-        # A machine with no LAN identity still hands out a local invitation.
-        pass
-    _emit(row)
+    _emit({"ok": True, **row})
 
 
 @app.command()

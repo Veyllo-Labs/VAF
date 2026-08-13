@@ -61,6 +61,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is a full agent of its own and is never shown as a second voice of yours. The
   browser reads a room; writing into one stays with your agent or with
   `vaf a2a say`.
+
+  An invitation now carries the instructions with it. `vaf a2a invite` prints a
+  ready-made briefing next to the ticket: a block you paste straight into the
+  other agent's session, whatever it is. It tells the agent how to join, how to
+  listen, which of the room's messages it is allowed to send in the role it is
+  being given, and - the line that decides whether a room does anything at all -
+  that every message it receives is a request to act, not text to look at. An
+  agent that misses that point does not fail loudly; it sits in the room being
+  polite, which looks exactly like a room nobody wanted.
+
+  The role paragraph in that briefing is read off the same table the room
+  enforces, so it cannot promise an agent something the room will refuse, and
+  every command it names is checked against the ones that actually exist.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

@@ -125,6 +125,48 @@ def gate_enabled() -> bool:
         return True
 
 
+def _offer_setup() -> None:
+    """No account on this machine yet - offer to create one right here.
+
+    Only reached from the fresh-install branch, so `is_interactive()` has
+    already been established: asking is safe.
+
+    Three properties this must keep, because the door is the last thing that
+    should ever break a first start:
+
+    - The import of the setup engine happens INSIDE the yes-branch. This module
+      is imported by every interactive lane and must stay light and offline
+      capable; the setup pulls in Docker and database machinery.
+    - Every failure path still lets the caller through. A fresh install has
+      always been open (there is nothing to check a password against), and a
+      failed or declined setup must not make the door tighter than it was.
+    - Any failure to READ the answer counts as "no", not just EOF or Ctrl+C.
+      A stdin that claims to be a terminal but cannot be read raises whatever
+      the environment feels like - under pytest's capture it is an OSError -
+      and none of those may turn a fresh start into a crash.
+    """
+    print("VAF: no admin account exists on this machine yet.", file=sys.stderr)
+    try:
+        answer = input("     Create it now? [Y/n] ").strip().lower()
+    except Exception:
+        print(file=sys.stderr)
+        answer = "n"
+
+    if answer in ("", "y", "yes", "j", "ja"):
+        try:
+            from vaf.cli.cmd.setup import SetupOutcome, run_first_account_setup
+            if run_first_account_setup() == SetupOutcome.CREATED:
+                return
+        except Exception as e:
+            logger.debug("The setup offer failed: %s", e)
+            print(f"VAF: the setup could not run ({type(e).__name__}). "
+                  "Start it yourself with `vaf setup`.", file=sys.stderr)
+            return
+
+    print("VAF: you can create it any time with `vaf setup`, or in the web UI.",
+          file=sys.stderr)
+
+
 def require_admin_password(*, force: bool = False) -> bool:
     """Ask for the admin password once per process. True = may proceed.
 
@@ -153,8 +195,7 @@ def require_admin_password(*, force: bool = False) -> bool:
               file=sys.stderr)
         return False
     if not stored:
-        print("VAF: no admin password is set yet - open the web UI once to create "
-              "your account, then this terminal will ask for it.", file=sys.stderr)
+        _offer_setup()
         _unlocked = True
         return True
 

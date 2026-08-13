@@ -176,7 +176,9 @@ memory hygiene) are always kept, so tools and streaming behave normally - you
 are setting the personality and task framing, not rewiring the engine.
 
 When you omit `system_prompt`, the agent uses the machine's Soul file
-(`~/.vaf/users/admin/soul.md`); if none exists yet, VAF materializes its
+(`~/.vaf/users/<owner>/soul.md`, where `<owner>` is the account name recorded
+in `local_admin_username` - not the literal `admin`); if none exists yet, VAF
+materializes its
 default persona there on first use (a neutral built-in identity is only the
 last resort when that load fails). For an embedded app you almost always want
 to set `system_prompt` explicitly, so your agent's voice does not depend on

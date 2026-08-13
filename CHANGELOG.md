@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **`vaf setup` creates the admin account from the terminal.** The first
+  account could previously only be created in the browser, which does not work
+  on a machine without one. The command asks for a username, a password, a
+  name for your AI agent and optionally your Veyllo API key, starts the
+  database it needs, and leaves the rest to the web login, where two-factor
+  setup happens on first sign-in as before. `vaf run` on a machine without an
+  account offers the same setup instead of pointing at the web UI. For scripts
+  and AI agents there is a prompt-free path with one exit code per outcome:
+  `printf 'pw\n' | vaf setup --username alice --agent-name Jarvis --password-stdin`.
+- The terminal setup asks what your agent should be called. The browser wizard
+  never did, so agents introduced themselves with a generated name such as
+  "Nobel4831SkyBlue" until the field was found in Settings.
+
 ### Changed
 - The "memory database still uses the default password" warning now says how
   to fix it, right in the log entry and the security dashboard: ask your agent
@@ -19,6 +33,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Your agent's name and personality were ignored unless your account happened
+  to be called "admin". Both the system prompt and the terminal app looked up
+  the workspace of a user literally named "admin", so an account with any other
+  name got default answers about who the agent is.
+- Accounts created in the browser never got their agent workspace prepared, so
+  the soul and identity files appeared later, on first access, with a random
+  agent name.
+- Two accounts could exist whose names differed only in capitalisation, and an
+  administrator could set a password of any length for someone else. Account
+  creation had drifted into two copies with different rules; there is one now.
 - Switching sessions in the terminal app no longer fails with "turn failed".
   Every switch into a session that already had messages ended in an error
   instead of showing the conversation, so a perfectly intact session looked

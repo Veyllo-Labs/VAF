@@ -31,7 +31,7 @@ The Soul System operates as a bridge between the **User Workspace** and the **LL
 
 ### Data flow
 
-1. **Storage**: Under `~/.vaf/users/admin/`: `soul.md` (personality and rules) and `identity.json` (agent display: name, emoji, theme). The **current user's** profile is in `user_identity.json` per user; see [USER_IDENTITY.md](USER_IDENTITY.md).
+1. **Storage**: Under `~/.vaf/users/<owner>/`, where `<owner>` is the machine owner's account name from `local_admin_username` (`admin` only when the account is called that): `soul.md` (personality and rules) and `identity.json` (agent display: name, emoji, theme). The **current user's** profile is in `user_identity.json` per user; see [USER_IDENTITY.md](USER_IDENTITY.md).
 2. **Access**: `UserWorkspace` in `vaf/auth/user_workspace.py` reads and writes these files.
 3. **API**: `user_persona_routes.py` exposes GET/PUT for persona and soul.
 4. **Prompt**: `SystemPromptManager.build_prompt()` injects the Soul (and agent identity) into the system prompt each turn.

@@ -254,6 +254,8 @@ Switch provider or model at runtime: press `C` in the chat, or use `/model <name
 ## CLI Reference
 
 ```bash
+vaf setup            # Create the admin account for this machine (first run)
+
 vaf start            # Start background service (or: systemctl in server mode)
 vaf stop             # Stop background service
 vaf restart          # Restart background service

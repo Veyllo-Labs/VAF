@@ -258,46 +258,29 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
     """Create a new user account (admin only)."""
     try:
         async with get_auth_db() as db:
-            # Check if username already exists
-            existing = await db.execute(
-                select(LocalUser).where(LocalUser.username == data.username)
-            )
-            if existing.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Username already exists"
-                )
-
             # Generate password if not provided
             password = data.password or secrets.token_urlsafe(12)
 
-            # Create user
-            _hash = hash_password(password)
-            from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
-            if is_local_admin_account(username=str(getattr(data, "username", "") or "")):
-                # Only the machine owner's password opens the terminal door; a
-                # second admin must not silently take that slot over.
-                mirror_admin_password_hash(_hash)
-            user = LocalUser(
-                id=uuid_module.uuid4(),
-                username=data.username,
-                password_hash=_hash,
-                role=data.role.lower(),
-                permissions={
-                    "email": data.email,
-                    "tools": data.tools,
-                    "workflows": data.workflows,
-                    "memory_enabled": data.create_db,
-                },
-                is_active=True,
-                requires_2fa_setup=True,
-                created_at=_utc_now_naive(),
-                updated_at=_utc_now_naive(),
-            )
-
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
+            # Same rules as the first admin gets - this route used to check
+            # duplicates case-SENSITIVELY and to accept any password length,
+            # so "Alice" and "alice" could both exist and an admin could hand
+            # out a two-character password.
+            from vaf.auth.user_admin import UserAdminError, create_local_user
+            try:
+                user = await create_local_user(
+                    db,
+                    username=data.username,
+                    password=password,
+                    role=data.role,
+                    permissions={
+                        "email": data.email,
+                        "tools": data.tools,
+                        "workflows": data.workflows,
+                        "memory_enabled": data.create_db,
+                    },
+                )
+            except UserAdminError as e:
+                raise HTTPException(status_code=e.http_status, detail=e.message)
 
             return {
                 "id": str(user.id),

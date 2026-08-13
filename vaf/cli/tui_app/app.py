@@ -80,10 +80,16 @@ def _agent_name() -> str:
 
     Deliberately NOT hardcoded to "VAF": identity.json is where a user names
     their agent, and the system prompt builds the persona from the same place.
+
+    The workspace is the machine owner's, looked up by the configured username
+    rather than the literal "admin" - the two are only the same on installs
+    whose account happens to be called admin, and everywhere else this read the
+    wrong (usually empty) workspace.
     """
     try:
         from vaf.auth.user_workspace import get_user_workspace
-        name = (get_user_workspace("admin").get_identity() or {}).get("name")
+        from vaf.core.config import get_local_admin_username
+        name = (get_user_workspace(get_local_admin_username()).get_identity() or {}).get("name")
         if name:
             return str(name)
     except Exception:

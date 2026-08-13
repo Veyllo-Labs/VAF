@@ -96,8 +96,8 @@ The route-level local-admin floors (`config_routes.get_current_user_or_local_adm
 
 When running locally without authentication (CLI or Web UI without JWT), VAF uses the scope and username from config:
 
-- **`local_admin_scope_id`**: Default `00000000-0000-0000-0000-000000000001` (legacy placeholder). After the first admin is created via `POST /api/auth/bootstrap`, the backend writes that admin's UUID here so CLI and localhost use the same identity as the logged-in admin.
-- **`local_admin_username`**: Default `admin`; updated by bootstrap to the first admin's username.
+- **`local_admin_scope_id`**: Default `00000000-0000-0000-0000-000000000001` (legacy placeholder). After the first admin is created - in the browser via `POST /api/auth/bootstrap`, or in the terminal via `vaf setup` - the shared layer `vaf/auth/user_admin.py` writes that admin's UUID here so CLI and localhost use the same identity as the logged-in admin.
+- **`local_admin_username`**: Default `admin`; set to the first admin's username when that account is created (either route). It is a real username, not the literal `admin` - the agent workspace under `~/.vaf/users/<username>/` is keyed on it.
 
 Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core.config` instead of reading config directly. This keeps data scoped consistently and avoids a split between "logged-in" and "local" identities.
 

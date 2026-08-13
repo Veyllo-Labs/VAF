@@ -240,6 +240,11 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
   spawns, the workflow engine, automations, and any non-tty stdin. They are
   already inside the shield, and prompting there would mean an unattended
   machine stops working after a reboot.
+- **No account yet**: there is nothing to verify against, so the door has
+  always let you through. It now offers to create the account on the spot
+  (`vaf setup`, see [FIRST_RUN.md](../setup/FIRST_RUN.md)); declining, or a
+  setup that fails, still lets you through - an offer must not make a fresh
+  install harder to start than it was.
 
 ## The commands
 

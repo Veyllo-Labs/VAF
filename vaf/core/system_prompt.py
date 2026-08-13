@@ -606,8 +606,13 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         if not persona_loaded:
             try:
                 from vaf.auth.user_workspace import get_user_workspace
-                # Soul and Identity bind to the Admin account
-                ws = get_user_workspace("admin")
+                from vaf.core.config import get_local_admin_username
+                # Soul and Identity bind to the machine owner's account - which
+                # is whatever name the account was created under, not the
+                # literal "admin". An owner called "mert" used to get the
+                # workspace of a user that does not exist, so their agent's
+                # name and soul were silently replaced by defaults.
+                ws = get_user_workspace(get_local_admin_username())
                 identity = ws.get_identity()
                 soul = ws.get_soul()
 

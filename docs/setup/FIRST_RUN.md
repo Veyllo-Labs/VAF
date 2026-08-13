@@ -17,6 +17,41 @@ The wizard is detected automatically (the backend reports "needs setup" while no
 account exists); these bootstrap endpoints are reachable without a login, by design - see
 [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
 
+## Without a browser: `vaf setup`
+
+The account can also be created in the terminal, which is the shorter path when you are
+already in one - and the only path on a machine with no browser at all:
+
+```
+vaf setup
+```
+
+It asks for a username, a password (twice), a name for your AI agent, and optionally a
+Veyllo API key. The database it needs runs in Docker, so the command starts the service
+stack itself and waits for it.
+
+Both routes create exactly the same account (`vaf/auth/user_admin.py` is the one place
+that does it), so afterwards the web UI shows the normal login instead of this wizard,
+and **the first login still walks you through two-factor setup**. What the wizard would
+also have done - language, theme, the soul questionnaire - is not asked here; those live
+in Settings, and your agent starts with a default soul.
+
+Naming the agent is the one thing the terminal asks and the wizard does not. Without it
+your agent picks its own name, something like `Nobel4831SkyBlue`.
+
+**For scripts and AI agents.** Give the password on stdin, never as an argument (an
+argument is visible in `ps` to every user on the machine):
+
+```
+printf 'your-password\n' | vaf setup --username alice --agent-name Jarvis --password-stdin
+```
+
+Exit codes: `0` created, `1` failed, `2` cancelled or bad input, `3` an admin already
+exists, `4` the database is unavailable.
+
+If you start `vaf run` on a machine that has no account yet, it offers the same setup
+right there before opening the chat.
+
 ## The steps
 
 The wizard first asks for your **language**, then confirms you have a phone for two-factor

@@ -30,7 +30,7 @@ When running in single-user / localhost mode (no network auth), or when using th
 | `local_admin_scope_id` | `00000000-0000-0000-0000-000000000001` | UUID for the local admin user (fallback for fresh installs) |
 | `local_admin_username` | `admin` | Display name for the local admin |
 
-**After bootstrap:** When the first admin is created via `POST /api/auth/bootstrap`, the backend writes that user's `user_scope_id` and `username` into config as `local_admin_scope_id` and `local_admin_username`. CLI and localhost without JWT then use the same identity as the logged-in admin (one identity, no split). Use `get_local_admin_scope_id()` / `get_local_admin_username()` from `vaf.core.config` instead of reading config directly.
+**After the first admin exists:** When the first admin is created - via `POST /api/auth/bootstrap` in the browser or `vaf setup` in the terminal - `vaf/auth/user_admin.py` writes that user's `user_scope_id` and `username` into config as `local_admin_scope_id` and `local_admin_username`. CLI and localhost without JWT then use the same identity as the logged-in admin (one identity, no split). Use `get_local_admin_scope_id()` / `get_local_admin_username()` from `vaf.core.config` instead of reading config directly.
 
 **Important:** The local admin is identified by `local_admin_scope_id`, NOT by the string `"admin"`. A network user whose username happens to be `"admin"` is a different user with a different `user_scope_id`.
 

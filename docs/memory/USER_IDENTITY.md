@@ -88,7 +88,7 @@ The modal size matches the Memory Graph modal (95vw × 90vh).
 
 When **local only** (no network, no auth):
 
-- After the first admin is created via `POST /api/auth/bootstrap`, `local_admin_scope_id` and `local_admin_username` in config are set to that admin's UUID and username so that local mode and CLI use the same identity as that admin (see [UUID.md](../platform/UUID.md)).
+- After the first admin is created (`POST /api/auth/bootstrap` in the browser, `vaf setup` in the terminal), `local_admin_scope_id` and `local_admin_username` in config are set to that admin's UUID and username so that local mode and CLI use the same identity as that admin (see [UUID.md](../platform/UUID.md)).
 - When there is no auth, the HTTP API and WebSocket use `get_local_admin_username()` and the backend uses `get_local_admin_scope_id()` for RAG/DB, so the same `user_identity.json` and scoped data (memories, mail DB, contacts) are used as for the local admin.
 - **RAG / DB (memories)** use that scope; **user identity (user_identity.json)** uses that username (e.g. `~/.vaf/users/<local_admin_username>/user_identity.json`).
 

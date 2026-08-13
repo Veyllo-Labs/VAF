@@ -33,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vaf.auth.models import LocalUser, UserSession
 from vaf.auth.database import get_auth_db
 from vaf.auth.crypto import (
-    hash_password,
     verify_password,
     create_access_token,
     create_refresh_token,
@@ -45,7 +44,6 @@ from vaf.auth.crypto import (
     get_totp_uri,
     verify_totp,
 )
-from vaf.auth.user_config import UserConfig
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
 logger = logging.getLogger(__name__)
@@ -227,58 +225,17 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
     """
     try:
         async with get_auth_db() as db:
-            result = await db.execute(
-                select(LocalUser).where(LocalUser.role == "admin", LocalUser.is_active == True)
-            )
-            if result.scalar_one_or_none() is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="An admin account already exists",
+            # The account and everything that identifies it live in
+            # vaf/auth/user_admin.py, so the terminal setup (`vaf setup`)
+            # creates the exact same thing this route does. What stays here is
+            # what only a browser needs: tokens, a session row and the cookie.
+            from vaf.auth.user_admin import UserAdminError, create_first_admin
+            try:
+                new_user = await create_first_admin(
+                    db, username=body.username, password=body.password,
                 )
-
-            username = (body.username or "").strip()
-            if not username or len(username) < 2:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Username must be at least 2 characters",
-                )
-
-            result = await db.execute(
-                select(LocalUser).where(func.lower(LocalUser.username) == username.lower())
-            )
-            if result.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Username already taken",
-                )
-
-            if not body.password or len(body.password) < 8:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Password must be at least 8 characters",
-                )
-
-            password_hash = hash_password(body.password)
-            # Mirror into the keyring so the terminal door can verify offline
-            # (the auth database is a container and is often down on a desktop).
-            from vaf.cli.gate import mirror_admin_password_hash
-            mirror_admin_password_hash(password_hash)
-            new_user = LocalUser(
-                username=username,
-                password_hash=password_hash,
-                role="admin",
-                requires_2fa_setup=True,
-            )
-            db.add(new_user)
-            await db.commit()
-            await db.refresh(new_user)
-            # Persist admin identity so CLI and localhost without JWT use the same scope (single identity)
-            from vaf.core.config import Config
-            config = Config.load()
-            config["local_admin_scope_id"] = str(new_user.user_scope_id)
-            config["local_admin_username"] = new_user.username
-            Config.save(config)
-            UserConfig.ensure_user_dir(username)
+            except UserAdminError as e:
+                raise HTTPException(status_code=e.http_status, detail=e.message)
 
             access = create_access_token(
                 str(new_user.id),

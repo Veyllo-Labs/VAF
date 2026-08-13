@@ -27,7 +27,8 @@ async def init_auth_db() -> None:
 
     Imports auth models so they are registered on Base, then creates all
     tables (memory + auth). Idempotent.
-    The first admin is created only via the web UI onboarding (POST /api/auth/bootstrap).
+    The first admin is created via the web UI onboarding (POST /api/auth/bootstrap)
+    or in the terminal (`vaf setup`); both go through vaf/auth/user_admin.py.
     """
     from vaf.auth.models import LocalUser  # noqa: F401 - register on Base for create_all
 

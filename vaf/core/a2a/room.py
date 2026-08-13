@@ -62,7 +62,7 @@ ROOM_KINDS = ("chain", "round")
 # peer become unable to say it is leaving.
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
-                         "role", "hire", "close", "leave", "ack", "join"}),
+                         "role", "hire", "close", "leave", "ack", "join", "kick"}),
     "worker": frozenset({"say", "ask", "answer", "report",
                          "hire", "leave", "ack", "join"}),
     "peer": frozenset({"say", "ask", "answer", "leave", "ack", "join"}),
@@ -347,6 +347,26 @@ class Room:
                 f"rooms are off by default"
             )
 
+    def host_peers(self) -> frozenset:
+        """The handles belonging to the account that owns this room.
+
+        DERIVED, never stored, and that is what makes it safe to decide anything on:
+        a member file is written by the member, so a peer that could name itself here
+        would be naming its own protection. These come out of the same derivation the
+        owner's own lanes use, so nobody else can land on one.
+
+        They are the peers that cannot be removed from the room. Getting rid of the
+        machine owner's own agent is not a membership operation - it is closing the
+        room, which takes everybody out at once and is the honest way to say it.
+        """
+        owner = self.manifest.get("owner_scope")
+        if not owner:
+            return frozenset()
+        return frozenset(
+            derive_peer_id(participant_key(lane, str(owner)), self.room_id)
+            for lane in PARTICIPANT_LANES
+        )
+
     def is_host(self, identity: "Identity") -> bool:
         """Whether this participant is the account whose machine holds the room.
 
@@ -374,8 +394,10 @@ class Room:
     def members(self) -> Dict[str, Dict[str, Any]]:
         """Members with their resolved role and liveness.
 
-        A lapsed lease makes a peer ``stale``, never ``gone``. Only a leave frame
-        removes somebody, because a sleeping laptop is not a departure.
+        A lapsed lease makes a peer ``stale``, never ``gone``: a sleeping laptop is not
+        a departure. Membership ends in exactly two ways, both of them frames somebody
+        wrote on purpose - a ``leave`` from the peer itself, or a ``kick`` from a leader
+        or the host.
         """
         roles = self.roles()
         now = time.time()
@@ -399,11 +421,24 @@ class Room:
         written by the peer itself, so a peer could then name its own role.
         """
         resolved: Dict[str, str] = {}
+        hosts = self.host_peers()
         for frame in self.store.frames():
             if frame.kind == "join":
                 resolved.setdefault(frame.sender, frame.role)
             elif frame.kind == "leave":
                 resolved.pop(frame.sender, None)
+            elif frame.kind == "kick":
+                # Removing somebody else, which `leave` deliberately cannot do: one
+                # writer per lane means a host cannot write into the lane of the peer
+                # it is removing, so the removal is a frame in the HOST's own lane that
+                # later readers fold in. Honoured only from a leader or from one of the
+                # room's own host handles, and never against a host handle - the
+                # protection is derived, so a peer cannot claim it for itself.
+                target = str(frame.body.get("peer") or "")
+                by_leader = frame.role == "leader"
+                by_host = frame.sender in hosts
+                if (by_leader or by_host) and target not in hosts:
+                    resolved.pop(target, None)
             elif frame.kind == "role":
                 target = str(frame.body.get("peer") or "")
                 granted = str(frame.body.get("role") or "")
@@ -462,8 +497,23 @@ class Room:
         # machine is storing it. Without this a round could never be closed at all -
         # a round has no leader by design, so its own host would be locked out of
         # ending a conversation living in their own files.
-        host_closing = kind == "close" and self.is_host(identity)
-        if kind in KINDS and not host_closing and not self.may(role, kind):
+        if kind == "kick":
+            target = str((data.get("body") or {}).get("peer") or "")
+            if not target:
+                raise RoomError("a kick names the peer it removes")
+            if target in self.host_peers():
+                # Said as a refusal rather than ignored, because the caller usually has
+                # a person in front of it who needs to hear the alternative.
+                raise NotPermitted(
+                    "the room's own host cannot be removed from it; closing the room "
+                    "is what takes everybody out")
+            if target == identity.peer_id:
+                raise NotPermitted("use leave to go yourself")
+            if not self.role_of(target):
+                raise NotAMember(f"{target!r} is not in room {self.room_id!r}")
+
+        host_acting = kind in ("close", "kick") and self.is_host(identity)
+        if kind in KINDS and not host_acting and not self.may(role, kind):
             raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
 
         frame = Frame.new(
@@ -509,6 +559,18 @@ class Room:
 
     def leave(self, identity: Identity, reason: str = "") -> Frame:
         return self.ingest({"kind": "leave", "body": {"reason": reason}}, identity=identity)
+
+    def kick(self, identity: Identity, peer_id: str, reason: str = "") -> Frame:
+        """Remove another peer from the room.
+
+        The frame goes into the ACTING peer's lane, never the removed one's: one
+        writer per lane is the property the whole store rests on, and a removal that
+        wrote into somebody else's directory would trade it away for a convenience.
+        Every reader folds the same frame and reaches the same membership.
+        """
+        return self.ingest({"kind": "kick",
+                            "body": {"peer": str(peer_id), "reason": reason}},
+                           identity=identity)
 
     def close(self, identity: Identity, reason: str = "") -> Frame:
         return self.ingest({"kind": "close", "body": {"reason": reason}}, identity=identity)
@@ -793,6 +855,9 @@ def describe(entry: Dict[str, Any]) -> str:
     if kind == "hire":
         return f"opened {body.get('child_room') or 'a child room'}" + (
             f" for {body['purpose']}" if body.get("purpose") else "")
+    if kind == "kick":
+        reason = str(body.get("reason") or "").strip()
+        return f"removed {body.get('peer')} from the room" + (f" - {reason}" if reason else "")
     if kind == "role":
         return f"made {body.get('peer')} a {body.get('role')}"
     if kind == "ack":
@@ -812,6 +877,7 @@ AUDIT_EVENTS = {
     "join": "joined",
     "leave": "left",
     "role": "role changed",
+    "kick": "removed somebody",
     "hire": "opened a child room",
     "close": "closed the room",
     "say": "message sent",
@@ -857,6 +923,8 @@ def audit(room: "Room", *, since_lamport: int = 0) -> List[Dict[str, Any]]:
         detail = ""
         if frame.kind == "report":
             detail = str(body.get("status") or "")
+        elif frame.kind == "kick":
+            detail = str(labels.get(str(body.get("peer") or "")) or body.get("peer") or "")
         elif frame.kind == "role":
             detail = f"{body.get('peer') or '?'} -> {body.get('role') or '?'}"
         elif frame.kind == "hire":

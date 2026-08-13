@@ -125,6 +125,7 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
 
     row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
     entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
+    members, labels, hosts = room.members(), room.labels(), room.host_peers()
     await websocket.send_json({
         "type": "room_transcript",
         "room": {
@@ -134,16 +135,36 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "roomKind": room.kind,
             "role": row.get("role"),
             "closed": bool(room.closed),
-            "members": len(room.members()),
+            "members": len(members),
             # Which peer is us, so the view can tell our own agent apart from the
             # strangers in the room.
             "me": row.get("peer"),
             # Who is in it, by the name the ROOM resolved. A header that listed join
             # names would show two agents called "Codex" and no way to tell which is
             # which, which is the same reason the tag exists at all.
+            # Whether the viewer may remove anybody here at all. Answered by the room
+            # rather than guessed from the role, because the host may act beyond its
+            # role and a browser that decided for itself would be a second rule.
+            "canManage": bool(row.get("peer")) and (
+                row.get("peer") in hosts or row.get("role") == "leader"),
+            # Built from members(), which already resolves the role, the card and the
+            # lease. Reading those out of the store again here would be a second answer
+            # to "who is in this room and are they awake".
             "members_list": [
-                {"peer": peer, "label": label, "role": room.role_of(peer) or ""}
-                for peer, label in sorted(room.labels().items(), key=lambda kv: kv[1])
+                {
+                    "peer": peer,
+                    "label": labels.get(peer) or record["display"],
+                    "role": record["role"],
+                    "card": record.get("card") or {},
+                    "stale": bool(record.get("stale")),
+                    # The room's own host handles. Sent so the view can leave the remove
+                    # button off entirely rather than offer one that is refused: an
+                    # action offered and then denied reads as a fault, and this is a
+                    # deliberate rule with a different answer (close the room).
+                    "protected": peer in hosts,
+                }
+                for peer, record in sorted(
+                    members.items(), key=lambda kv: labels.get(kv[0]) or kv[1]["display"])
             ],
         },
         "messages": [
@@ -3484,7 +3505,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
 
-                elif type in ("room_say", "close_room"):
+                elif type in ("room_say", "close_room", "kick_peer", "rename_room"):
                     # The person at the browser acting in a room themselves, rather
                     # than their agent doing it for them. They act on the CLI lane and
                     # not on a lane of their own, deliberately: the lanes separate the
@@ -3522,6 +3543,26 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         if type == "close_room":
                             room.close(identity, reason=Room.TERMINATED_BY_USER)
+                        elif type == "kick_peer":
+                            # The room decides whether this is allowed, including the
+                            # rule that its own host handles can never be removed. A
+                            # second check here would be a second answer.
+                            room.kick(identity, str(cmd.get("peer") or ""),
+                                      reason=str(cmd.get("reason") or "").strip())
+                        elif type == "rename_room":
+                            title = str(cmd.get("title") or "").strip()
+                            if not title:
+                                continue
+                            # The topic lives in the manifest, not in a frame: it is a
+                            # property of the room rather than something somebody said,
+                            # and a renamed room must not look like a message nobody
+                            # wrote. Only the host may change it.
+                            if not room.is_host(identity):
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Only the room's host can rename it"})
+                                continue
+                            room.store.update_manifest(topic=title[:200])
                         else:
                             text = str(cmd.get("text") or "").strip()
                             if not text:

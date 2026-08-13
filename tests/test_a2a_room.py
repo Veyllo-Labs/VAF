@@ -882,3 +882,106 @@ def test_a_closed_room_cannot_be_closed_twice(tmp_path):
     with pytest.raises(RoomClosed):
         room.close(host, reason="again")
     assert sum(1 for r in room.transcript() if r["kind"] == "close") == 1
+
+
+# ── removing somebody, and who cannot be removed ───────────────────────────
+
+def test_a_host_removes_a_guest_and_the_guest_is_out(tmp_path):
+    """MUTATION: write the removal into the removed peer's lane.
+
+    One writer per lane is the property the whole store rests on. A removal that wrote
+    into somebody else's directory would trade it away for a convenience - and two
+    writers in one lane is the lost update the design exists to avoid.
+    """
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-kick")
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+    host_peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-kick")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=host_peer)
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-guest")
+
+    frame = room.kick(host, "p-guest", reason="done here")
+
+    assert room.role_of("p-guest") is None
+    assert frame.sender == host_peer, "the removal was written into another peer's lane"
+    with pytest.raises(RoomError):
+        room.say(guest, "am I still here?")
+
+
+def test_the_rooms_own_host_can_never_be_kicked(tmp_path):
+    """MUTATION: let the protection be read from anything a peer writes.
+
+    The member file is written by the member, so a protection stored there would be a
+    peer naming its own. These handles are DERIVED from the owner's scope and the room
+    id, so nobody else can land on one.
+    """
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="chain", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-protect")
+    agent_peer = derive_peer_id(participant_key("agent", "scope-owner"), "room-protect")
+    room.join(display="VAF", scope_id="scope-owner", peer_id=agent_peer)
+    leader = room.join(display="Boss", scope_id="scope-owner", peer_id="p-boss")
+
+    assert agent_peer in room.host_peers()
+    with pytest.raises(NotPermitted) as refusal:
+        room.kick(leader, agent_peer)
+    assert "closing the room" in str(refusal.value), (
+        "the refusal does not say what to do instead")
+    assert room.role_of(agent_peer) is not None
+
+
+def test_a_peer_cannot_kick_anybody(tmp_path):
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-nokick")
+    one = room.join(display="A", scope_id=None, peer_id="p-a")
+    room.join(display="B", scope_id=None, peer_id="p-b")
+
+    with pytest.raises(NotPermitted):
+        room.kick(one, "p-b")
+    assert room.role_of("p-b") == "peer"
+
+
+def test_kicking_yourself_and_kicking_a_stranger_are_both_refused(tmp_path):
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-odd-kick")
+    host_peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-odd-kick")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=host_peer)
+
+    with pytest.raises(NotPermitted):
+        room.kick(host, host_peer)
+    with pytest.raises(NotAMember):
+        room.kick(host, "p-nobody")
+
+
+def test_a_removed_peer_can_be_invited_back(tmp_path):
+    """Removal is not a ban. The fold is over the log, so a later join simply resolves
+    again - which is what makes membership recomputable rather than stateful."""
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-return")
+    host_peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-return")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=host_peer)
+    room.join(display="Codex", scope_id=None, peer_id="p-back")
+    room.kick(host, "p-back")
+    assert room.role_of("p-back") is None
+
+    room.join(display="Codex", scope_id=None, peer_id="p-back")
+    assert room.role_of("p-back") == "peer"
+
+
+def test_a_removal_reads_as_a_removal_everywhere(tmp_path):
+    from vaf.core.a2a.room import audit, derive_peer_id, describe, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-said")
+    host_peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-said")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=host_peer)
+    room.join(display="Codex", scope_id=None, peer_id="p-gone")
+    room.kick(host, "p-gone", reason="finished")
+
+    last = room.transcript()[-1]
+    assert "removed" in describe(last) and "finished" in describe(last)
+    assert audit(room)[-1]["event"] == "removed somebody"

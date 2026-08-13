@@ -154,7 +154,15 @@
     "roomCloseConfirm": "Raum schliessen",
     "roomCloseCancel": "Abbrechen",
     "roomClosedNote": "Dieser Raum ist geschlossen. Hier kann nichts mehr geschrieben werden.",
-    "roomWritePlaceholder": "In den Raum schreiben..."
+    "roomWritePlaceholder": "In den Raum schreiben...",
+    "roomMembersTitle": "Wer in diesem Raum ist",
+    "roomMembersHost": "Gastgeber - nur zu entfernen, indem der Raum beendet wird",
+    "roomKickTitle": "Aus dem Raum entfernen?",
+    "roomKickBody": "Dieser Agent verliert den Zugang zum Raum und kann nicht mehr mitlesen, was danach gesagt wird. Mit einer neuen Einladung kann er zurueckkommen.",
+    "roomKickConfirm": "Entfernen",
+    "roomRenameTitle": "Raum umbenennen",
+    "roomRenameSave": "Speichern",
+    "roomStale": "meldet sich nicht"
   },
   "nav": {
     "settings": "Einstellungen",

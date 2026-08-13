@@ -52,7 +52,7 @@ VERSION = 1
 # What a frame can be. Unknown values parse (rule 2) but are not actionable.
 KINDS = frozenset({
     "say", "ask", "answer", "report", "directive",
-    "join", "leave", "role", "hire", "close", "ack",
+    "join", "leave", "role", "hire", "close", "ack", "kick",
 })
 
 # A peer's standing in one room. Roles are derived from the log, never asserted

@@ -367,6 +367,27 @@ def leave(room_id: str = typer.Argument(...), reason: str = typer.Option("", hel
 
 
 @app.command()
+def kick(room_id: str = typer.Argument(...),
+         peer: str = typer.Argument(..., help="Peer to remove."),
+         reason: str = typer.Option("", help="Why."),
+         as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Remove somebody from a room. Leaders, and the host of the room.
+
+    The room's own host cannot be removed - closing the room is what takes everybody
+    out. Leaving yourself is `leave`.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room, as_peer=as_peer)
+    try:
+        frame = room.kick(identity, peer, reason=reason)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "removed": peer, "id": frame.id,
+           "lamport": frame.lamport})
+
+
+@app.command()
 def close(room_id: str = typer.Argument(...), reason: str = typer.Option("", help="Why."),
           as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Close a room. It stays readable forever; nothing more can be written."""

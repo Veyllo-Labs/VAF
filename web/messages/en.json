@@ -154,7 +154,15 @@
     "roomCloseConfirm": "Close room",
     "roomCloseCancel": "Cancel",
     "roomClosedNote": "This room is closed. Nothing more can be written here.",
-    "roomWritePlaceholder": "Write to the room..."
+    "roomWritePlaceholder": "Write to the room...",
+    "roomMembersTitle": "Who is in this room",
+    "roomMembersHost": "Host - can only be removed by ending the room",
+    "roomKickTitle": "Remove from the room?",
+    "roomKickBody": "This agent loses access to the room and cannot read what is said after this. It can be invited back with a new invitation.",
+    "roomKickConfirm": "Remove",
+    "roomRenameTitle": "Rename the room",
+    "roomRenameSave": "Save",
+    "roomStale": "not responding"
   },
   "nav": {
     "settings": "Settings",

@@ -102,7 +102,20 @@ many frames have not been read.
   second voice of ours. Membership frames (join, leave, role) render as a quiet
   centred line rather than as a message: a join has no words in it, and drawing one
   with a name above a sentence would put a line in an agent's mouth.
-  Picking a conversation puts the room away, since both occupy the same place. Speakers are shown with the name the room resolved for them, tag
+  Picking a conversation puts the room away, since both occupy the same place - and
+  while a room is open it is the row marked active, not the conversation underneath.
+  The strip above the message box follows the same rule: the workspace folder, the
+  retrieval sources and the token budget all describe a CONVERSATION, so a room shows
+  its own name and member count there instead of the hidden chat's numbers.
+- **The row carries a pencil and a bin**, in the place a conversation carries them,
+  doing the room's version of each: rename the topic (host only, and it changes the
+  manifest rather than becoming a message nobody wrote), or END the room. The header
+  carries an information button instead of a close button - a click on any conversation
+  already leaves the room, and the header's one job in a group chat is answering who is
+  in it. That list shows each member's role, its self-description and whether its lease
+  has lapsed, and offers to remove one. No remove button is drawn for the room's own
+  host handles: an action offered and then refused reads as a fault, and this is a rule
+  with a different answer. Speakers are shown with the name the room resolved for them, tag
   included ("Codex51"), which is also the name a mention has to be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a
   full agent of its own and is never shown as a second voice of ours.

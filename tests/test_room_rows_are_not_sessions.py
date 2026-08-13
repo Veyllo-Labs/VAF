@@ -332,20 +332,19 @@ def test_bookkeeping_is_not_rendered_as_something_somebody_said():
 
 # ── closing a room, and writing into one ───────────────────────────────────
 
-def test_a_room_row_offers_closing_and_not_deleting():
-    """MUTATION: give the room row the chat's bin.
-
-    They are not the same act. A conversation is DELETED and gone; a room is CLOSED -
-    it stays readable forever and only stops accepting writes. An icon that promised
-    removal would be a promise the store deliberately does not keep.
+def test_a_room_row_carries_the_same_pair_a_conversation_does():
+    """A room row offers a pencil and a bin in the place a conversation offers them,
+    doing the room's version of each: rename the topic, END the room. Ending is not
+    deleting - the transcript stays readable - but it is the act a person reaches for
+    in that spot, and a different icon there made them hunt for it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
 
-    assert "KeyRound" in branch, "the room row has no way to close the room"
-    assert "Trash2" not in branch and "delete_session" not in branch, (
-        "a room row is offering deletion")
-    assert "setRoomToClose(s)" in branch, "the key acts immediately instead of asking"
+    assert "Edit2" in branch and "setRoomToRename(s)" in branch
+    assert "Trash2" in branch and "setRoomToClose(s)" in branch
+    assert "delete_session" not in branch, (
+        "a room row reached the session deleter, which would not know what to delete")
 
 
 def test_closing_never_happens_on_one_click():
@@ -406,7 +405,7 @@ def test_the_browser_acts_on_the_human_lane_and_not_a_lane_of_its_own():
 
     assert "web" not in PARTICIPANT_LANES
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room"):')[1].split("elif type ==")[0]
+    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
     assert 'participant_key("cli", user_scope_id)' in block
 
 
@@ -418,9 +417,120 @@ def test_writing_and_closing_answer_from_the_store():
     and the drift would be invisible until somebody compared two screens.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room"):')[1].split("elif type ==")[0]
+    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
 
     assert "_send_room_transcript" in block
     # one builder for all three commands, so they cannot describe the room differently
     assert source.count("async def _send_room_transcript") == 1
     assert source.count("_send_room_transcript(") >= 3
+
+
+# ── the group-chat header, and removing somebody ───────────────────────────
+
+def test_the_header_asks_who_is_here_rather_than_offering_a_third_way_out():
+    """MUTATION: put the close button back in the header.
+
+    A click on any conversation already leaves the room, and the sidebar bin ends it.
+    A third exit in the header crowded out the one thing a group-chat header is
+    actually asked for: who is in this room.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("function RoomConversation(")[1].split("\nfunction ")[0]
+
+    assert "onMembers" in block and "<Info size={16} />" in block
+    assert "onClose" not in block, "the header still carries a way to close the view"
+
+
+def test_removing_somebody_asks_first_and_says_something_different_from_ending_the_room():
+    """One takes a participant out, the other takes everybody out. A dialog that used
+    the same sentence for both would be answered by habit."""
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    dialog = source.split("{peerToKick && roomView && (")[1].split("{/* Renaming a room")[0]
+
+    assert "type: 'kick_peer'" in dialog
+    assert "tMain('roomKickBody')" in dialog
+    assert "roomCloseBody" not in dialog, "the removal dialog reuses the closing wording"
+
+
+def test_no_remove_button_is_offered_for_a_peer_that_cannot_be_removed():
+    """MUTATION: render the button and let the backend refuse.
+
+    An action offered and then denied reads as a fault. This is a deliberate rule with
+    a different answer - end the room - so the button is ABSENT rather than disabled.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    members = source.split("{roomMembersOpen && roomView && (")[1].split("{/* Removing one agent")[0]
+
+    assert "roomView.room.canManage && !m.protected" in members
+    assert "m.peer !== roomView.room.me" in members, "the viewer is offered a way to kick itself"
+
+
+def test_the_payload_marks_the_peers_that_cannot_be_removed():
+    """MUTATION: leave `protected` out and let the browser work it out.
+
+    The rule is derived from the owner's scope and the room id. A browser deciding it
+    for itself would be a second answer to a question the room already answers, and it
+    is the answer that keeps somebody from being locked out of their own room.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split("async def _send_room_transcript")[1].split("\ndef ")[0]
+
+    assert '"protected": peer in hosts' in block
+    assert '"canManage"' in block
+
+
+def test_renaming_a_room_changes_the_manifest_and_never_becomes_a_message():
+    """MUTATION: write the new title as a frame.
+
+    A topic is a property of the room, not something somebody said. As a frame it would
+    appear in the transcript as a line nobody wrote, and every reader would render it.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split('elif type == "rename_room":')[1].split("else:")[0]
+
+    assert "update_manifest(topic=" in block
+    assert "ingest" not in block and "room.say" not in block
+    assert "is_host" in block, "anybody in the room can rename it"
+
+
+def test_the_new_dialogs_are_translated_in_every_language_we_ship():
+    import json
+
+    keys = {"roomMembersTitle", "roomMembersHost", "roomKickTitle", "roomKickBody",
+            "roomKickConfirm", "roomRenameTitle", "roomRenameSave", "roomStale"}
+    for name in ("en", "de"):
+        catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
+        missing = keys - set(catalogue.get("main", {}))
+        assert not missing, f"{name}.json is missing {sorted(missing)}"
+
+
+# ── the two things the owner found by using it ─────────────────────────────
+
+def test_an_open_room_is_the_active_row_and_the_chat_underneath_is_not():
+    """MUTATION: leave the active mark on the conversation.
+
+    Both live in one list. With a room open, the mark sat on the chat the user had
+    left, so the sidebar said they were somewhere they were not.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
+    chat = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[1][:6000]
+
+    assert "roomView?.room.roomId === s.roomId" in branch, "the open room is never marked active"
+    assert "currentSessionId === s.id && !roomView" in chat, (
+        "a conversation still claims to be active while a room is open")
+
+
+def test_the_strip_over_the_composer_belongs_to_whatever_is_open():
+    """MUTATION: keep showing the conversation's workspace and token budget.
+
+    The workspace folder, the retrieval sources and the token budget all describe the
+    CHAT. With a room open they described the one hidden behind it, so a user read
+    another chat's workspace and another chat's numbers while typing into a room.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    strip = source.split("{/* Token Stats (Clickable) + RAG Badge */}")[1][:3000]
+
+    assert "{roomView ? (" in strip
+    assert strip.index("{roomView ? (") < strip.index("workspaceInfo?.path"), (
+        "the workspace chip is still rendered for a room")

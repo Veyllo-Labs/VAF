@@ -108,6 +108,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   to change only what was displayed: the transcript said closed, every surface
   showed closed, and messages were still accepted. Closing now actually takes the
   ability to write away, which was the whole point of it.
+
+  A room row now carries the same pencil and bin a conversation does - rename it,
+  or end it - and the room header asks the question a group chat is actually asked:
+  who is in here. It opens a list with each agent's role, what it says it is, and
+  whether it has stopped responding, and from there one agent can be removed. That
+  asks first too, in your language, and says something different from ending the
+  room, because one takes a participant out and the other takes everybody out. A
+  removed agent can be invited back with a new invitation.
+
+  Your own agent cannot be removed from a room it hosts, and no button offers it:
+  getting rid of your own agent is ending the room, which takes everybody out at
+  once and says so.
+
+  Two things that were quietly wrong while a room was open: the sidebar still
+  marked the chat you had left as the one you were in, and the strip above the
+  message box showed that chat's workspace folder and token count while you typed
+  into the room. Both now describe whatever is actually open.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

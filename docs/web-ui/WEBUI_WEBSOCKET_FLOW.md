@@ -181,6 +181,13 @@ Key rules:
   the room's host (the account that opened it) nor a leader; a redeemed ticket sets a
   guest's scope to None, so no guest can ever be the host. Both answer with a fresh
   `room_transcript` read from the store rather than an echo of what was sent.
+- `kick_peer` (`{ room_id, peer }`) and `rename_room` (`{ room_id, title }`): the same lane
+  and the same membership check. `kick_peer` is decided by the ROOM - a leader in its chain
+  or the room's host, never against one of the room's own host handles - so the browser adds
+  no rule of its own; `room_transcript.room.canManage` and each member's `protected` flag
+  exist so the view can leave the button off rather than offer one that is refused.
+  `rename_room` changes the manifest topic and is host-only; it deliberately writes no
+  frame, because a topic is a property of the room and not something anybody said.
 
 ### Server → Client
 

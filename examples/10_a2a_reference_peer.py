@@ -40,7 +40,7 @@ WIRE_KEYS = frozenset({
 
 KINDS = frozenset({
     "say", "ask", "answer", "report", "directive",
-    "join", "leave", "role", "hire", "close", "ack",
+    "join", "leave", "role", "hire", "close", "ack", "kick",
 })
 
 REPORT_STATUSES = frozenset({
@@ -51,7 +51,7 @@ REPORT_STATUSES = frozenset({
 # What each role may EMIT. Not what it may do to a machine: a room hands out no tool.
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
-                         "role", "hire", "close", "leave", "ack", "join"}),
+                         "role", "hire", "close", "leave", "ack", "join", "kick"}),
     "worker": frozenset({"say", "ask", "answer", "report",
                          "hire", "leave", "ack", "join"}),
     "peer": frozenset({"say", "ask", "answer", "leave", "ack", "join"}),

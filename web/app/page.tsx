@@ -12,7 +12,7 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, KeyRound
+    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -161,7 +161,17 @@ type RoomMessage = {
 type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
-    members_list?: Array<{ peer: string; label: string; role: string }>;
+    canManage?: boolean;
+    members_list?: Array<{
+        peer: string; label: string; role: string;
+        /** The room's own host handles: no remove button is offered for them. */
+        protected?: boolean;
+        /** Self-description from the join. Shown as self-description, never read as
+         *  permission - a card that named a role would change nothing. */
+        card?: { kind?: string; skills?: string };
+        /** Lease lapsed. Stale, never gone: a sleeping laptop is not a departure. */
+        stale?: boolean;
+    }>;
 };
 
 type SessionEditorDocumentState = {
@@ -1025,10 +1035,11 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onClose, closedNote }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
     view: { room: RoomView; messages: RoomMessage[] };
-    onClose: () => void;
+    onMembers: () => void;
     closedNote: string;
+    membersTitle: string;
 }) {
     return (
         <>
@@ -1062,9 +1073,13 @@ function RoomConversation({ view, onClose, closedNote }: {
                         </span>
                     ))}
                 </div>
-                <button onClick={onClose} title="Back to the conversation"
+                {/* Who is in here, and what each of them is. There was a close button in
+                    this spot; it was the third way to leave a room that a click on any
+                    conversation already does, and it crowded out the one thing a group
+                    chat header is actually asked for. */}
+                <button onClick={onMembers} title={membersTitle}
                     className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
-                    <X size={16} />
+                    <Info size={16} />
                 </button>
             </div>
 
@@ -1332,6 +1347,13 @@ function VAFDashboardContent() {
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
+    const [roomToRename, setRoomToRename] = useState<Session | null>(null);
+    const [roomTitleDraft, setRoomTitleDraft] = useState('');
+    const [roomMembersOpen, setRoomMembersOpen] = useState(false);
+    // The member a user has asked to remove, pending confirmation. Removing somebody
+    // from a room ends their access to a conversation they were invited into, and they
+    // are not here to be asked, so it never happens on one click.
+    const [peerToKick, setPeerToKick] = useState<{ peer: string; label: string } | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     const pendingSendRef = useRef<{ text: string } | null>(null);
@@ -2616,6 +2638,7 @@ function VAFDashboardContent() {
         // conversation has to put it away. Without this, clicking a chat while a room
         // is open would load that chat underneath and keep showing the room.
         setRoomView(null);
+        setRoomMembersOpen(false);
         if (currentSessionId === id) return;
 
         // 1. Save current session state before switching (messages + animation). Document Viewer is already keyed by session in state.
@@ -5901,9 +5924,16 @@ function VAFDashboardContent() {
                                         setDrawerOpen(false);
                                         ws?.send(JSON.stringify({ type: 'open_room', room_id: s.roomId }));
                                     }}
-                                    className="flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative hover:bg-gray-100">
+                                    className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative",
+                                        roomView?.room.roomId === s.roomId ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
-                                    {(s.unread || 0) > 0 && (
+                                    {/* The open room IS the active row. Leaving the mark on the chat
+                                        underneath told the user they were somewhere they had left. */}
+                                    {roomView?.room.roomId === s.roomId && (
+                                        <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-1 bg-black rounded-full opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity" />
+                                    )}
+
+                                    {(s.unread || 0) > 0 && roomView?.room.roomId !== s.roomId && (
                                         <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                                     )}
 
@@ -5925,12 +5955,19 @@ function VAFDashboardContent() {
                                                 CLOSED - it stays readable forever and only stops
                                                 accepting writes, so the icon has to promise
                                                 revoked access rather than removal. */}
+                                            {/* The same pair a conversation has, doing the room's
+                                                version of each: the pencil renames it, the bin ENDS
+                                                it. Ending is not deleting - the transcript stays
+                                                readable forever - but it is the act a person reaches
+                                                for in that spot, and giving it a different icon made
+                                                them hunt for it. */}
                                             {!s.closed && (
-                                                <span title={tMain('roomCloseTitle')}
-                                                    onClick={(e) => { e.stopPropagation(); setRoomToClose(s); }}
-                                                    className="opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
-                                                    <KeyRound size={12} className="text-gray-400 hover:text-red-600" />
-                                                </span>
+                                                <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
+                                                    <Edit2 size={12} className="text-gray-400 hover:text-gray-900"
+                                                        onClick={(e) => { e.stopPropagation(); setRoomToRename(s); setRoomTitleDraft(s.title); }} />
+                                                    <Trash2 size={12} className="text-gray-400 hover:text-red-600"
+                                                        onClick={(e) => { e.stopPropagation(); setRoomToClose(s); }} />
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -5942,7 +5979,7 @@ function VAFDashboardContent() {
                                     {/* Active Indicator (Dot) — only while the sidebar is expanded, so the
                                         collapsed rail keeps the active bubble aligned with the inactive ones
                                         (the active state is still conveyed by the darker icon colour). */}
-                                    {currentSessionId === s.id && (
+                                    {currentSessionId === s.id && !roomView && (
                                         <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-1 bg-black rounded-full opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity" />
                                     )}
 
@@ -6163,8 +6200,9 @@ function VAFDashboardContent() {
                                     attempts got this wrong by building a surface of their own, first a
                                     narrow dialog and then a full-screen layer that covered the sidebar. */}
                                 {roomView ? (
-                                    <RoomConversation view={roomView} onClose={() => setRoomView(null)}
-                                        closedNote={tMain('roomClosedNote')} />
+                                    <RoomConversation view={roomView} onMembers={() => setRoomMembersOpen(true)}
+                                        closedNote={tMain('roomClosedNote')}
+                                        membersTitle={tMain('roomMembersTitle')} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -7127,6 +7165,20 @@ function VAFDashboardContent() {
                                         <div className="w-9 shrink-0" />
                                     )}
                                     <div className="flex min-w-0 flex-1 items-baseline justify-end gap-2 px-2 max-md:flex-wrap max-md:gap-y-1">
+                                    {/* Everything on this strip - the workspace folder, the retrieval
+                                        sources, the token budget - belongs to the CONVERSATION. With a
+                                        room open it described the chat hidden behind it, so the user
+                                        read another chat's workspace and another chat's token count
+                                        while typing into a room. A room says what it is instead. */}
+                                    {roomView ? (
+                                        <span className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded border border-gray-200 dark:border-[#2a2a2a] leading-none select-none">
+                                            <Users size={10} className="shrink-0" />
+                                            <span className="max-w-[220px] truncate">{roomView.room.title}</span>
+                                            <span className="opacity-70">
+                                                {`\u00b7 ${roomView.room.members ?? 0}`}
+                                            </span>
+                                        </span>
+                                    ) : (<>
                                     {/* Workspace chip: leftmost element; mr-auto pushes RAG/tokens to the right edge.
                                         Always shown once this chat HAS a workspace folder, even an empty one - it is
                                         the "this chat has its own workspace" affordance, not a "you saved something"
@@ -7222,6 +7274,7 @@ function VAFDashboardContent() {
                                             {Math.round(contextStats.percent)}%<span className="max-md:hidden"> ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})</span>
                                         </span>
                                     )}
+                                    </>)}
                                     </div>
                                 </div>
 
@@ -8607,6 +8660,128 @@ function VAFDashboardContent() {
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
             )}
+            {/* Who is in the room. A popup rather than a permanent panel: it answers a
+                question that is asked occasionally and would otherwise take width away
+                from the conversation on every screen. */}
+            {roomMembersOpen && roomView && (
+                <div className="fixed inset-0 z-[85] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setRoomMembersOpen(false)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] max-h-[80vh] flex flex-col">
+                        <div className="flex items-center gap-3 p-5 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
+                            <Users className="w-5 h-5 text-gray-400" />
+                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] flex-1 truncate">
+                                {tMain('roomMembersTitle')}
+                            </div>
+                            <button onClick={() => setRoomMembersOpen(false)}
+                                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400">
+                                <X size={16} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-3 space-y-1 min-h-0">
+                            {(roomView.room.members_list || []).map(m => (
+                                <div key={m.peer} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#242424]">
+                                    <div className={cn(
+                                        "w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium",
+                                        m.peer === roomView.room.me
+                                            ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                            : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
+                                        {(m.label || '?').slice(0, 2)}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">{m.label}</div>
+                                        <div className="text-[11px] text-gray-400 truncate">
+                                            {m.role}
+                                            {m.card?.kind ? ` \u00b7 ${m.card.kind}` : ''}
+                                            {m.stale ? ` \u00b7 ${tMain('roomStale')}` : ''}
+                                            {m.protected ? ` \u00b7 ${tMain('roomMembersHost')}` : ''}
+                                        </div>
+                                        {m.card?.skills && (
+                                            <div className="text-[11px] text-gray-400 line-clamp-2">{m.card.skills}</div>
+                                        )}
+                                    </div>
+                                    {/* Absent, not disabled, for a host handle: an action offered and
+                                        then refused reads as a fault, and this is a rule with a
+                                        different answer - end the room instead. */}
+                                    {roomView.room.canManage && !m.protected && m.peer !== roomView.room.me && (
+                                        <button title={tMain('roomKickTitle')}
+                                            onClick={() => setPeerToKick({ peer: m.peer, label: m.label })}
+                                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-[#2a2a2a] shrink-0">
+                                            <UserMinus size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Removing one agent. Its own confirmation, and deliberately not the same
+                sentence as ending the room: one takes a participant out, the other takes
+                everybody out, and a dialog that blurred them would be answered by habit. */}
+            {peerToKick && roomView && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setPeerToKick(null)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                                <UserMinus className="w-5 h-5 text-red-500" />
+                            </div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
+                                {tMain('roomKickTitle')} {peerToKick.label}
+                            </div>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-[#8a8a8a] mb-5">{tMain('roomKickBody')}</p>
+                        <div className="flex gap-2">
+                            <button onClick={() => setPeerToKick(null)}
+                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-sm text-gray-700 dark:text-[#c8c8c8] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
+                                {tMain('roomCloseCancel')}
+                            </button>
+                            <button onClick={() => {
+                                ws?.send(JSON.stringify({ type: 'kick_peer', room_id: roomView.room.roomId, peer: peerToKick.peer }));
+                                setPeerToKick(null);
+                            }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors">
+                                {tMain('roomKickConfirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Renaming a room. The topic is a property of the room, not something
+                somebody said, so it changes the manifest and never becomes a message. */}
+            {roomToRename && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setRoomToRename(null)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6">
+                        <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] mb-4">
+                            {tMain('roomRenameTitle')}
+                        </div>
+                        <input
+                            autoFocus
+                            value={roomTitleDraft}
+                            onChange={e => setRoomTitleDraft(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Escape') setRoomToRename(null); }}
+                            className="w-full px-3 py-2 mb-5 rounded-lg border border-gray-200 dark:border-[#2a2a2a] bg-transparent text-sm text-gray-900 dark:text-[#e6e6e6] focus:outline-none focus:border-gray-400"
+                        />
+                        <div className="flex gap-2">
+                            <button onClick={() => setRoomToRename(null)}
+                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-sm text-gray-700 dark:text-[#c8c8c8] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
+                                {tMain('roomCloseCancel')}
+                            </button>
+                            <button onClick={() => {
+                                const title = roomTitleDraft.trim();
+                                if (title) ws?.send(JSON.stringify({ type: 'rename_room', room_id: roomToRename.roomId, title }));
+                                setRoomToRename(null);
+                            }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 dark:bg-[#e6e6e6] dark:text-[#181818] text-white text-sm font-medium transition-colors">
+                                {tMain('roomRenameSave')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {/* Closing a room. A dialog IS right here, unlike for reading one: this is a
                 decision, it cannot be undone, and it takes access away from agents that
                 are not in front of this screen to object. */}
@@ -8616,7 +8791,7 @@ function VAFDashboardContent() {
                     <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6">
                         <div className="flex items-center gap-3 mb-3">
                             <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
-                                <KeyRound className="w-5 h-5 text-red-500" />
+                                <Trash2 className="w-5 h-5 text-red-500" />
                             </div>
                             <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">
                                 {tMain('roomCloseTitle')}

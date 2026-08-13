@@ -72,7 +72,7 @@ rule 1 applies to it.
 ### Kinds
 
 `say`, `ask`, `answer`, `report`, `directive`, `join`, `leave`, `role`, `hire`, `close`,
-`ack`.
+`ack`, `kick`.
 
 `report.body.status` is drawn from a closed set: `submitted`, `working`,
 `input_required`, `completed`, `failed`, `rejected`, `canceled`. `input_required` is the
@@ -107,9 +107,9 @@ has a test.
 
 | Role | May emit | May not |
 |---|---|---|
-| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` | - |
-| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` | `directive` `role` `close` |
-| `peer` | `say` `ask` `answer` `leave` `ack` `join` | `report` `directive` `role` `hire` `close` |
+| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` | - |
+| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` | `directive` `role` `close` `kick` |
+| `peer` | `say` `ask` `answer` `leave` `ack` `join` | `report` `directive` `role` `hire` `close` `kick` |
 
 Room kinds: `chain` (one leader, N workers, where a directive means something) and
 `round` (peers, nobody commands). A two-member chain covers the direct case, so there is
@@ -135,6 +135,31 @@ no leader by design.
 
 The host is decided by TENANT and never by role, so a guest can never be one: redeeming
 a ticket sets the guest's scope to `None` on purpose.
+
+### Removing somebody: `kick`, and who cannot be removed
+
+`leave` removes only its own sender, by design, and that is not an oversight to work
+around: the store has ONE WRITER PER LANE, so a host cannot write into the lane of the
+peer it is removing. `kick` is therefore a frame in the ACTING peer's own lane naming
+somebody else, which every reader folds and reaches the same membership from.
+
+A leader may kick in its chain; the host may kick in any room it hosts, the same shape
+as `close`.
+
+**The room's own host handles can never be kicked.** They are DERIVED from the owner's
+scope and the room id rather than stored anywhere, so a peer cannot claim the protection
+for itself, and it is refused out loud rather than ignored - because the caller usually
+has a person in front of it who needs to hear the alternative. Removing the machine
+owner's own agent is not a membership operation: it is closing the room, which takes
+everybody out at once and says so.
+
+A kick against a non-member, or against yourself, is refused too. Leaving is `leave`.
+
+`kick` is also the worked example of rule 2. It did not exist in the first release, so a
+peer written against that release treats it as an unknown kind: it SHOWS the frame and
+does not act on it. The membership those older peers compute is stale rather than wrong,
+and they never misread it as something else - which is what would have happened had the
+removal been squeezed into an existing kind.
 
 ### A worker that hires becomes a leader in a CHILD room
 
@@ -345,7 +370,7 @@ NDJSON on stdout.
 
 ```
 create  list  invite  join  trust  say  ask  answer  report  directive
-hire  role  leave  close  members  read  wait  log  audit  export
+hire  role  kick  leave  close  members  read  wait  log  audit  export
 ```
 
 `wait` is the most used line of the protocol, since a foreign agent blocks on it between

@@ -130,6 +130,40 @@ class WakeMessage(Vertical):
         yield Static(self._text, classes="wake-msg", markup=False)
 
 
+class PeerMessage(Vertical):
+    """One speaker in an agent room: who said it, what role they hold, when.
+
+    A room has N speakers, so the label cannot be baked into the widget the way
+    `UserMessage` bakes in "You". It arrives as data, and the TEXT never carries it -
+    the same rule voice_turn follows for a transcript with several people in it, so a
+    renderer never has to parse a name back out of a message.
+
+    UserMessage and AgentMessage are deliberately NOT rebuilt on top of this. Their
+    output has to stay byte-identical, the two-speaker path is what almost every
+    session is, and a shared base would put that at risk to save a dozen lines.
+    """
+
+    def __init__(self, speaker: str, text: str, *, badge: str = "",
+                 when: str = "", kind: str = "say") -> None:
+        super().__init__()
+        self.add_class("peer-msg-wrap")
+        self._speaker = speaker
+        self._badge = badge
+        self._text = text
+        self._when = when
+        self._kind = kind
+
+    def compose(self) -> ComposeResult:
+        label = f"[$secondary]{_escape(self._speaker)}[/]"
+        if self._badge:
+            label += f" [$text-disabled]{_escape(self._badge)}[/]"
+        if self._kind and self._kind != "say":
+            label += f" [$warning]({_escape(self._kind)})[/]"
+        yield Static(f"{label} [$text-disabled]· {self._when or _now()}[/]",
+                     classes="msg-head")
+        yield Static(self._text, classes="peer-msg", markup=False)
+
+
 class AgentMessage(Vertical):
     """Role-headed streaming content with a separate think channel; the avatar
     lives IN the head row (`[ ● ] VAF · HH:MM`), so think and answer below run

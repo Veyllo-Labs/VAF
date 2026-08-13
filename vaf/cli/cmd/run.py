@@ -1948,6 +1948,45 @@ Tab             - Autocomplete
                         tui.warning("Usage: /export <filename>")
                     continue
 
+                elif cmd == "room":
+                    # Same view the terminal app paints and `vaf a2a log` prints,
+                    # rendered with this lane's own primitives. A room is not a
+                    # session: it is shown, never switched to.
+                    try:
+                        from vaf.core.a2a.room import Room, joined_rooms, unread_frames
+                        from vaf.core.a2a.store import StoreError, UnsafeName
+                        from vaf.core.config import get_local_admin_scope_id
+                        _key = str(get_local_admin_scope_id() or "local")
+                        if not args:
+                            _rooms = joined_rooms(_key)
+                            if not _rooms:
+                                tui.info("No agent rooms yet - `vaf a2a create` opens one")
+                            else:
+                                _pending = {r.room_id: len(f) for r, _i, f in unread_frames(_key)}
+                                tui.list_items(
+                                    [f"{r.room_id} ({r.kind}) as {i.role}"
+                                     f" - {_pending.get(r.room_id, 0)} unread"
+                                     for r, i in _rooms],
+                                    title="Agent rooms", numbered=True)
+                        else:
+                            try:
+                                _room = Room.open(args[0])
+                            except (StoreError, UnsafeName):
+                                tui.warning(f"No room '{args[0]}' on this machine")
+                                continue
+                            _rows = _room.transcript()
+                            if not _rows:
+                                tui.info(f"{args[0]} is empty")
+                            else:
+                                for _entry in _rows:
+                                    _label = f"{_entry['display']} [{_entry['role']}]"
+                                    if _entry["kind"] != "say":
+                                        _label += f" ({_entry['kind']})"
+                                    tui.info(f"{_label}: {_entry['text']}")
+                    except Exception as _room_err:
+                        tui.warning(f"Rooms unavailable: {_room_err}")
+                    continue
+
                 elif cmd == "tools":
                     if hasattr(agent, 'tools'):
                         tools_list = [f"{name}: {tool.description[:50]}..." for name, tool in agent.tools.items()]

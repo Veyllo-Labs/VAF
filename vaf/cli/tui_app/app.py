@@ -15,6 +15,7 @@ and the letters typed alone into the prompt still route the way the classic
 loop's words did.
 """
 import threading
+import time
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -174,6 +175,19 @@ class TuiEvents:
         getattr(self._app, name)(*args)
 
 
+def _room_clock(ts) -> str:
+    """A frame's wall clock as HH:MM for the head row.
+
+    `ts` is advisory in the protocol and is used for exactly this: showing a human
+    when something was said. Ordering never reads it. An unusable value renders as
+    empty rather than as a wrong time, and the widget then shows the current one.
+    """
+    try:
+        return time.strftime("%H:%M", time.localtime(float(ts)))
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
 class VafApp(App):
     """Assembly only: widgets render, screens overlay, the injected bridge owns
     every behavior. The chrome order (top bar / transcript / tasks line /
@@ -225,6 +239,7 @@ class VafApp(App):
     .user-msg-wrap { height: auto; }
     .agent-msg-wrap { height: auto; }
     .wake-msg-wrap { height: auto; }
+    .peer-msg-wrap { height: auto; }
     .user-msg {
         padding: 0 1; border-left: thick $accent; background: $surface;
     }
@@ -823,6 +838,7 @@ class VafApp(App):
             "undo": lambda a: self._bridge.undo_last_change(),
             "restore": lambda a: self._bridge.restore_context(),
             "export": self._cmd_export,
+            "room": self._cmd_room,
             "listen": lambda a: self.action_voice(),
             "halt": lambda a: self._bridge.stop_speech(),
             "restart": lambda a: self._request_restart(),
@@ -852,6 +868,60 @@ class VafApp(App):
                              lambda yes: handler(parsed.args) if yes else None)
         else:
             handler(parsed.args)
+
+    def _cmd_room(self, args) -> None:
+        """Paint an agent room as a group chat, or list the rooms with no argument.
+
+        A room is NOT a session: it has many writers and no single history to load, so
+        it is painted into the transcript as a read-only view rather than switched to.
+        The live conversation stays where it was.
+        """
+        from vaf.cli.tui_app.widgets import PeerMessage
+        try:
+            from vaf.core.config import get_local_admin_scope_id
+            from vaf.core.a2a.room import Room, joined_rooms, unread_frames
+            from vaf.core.a2a.store import StoreError, UnsafeName
+        except Exception as exc:                      # pragma: no cover - import guard
+            self.add_event_note("Rooms", f"not available: {exc}", "warning")
+            return
+
+        key = str(get_local_admin_scope_id() or "local")
+        if not args:
+            rooms = joined_rooms(key)
+            if not rooms:
+                self.add_system_note("No agent rooms yet - `vaf a2a create` opens one")
+                return
+            pending = {r.room_id: len(f) for r, _i, f in unread_frames(key)}
+            lines = [f"{room.room_id} ({room.kind}) as {identity.role}"
+                     f"{f' - {pending[room.room_id]} unread' if pending.get(room.room_id) else ''}"
+                     for room, identity in rooms]
+            self.add_system_note("Rooms: " + " | ".join(lines))
+            return
+
+        room_id = str(args[0])
+        try:
+            room = Room.open(room_id)
+        except (StoreError, UnsafeName):
+            self.add_event_note("Rooms", f"no room {room_id!r} on this machine", "warning")
+            return
+
+        rows = room.transcript()
+        if not rows:
+            self.add_system_note(f"{room_id} is empty")
+            return
+        self.add_system_note(
+            f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
+            f"{len(rows)} messages")
+        for entry in rows[-self.REPLAY_CAP:]:
+            text = entry["text"]
+            if entry["kind"] == "report" and (entry["body"] or {}).get("status"):
+                text = f"[{entry['body']['status']}] {text}"
+            if not entry["known"]:
+                text = f"<message type '{entry['kind']}' this version does not know> {text}"
+            self._mount_scrolled(PeerMessage(
+                entry["display"], text, badge=entry["role"], kind=entry["kind"],
+                when=_room_clock(entry["ts"]),
+            ))
 
     def _cmd_theme(self, args) -> None:
         if not args:

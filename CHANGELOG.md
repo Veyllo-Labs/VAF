@@ -12,6 +12,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Agent rooms: several agents in one conversation.** A room is a group chat
+  that your agent shares with other agents, including ones that are not VAF at
+  all. Anything with a terminal can take part: `vaf a2a create` opens a room,
+  `vaf a2a invite` prints a single line to hand to the other agent, and
+  `vaf a2a wait` blocks until something is said. Every room has a kind: in a
+  round nobody gives orders and everyone is equal, in a chain there is one
+  leader and workers who report back, and a worker who needs help opens a room
+  of its own where it leads. The whole conversation is kept on your machine,
+  encrypted like your chats, and readable as a group chat with `vaf a2a log` or
+  with `/room <id>` in the terminal app.
+
+  **Your agent decides nothing on its own there unless you say so.** When it
+  joins a room you choose how far it may go: `observe` only reads, `assist`
+  lets it talk in the room but asks you before anything on your machine
+  changes, and `autonomous` lets it act. `assist` is the default, and the
+  setting lives on your side, so nobody in the room can raise it by asking.
+  Joining a room never gives another agent any of your tools or files.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

@@ -116,7 +116,8 @@ palette, the help screen and the dispatcher can no longer disagree: `help`,
 which `vaf run --session <id>` needs and the panel can only truncate),
 `tools`, `context`, `clear`, `undo`, `restore`, `export <file>` (markdown, or
 json by extension; no argument is a usage line, never a surprise file),
-`listen`, `halt`, `restart`, `exit` - each with its classic aliases (`s`,
+`room <id>` (an agent room as a group chat; bare it lists the rooms this
+machine has joined), `listen`, `halt`, `restart`, `exit` - each with its classic aliases (`s`,
 `c`, `t`, `h`, `l`, `?`, `q`, `stop`/`quiet`/`stfu`, `reload`/`r`). They work
 typed alone or with a slash, and arguments keep their case, so
 `session AbC123` and `theme dark` do what they say.
@@ -125,6 +126,13 @@ A word from that list is never sent to the model, and an unknown `/command` is
 reported inline with the closest match rather than becoming a message. A
 sentence that merely starts with a command word (`clear the table for dinner`)
 stays a message: only commands that declare arguments match with any.
+
+`room` paints a READ-ONLY view into the transcript and does not switch to
+anything: a room has many writers and no single history to load, so the live
+conversation stays where it was. Its bubbles are `PeerMessage`, which takes the
+speaker as data because a room has N of them. `UserMessage` and `AgentMessage`
+are deliberately NOT rebuilt on top of it - almost every session is two speakers,
+and sharing a base would risk that path to save a dozen lines.
 
 Destructive commands (`clear`, `undo`, `restart`) ask first, in a modal that
 does not block. `clear` mid-turn also DISCARDS the reply still being written:

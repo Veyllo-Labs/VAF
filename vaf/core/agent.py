@@ -7756,7 +7756,17 @@ class Agent:
         # Ask-first invariant: a REAL user message clears the pending-question latch; synthetic
         # background turns (runner drain sets _synthetic_drain_turn) must NOT clear it - that is
         # exactly the window in which new write actions stay blocked until the user answers.
-        if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):
+        # The latch means "the agent asked its user something and is waiting". Only a
+        # PERSON answering may clear it. A timer and an automation both reach this line
+        # looking exactly like a user turn - real text, no background marker - so a
+        # scheduled job ten minutes later used to open a gate that promised to stay shut
+        # until the user replied. chat_step cannot tell them apart on its own, because
+        # the lanes that have no queue (the terminal, an embedder) are genuinely a
+        # person typing; the queue boundary sets `_turn_is_human` when it knows better,
+        # and the absence of the flag keeps those lanes behaving exactly as before.
+        if (user_input and not skip_input
+                and not getattr(self, "_synthetic_drain_turn", False)
+                and getattr(self, "_turn_is_human", True)):
             self._pending_user_question = None
 
         # Cross Chat Hint: resolved ONCE per turn, from the raw message. The block is

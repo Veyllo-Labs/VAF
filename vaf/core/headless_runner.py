@@ -1553,6 +1553,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # sub-agent (live incident 2026-07-20).
                     _manage_webui_env = force_webui_active and total_workers <= 1
                     _task_images = task_meta_for_env.get("images") or None
+                    # Did a PERSON send this turn? Only the queue boundary can tell: a
+                    # timer and an automation arrive with the user's own text and no
+                    # marker. The agent uses it for the ask-first latch and for the room
+                    # streak, and it is restored on every exit path below (Rule 4.5) so
+                    # one task's answer can never colour the next one's.
+                    _turn_is_human = bool(
+                        getattr(task, "task_class", "") == "interactive"
+                        and not task_meta_for_env.get("timer")
+                        and str(task.input_text or "").strip()
+                    )
+                    _prev_turn_is_human = getattr(agent, "_turn_is_human", None)
+                    agent._turn_is_human = _turn_is_human
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary
                     # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
                     # Emit the trigger as a "wake" system-activity message (kind="timer") -> the Web UI
@@ -1591,6 +1603,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")
                     finally:
+                        if _prev_turn_is_human is None:
+                            try:
+                                del agent._turn_is_human
+                            except AttributeError:
+                                pass
+                        else:
+                            agent._turn_is_human = _prev_turn_is_human
                         if _manage_webui_env:
                             if prev_webui_active is None:
                                 os.environ.pop("VAF_WEBUI_ACTIVE", None)
@@ -1610,10 +1629,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # agent as an ordinary turn with real text and no marker, and a
                     # repeating timer would otherwise hold the brake open forever.
                     try:
-                        _meta_h = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        if (getattr(task, "task_class", "") == "interactive"
-                                and not _meta_h.get("timer")
-                                and str(task.input_text or "").strip()):
+                        if _turn_is_human:
                             agent.note_human_turn()
                     except Exception:
                         pass

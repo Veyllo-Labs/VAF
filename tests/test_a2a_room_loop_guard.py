@@ -246,15 +246,25 @@ def test_a_timer_and_an_automation_are_not_a_person():
     agent_src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
     runner_src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
 
-    latch = agent_src.split(
-        'if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):')[1]
-    assert "_room_reply_streak" not in latch.split("\n\n")[0], (
-        "the streak is reset from a test that a timer also satisfies")
+    # The streak is reset from note_human_turn, never from the latch-clearing branch in
+    # chat_step: that branch has its own condition and its own history, and hanging a
+    # second meaning on it is how two rules end up sharing one bug.
+    import ast
+    for node in ast.walk(ast.parse(agent_src)):
+        if isinstance(node, ast.If):
+            body = ast.dump(ast.Module(body=node.body, type_ignores=[]))
+            if "_pending_user_question" in body:
+                assert "_room_reply_streak" not in body, (
+                    "the streak is reset from the latch branch instead of note_human_turn")
 
-    tail = runner_src.split("agent.note_human_turn()")[0][-700:]
-    assert 'task_class", "") == "interactive"' in tail
-    assert '_meta_h.get("timer")' in tail
-    assert "task.input_text" in tail
+    # The runner decides once, at the queue boundary, and both consumers ride on that
+    # one decision: the ask-first latch and this streak. Two copies of "was that a
+    # person" would drift, and one of them would be the enforcing one.
+    decision = runner_src.split("_turn_is_human = bool(")[1].split("\n                    )")[0]
+    assert 'task_class", "") == "interactive"' in decision
+    assert 'get("timer")' in decision
+    assert "task.input_text" in decision
+    assert "if _turn_is_human:" in runner_src.split("agent.note_human_turn()")[0][-200:]
 
 
 # ── the layer that prevents the loop in the first place ────────────────────

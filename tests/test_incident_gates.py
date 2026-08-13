@@ -131,10 +131,27 @@ def test_drain_retry_respects_pending_question():
 
 
 def test_pending_latch_not_cleared_by_synthetic_turns():
+    """The latch must survive a synthetic drain turn - and, since a later round, a
+    timer and an automation as well.
+
+    Both reach chat_step looking exactly like a user turn (real text, no background
+    marker), so a reminder firing ten minutes after "shall I delete it?" used to answer
+    on the user's behalf. chat_step cannot tell them apart on its own, because the lanes
+    with no queue really are a person typing; the queue boundary sets `_turn_is_human`
+    and its absence keeps those lanes unchanged.
+    """
+    import ast
     import vaf.core.agent as agent_mod
     src = Path(agent_mod.__file__).read_text(encoding="utf-8")
-    assert ('if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):'
-            in src), "pending-question latch must survive synthetic drain turns"
+
+    clearing = [ast.dump(n.test) for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.If)
+                and "_pending_user_question" in ast.dump(ast.Module(body=n.body, type_ignores=[]))
+                and "Constant(value=None)" in ast.dump(ast.Module(body=n.body, type_ignores=[]))]
+    assert clearing, "nothing clears the pending-question latch any more"
+    for test in clearing:
+        assert "_synthetic_drain_turn" in test, "the latch no longer survives drain turns"
+        assert "_turn_is_human" in test, "a timer or an automation can answer for the user"
 
 
 def test_config_kill_switches_exist():

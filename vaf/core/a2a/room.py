@@ -1,0 +1,515 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""Membership, roles, and the rules that decide what a peer may say.
+
+The one sentence this module exists to enforce
+----------------------------------------------
+A ROOM IS A MESSAGE BUS, NOT AN AUTHORITY. It hands out no tool, lifts no
+restriction, and carries no identity into the tool funnel.
+
+A foreign agent in a room is a full agent with its own capabilities running on its
+own side; VAF lends it nothing. A VAF agent in a room still calls its tools under
+its own bound identity, through the same funnel as always, and a ``directive`` that
+arrives is INPUT, never a warrant. What a room assigns is a ROLE, and a role governs
+what a peer may EMIT, not what it may do to the machine.
+
+That is also why no synthetic tenant identity is invented for a peer. Three gates in
+this tree read "no scope" or "admin" as unrestricted (the account allowlist, the file
+jail, and an allowlist lookup that returns None for a scope with no record), and a
+made-up identity would walk straight into them. A room peer never reaches those gates
+at all, because it never triggers a tool call.
+
+Roles are derived, never stored as mutable state
+------------------------------------------------
+The role of a peer at any point is the FOLD over the ``join``, ``role`` and ``leave``
+frames in the log. Nothing rewrites a role in place, so any reader can recompute the
+whole membership history from the transcript and two readers cannot disagree.
+
+A worker that hires becomes a leader in a CHILD room, not by promotion
+---------------------------------------------------------------------
+Promotion inside one room needs agreement about who promoted whom, seen by whom, at
+which lamport. That is distributed consensus. Creating a child room is a single act
+by a single writer and needs none. The parent keeps the ``hire`` frame and the
+child's ``report``, and never the child's transcript: that containment is what lets
+the chain of command grow without every ancestor drowning in its descendants' chatter.
+"""
+from __future__ import annotations
+
+import secrets
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from vaf.core.a2a.frame import KINDS, Frame
+from vaf.core.a2a.store import (
+    RoomStore,
+    StoreError,
+    check_name,
+    new_peer_id,
+    new_room_id,
+)
+
+# What a room is for. `chain` has one leader and N workers and is where a directive
+# means something; `round` is a conversation among equals. A two-member chain covers
+# the direct case, so there is no third kind to keep in sync.
+ROOM_KINDS = ("chain", "round")
+
+# What each role may EMIT. Not what it may do to the machine - see the module
+# docstring. `ack` and `leave` are open to everyone because refusing them would let a
+# peer become unable to say it is leaving.
+CAPABILITIES: Dict[str, frozenset] = {
+    "leader": frozenset({"say", "ask", "answer", "report", "directive",
+                         "role", "hire", "close", "leave", "ack", "join"}),
+    "worker": frozenset({"say", "ask", "answer", "report",
+                         "hire", "leave", "ack", "join"}),
+    "peer": frozenset({"say", "ask", "answer", "leave", "ack", "join"}),
+}
+
+# How much of a room's traffic the LOCAL user has authorised their agent to act on.
+# Written by the peer into its own member record, never read from a frame: an agent's
+# autonomy is granted locally and can never be handed over by a remote leader.
+ROOM_MODES = ("observe", "assist", "autonomous")
+DEFAULT_MODE = "assist"
+
+DEFAULT_MAX_DEPTH = 3
+DEFAULT_MAX_CHILDREN = 8
+
+# A lease older than this makes a peer "stale" to readers. It never makes them gone:
+# only a leave frame does that, and only the peer or a leader writes one.
+LEASE_TTL_S = 90.0
+
+
+class RoomError(Exception):
+    """Base for a refusal that is about the room's rules, not its files."""
+
+
+class NotPermitted(RoomError):
+    """The peer's role does not allow this kind of frame."""
+
+
+class WrongRoomKind(RoomError):
+    """The frame is not meaningful in this kind of room.
+
+    A `directive` in a `round` lands here. "Nobody commands" is enforced at ingest or
+    it is not a rule, only etiquette.
+    """
+
+
+class NotAMember(RoomError):
+    """The acting identity has not joined this room."""
+
+
+class BudgetExceeded(RoomError):
+    """The hiring budget (depth or children) is spent. Refused, never silent."""
+
+
+class TicketInvalid(RoomError):
+    """A join ticket is unknown, spent, expired, or minted for another room."""
+
+
+class Identity:
+    """Who is acting, as the ROOM sees them.
+
+    ``scope_id`` is the VAF tenant when the peer is one of ours, and None for a
+    foreign agent that has no account here. It never travels in a frame: a scope UUID
+    identifies a tenant, and every member of a room can read every frame in it.
+    """
+
+    __slots__ = ("peer_id", "display", "scope_id", "role")
+
+    def __init__(self, peer_id: str, display: str, scope_id: Optional[str], role: str) -> None:
+        self.peer_id = check_name(peer_id, what="peer id")
+        self.display = str(display or peer_id)
+        self.scope_id = str(scope_id) if scope_id else None
+        self.role = role
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"Identity({self.peer_id!r}, {self.display!r}, role={self.role!r})"
+
+
+class Room:
+    """One room: its manifest, its members, and the rules for what may be said."""
+
+    def __init__(self, store: RoomStore) -> None:
+        self.store = store
+        manifest = store.manifest()
+        if manifest is None:
+            raise StoreError(f"room {store.room_id!r} does not exist")
+        self.manifest = manifest
+
+    # ── lifecycle ───────────────────────────────────────────────────────────
+
+    @property
+    def room_id(self) -> str:
+        return self.store.room_id
+
+    @property
+    def kind(self) -> str:
+        return str(self.manifest.get("kind") or "round")
+
+    @property
+    def closed(self) -> bool:
+        return any(f.kind == "close" for f in self.store.frames())
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        kind: str = "round",
+        owner_scope: Optional[str] = None,
+        topic: str = "",
+        base: Optional[Path] = None,
+        room_id: Optional[str] = None,
+        backlog: str = "",
+        depth: int = 0,
+        parent_room: Optional[str] = None,
+        parent_frame: Optional[str] = None,
+        max_depth: int = DEFAULT_MAX_DEPTH,
+        max_children: int = DEFAULT_MAX_CHILDREN,
+        multi_scope: bool = False,
+    ) -> "Room":
+        if kind not in ROOM_KINDS:
+            raise RoomError(f"unknown room kind {kind!r}; expected one of {ROOM_KINDS}")
+        store = RoomStore(room_id or new_room_id(), base=base)
+        store.create({
+            "kind": kind,
+            "topic": str(topic or ""),
+            "owner_scope": str(owner_scope) if owner_scope else None,
+            # A late joiner in a round sees only what happened after it arrived, the
+            # same rule voice_context.recent(since=...) already applies to a guest.
+            "backlog": backlog or ("all" if kind == "chain" else "since_join"),
+            "depth": int(depth),
+            "parent_room": parent_room,
+            "parent_frame": parent_frame,
+            "max_depth": int(max_depth),
+            "max_children": int(max_children),
+            # Cross-tenant rooms are deliberately off. subagent_ipc records what a
+            # shared record carrying model text across tenants costs here.
+            "multi_scope": bool(multi_scope),
+        })
+        return cls(store)
+
+    @classmethod
+    def open(cls, room_id: str, *, base: Optional[Path] = None) -> "Room":
+        return cls(RoomStore(room_id, base=base))
+
+    def update(self, **fields: Any) -> Dict[str, Any]:
+        """Change the manifest through the room, so the in-memory copy cannot drift.
+
+        The manifest is read once and kept, because ``kind`` is consulted on every
+        single ingest and re-reading it would mean decrypting a file per message.
+        The cost of that choice is exactly this method: a write that went straight to
+        the store would leave this object describing a room that no longer exists
+        that way.
+        """
+        self.manifest = self.store.update_manifest(**fields)
+        return self.manifest
+
+    # ── membership ──────────────────────────────────────────────────────────
+
+    def default_role(self) -> str:
+        """The role a new member gets. In a round nobody commands, so everyone is a
+        peer; in a chain the first member leads and the rest work."""
+        if self.kind == "round":
+            return "peer"
+        return "leader" if not self.roles() else "worker"
+
+    def join(
+        self,
+        *,
+        display: str,
+        peer_id: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        card: Optional[Dict[str, Any]] = None,
+        mode: str = DEFAULT_MODE,
+        role: Optional[str] = None,
+    ) -> Identity:
+        """Admit a peer and record the join in the log.
+
+        ``role`` is a request, honoured only where the room's own rule allows it.
+        Whatever a ``card`` claims is displayed, never believed: the card is a self
+        description for humans and for a leader choosing workers, and it has no say
+        in the fold that decides roles.
+        """
+        if self.closed:
+            raise RoomError(f"room {self.room_id!r} is closed")
+        self._check_tenant(scope_id)
+        if mode not in ROOM_MODES:
+            raise RoomError(f"unknown room mode {mode!r}; expected one of {ROOM_MODES}")
+
+        resolved = self.default_role()
+        if role and role in CAPABILITIES and self.kind == "chain" and not self.roles():
+            resolved = role
+        identity = Identity(peer_id or new_peer_id(), display, scope_id, resolved)
+
+        self.store.put_member(identity.peer_id, {
+            "display": identity.display,
+            # The local user's decision about their own agent, not the room's.
+            "mode": mode,
+            "lease": time.time(),
+            "card": dict(card) if card else {},
+        })
+        self.ingest(
+            {"kind": "join", "to": {"room": True},
+             "body": {"display": identity.display, "card": dict(card) if card else {}}},
+            identity=identity,
+        )
+        return identity
+
+    def _check_tenant(self, scope_id: Optional[str]) -> None:
+        """A room belongs to one tenant unless it says otherwise.
+
+        A foreign agent carries no scope at all and is not a tenant, so it is not
+        caught here; what bounds it is the ticket, which opens exactly one room.
+        """
+        if self.manifest.get("multi_scope"):
+            return
+        owner = self.manifest.get("owner_scope")
+        if owner and scope_id and str(scope_id) != str(owner):
+            raise NotAMember(
+                f"room {self.room_id!r} belongs to another account; cross-account "
+                f"rooms are off by default"
+            )
+
+    def heartbeat(self, identity: "Identity") -> None:
+        """Refresh this peer's lease. Only ever writes the peer's OWN file."""
+        record = self.store.member(identity.peer_id) or {}
+        record["lease"] = time.time()
+        self.store.put_member(identity.peer_id, record)
+
+    def members(self) -> Dict[str, Dict[str, Any]]:
+        """Members with their resolved role and liveness.
+
+        A lapsed lease makes a peer ``stale``, never ``gone``. Only a leave frame
+        removes somebody, because a sleeping laptop is not a departure.
+        """
+        roles = self.roles()
+        now = time.time()
+        out: Dict[str, Dict[str, Any]] = {}
+        for peer_id, record in self.store.members().items():
+            if peer_id not in roles:
+                continue
+            lease = float(record.get("lease") or 0.0)
+            out[peer_id] = {
+                "display": record.get("display") or peer_id,
+                "role": roles[peer_id],
+                "card": record.get("card") or {},
+                "stale": (now - lease) > LEASE_TTL_S,
+            }
+        return out
+
+    def roles(self) -> Dict[str, str]:
+        """The fold over join / role / leave. Recomputed, never cached to disk.
+
+        MUTATION TARGET: reading a role out of the member file instead. That file is
+        written by the peer itself, so a peer could then name its own role.
+        """
+        resolved: Dict[str, str] = {}
+        for frame in self.store.frames():
+            if frame.kind == "join":
+                resolved.setdefault(frame.sender, frame.role)
+            elif frame.kind == "leave":
+                resolved.pop(frame.sender, None)
+            elif frame.kind == "role":
+                target = str(frame.body.get("peer") or "")
+                granted = str(frame.body.get("role") or "")
+                # Only a leader may re-cast a role, and only within this room's
+                # vocabulary. The sender's role here is the one the fold already
+                # resolved, not one the frame claimed.
+                if frame.role == "leader" and target in resolved and granted in CAPABILITIES:
+                    resolved[target] = granted
+        return resolved
+
+    def role_of(self, peer_id: str) -> Optional[str]:
+        return self.roles().get(peer_id)
+
+    # ── the gate every frame passes ─────────────────────────────────────────
+
+    def may(self, role: str, kind: str) -> bool:
+        """The truth table, in one place, so no caller can hold a second copy."""
+        if self.kind == "round" and kind == "directive":
+            return False
+        return kind in CAPABILITIES.get(role, frozenset())
+
+    def ingest(self, payload: Any, *, identity: Identity) -> Frame:
+        """Accept one frame from an admitted peer, or refuse it.
+
+        ``from`` and ``role`` are OVERWRITTEN with the admitted peer's resolved
+        values. They are never honoured as they arrive: this is the same rule the
+        tool dispatcher applies to model output, where identity is assigned over
+        whatever the model produced rather than defaulted from it.
+        """
+        data = dict(payload.to_dict() if isinstance(payload, Frame) else payload)
+        kind = str(data.get("kind") or "say")
+
+        # A join carries its own admission, so the fold does not know the peer yet.
+        role = identity.role if kind == "join" else (self.role_of(identity.peer_id) or "")
+        if not role:
+            raise NotAMember(f"{identity.peer_id!r} has not joined room {self.room_id!r}")
+
+        if self.kind == "round" and kind == "directive":
+            raise WrongRoomKind(
+                "a round has no command direction; nobody may issue a directive here"
+            )
+        if kind in KINDS and not self.may(role, kind):
+            raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
+
+        frame = Frame.new(
+            room=self.room_id,
+            sender=identity.peer_id,
+            role=role,
+            kind=kind,
+            seq=self.store.next_seq(identity.peer_id),
+            lamport=self.store.next_lamport(),
+            to=data.get("to") or {"room": True},
+            body=data.get("body") or {},
+            reply_to=data.get("reply_to"),
+            must_understand=data.get("must_understand") or (),
+            ext=data.get("ext") or {},
+        )
+        return self.store.append(frame)
+
+    # ── convenience, all of it routed through ingest ────────────────────────
+
+    def say(self, identity: Identity, text: str, **kw) -> Frame:
+        return self.ingest({"kind": "say", "body": {"text": text}, **kw}, identity=identity)
+
+    def ask(self, identity: Identity, text: str, **kw) -> Frame:
+        return self.ingest({"kind": "ask", "body": {"text": text}, **kw}, identity=identity)
+
+    def answer(self, identity: Identity, text: str, *, reply_to: str = "", **kw) -> Frame:
+        return self.ingest({"kind": "answer", "body": {"text": text},
+                            "reply_to": reply_to or None, **kw}, identity=identity)
+
+    def directive(self, identity: Identity, text: str, **kw) -> Frame:
+        return self.ingest({"kind": "directive", "body": {"text": text}, **kw},
+                           identity=identity)
+
+    def report(self, identity: Identity, text: str, *, status: str = "completed",
+               artifacts: Optional[List[Dict[str, Any]]] = None, **kw) -> Frame:
+        """A report carries a STATUS from the open A2A vocabulary and may carry
+        artifacts. Both live in the body, so neither costs a frame change, and an
+        artifact kept out of the chat text stays findable by a machine."""
+        body: Dict[str, Any] = {"text": text, "status": status}
+        if artifacts:
+            body["artifacts"] = list(artifacts)
+        return self.ingest({"kind": "report", "body": body, **kw}, identity=identity)
+
+    def leave(self, identity: Identity, reason: str = "") -> Frame:
+        return self.ingest({"kind": "leave", "body": {"reason": reason}}, identity=identity)
+
+    def close(self, identity: Identity, reason: str = "") -> Frame:
+        return self.ingest({"kind": "close", "body": {"reason": reason}}, identity=identity)
+
+    def grant_role(self, identity: Identity, peer_id: str, role: str) -> Frame:
+        return self.ingest({"kind": "role", "body": {"peer": peer_id, "role": role}},
+                           identity=identity)
+
+    # ── the snowball ────────────────────────────────────────────────────────
+
+    def children(self) -> List[str]:
+        return [str(f.body.get("child_room") or "")
+                for f in self.store.frames() if f.kind == "hire"]
+
+    def hire(self, identity: Identity, *, purpose: str = "",
+             kind: str = "chain", base: Optional[Path] = None) -> Tuple["Room", Frame]:
+        """Open a child room in which this peer is the leader.
+
+        The peer's role in THIS room does not change. The parent keeps the hire frame
+        and, later, the child's report; it never receives the child's transcript.
+        """
+        role = self.role_of(identity.peer_id) or ""
+        if not self.may(role, "hire"):
+            raise NotPermitted(f"a {role} may not hire")
+
+        depth = int(self.manifest.get("depth") or 0)
+        max_depth = int(self.manifest.get("max_depth") or DEFAULT_MAX_DEPTH)
+        max_children = int(self.manifest.get("max_children") or DEFAULT_MAX_CHILDREN)
+        if depth + 1 > max_depth:
+            raise BudgetExceeded(
+                f"hiring would reach depth {depth + 1}, over the room's limit of {max_depth}"
+            )
+        if len(self.children()) >= max_children:
+            raise BudgetExceeded(
+                f"this room has already hired {max_children} times, its limit"
+            )
+
+        child = Room.create(
+            kind=kind,
+            owner_scope=self.manifest.get("owner_scope"),
+            topic=purpose,
+            base=base,
+            depth=depth + 1,
+            parent_room=self.room_id,
+            max_depth=max_depth,
+            max_children=max_children,
+            multi_scope=bool(self.manifest.get("multi_scope")),
+        )
+        frame = self.ingest(
+            {"kind": "hire", "body": {"child_room": child.room_id, "purpose": purpose}},
+            identity=identity,
+        )
+        child.update(parent_frame=frame.id)
+        # The hirer leads the child. It writes into the child's log as a new peer,
+        # so the two rooms share no lane and no sequence.
+        child.join(display=identity.display, scope_id=identity.scope_id, role="leader")
+        return child, frame
+
+    # ── tickets: a bearer credential for exactly one room ──────────────────
+
+    def mint_ticket(self, identity: Identity, *, display: str = "",
+                    ttl_s: float = 3600.0) -> str:
+        role = self.role_of(identity.peer_id) or ""
+        if not role:
+            raise NotAMember("only a member may invite")
+        ticket_id = "t-" + secrets.token_hex(12)
+        self.store.put_ticket(ticket_id, {
+            "room": self.room_id,
+            "display": display or "guest",
+            "expires_at": time.time() + float(ttl_s),
+            # Recorded for the transcript, not consulted for permission: what a guest
+            # may do is decided when they act, not when they were invited.
+            "minted_by": identity.peer_id,
+        })
+        return ticket_id
+
+    def redeem_ticket(self, ticket_id: str, *, display: str = "",
+                      mode: str = DEFAULT_MODE) -> Identity:
+        """Spend a ticket and join. Single use: it is gone before the join happens."""
+        record = self.store.ticket(ticket_id)
+        if not record or str(record.get("room")) != self.room_id:
+            raise TicketInvalid("this ticket is not for this room")
+        if float(record.get("expires_at") or 0.0) < time.time():
+            self.store.drop_ticket(ticket_id)
+            raise TicketInvalid("this ticket has expired")
+        self.store.drop_ticket(ticket_id)
+        return self.join(display=display or str(record.get("display") or "guest"),
+                         scope_id=None, mode=mode)
+
+    # ── reading ─────────────────────────────────────────────────────────────
+
+    def transcript(self, since_lamport: int = 0) -> List[Dict[str, Any]]:
+        """The room as a group chat: who said what, in canonical order.
+
+        The speaker is kept APART from the text, the rule voice_turn already follows,
+        so a renderer never has to parse a name back out of a message.
+        """
+        members = self.store.members()
+        rows = []
+        for frame in self.store.read_since(since_lamport):
+            record = members.get(frame.sender) or {}
+            rows.append({
+                "peer": frame.sender,
+                "display": record.get("display") or frame.sender,
+                "role": frame.role,
+                "kind": frame.kind,
+                "text": str((frame.body or {}).get("text") or ""),
+                "body": frame.body,
+                "lamport": frame.lamport,
+                "ts": frame.ts,
+                "id": frame.id,
+                "reply_to": frame.reply_to,
+                "known": frame.kind_known,
+            })
+        return rows

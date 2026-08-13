@@ -200,6 +200,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- An "always allow" answer for unsandboxed Python was read machine-wide
+  instead of per user: one user's standing grant could open unsandboxed
+  execution for every account on the instance, and another user's own grant
+  was never found. The check now reads the same per-user store the answer is
+  written to.
 - **Network mode: programs that check the certificate properly can connect
   again.** The certificate VAF generates for network access was missing two
   standard fields, which browsers and `curl` overlook but a correctly written

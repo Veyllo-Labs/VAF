@@ -130,3 +130,24 @@ def test_the_switch_is_admin_write_only():
     assert Config.DEFAULTS["tool_confirmation_bypass_admins"] is False
     assert Config.is_global_config_key("tool_confirmation_bypass_admins")
     assert Config.filter_for_non_admin({"tool_confirmation_bypass_admins": True}) == {}
+
+
+def test_the_python_exec_gate_reads_with_the_scope_it_wrote_with():
+    """The hand-rolled python_exec gate in agent.py writes its "always" answer
+    scoped (mark_trusted_dir/set_tool_policy with _gate_scope) and used to READ
+    the store unscoped two lines later. An unscoped read lands in the default
+    scope: the owner's one "always" opened unsandboxed execution for every
+    tenant, and a tenant's own "always" was never found at all.
+
+    MUTATION: drop either _gate_scope argument from the execution check - this
+    test must go red.
+    """
+    source = (Path(__file__).parent.parent / "vaf" / "core" / "agent.py").read_text(
+        encoding="utf-8")
+    assert 'get_tool_policy("python_exec", _gate_scope) == "allow"' in source, (
+        "the execution check reads the tool policy without the caller's scope")
+    assert 'is_trusted_dir(cwd, _gate_scope)' in source, (
+        "the execution check reads the trusted-dir store without the caller's scope")
+    assert 'get_tool_policy("python_exec") == "allow"' not in source, (
+        "an unscoped policy read is back in agent.py")
+

@@ -67,24 +67,18 @@ request.state.user = {
 }
 ```
 
-All API route handlers read `request.state.user` to extract the authenticated user's identity and scope. The WebSocket handler in the gateway accesses the same dict:
+All API route handlers read `request.state.user` to extract the authenticated user's identity and scope. The WebSocket lane resolves the same identity **once, at the handshake**: the presented token is decoded and the scope from its payload is stored on the connection (`web_interface.set_connection_user`). Every later handler asks the connection, never the message:
 
 ```python
-# In vaf/core/gateway.py - WebSocket handler
-user_state = getattr(websocket.state, "user", None)
-if user_state and isinstance(user_state, dict):
-    server_user_scope_id = user_state.get("user_scope_id")
+# vaf/core/web_server.py - inside a WebSocket handler
+user_scope_id = manager.get_connection_user(websocket)
 ```
 
-**Critical rule**: The gateway **strips** any `user_scope_id` sent by the client in the context payload. This prevents impersonation attacks where a malicious client sends another user's scope ID:
-
-```python
-context.pop("user_scope_id", None)  # Never trust client-sent scope
-```
+**Critical rule**: identity is never read from message content. No field of a chat payload is consulted for `user_scope_id`, so a client cannot present another user's scope - there is nothing to strip, because nothing client-sent is ever trusted as identity in the first place. This is the same rule the tool dispatcher applies to model output, where a tool's declared `identity_kwargs` are **assigned over** whatever the model produced rather than defaulted.
 
 The integrated HTTPS proxy relays WebSocket traffic to the backend with `max_size=None` so large `history_update` frames are not truncated; this loopback-proxy path is where the JWT-over-loopback identity handling lives. See [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md) and [WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md) for the transport detail.
 
-The `server_user_scope_id` is then passed into `run_agent_step()` and propagated to all downstream services (memory, tools, automations).
+The resolved scope is then bound onto the agent for the turn (`vaf.core.identity_binding.bind_identity`, called by the headless runner) and propagated to all downstream services (memory, tools, automations).
 
 **Token before localhost short-circuit.** `AuthMiddleware` extracts and honors a presented access JWT **before** any localhost short-circuit, so a valid token always establishes the real identity regardless of peer IP. A tokenless localhost request leaves `request.state.user` unset (internal IPC / single-user desktop). This is what lets a LAN user proxied over loopback by the integrated HTTPS proxy get **their** scope instead of the local admin's: because the token is read before the localhost branch, a remote user arriving over the loopback proxy is identified by their own token rather than inheriting the local-admin identity.
 
@@ -103,7 +97,7 @@ Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core
 
 **Who counts as an admin: `is_admin_identity(role, user_scope_id)`.** Admin is two halves and both are load-bearing. The **role** half covers every admin account: VAF supports more than one admin (user management refuses only to delete the *last* one) and each carries their own scope UUID. The **scope** half covers the machine owner when there is no role claim at all - the tokenless desktop, the CLI and automations resolve to `local_admin_scope_id`. Only one scope can ever be the local admin, so a scope-only check silently demotes every additional admin, and a role-only check locks the owner out. The role is read exclusively from a signature-verified JWT claim (issued from `LocalUser.role` at login) and, for tools, is **assigned** by the dispatcher over whatever the model put in the arguments - never honored as model input. Use this helper rather than rebuilding the comparison: the file gates below were the three places that had rebuilt it scope-only and drifted (guarded by `tests/test_admin_identity_is_role_aware.py`).
 
-**Where the binding happens.** For channel and WebSocket clients the gateway (`run_agent_step` in `vaf/core/gateway.py`) applies this fallback. The interactive CLI (`vaf run` and `vaf prompt`) does **not** pass through the gateway - it calls `Agent.chat_step()` directly - so it binds the local-admin scope and username explicitly at agent creation, via `_make_cli_agent()` in `vaf/cli/cmd/run.py`. Without this the CLI would run under scope `None` (the `"default"` bucket) and diverge from the WebUI admin: a stale `last_interaction` and memory/RAG that cannot see the admin's data. The binding is re-applied on every agent (re)creation, because `Agent.__init__` does not set a scope.
+**Where the binding happens.** For channel and WebSocket clients the headless runner applies this fallback (`bind_identity(agent, identity)` in `vaf/core/headless_runner.py`, from the identity the queued task carries). The interactive CLI (`vaf run` and `vaf prompt`) does **not** go through the queue - it calls `Agent.chat_step()` directly - so it binds the local-admin scope and username explicitly at agent creation, via `_make_cli_agent()` in `vaf/cli/cmd/run.py`. Without this the CLI would run under scope `None` (the `"default"` bucket) and diverge from the WebUI admin: a stale `last_interaction` and memory/RAG that cannot see the admin's data. The binding is re-applied on every agent (re)creation, because `Agent.__init__` does not set a scope.
 
 ### Hybrid Scoping Strategy (Local Mode Stability)
 
@@ -720,6 +714,5 @@ When testing new features, create at least two test users and verify:
 
 - [USER_IDENTITY.md](../memory/USER_IDENTITY.md) - User profile and preferences system
 - [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md) - Memory storage and RAG pipeline
-- [GATEWAY.md](../setup/GATEWAY.md) - WebSocket gateway architecture
 - [CONNECTIONS.md](../integrations/CONNECTIONS.md) - External service connections (WhatsApp, Telegram, etc.)
 - [SANDBOXING.md](SANDBOXING.md) - Docker sandbox for code execution

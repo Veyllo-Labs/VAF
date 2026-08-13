@@ -62,9 +62,10 @@ def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
 
     Why this exists
     ---------------
-    The CLI has no authentication: the local user is always the admin. Unlike the
-    Web/Channel path (``vaf.core.gateway.run_agent_step``), the CLI calls
-    ``Agent.chat_step()`` directly and never resolves a ``user_scope_id``. Without
+    The CLI has no authentication: the local user is always the admin. Unlike the web
+    path, where ``vaf.api.config_routes.get_current_user_or_local_admin`` resolves a
+    ``user_scope_id`` from the request's verified token, the CLI calls
+    ``Agent.chat_step()`` directly and never resolves one. Without
     binding it here the agent runs under scope ``None`` -> the ``"default"`` bucket,
     which is a *different* identity from the admin scope the WebUI uses. Because
     ``last_interaction`` and memory/RAG are both keyed by ``user_scope_id``, this made
@@ -73,8 +74,9 @@ def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
 
     What it does
     ------------
-    Applies the exact fallback the gateway uses for local (unauthenticated) calls: binds
-    the agent to ``get_local_admin_scope_id()`` / ``get_local_admin_username()``. This is
+    Applies the same fallback a tokenless local request already gets on the web side
+    (``config_routes.py``, the branch with no ``request.state.user``): binds the agent to
+    ``get_local_admin_scope_id()`` / ``get_local_admin_username()``. This is
     re-applied on *every* agent (re)creation — initial start and config/session reloads —
     because ``Agent.__init__`` does not set a scope, so a reload would otherwise drop back
     to ``"default"``.
@@ -112,10 +114,11 @@ def _quiet_cli_http_logs() -> None:
 
     The OpenAI/DeepSeek SDK logs every call as
     ``INFO:httpx:HTTP Request: POST .../chat/completions "HTTP/1.1 200 OK"``.
-    ``vaf.core.gateway`` calls ``logging.basicConfig(level=INFO)`` on import, which routes
-    those records to the console. We raise the *logger* level (not the root logger) for
-    httpx/httpcore so those INFO records are dropped at the source — this keeps working
-    regardless of what the root logger is set to, and mirrors the existing approach in
+    Anything that puts the root logger at INFO routes those records to the console - a
+    dependency calling ``logging.basicConfig`` at import time, or a server lane sharing
+    the process. We raise the *logger* level (not the root logger) for httpx/httpcore so
+    those INFO records are dropped at the source; that keeps working regardless of what
+    the root logger is set to, and mirrors the existing approach in
     ``vaf.tools.research_agent``.
 
     Called only from the interactive CLI commands (``vaf run`` / ``vaf prompt``), never at

@@ -120,8 +120,8 @@ grep the symbol names to find them.
 
 Host-speaker TTS (final answer, thinking fillers, answer chime) only fires for agents
 constructed with `host_audio=True`, which is exclusively the interactive CLI
-(`_make_cli_agent`). Headless queue turns, automations, thinking runs, the gateway,
-`vaf run -p`, and embedders are fail-closed silent on the host; browser TTS is a
+(`_make_cli_agent`). Headless queue turns, automations, thinking runs, `vaf run -p`,
+and embedders are fail-closed silent on the host; browser TTS is a
 separate frontend-pulled lane (`message_complete` -> `speak` WebSocket command) and
 is not affected by this gate.
 

@@ -32,6 +32,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the warning named the problem on every start and left the reader to go
   searching for the remedy.
 
+### Removed
+- The separate "gateway" server, together with its setup page and the
+  `vaf bridge discord` command that talked to it. Nothing in VAF ever started
+  the gateway: the web interface, the desktop app and the messaging channels
+  all run on the normal server, and the gateway could only be launched by hand
+  by following its own documentation. Anyone who did launch it exposed a file
+  endpoint that needed no login and could read from every account's folder on
+  that machine, so the page describing how to start it is gone as well.
+  Discord itself is unaffected: it is set up in the web interface and runs on
+  the normal server, as before.
+
 ### Fixed
 - Your agent's name and personality were ignored unless your account happened
   to be called "admin". Both the system prompt and the terminal app looked up

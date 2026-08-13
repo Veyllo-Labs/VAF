@@ -24,7 +24,6 @@ Docs are grouped into category folders. Full index by category:
 - [FIRST_RUN.md](setup/FIRST_RUN.md) - First-run setup wizard walkthrough (language, admin, Soul, Veyllo API, 2FA).
 - [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md) - TTS/STT/Gotenberg/DB/Redis containers.
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) - Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
-- [GATEWAY.md](setup/GATEWAY.md) - Persistent gateway server, multi-channel access.
 - [RELEASING.md](setup/RELEASING.md) - Cutting a release; how `vaf update` updates installed clients.
 - [SERVER_MODE.md](setup/SERVER_MODE.md) - Always-on server installation profile: systemd service, TLS, LAN access, multi-user concurrency.
 - [PROCESS_MANAGEMENT.md](setup/PROCESS_MANAGEMENT.md) - Process lifecycle management.
@@ -158,7 +157,7 @@ Developers should consult these documents when:
 - Implementing new tools or sub-agents.
 - Troubleshooting core system behavior (e.g., context compression).
 - Setting up external bridges like Telegram or Discord.
-- Modifying the Web UI or Gateway architecture.
+- Modifying the Web UI or the WebSocket architecture.
 - Adding speech features or new TTS/STT engines.
 
 ---

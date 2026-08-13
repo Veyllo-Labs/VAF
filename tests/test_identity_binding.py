@@ -238,9 +238,6 @@ ALLOWED_DIRECT_WRITERS = {
     # The CLOBBERER, not a binder: it answers "who owns this session", which is a
     # different question from "who is calling". reassert_identity exists for it.
     "vaf/core/agent.py": 2,
-    # NAMED BOUNDARY: the only bind-if-unset binder, for an unwired auth path.
-    # Converting means an if_unset flag with exactly one, unreachable caller.
-    "vaf/core/gateway.py": 5,
 }
 
 _IDENTITY_ATTRS = {

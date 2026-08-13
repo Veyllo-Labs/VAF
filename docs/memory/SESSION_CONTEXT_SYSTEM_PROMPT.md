@@ -90,8 +90,7 @@ If the user asks to keep attachment knowledge for future chats, the agent should
 | Prompt block text | `vaf/core/system_prompt.py` | `build_prompt(..., current_source=..., last_interaction=...)`, section "2b. LAST INTERACTION & CURRENT CHANNEL" |
 | Channel capabilities | `vaf/core/system_prompt.py` | Section "2c. CHANNEL CAPABILITIES" – added when `current_source` is telegram/whatsapp/discord/cli |
 | Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction` |
-| Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source`; after `chat_step`: call `update_last_interaction()` |
-| Set channel (Gateway/Discord) | `vaf/core/gateway.py` | Before `chat_step`: set `_current_chat_source` from `context.platform` (e.g. `"discord"`). Discord bridge sends `platform: "discord"` in payload. |
+| Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source` from the task's `source`; after `chat_step`: call `update_last_interaction()`. This is the ONLY setter: a channel task (Discord, Telegram, WhatsApp) carries its source on the queued task, so no channel bridge sets the field itself. |
 
 ## User isolation
 

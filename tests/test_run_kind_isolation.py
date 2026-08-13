@@ -110,7 +110,6 @@ def test_background_construction_sites_pass_run_kind():
     for mod_path, kind in (
         ("vaf/core/thinking_mode.py", "thinking"),
         ("vaf/core/automation.py", "automation"),
-        ("vaf/core/gateway.py", "chat"),
         ("vaf/core/headless_runner.py", "chat"),
     ):
         src = (repo_root / mod_path).read_text(encoding="utf-8")

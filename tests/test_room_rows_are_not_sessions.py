@@ -807,3 +807,23 @@ def test_an_open_room_refetches_itself_while_it_is_on_screen():
     assert "roomView?.room.closed" in block, "a closed room is still being polled"
     assert "wsSocketRef.current" in block, (
         "the captured socket is null on a reconnect; the ref is the documented fix")
+
+
+def test_a_room_scrolls_with_the_chat_s_own_autoscroll():
+    """MUTATION: leave the bottom anchor inside the chat branch.
+
+    It used to live there, so with a room open there was nothing for the autoscroll to
+    aim at and the conversation ran off the bottom of the screen. The anchor and the
+    effect are the CHAT's - a room does not get a scroll of its own, it gets the one
+    that already works.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+
+    # the anchor sits after the branch closes, so both halves render it
+    branch_end = source.index("</>)}")
+    anchor_at = source.index("<div ref={scrollRef} />", branch_end)
+    assert anchor_at > branch_end, "the scroll anchor is inside the chat branch again"
+
+    # and the effect fires for a room's messages too
+    assert "}, [messages, loading, roomView?.messages.length]);" in source, (
+        "new room messages do not trigger the scroll")

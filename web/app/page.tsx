@@ -4848,7 +4848,7 @@ function VAFDashboardContent() {
         } else if (isAtBottomRef.current) {
             scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [messages, loading]);
+    }, [messages, loading, roomView?.messages.length]);
 
     // Track whether the user is scrolled to the bottom
     useEffect(() => {
@@ -7012,8 +7012,12 @@ function VAFDashboardContent() {
 
                                 {/* Active Tools Panel Removed (Now Inline) */}
 
-                                <div ref={scrollRef} />
                                 </>)}
+                                {/* The bottom anchor the autoscroll aims at. OUTSIDE the
+                                    branch on purpose: it used to live in the chat's half, so
+                                    with a room open there was nothing to scroll to and the
+                                    conversation ran off the bottom of the screen. */}
+                                <div ref={scrollRef} />
                             </div>
                         </div>
 

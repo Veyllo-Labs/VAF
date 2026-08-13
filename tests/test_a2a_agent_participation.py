@@ -463,3 +463,83 @@ def test_every_refusal_forbids_claiming_the_action_happened():
         )._room_mode_gate_decision("write_file", _Tool("write"))
         assert "did not run" in room_refusal.lower(), mode
         assert "report it as done" in room_refusal.lower(), mode
+
+
+# ── the fallback nobody reaches, pinned so nobody flips it ─────────────────
+
+@pytest.mark.parametrize("room_turn", [
+    {"room_id": "room-x"},                 # the key is absent
+    {"room_id": "room-x", "mode": ""},     # present and empty
+    {"room_id": "room-x", "mode": None},   # present and null
+])
+def test_a_room_turn_with_no_usable_mode_falls_back_to_assist(room_turn):
+    """MUTATION: change the gate's fallback from "assist" to "autonomous".
+
+    The wake-up always sets a mode today, so this branch never fires in production -
+    and that is exactly why it is pinned. An unreachable line is a line a later
+    refactor flips with nothing turning red, and this particular line decides whether
+    a message from a foreign agent can reach the machine unattended.
+
+    The assertions pin it EXACTLY to assist rather than to "something restrictive":
+    the two refusals prove it is not autonomous, and the two permissions prove it is
+    not observe. A test that only checked the refusals would stay green if the
+    fallback were tightened to observe, which is a different bug in the other
+    direction - an agent that goes mute for a reason nobody chose.
+    """
+    agent = _Agent(room_turn=room_turn)
+
+    assert agent._room_mode_gate_decision("write_file", _Tool("write")) is not None
+    assert agent._room_mode_gate_decision("coding_agent", _Tool("read")) is not None
+    assert agent._room_mode_gate_decision("room_send", _Tool("write")) is None
+    assert agent._room_mode_gate_decision("memory_search", _Tool("read")) is None
+
+
+def test_a_damaged_member_record_still_reads_as_assist(tmp_path):
+    """MUTATION: return the stored string unchecked from Room.mode_of.
+
+    The member file is written by the peer and can be edited by anyone with the disk.
+    A missing mode, an empty one, or a value from a newer version must all land on the
+    default rather than on whatever happens to be in the file - an unrecognised mode
+    that fell through would be compared against "autonomous" and lose, which sounds
+    safe until somebody writes "autonomous " with a trailing space.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-dmg")
+    me = room.join(display="Mine", scope_id="s", peer_id="p-mine", mode="autonomous")
+    assert room.mode_of(me.peer_id) == "autonomous"
+
+    for damaged in ({}, {"mode": ""}, {"mode": None}, {"mode": "unrestricted"},
+                    {"mode": "autonomous "}, {"mode": 7}):
+        record = room.store.member(me.peer_id) or {}
+        record.pop("mode", None)
+        record.update(damaged)
+        room.store.put_member(me.peer_id, record)
+        assert room.mode_of(me.peer_id) == "assist", damaged
+
+
+def test_the_gates_fallback_is_the_shared_default_and_not_a_copy():
+    """MUTATION: spell the fallback as a literal again in the gate.
+
+    The default decides whether a message from a foreign agent can reach this machine
+    unattended, so it has one home. Two copies drift the first time one is changed, and
+    the copy left behind is the one that will be enforcing.
+
+    Deliberately narrow: this checks the FALLBACK position only. Comparing against
+    "assist" elsewhere in the gate is a comparison with that MODE, not with the
+    default, and the two are different ideas that happen to share a value today. A
+    guard that banned the word outright would forbid the mode comparison and teach the
+    next reader to work around it.
+    """
+    from vaf.core.a2a.room import DEFAULT_MODE
+
+    assert DEFAULT_MODE == "assist"
+    home = (ROOT / "vaf" / "core" / "a2a" / "room.py").read_text(encoding="utf-8")
+    assert f'DEFAULT_MODE = "{DEFAULT_MODE}"' in home
+
+    source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    gate = source.split("def _room_mode_gate_decision")[1].split("\n    def ")[0]
+    assert 'room_turn.get("mode") or DEFAULT_MODE' in gate
+    assert 'room_turn.get("mode") or "' not in gate, "the fallback is a literal again"
+
+    tools = (ROOT / "vaf" / "tools" / "room_tools.py").read_text(encoding="utf-8")
+    assert 'kwargs.get("mode") or DEFAULT_MODE' in tools
+    assert 'kwargs.get("mode") or "' not in tools

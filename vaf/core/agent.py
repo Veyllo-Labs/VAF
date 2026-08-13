@@ -1796,7 +1796,11 @@ class Agent:
         if not room_turn:
             return None
         try:
-            mode = str(room_turn.get("mode") or "assist")
+            # The default is imported, never spelled again. A second literal here would
+            # be a copy of the single most load-bearing value in the feature, and the
+            # two would drift the first time somebody changed one of them.
+            from vaf.core.a2a.room import DEFAULT_MODE
+            mode = str(room_turn.get("mode") or DEFAULT_MODE)
             room_id = str(room_turn.get("room_id") or "a room")
             if mode == "autonomous":
                 return None

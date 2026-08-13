@@ -265,30 +265,55 @@ def test_the_header_renders_the_members_and_marks_our_own(rooms):
     about who said what depends on it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    block = source.split("(roomView.room.members_list || []).map(m => (")[1].split("</div>")[0]
+    block = source.split("(view.room.members_list || []).map(m => (")[1].split("</div>")[0]
 
-    assert "m.peer === roomView.room.me" in block, "our own agent is not marked"
+    assert "m.peer === view.room.me" in block, "our own agent is not marked"
     assert "{m.label}" in block, "the header shows something other than the resolved name"
 
 
-def test_a_room_is_read_on_the_same_surface_as_a_conversation():
-    """MUTATION: put the room back in a narrow dialog.
+def test_a_room_is_rendered_inside_the_ordinary_chat_area():
+    """MUTATION: give the room a surface of its own again.
 
-    A dialog is for a decision. A room is a conversation, and nobody reads one in a
-    box - it gets the chat column's own width and padding so it looks like what it is.
-    The first version was a max-w-2xl modal and it read as a notification about a chat
-    rather than as the chat.
+    Twice already: first a narrow dialog, then a full-screen layer that covered the
+    sidebar. Both were the same mistake - a room is not a different screen, it is the
+    same screen with several speakers in it. The chat's frame (sidebar, header,
+    composer, scroll area, column width) stays untouched and only the placing of the
+    content differs, so the room component renders CONTENT and nothing around it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    block = source.split("{roomView && (")[1].split("{/* Trust Gate Dialog")[0]
+    block = source.split("function RoomConversation(")[1].split("\nfunction ")[0]
 
-    assert "max-w-2xl" not in block, "the room is in a dialog again"
-    assert "bg-black/60" not in block, "a scrim means a dialog, not a view"
-    # the chat's own metrics, not a second set invented here
-    assert block.count("messagesAreaWidthClass") >= 3, (
-        "the room stopped using the chat column width")
-    assert "flex-1 overflow-y-auto p-6 max-md:p-3" in block, (
-        "the room scroll area no longer matches the chat's")
+    for surface in ("fixed inset-0", "max-w-2xl", "bg-black/60", "z-[80]"):
+        assert surface not in block, f"the room built a surface of its own again: {surface}"
+    # it is placed by the chat, so it must not set the column width or the scrolling
+    for chrome in ("messagesAreaWidthClass", "overflow-y-auto", "h-screen"):
+        assert chrome not in block, f"the room is laying out the chat's frame: {chrome}"
+
+
+def test_the_room_is_branched_inside_the_message_container():
+    """MUTATION: mount the room next to the chat instead of inside it.
+
+    Rendered as a sibling it would appear beside or over the conversation. Inside the
+    message container it lands exactly where messages land, which is what makes it
+    look like the chat rather than like something covering it.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    container = source.split('mx-auto space-y-2 pb-32")}>')[1][:1200]
+
+    assert "{roomView ? (" in container, "the room is not branched inside the chat area"
+    assert "<RoomConversation" in container
+
+
+def test_choosing_a_conversation_puts_the_room_away():
+    """MUTATION: leave roomView set when a session is picked.
+
+    Both occupy the same place. A chat loaded underneath a room that is still showing
+    is a user clicking a conversation and getting no conversation.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    body = source.split("const handleSessionSwitch = (id: string) => {")[1][:400]
+
+    assert "setRoomView(null)" in body
 
 
 def test_bookkeeping_is_not_rendered_as_something_somebody_said():
@@ -299,7 +324,7 @@ def test_bookkeeping_is_not_rendered_as_something_somebody_said():
     frame where that is guaranteed to be a fabrication.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    block = source.split("{roomView && (")[1].split("{/* Trust Gate Dialog")[0]
+    block = source.split("function RoomConversation(")[1].split("\nfunction ")[0]
 
     assert "const bookkeeping = m.kind === 'join'" in block
     assert "if (bookkeeping) {" in block

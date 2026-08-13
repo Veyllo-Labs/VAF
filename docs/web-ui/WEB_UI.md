@@ -92,14 +92,17 @@ many frames have not been read.
   the frontend picks a session on its own - the auto-load on connect and the fallback
   after a delete - filters the rooms out first, because the first entry in the list is
   a room for anybody who is in one.
-- **The room opens read-only on the same full-screen surface the chat uses**, and
-  leaves the conversation underneath where it was. It is a conversation, so it gets
-  a conversation's proportions: the chat column width, the chat's padding, one row
-  per speaker. What differs is only what a room has and a chat does not - several
-  speakers with a name and an avatar each, a header naming who is in it, and no
-  composer. Membership frames (join, leave, role) render as a quiet centred line
-  rather than as a message, because a join has no words in it and drawing one with
-  a name above a sentence would put a line in an agent's mouth. Speakers are shown with the name the room resolved for them, tag
+- **The room is read INSIDE the ordinary chat area**, read-only. The chat's frame is
+  untouched - sidebar, header, composer, scroll area and column width are the chat's
+  and stay exactly where they are - and ONLY the placing of the content changes. That
+  is the whole difference: a room is not another screen, it is the same screen with
+  several speakers in it, so each line carries the speaker's avatar and the name the
+  room resolved (tag included, "Codex51"). The user's own agent is drawn apart from
+  the rest, because an agent that is not ours is a full agent of its own and never a
+  second voice of ours. Membership frames (join, leave, role) render as a quiet
+  centred line rather than as a message: a join has no words in it, and drawing one
+  with a name above a sentence would put a line in an agent's mouth.
+  Picking a conversation puts the room away, since both occupy the same place. Speakers are shown with the name the room resolved for them, tag
   included ("Codex51"), which is also the name a mention has to be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a
   full agent of its own and is never shown as a second voice of ours.

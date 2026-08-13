@@ -297,7 +297,7 @@ set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -364,6 +364,9 @@ app.add_typer(snapshot_app, name="snapshot", help="Code snapshots and undo")
 
 # Scheduled Automations
 app.add_typer(automation_app, name="automation", help="Time-based task automation")
+
+# Agent-to-agent rooms: the door a foreign agent walks through
+app.add_typer(a2a.app, name="a2a", help="Agent-to-agent rooms: join, talk, read")
 
 # Server/Hosting management
 app.add_typer(server.app, name="server", help="Manage local network server mode")

@@ -196,8 +196,34 @@ def invite(
         ticket = room.mint_ticket(identity, display=display, ttl_s=float(ttl))
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
-    _emit({"ok": True, "room": room_id, "ticket": ticket, "expires_in": ttl,
-           "join": f"vaf a2a join {room_id} --ticket {ticket}"})
+    row = {"ok": True, "room": room_id, "ticket": ticket, "expires_in": ttl,
+           "join": f"vaf a2a join {room_id} --ticket {ticket}"}
+
+    # The line a human carries to the other machine: address, room, credential and
+    # trust anchor in one string. Everything a peer needs and nothing it can look up
+    # by itself, which is what makes this serverless - there is no directory to ask.
+    #
+    # The address comes from the SAME source the certificate's SANs are built from, so
+    # the printed host is guaranteed to be one the certificate actually covers. A test
+    # holds those two together.
+    try:
+        from vaf.network.binding import get_local_network_ip
+        from vaf.network.ssl_utils import ca_fingerprint
+        from vaf.core.config import Config
+
+        lan_ip = str(get_local_network_ip() or "").strip()
+        fingerprint = ca_fingerprint()
+        if lan_ip and fingerprint and Config.get("local_network_tls_enabled", False):
+            port = int(Config.get("local_network_https_port", 443) or 443)
+            row["url"] = f"wss://{lan_ip}:{port}/ws/a2a/{room_id}"
+            row["ca_fingerprint"] = fingerprint
+            row["join_remote"] = (f"vaf a2a trust wss://{lan_ip}:{port} --ca-fp {fingerprint}"
+                                  f" && vaf a2a join {room_id} --ticket {ticket}"
+                                  f" --url wss://{lan_ip}:{port}/ws/a2a/{room_id}")
+    except Exception:
+        # A machine with no LAN identity still hands out a local invitation.
+        pass
+    _emit(row)
 
 
 @app.command()
@@ -237,6 +263,38 @@ def join(
         _fail(str(e), EXIT_REFUSED)
     _emit({"ok": True, "room": room_id, "peer": identity.peer_id, "role": identity.role,
            "mode": mode})
+
+
+@app.command()
+def trust(
+    url: str = typer.Argument(..., help="wss://host:port of the machine hosting the room."),
+    ca_fp: str = typer.Option("", "--ca-fp", help="SHA-256 fingerprint from the invitation."),
+    ca_file: str = typer.Option("", "--ca-file", help="A copy of that machine's ca.pem."),
+) -> None:
+    """Trust another machine's certificate authority, and only the right one.
+
+    Two ways in, and both end at the same check. With --ca-file you already have the
+    file and the fingerprint says whether it is the RIGHT file. With --ca-fp alone the
+    certificate is fetched from the machine itself and kept only if it matches - trust
+    on first use with an out-of-band fingerprint, which is not the same thing as blind
+    trust on first use: the number came to you by another route than the certificate.
+
+    Nothing is stored on a mismatch. A near miss is a miss.
+    """
+    from pathlib import Path as _Path
+
+    from vaf.core.a2a.trust import pin_authority, TrustRefused
+
+    if not ca_fp and not ca_file:
+        _fail("Give --ca-fp from the invitation, or --ca-file plus --ca-fp to check it.",
+              EXIT_REFUSED)
+    try:
+        stored, fingerprint = pin_authority(
+            url, expected_fingerprint=ca_fp,
+            ca_file=_Path(ca_file) if ca_file else None)
+    except TrustRefused as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "url": url, "ca_fingerprint": fingerprint, "stored": str(stored)})
 
 
 # ── talking ─────────────────────────────────────────────────────────────────

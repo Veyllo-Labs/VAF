@@ -120,3 +120,19 @@ switching are covered in the main [README](../../README.md) and
 - your agent's `soul.md` and identity files under `~/.vaf/users/<admin>/`.
 
 After step 4 you land in the main web UI, logged in, with your agent live.
+
+## If a device suddenly warns about the certificate
+
+Only relevant if you turned network access on and installed `~/.vaf/ssl/ca.pem` on
+another device to silence its browser warning.
+
+That authority certificate is replaced ONCE, on the first start after updating, because
+the one generated before carried no key identifier and was therefore unverifiable to any
+program that checks properly - browsers and `curl` accepted it, correctly written
+programs did not. See
+[NETWORK_FEATURES.md](NETWORK_FEATURES.md) for the measurement behind that.
+
+What you see: every device that trusted the old file warns once. What to do: copy the new
+`~/.vaf/ssl/ca.pem` over the old one on those devices. The log says the same thing at
+warning level when it happens, and nothing else about your setup changes - your account,
+sessions and settings are untouched.

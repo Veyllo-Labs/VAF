@@ -284,6 +284,57 @@ def _cert_has_required_ip_sans(cert_path: Path, required_ips: set[str]) -> bool:
         return False
 
 
+def ca_certificate_path() -> Optional[Path]:
+    """Where this machine's local CA lives, or None if it has none yet."""
+    path = _get_ssl_dir() / "ca.pem"
+    return path if path.exists() else None
+
+
+def ca_fingerprint() -> Optional[str]:
+    """The SHA-256 fingerprint of this machine's CA, lowercase hex, or None.
+
+    THE MACHINE'S IDENTITY for anybody connecting from outside. It is stable across
+    server-certificate rotations - the CA is deliberately kept when only the leaf is
+    reissued - which is exactly why a remote peer pins this and never the leaf: an
+    ordinary DHCP lease change reissues the server certificate with a fresh key.
+
+    There was no way to read this before. Provisioning meant copying a file and hoping,
+    with nothing to compare against; a fingerprint is what turns "here is a certificate"
+    into "here is the certificate I meant".
+    """
+    path = ca_certificate_path()
+    if path is None:
+        return None
+    try:
+        cert = x509.load_pem_x509_certificate(path.read_bytes())
+        return cert.fingerprint(hashes.SHA256()).hex()
+    except Exception:
+        return None
+
+
+def fingerprint_of(cert_pem: bytes) -> str:
+    """The SHA-256 fingerprint of a PEM certificate, lowercase hex."""
+    return x509.load_pem_x509_certificate(cert_pem).fingerprint(hashes.SHA256()).hex()
+
+
+def fingerprints_match(left: str, right: str) -> bool:
+    """Compare two fingerprints without leaking where they differ.
+
+    Constant time, and tolerant of the shapes a human retypes: colons, spaces and case
+    are normalised, because a fingerprint that only matches when pasted perfectly is a
+    fingerprint people stop checking.
+    """
+    import hmac
+
+    def _norm(value: str) -> str:
+        return "".join(ch for ch in str(value or "").lower() if ch in "0123456789abcdef")
+
+    a, b = _norm(left), _norm(right)
+    if not a or not b:
+        return False
+    return hmac.compare_digest(a, b)
+
+
 def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     """
     Ensure SSL certificates exist and are valid.

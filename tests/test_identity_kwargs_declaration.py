@@ -253,6 +253,7 @@ def _dispatch(tool, model_args, *, scope="deadbeef-0000-0000-0000-000000000000",
         _plan_gate_decision=lambda name, tool, tool_args=None: None,
         _proactive_reply_gate_decision=lambda name, tool, args: None,
         _ask_first_gate_decision=lambda name, tool: None,
+        _room_mode_gate_decision=lambda name, tool: None,
     ))
     with patch("vaf.core.trust.get_tool_policy", return_value="always"), patch(
         "vaf.core.trust.is_trusted_dir", return_value=True

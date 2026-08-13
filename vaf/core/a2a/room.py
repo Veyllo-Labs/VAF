@@ -36,16 +36,18 @@ the chain of command grow without every ancestor drowning in its descendants' ch
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from vaf.core.a2a.frame import KINDS, Frame
 from vaf.core.a2a.store import (
     RoomStore,
     StoreError,
     check_name,
+    list_rooms,
     new_peer_id,
     new_room_id,
 )
@@ -78,6 +80,24 @@ DEFAULT_MAX_CHILDREN = 8
 # A lease older than this makes a peer "stale" to readers. It never makes them gone:
 # only a leave frame does that, and only the peer or a leader writes one.
 LEASE_TTL_S = 90.0
+
+
+def derive_peer_id(key: str, room_id: str) -> str:
+    """The room-local handle one participant always gets in one room.
+
+    Derived rather than stored, for three reasons: it survives a restart with no
+    index to keep in sync, a re-join lands on the same handle so a peer does not
+    accumulate ghosts of itself, and the SAME participant gets a DIFFERENT handle in
+    every room, so reading two transcripts cannot correlate them.
+
+    ``key`` is whatever identifies the participant locally - a tenant's scope for a
+    VAF agent, the local admin's for the terminal. It is hashed, so it never appears
+    in a frame that every member of the room can read.
+    """
+    digest = hashlib.blake2s(
+        f"{key}:{room_id}".encode("utf-8"), digest_size=8
+    ).hexdigest()
+    return "p-" + digest[:10]
 
 
 class RoomError(Exception):
@@ -489,6 +509,34 @@ class Room:
 
     # ── reading ─────────────────────────────────────────────────────────────
 
+    def identity_for(self, key: str, *, display: str = "",
+                     scope_id: Optional[str] = None) -> Optional[Identity]:
+        """The Identity this participant already has here, or None if not a member."""
+        peer_id = derive_peer_id(key, self.room_id)
+        role = self.role_of(peer_id)
+        if not role:
+            return None
+        record = self.store.member(peer_id) or {}
+        return Identity(peer_id, display or record.get("display") or peer_id, scope_id, role)
+
+    def mode_of(self, peer_id: str) -> str:
+        """The LOCAL user's standing decision about how far their agent may go here.
+
+        Read from the member file, which only this peer writes, and never from a
+        frame. A remote leader can ask for anything; it can never grant autonomy.
+        """
+        record = self.store.member(peer_id) or {}
+        mode = str(record.get("mode") or DEFAULT_MODE)
+        return mode if mode in ROOM_MODES else DEFAULT_MODE
+
+    def set_mode(self, identity: Identity, mode: str) -> str:
+        if mode not in ROOM_MODES:
+            raise RoomError(f"unknown room mode {mode!r}; expected one of {ROOM_MODES}")
+        record = self.store.member(identity.peer_id) or {}
+        record["mode"] = mode
+        self.store.put_member(identity.peer_id, record)
+        return mode
+
     def transcript(self, since_lamport: int = 0) -> List[Dict[str, Any]]:
         """The room as a group chat: who said what, in canonical order.
 
@@ -513,3 +561,53 @@ class Room:
                 "known": frame.kind_known,
             })
         return rows
+
+
+# ── how a local participant finds its own rooms ─────────────────────────────
+
+def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity]]:
+    """Every room on this machine this participant has joined, with its identity.
+
+    A room whose manifest is unreadable is SKIPPED rather than allowed to abort the
+    scan: one damaged room must not make a participant deaf in all the others.
+    """
+    found: List[Tuple[Room, Identity]] = []
+    for room_id in list_rooms(base):
+        try:
+            room = Room.open(room_id, base=base)
+        except Exception:
+            continue
+        identity = room.identity_for(key)
+        if identity is not None:
+            found.append((room, identity))
+    return found
+
+
+# Membership bookkeeping. It belongs in the transcript and it is NOT worth waking a
+# participant for: an agent that starts a whole turn because somebody joined is noise,
+# and who is present is answered by members() whenever it does read. An unknown kind is
+# deliberately absent from this set, so a newer peer's message still wakes an older one.
+BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
+
+
+def unread_frames(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity, List[Any]]]:
+    """Frames addressed to this participant that it has not read yet.
+
+    Its OWN frames are excluded: an agent must not be woken by its own voice, which
+    is the loop that turns a two-agent room into a runaway conversation. Membership
+    bookkeeping is excluded for the same kind of reason, one level quieter.
+    """
+    pending: List[Tuple[Room, Identity, List[Any]]] = []
+    for room, identity in joined_rooms(key, base=base):
+        if room.closed:
+            continue
+        cursor = room.store.cursor(identity.peer_id)
+        fresh = [
+            frame for frame in room.store.read_since(cursor)
+            if frame.sender != identity.peer_id
+            and frame.kind not in BOOKKEEPING_KINDS
+            and frame.addresses(identity.peer_id, identity.role)
+        ]
+        if fresh:
+            pending.append((room, identity, fresh))
+    return pending

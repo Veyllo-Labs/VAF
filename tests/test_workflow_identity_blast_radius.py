@@ -156,6 +156,9 @@ NEWLY_IDENTIFIED = {
     "read_telegram_chat": ('user_scope_id', 'username'),
     "replace_editor_selection": ('user_scope_id',),
     "restore_automation": ('user_role', 'user_scope_id'),
+    "room_join": ('user_role', 'user_scope_id'),
+    "room_read": ('user_role', 'user_scope_id'),
+    "room_send": ('user_role', 'user_scope_id'),
     "telegram_inbox": ('user_scope_id', 'username'),
     # Added 2026-08-04. Its schema always told the model this field was "injected by the
     # framework"; it was not, because the tool declared no identity_kwargs, so the tool fell

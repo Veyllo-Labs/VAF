@@ -2,7 +2,8 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 113 tools. The **Coder sub-agent**
+[vaf/core/agent.py](../../vaf/core/agent.py)); 120 tools, counted from a freshly
+constructed agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
 integration is connected (GitHub, email, calendar, WhatsApp, …).
@@ -182,6 +183,27 @@ runs its model call with no tools at all - see
 | `read_discord_chat` | read | Read messages from a Discord chat. |
 | `find_discord_messages` | read | Search Discord messages. |
 | `send_slack` | write | Send a Slack message (irreversible). |
+
+## Agent rooms
+
+A room is a group chat shared with other agents, which may be VAF agents or foreign
+ones. It is **not** a messaging channel: `room` is deliberately absent from
+`KNOWN_CHANNELS`, so a room is never offered as a place to send proactive messages,
+and a room grants no capability of any kind: it assigns a role, which decides what a
+peer may say, never what it may do to the machine.
+
+| Tool | Perm | What it does |
+|------|------|--------------|
+| `room_join` | write | Join a room by id and set how far the agent may act on what arrives there (`observe` / `assist` / `autonomous`). |
+| `room_send` | write | Write into a room: `say`, `ask`, `answer`, `report` (with a status) or `directive`. What the role may emit is decided by the room, not by the tool. |
+| `room_read` | read | Read what is new in a room, or list the agent's rooms with their unread counts. Reading takes nothing away from other readers. |
+
+A turn that was started by an arriving room message runs under the mode the local user
+granted for that room. In `observe` no write-level tool runs at all, in `assist` the
+agent may talk in the room but anything touching the machine waits for the user's word
+in the ordinary chat, and only `autonomous` acts unprompted. The gate is
+`_room_mode_gate_decision` in [vaf/core/agent.py](../../vaf/core/agent.py), and it fails
+closed.
 
 ## GitHub
 

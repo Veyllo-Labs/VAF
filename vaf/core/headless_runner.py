@@ -453,6 +453,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     
     # Main Loop
     last_subagent_check = 0.0
+    # Rooms are polled rather than pushed: a peer may be a foreign process that has
+    # no way to signal this runner. The interval is its own so a busy sub-agent lane
+    # cannot starve a conversation.
+    last_room_check = 0.0
+    ROOM_POLL_SECONDS = 2.0
     last_subagent_ui_update = 0.0
     last_memory_check = 0.0
     last_queue_metrics = 0.0
@@ -2306,6 +2311,42 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # <ipc-notification> push (react the instant a sub-agent finishes) with the
                 # ~1s interval kept as a reliable fallback if a push was ever missed.
                 now = time.time()
+                # Rooms: deliver what other agents said, as a synthetic turn that is
+                # bound to the mode the LOCAL user granted for that room. _room_turn is
+                # what the mode gate keys on and is restored on EVERY exit path
+                # (Rule 4.5); the cursor advances only afterwards, so an interruption
+                # costs a repeat rather than a lost message.
+                # Named boundary: the turn lands in the agent's current session. Routing
+                # a room to a chosen chat needs a session model rooms do not have yet.
+                if now - last_room_check >= ROOM_POLL_SECONDS:
+                    last_room_check = now
+                    _room_wake = None
+                    try:
+                        _room_wake = agent.collect_room_wake()
+                    except Exception:
+                        _room_wake = None
+                    if _room_wake:
+                        agent._room_turn = {"room_id": _room_wake["room_id"],
+                                            "mode": _room_wake["mode"]}
+                        agent._synthetic_drain_turn = True
+                        try:
+                            agent.chat_step(
+                                user_input=_room_wake["prompt"],
+                                skip_input=False,
+                                disable_workflows=True,
+                                disable_tools=False,
+                            )
+                        except Exception as _room_err:
+                            append_domain_log_always(
+                                "headless", f"[ROOM] delivery failed: {_room_err}"
+                            )
+                        finally:
+                            agent._synthetic_drain_turn = False
+                            agent._room_turn = None
+                            try:
+                                _room_wake["advance"]()
+                            except Exception:
+                                pass
                 _pushed = False
                 try:
                     _pushed = take_result_notification()

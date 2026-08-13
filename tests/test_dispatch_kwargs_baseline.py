@@ -146,6 +146,11 @@ KWARGS_BASELINE = {
     "memory_search":             ("chat", ["user_scope_id", "username"]),
     "move_file":                 ("chat", []),
     "project_history":           ("chat", []),
+    # Room tools carry both halves: the scope decides which rooms this caller is a
+    # member of, and the role travels with it the way every identity pair does.
+    "room_join":                 ("chat", ["user_role", "user_scope_id"]),
+    "room_read":                 ("chat", ["user_role", "user_scope_id"]),
+    "room_send":                 ("chat", ["user_role", "user_scope_id"]),
     "project_rollback":          ("chat", []),
     # DELIBERATE change: the trust store is per user now, and this tool reads
     # the policy itself (vaf/tools/python_exec.py) - without the declared
@@ -296,6 +301,7 @@ def _fake_agent(tools, *, thinking=False):
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda name, tool, args: None,
         _ask_first_gate_decision=lambda name, tool: None,
+        _room_mode_gate_decision=lambda name, tool: None,
         get_live_session_subagents=lambda: [],
         _extract_subagent_goal=lambda args: "",
         model_display_name="probe",

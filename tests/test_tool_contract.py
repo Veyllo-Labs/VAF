@@ -146,6 +146,7 @@ def test_execute_tool_uses_contract_for_noninteractive_gating():
         _plan_gate_decision=lambda name, tool, tool_args=None: None,  # plan gate is a no-op here (noninteractive)
         _proactive_reply_gate_decision=lambda name, tool, args: None,  # incident gates: no-op
         _ask_first_gate_decision=lambda name, tool: None,
+        _room_mode_gate_decision=lambda name, tool: None,
     ))
 
     with patch("vaf.core.trust.get_tool_policy", return_value="ask"), patch(

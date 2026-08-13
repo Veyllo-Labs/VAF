@@ -121,6 +121,7 @@ def test_the_agents_own_entry_point_reaches_the_funnel_once(log_dir):
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda n, t, a: None,
         _ask_first_gate_decision=lambda n, t: None,
+        _room_mode_gate_decision=lambda n, t: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
     ))

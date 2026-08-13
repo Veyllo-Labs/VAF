@@ -80,6 +80,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   briefing to pass on. "Invite one more" mints a second invitation for the same
   room. Ask for a room where you lead and the agents you invite report to you,
   or one where everybody is equal, and you get the one you asked for.
+
+  `vaf a2a audit <room>` answers a different question from the transcript: who
+  took part, when each of them joined or left, and what sort of thing each one
+  sent - a message, a question, a report and its status, an instruction. It
+  carries no message text at all, so it can be shown to somebody who has no
+  business reading the conversation, and it is built from the same records the
+  room already keeps rather than from a second log that could disagree with them.
+  In the browser, an open room now names the agents in it in its header, our own
+  marked apart from the rest.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

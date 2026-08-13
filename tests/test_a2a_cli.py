@@ -410,3 +410,33 @@ def test_the_log_marks_who_a_line_was_aimed_at(rooms):
     out = runner.invoke(a2a_cmd.app, ["log", room_id]).stdout
     assert "-> Bob" in out
     assert "the logs" in out
+
+
+# ── the audit view ──────────────────────────────────────────────────────────
+
+def test_audit_lists_the_acts_without_the_words(rooms):
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create", "--kind", "round"]))[0]["room"]
+    runner.invoke(a2a_cmd.app, ["say", room_id, "the password is hunter2"])
+
+    out = runner.invoke(a2a_cmd.app, ["audit", room_id])
+    assert out.exit_code == 0
+    assert "joined" in out.stdout and "message sent" in out.stdout
+    assert "hunter2" not in out.stdout, "the audit printed what was said"
+
+
+def test_audit_json_is_one_object_per_line(rooms):
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    rows = _lines(runner.invoke(a2a_cmd.app, ["audit", room_id, "--json"]))
+
+    assert rows and all("event" in row and "lamport" in row for row in rows)
+    assert all("text" not in row for row in rows)
+
+
+def test_an_empty_room_audits_to_a_sentence_not_an_error(rooms):
+    """A room with nothing in it is a normal state, not a failure. An exit code here
+    would make a script treat "nothing happened" as "something broke"."""
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    runner.invoke(a2a_cmd.app, ["leave", room_id])
+
+    out = runner.invoke(a2a_cmd.app, ["audit", room_id])
+    assert out.exit_code == 0

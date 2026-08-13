@@ -705,6 +705,24 @@ class Room:
 
 # ── one wording for the three renderers ─────────────────────────────────────
 
+def frame_clock(ts: Any) -> str:
+    """A frame's wall clock as HH:MM, or empty if it cannot be one.
+
+    `ts` is ADVISORY in the protocol and this is the only thing it is for: telling a
+    human roughly when something was said. Ordering never reads it, because the clocks
+    of two machines in one room do not agree.
+
+    An unusable value renders as EMPTY rather than as a wrong time. The rule is worth a
+    home of its own: a missing timestamp in a transcript is a gap somebody notices, and
+    a wrong one is a fact somebody believes.
+    """
+    import time as _time
+    try:
+        return _time.strftime("%H:%M", _time.localtime(float(ts)))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
 def describe(entry: Dict[str, Any]) -> str:
     """A transcript row as a line a human reads.
 
@@ -739,6 +757,82 @@ def describe(entry: Dict[str, Any]) -> str:
     if not entry.get("known", True):
         return f"<message type {kind!r} this version does not understand> {text}".strip()
     return text
+
+
+# What each kind of frame IS, as an event. Separate from `describe` on purpose: that
+# renders a conversation for somebody reading along, this answers "who did what, and
+# when" for somebody checking. An unknown kind keeps its own name rather than being
+# dropped, because a gap in an audit is worse than a line nobody recognises.
+AUDIT_EVENTS = {
+    "join": "joined",
+    "leave": "left",
+    "role": "role changed",
+    "hire": "opened a child room",
+    "close": "closed the room",
+    "say": "message sent",
+    "ask": "question asked",
+    "answer": "answer sent",
+    "report": "report sent",
+    "directive": "instruction sent",
+    "ack": "acknowledged",
+}
+
+
+def audit(room: "Room", *, since_lamport: int = 0) -> List[Dict[str, Any]]:
+    """Who did what in a room, and when - at the level of the act, never its wording.
+
+    Everything here is derived from frames that were already written. There is no
+    second record and nothing new is stored, which is the property that makes it worth
+    trusting: an audit built from its own log could disagree with the transcript, and
+    then somebody would have to decide which one lied. This one cannot, because it IS
+    the transcript, read a different way.
+
+    THE MESSAGE TEXT IS DELIBERATELY ABSENT. An audit answers "did the worker report
+    before or after the leader asked" and "when did this agent leave"; reading what was
+    actually said is the transcript's job, and it is a different question with a
+    different reason for asking. Keeping the two apart means an audit can be shown to
+    somebody who has no business reading the conversation.
+
+    NAMED BOUNDARY: none of this is copied into the security event log, and joins are
+    not security events. What that log holds today is REFUSALS - a handshake turned
+    away at the room socket is written there, which is the shape it is good at: rare,
+    each one worth a look. A successful join is membership in a conversation, and
+    writing every one of them there would bury the refusals in traffic.
+    The measurement behind that boundary, so it can be revisited honestly: an admission
+    from ANOTHER machine would be a different case, because it means a stranger's agent
+    was let in - and there are exactly zero of those today, since no client speaks the
+    room socket yet. When one exists, this is the paragraph to come back to.
+    """
+    labels = room.labels()
+    members = room.store.members()
+    rows: List[Dict[str, Any]] = []
+    for frame in room.store.read_since(since_lamport):
+        body = frame.body or {}
+        record = members.get(frame.sender) or {}
+        detail = ""
+        if frame.kind == "report":
+            detail = str(body.get("status") or "")
+        elif frame.kind == "role":
+            detail = f"{body.get('peer') or '?'} -> {body.get('role') or '?'}"
+        elif frame.kind == "hire":
+            detail = str(body.get("child_room") or "")
+        elif frame.kind in ("leave", "close"):
+            detail = str(body.get("reason") or "")
+        elif frame.to and frame.to.get("peer"):
+            # Not the wording, but the fact that it was aimed at one participant -
+            # which is exactly the sort of thing an audit is asked about.
+            detail = f"to {labels.get(frame.to['peer']) or frame.to['peer']}"
+        rows.append({
+            "lamport": frame.lamport,
+            "ts": frame.ts,
+            "peer": frame.sender,
+            "label": labels.get(frame.sender) or record.get("display") or frame.sender,
+            "role": frame.role,
+            "kind": frame.kind,
+            "event": AUDIT_EVENTS.get(frame.kind, f"{frame.kind} sent"),
+            "detail": detail,
+        })
+    return rows
 
 
 # ── how a local participant finds its own rooms ─────────────────────────────

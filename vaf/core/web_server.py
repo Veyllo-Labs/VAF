@@ -3449,6 +3449,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # Which peer is us, so the view can tell our own agent
                                 # apart from the strangers in the room.
                                 "me": row.get("peer"),
+                                # Who is in it, by the name the ROOM resolved. A header
+                                # that listed join names would show two agents called
+                                # "Codex" and no way to tell which is which, which is
+                                # the same reason the tag exists at all.
+                                "members_list": [
+                                    {"peer": peer, "label": label,
+                                     "role": room.role_of(peer) or ""}
+                                    for peer, label in sorted(
+                                        room.labels().items(), key=lambda kv: kv[1])
+                                ],
                             },
                             "messages": [
                                 {"id": e["id"], "peer": e["peer"], "label": e["label"],

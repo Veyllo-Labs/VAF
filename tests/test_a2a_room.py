@@ -641,3 +641,117 @@ def test_an_ambiguous_bare_name_is_still_refused(tmp_path):
 
     assert room.peer_by_display("Codex") is None
     assert room.address_from_mention("@Codex hello") is None
+
+
+# ── the audit view ─────────────────────────────────────────────────────────
+
+def test_the_audit_says_who_did_what_and_when(tmp_path):
+    from vaf.core.a2a.room import audit
+
+    room = Room.create(kind="chain", owner_scope=None, base=tmp_path, room_id="room-aud")
+    leader = room.join(display="VAF", scope_id=None, peer_id="p-lead")
+    worker = room.join(display="Codex", scope_id=None, peer_id="p-work")
+    room.ingest({"kind": "directive", "body": {"text": "collect the logs"}}, identity=leader)
+    room.ingest({"kind": "report", "body": {"text": "done", "status": "completed"}},
+                identity=worker)
+    room.leave(worker, reason="finished")
+
+    events = [row["event"] for row in audit(room)]
+    assert events == ["joined", "joined", "instruction sent", "report sent", "left"]
+
+    rows = audit(room)
+    assert rows[3]["detail"] == "completed", "a report's status is the point of it"
+    assert rows[4]["detail"] == "finished"
+    assert rows[1]["label"] == room.label_for("p-work")
+
+
+def test_the_audit_carries_no_message_text(tmp_path):
+    """MUTATION: put the body, or the text, into the audit row.
+
+    An audit answers "did the worker report before the leader asked" and "when did
+    this one leave". Reading what was actually said is the transcript's job and a
+    different question - keeping them apart is what lets an audit be shown to somebody
+    who has no business reading the conversation.
+    """
+    from vaf.core.a2a.room import audit
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-quiet")
+    one = room.join(display="Alice", scope_id=None, peer_id="p-a")
+    room.say(one, "the password is hunter2")
+
+    blob = repr(audit(room))
+    assert "hunter2" not in blob
+    assert all("text" not in row and "body" not in row for row in audit(room))
+
+
+def test_an_unknown_kind_still_appears_in_the_audit(tmp_path):
+    """MUTATION: skip a kind the table does not know.
+
+    A gap in an audit is worse than a line nobody recognises: the first is invisible,
+    the second asks a question. It is also the frame rule one level up - an unknown
+    kind is shown, never dropped.
+    """
+    from vaf.core.a2a.room import audit
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-odd")
+    one = room.join(display="Alice", scope_id=None, peer_id="p-a")
+    from vaf.core.a2a.frame import Frame
+    room.store.append(Frame.new(
+        room=room.room_id, sender=one.peer_id, role="peer", kind="telemetry",
+        seq=room.store.next_seq(one.peer_id), lamport=room.store.next_lamport(),
+        body={"cpu": 12}))
+
+    rows = audit(room)
+    assert any(row["kind"] == "telemetry" for row in rows), "an unknown act vanished"
+
+
+def test_an_addressed_message_is_visible_as_a_fact_without_its_wording(tmp_path):
+    from vaf.core.a2a.room import audit
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-aim")
+    one = room.join(display="Alice", scope_id=None, peer_id="p-a")
+    two = room.join(display="Bob", scope_id=None, peer_id="p-b")
+    room.ingest({"kind": "say", "body": {"text": "secret plan"},
+                 "to": {"peer": two.peer_id}}, identity=one)
+
+    row = audit(room)[-1]
+    assert row["event"] == "message sent"
+    assert row["detail"] == f"to {room.label_for('p-b')}"
+    assert "secret plan" not in repr(row)
+
+
+def test_the_audit_reads_the_log_and_stores_nothing(tmp_path):
+    """MUTATION: keep a second record of events.
+
+    Two records can disagree, and then somebody has to decide which one lied. This one
+    cannot, because it IS the transcript read a different way - every row it returns
+    has a frame behind it.
+    """
+    from vaf.core.a2a.room import audit
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-one-truth")
+    one = room.join(display="Alice", scope_id=None, peer_id="p-a")
+    room.say(one, "hello")
+
+    lamports = [row["lamport"] for row in audit(room)]
+    assert lamports == [f.lamport for f in room.store.read_since(0)]
+
+    before = sorted(p.name for p in tmp_path.rglob("*") if p.is_file())
+    audit(room)
+    assert sorted(p.name for p in tmp_path.rglob("*") if p.is_file()) == before
+
+
+# ── the advisory clock belongs to the protocol ─────────────────────────────
+
+def test_a_broken_timestamp_renders_as_nothing_not_as_a_wrong_time(tmp_path):
+    """MUTATION: fall back to "now" when ts cannot be read.
+
+    A missing timestamp in a transcript is a gap somebody notices. A wrong one is a
+    fact somebody believes - and in a room whose whole ordering rule is "never trust
+    the clock", inventing one is the worst available answer.
+    """
+    from vaf.core.a2a.room import frame_clock
+
+    assert len(frame_clock(1765000000.0)) == 5
+    for bad in (None, "", "nope", float("nan"), object()):
+        assert frame_clock(bad) == ""

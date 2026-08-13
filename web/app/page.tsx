@@ -161,6 +161,7 @@ type RoomMessage = {
 type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
+    members_list?: Array<{ peer: string; label: string; role: string }>;
 };
 
 type SessionEditorDocumentState = {
@@ -8456,6 +8457,25 @@ function VAFDashboardContent() {
                                     {roomView.room.members ? ` · ${roomView.room.members} agents` : ''}
                                     {roomView.room.closed ? ' · closed' : ''}
                                 </div>
+                                {/* Who is in the room, by the name the room resolved.
+                                    Join names alone would show two agents called
+                                    "Codex" with no way to tell them apart, which is
+                                    what the tag exists for. */}
+                                {(roomView.room.members_list?.length || 0) > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                        {roomView.room.members_list!.map(m => (
+                                            <span key={m.peer}
+                                                title={m.role}
+                                                className={cn(
+                                                    "text-[10px] px-1.5 py-0.5 rounded-full",
+                                                    m.peer === roomView.room.me
+                                                        ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                                        : "bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]")}>
+                                                {m.label}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                             <button onClick={() => setRoomView(null)}
                                 className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">

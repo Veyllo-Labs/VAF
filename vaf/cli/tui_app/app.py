@@ -178,14 +178,12 @@ class TuiEvents:
 def _room_clock(ts) -> str:
     """A frame's wall clock as HH:MM for the head row.
 
-    `ts` is advisory in the protocol and is used for exactly this: showing a human
-    when something was said. Ordering never reads it. An unusable value renders as
-    empty rather than as a wrong time, and the widget then shows the current one.
+    The rule it follows - an unusable `ts` renders as empty, never as a wrong time -
+    belongs to the protocol, so it lives with the frames. Kept as a name here because
+    the call site reads better with it and the tests point at it.
     """
-    try:
-        return time.strftime("%H:%M", time.localtime(float(ts)))
-    except (TypeError, ValueError, OSError):
-        return ""
+    from vaf.core.a2a.room import frame_clock
+    return frame_clock(ts)
 
 
 class VafApp(App):

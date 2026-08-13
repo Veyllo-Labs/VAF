@@ -523,6 +523,39 @@ def log(room_id: str = typer.Argument(...),
 
 
 @app.command()
+def audit(room_id: str = typer.Argument(...),
+          since: int = typer.Option(0, help="Only events after this lamport."),
+          json_out: bool = typer.Option(False, "--json", help="One JSON object per line.")) -> None:
+    """Who did what in a room, and when. Acts, not wording.
+
+    The transcript answers what was said; this answers who took part, when they came
+    and went, and what sort of thing each of them sent. It carries no message text, so
+    it can be shown to somebody who has no business reading the conversation.
+    """
+    from vaf.core.a2a.room import audit as audit_rows, frame_clock
+
+    room = _room(room_id)
+    _me(room, required=False)
+    rows = audit_rows(room, since_lamport=int(since))
+    if json_out:
+        for row in rows:
+            _emit(row)
+        return
+
+    if not rows:
+        typer.echo(f"{room_id}: nothing has happened yet.")
+        return
+    typer.echo(f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
+               f"{len(rows)} events")
+    for row in rows:
+        when = frame_clock(row.get("ts"))
+        line = f"{when} {row['label']} [{row['role']}] {row['event']}"
+        if row.get("detail"):
+            line += f" ({row['detail']})"
+        typer.echo(line)
+
+
+@app.command()
 def export(room_id: str = typer.Argument(...),
            output: Optional[str] = typer.Option(None, "--out", help="Write to this file.")) -> None:
     """Export the whole transcript as Markdown, artifacts listed separately."""

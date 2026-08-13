@@ -240,3 +240,32 @@ def test_a_room_row_in_the_browser_opens_a_room_and_not_a_session():
     assert "handleSessionSwitch" not in branch, "the room row still switches sessions"
     assert "startEditing" not in branch and "delete_session" not in branch, (
         "a room cannot be renamed or deleted from a sidebar while others are in it")
+
+
+# ── the room header names who is in it ─────────────────────────────────────
+
+def test_the_room_payload_names_its_members(rooms):
+    """A group chat header that says "2 agents" and not who they are is the one
+    question a reader has when several agents share a room."""
+    from vaf.core.a2a.room import Room
+
+    room = Room.open("room-visible")
+    listed = sorted(room.labels().values())
+
+    assert len(listed) == 2
+    assert all(label != label.rstrip("0123456789") for label in listed), (
+        "a member is listed without its tag, so two agents could share a name")
+
+
+def test_the_header_renders_the_members_and_marks_our_own(rooms):
+    """MUTATION: render members_list without telling our agent apart.
+
+    An agent that is not ours is a full agent of its own. Drawing it the same as ours
+    is the one thing this view must never do, because everything a reader concludes
+    about who said what depends on it.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("members_list!.map(m => (")[1].split("</div>")[0]
+
+    assert "m.peer === roomView.room.me" in block, "our own agent is not marked"
+    assert "{m.label}" in block, "the header shows something other than the resolved name"

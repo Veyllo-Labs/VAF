@@ -591,6 +591,26 @@ class Room:
     def leave(self, identity: Identity, reason: str = "") -> Frame:
         return self.ingest({"kind": "leave", "body": {"reason": reason}}, identity=identity)
 
+    def delete(self, identity: Identity, *, reason: str = "") -> bool:
+        """Close the room and remove it from this machine. HOST ONLY.
+
+        Closing first is not a formality. The farewell is a frame, so a peer that reads
+        the room before the files go tells its own user WHY its access ended, instead of
+        finding a conversation that simply is not there any more. On one machine the two
+        happen in the same breath; over a wire they do not, and the order is what makes
+        the difference survivable.
+
+        Host only, and for a blunter reason than kicking: this deletes somebody else's
+        transcript as well as your own. A guest that could do it could end everybody's
+        work on its way out and leave no record that it had been there.
+        """
+        if not self.is_host(identity):
+            raise NotPermitted(
+                "only the machine hosting a room can delete it; leaving is `leave`")
+        if not self.closed:
+            self.close(identity, reason=reason or self.TERMINATED_BY_USER)
+        return self.store.destroy()
+
     def kick(self, identity: Identity, peer_id: str, reason: str = "") -> Frame:
         """Remove another peer from the room.
 

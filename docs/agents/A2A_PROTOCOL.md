@@ -146,6 +146,13 @@ somebody else, which every reader folds and reaches the same membership from.
 A leader may kick in its chain; the host may kick in any room it hosts, the same shape
 as `close`.
 
+`close` and `delete` are different acts and both are wanted. Closing is a PROTOCOL event:
+a frame every participant reads, saying the conversation is over, and the transcript
+survives it. Deleting removes the room from the machine that holds it, and it is the host
+only - it takes away somebody else's transcript as well as your own. Deleting closes
+first, so a peer reading over a wire is told WHY its access ended instead of finding a
+conversation that is simply not there.
+
 **The room's own host handles can never be kicked.** They are DERIVED from the owner's
 scope and the room id rather than stored anywhere, so a peer cannot claim the protection
 for itself, and it is refused out loud rather than ignored - because the caller usually
@@ -370,7 +377,7 @@ NDJSON on stdout.
 
 ```
 create  list  invite  join  trust  say  ask  answer  report  directive
-hire  role  kick  leave  close  members  read  wait  log  audit  export
+hire  role  kick  leave  close  delete  members  read  wait  log  audit  export
 ```
 
 `wait` is the most used line of the protocol, since a foreign agent blocks on it between

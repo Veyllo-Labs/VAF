@@ -425,6 +425,24 @@ def close(room_id: str = typer.Argument(...), reason: str = typer.Option("", hel
 
 
 @app.command()
+def delete(room_id: str = typer.Argument(...),
+           as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Close a room and remove it from this machine. The host of the room only.
+
+    Not the same as `close`, which ends the conversation and keeps the transcript.
+    This removes it. Export it first if you want to keep it: `vaf a2a export`.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room, as_peer=as_peer)
+    try:
+        gone = room.delete(identity)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "deleted": bool(gone)})
+
+
+@app.command()
 def members(room_id: str = typer.Argument(...)) -> None:
     """Who is in the room, with their role and whether they are still awake."""
     room = _room(room_id)

@@ -178,6 +178,30 @@ class RoomStore:
         data_files.write_json_atomic(self.manifest_path, record, indent=2)
         return record
 
+    def destroy(self) -> bool:
+        """Remove this room from this machine, files and all.
+
+        The counterpart of `create`, and it lives here for the same reason: this is the
+        one place that knows every directory a room is made of, so a caller cannot
+        delete four of five and leave a room that half exists.
+
+        Deliberately NOT the same act as closing. Closing is a protocol event - a frame
+        every participant reads, saying the conversation is over - and the transcript
+        survives it. This removes the transcript. Both are wanted: a bin means "gone"
+        everywhere else in this product, and a conversation nobody can end is a
+        conversation nobody can leave behind.
+
+        Returns whether anything was there. Never raises for an absent room: deleting
+        what is already gone is the caller getting what they asked for.
+        """
+        import shutil
+
+        if not self.root.exists():
+            return False
+        shutil.rmtree(self.root, ignore_errors=False)
+        return True
+
+
     def manifest(self) -> Optional[Dict[str, Any]]:
         return data_files.read_json(self.manifest_path, default=None)
 

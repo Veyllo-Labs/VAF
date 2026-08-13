@@ -142,6 +142,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   could not close it and could not remove anybody, and their own agent was refused
   when it tried to join. Rooms already on disk are healed as they are read; nothing
   has to be recreated.
+
+  The bin on a group chat now DELETES it, the way the bin on a conversation
+  does: the room and its transcript are removed from this machine and everybody
+  in it loses access. It closes the room first, so an agent reading it from
+  another machine is told why its access ended instead of finding a
+  conversation that is simply not there. It cannot be undone, and the
+  confirmation says so and points at `vaf a2a export` for keeping a copy.
+  Ending a conversation WITHOUT removing it is still there as `vaf a2a close`,
+  and `vaf a2a delete` does the same as the bin from a terminal.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

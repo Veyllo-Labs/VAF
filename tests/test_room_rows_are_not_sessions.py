@@ -389,7 +389,9 @@ def test_closing_never_happens_on_one_click():
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     dialog = source.split("{roomToClose && (")[1].split("{/* Trust Gate Dialog")[0]
 
-    assert "type: 'close_room'" in dialog
+    assert "type: 'delete_room'" in dialog, (
+        "the bin closes instead of deleting, which is not what a bin means anywhere "
+        "else in this product")
     for key in ("roomCloseTitle", "roomCloseBody", "roomCloseConfirm", "roomCloseCancel"):
         assert f"tMain('{key}')" in dialog, f"the dialog hardcodes {key} instead of translating it"
 
@@ -438,7 +440,7 @@ def test_the_browser_acts_on_the_human_lane_and_not_a_lane_of_its_own():
 
     assert "web" not in PARTICIPANT_LANES
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
+    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
     assert 'participant_key("cli", user_scope_id)' in block
 
 
@@ -450,7 +452,7 @@ def test_writing_and_closing_answer_from_the_store():
     and the drift would be invisible until somebody compared two screens.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
+    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
 
     assert "_send_room_transcript" in block
     # one builder for all three commands, so they cannot describe the room differently
@@ -679,10 +681,10 @@ def test_closing_or_renaming_pushes_a_fresh_sidebar():
     may have the app open twice.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1] \
+    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
                   .split('elif type == "load_session"')[0]
 
-    assert 'if type in ("close_room", "rename_room"):' in block
+    assert 'if type in ("close_room", "delete_room", "rename_room"):' in block
     assert "broadcast_to_user" in block and '"type": "session_list"' in block
     assert "session_list_payload" in block, "the push would drop the room fields again"
 
@@ -701,3 +703,31 @@ def test_a_room_that_leaves_the_list_closes_its_view():
     assert "setRoomView(prev =>" in block
     assert "s.roomId === prev.room.roomId" in block
     assert "setRoomMembersOpen(false)" in block, "the members panel outlives its room"
+
+
+def test_the_bin_deletes_the_room_the_way_it_deletes_a_chat():
+    """MUTATION: point the bin back at close_room.
+
+    A bin means "gone" everywhere else in this product, and a room that only closed
+    stayed on disk - which is why "I deleted it and it is still there" was reported
+    twice from two different causes. Closing remains available as a protocol act
+    (`vaf a2a close`): it ends the conversation and KEEPS the transcript. The bin does
+    the other thing.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    dialog = source.split("{roomToClose && (")[1].split("{/* Trust Gate Dialog")[0]
+
+    assert "type: 'delete_room'" in dialog
+    assert "close_room" not in dialog
+
+
+def test_the_confirmation_says_it_cannot_be_undone():
+    """Deleting a room removes somebody else's transcript as well as your own, so the
+    sentence in front of it has to say what it costs and where to keep a copy."""
+    import json
+
+    for name, phrase in (("en", "cannot be undone"), ("de", "rueckgaengig")):
+        catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
+        body = catalogue["main"]["roomCloseBody"]
+        assert phrase in body, f"{name}: the warning does not say it is permanent"
+        assert "vaf a2a export" in body, f"{name}: no way to keep a copy is offered"

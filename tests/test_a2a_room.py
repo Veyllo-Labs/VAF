@@ -1104,3 +1104,89 @@ def test_a_guest_is_never_recognised_by_a_handle_it_holds(tmp_path):
 
     assert guest.peer_id not in room.host_peers()
     assert room.is_host(guest) is False
+
+
+# ── deleting a room, the way a chat is deleted ─────────────────────────────
+
+def test_the_host_deletes_a_room_and_it_is_gone(tmp_path):
+    """A chat is deleted by removing its file. A room had no equivalent at all, so the
+    only thing a bin could offer was CLOSING - which leaves it on disk and, before the
+    list learned to skip closed rooms, on screen.
+    """
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+    from vaf.core.a2a.store import RoomStore, StoreError
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-gone")
+    peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-gone")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=peer)
+    room.join(display="Codex", scope_id=None, peer_id="p-guest")
+
+    assert room.delete(host) is True
+    assert not RoomStore("room-gone", base=tmp_path).exists()
+    with pytest.raises(StoreError):
+        Room.open("room-gone", base=tmp_path)
+
+
+def test_deleting_closes_first_so_the_others_learn_why(tmp_path):
+    """MUTATION: remove the files without closing.
+
+    On one machine the two happen in the same breath. Over a wire they do not: a peer
+    that reads the room in between is told the conversation ended rather than finding
+    one that is simply not there, and the order is what makes that survivable.
+    """
+    import vaf.core.a2a.room as room_mod
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-farewell")
+    peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-farewell")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=peer)
+
+    seen = {}
+    original = room_mod.RoomStore.destroy
+
+    def _spy(self):
+        seen["closed_before_delete"] = any(
+            f.kind == "close" for f in self.frames())
+        return original(self)
+
+    room_mod.RoomStore.destroy = _spy
+    try:
+        room.delete(host)
+    finally:
+        room_mod.RoomStore.destroy = original
+
+    assert seen["closed_before_delete"] is True
+
+
+def test_a_guest_can_never_delete_the_room_it_was_invited_into(tmp_path):
+    """MUTATION: allow anybody in the room to delete it.
+
+    Blunter than kicking: this removes somebody else's transcript as well as your own.
+    A guest that could do it could end everybody's work on its way out and leave no
+    record it had been there.
+    """
+    from vaf.core.a2a.store import RoomStore
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-safe")
+    room.join(display="Me", scope_id="scope-owner", peer_id="p-host")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-guest")
+
+    with pytest.raises(NotPermitted) as refusal:
+        room.delete(guest)
+    assert "leaving is" in str(refusal.value), "the refusal does not say what a guest CAN do"
+    assert RoomStore("room-safe", base=tmp_path).exists()
+
+
+def test_deleting_an_already_closed_room_does_not_close_it_twice(tmp_path):
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-shut-then-gone")
+    peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-shut-then-gone")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=peer)
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    assert room.delete(host) is True

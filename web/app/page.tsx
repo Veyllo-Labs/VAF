@@ -8937,7 +8937,7 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 onClick={() => {
-                                    ws?.send(JSON.stringify({ type: 'close_room', room_id: roomToClose.roomId }));
+                                    ws?.send(JSON.stringify({ type: 'delete_room', room_id: roomToClose.roomId }));
                                     setRoomToClose(null);
                                 }}
                                 className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"

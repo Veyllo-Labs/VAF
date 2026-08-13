@@ -3521,7 +3521,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
 
-                elif type in ("room_say", "close_room", "kick_peer", "rename_room"):
+                elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):
                     # The person at the browser acting in a room themselves, rather
                     # than their agent doing it for them. They act on the CLI lane and
                     # not on a lane of their own, deliberately: the lanes separate the
@@ -3557,7 +3557,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             identity = room.join(display=display, scope_id=user_scope_id,
                                                  peer_id=derive_peer_id(key, wanted))
 
-                        if type == "close_room":
+                        if type == "delete_room":
+                            # What the bin means everywhere else in this product. It
+                            # closes first, so a peer reading the room over a wire is
+                            # told WHY its access ended rather than finding a
+                            # conversation that is simply not there any more.
+                            room.delete(identity, reason=Room.TERMINATED_BY_USER)
+                        elif type == "close_room":
                             room.close(identity, reason=Room.TERMINATED_BY_USER)
                         elif type == "kick_peer":
                             # The room decides whether this is allowed, including the
@@ -3593,9 +3599,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             room.ingest(payload, identity=identity)
 
                         # Answer with the room as it now stands, so the view repaints
-                        # from the store rather than from what the browser assumed.
-                        room = Room.open(wanted)
-                        await _send_room_transcript(websocket, room, user_scope_id)
+                        # from the store rather than from what the browser assumed. A
+                        # deleted room has no "as it stands" - the sidebar push below
+                        # is the whole answer, and the view closes itself when the row
+                        # goes.
+                        if type != "delete_room":
+                            await _send_room_transcript(websocket, Room.open(wanted),
+                                                        user_scope_id)
 
                         # Anything that changes what the SIDEBAR says has to push the
                         # sidebar. Closing takes the room out of the list and renaming
@@ -3604,7 +3614,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # its own farewell in it, which is precisely what it should
                         # never do. Broadcast rather than reply: the same person may
                         # have the app open twice.
-                        if type in ("close_room", "rename_room"):
+                        if type in ("close_room", "delete_room", "rename_room"):
                             await manager.broadcast_to_user(user_scope_id, {
                                 "type": "session_list",
                                 "sessions": session_list_payload(

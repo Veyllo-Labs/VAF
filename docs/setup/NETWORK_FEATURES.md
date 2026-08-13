@@ -221,7 +221,33 @@ When TLS is enabled and no valid certificate is configured, VAF's `ssl_utils` mo
    - Certificates are generated once and reused across restarts
    - On each startup, the server checks if the certificate has at least 30 days remaining
    - If expired or expiring soon, only the server certificate is regenerated (CA stays the same)
+   - A certificate is also replaced when it cannot be VERIFIED, not only when it expires
+     (see below) - and that is the one case in which the CA itself is replaced too
    - Config paths (`local_network_ssl_cert`, `local_network_ssl_key`) are updated automatically
+
+#### Why a valid certificate can still be replaced
+
+Both certificates carry the key identifiers RFC 5280 requires: the CA names its own key,
+and the server certificate names both itself and the key that signed it. Without them a
+verifier cannot build the chain under strict checking, which Python turns ON by default
+from 3.13 (`ssl.create_default_context()` sets `VERIFY_X509_STRICT`).
+
+The practical effect of a certificate generated before this was fixed: `curl` and browsers
+still connect, and every correctly written Python client fails with
+`certificate verify failed: Missing Authority Key Identifier`. Both extensions are needed,
+and neither alone helps - measured against `openssl verify -x509_strict`:
+
+| CA has subject key id | Server has authority key id | Result |
+|---|---|---|
+| no | no | error 85, missing authority key identifier |
+| yes | no | error 85 |
+| no | yes | error 86, missing subject key identifier |
+| yes | yes | OK |
+
+So such a certificate is treated as invalid rather than as merely old, and both files are
+reissued on the next start. **The new CA has a different fingerprint**, so any device that
+installed the old `~/.vaf/ssl/ca.pem` in its trust store has to be given the new one. The
+replacement is logged at warning level and says exactly that.
 
 ### Certificate Lifecycle
 
@@ -234,13 +260,14 @@ Certificates exist in ~/.vaf/ssl/?
     No                  Yes
     |                    |
     v                    v
-Generate CA         Certificate valid (>30 days)?
+Generate CA         Certificate valid, verifiable (>30 days)?
 Generate Server         |              |
     |                  Yes             No
     |                   |              |
     v                   v              v
 Store in              Reuse        Regenerate server cert
-~/.vaf/ssl/                        (keep CA unchanged)
+~/.vaf/ssl/                        (keep CA unless it is
+                                    itself unverifiable)
     |
     v
 Update config paths

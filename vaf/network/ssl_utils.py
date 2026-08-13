@@ -74,6 +74,16 @@ def _generate_ca(ssl_dir: Path) -> tuple:
             ),
             critical=True,
         )
+        # RFC 5280 requires a CA certificate to name its own key, and OpenSSL enforces
+        # it under X509_V_FLAG_X509_STRICT - which Python 3.13 turns ON by default in
+        # ssl.create_default_context(). Without this, verification of anything this CA
+        # signed fails with "Missing Subject Key Identifier", so a correctly written
+        # Python client cannot connect at all while curl and browsers still can.
+        # Measured, not assumed: only CA-SKI plus leaf-AKI together verify under strict.
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
         .sign(ca_key, hashes.SHA256())
     )
 
@@ -173,6 +183,18 @@ def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=False,
         )
+        # The other half of the pair above: the leaf must point at the key that signed
+        # it, or strict verification stops at depth 0 with "Missing Authority Key
+        # Identifier". Its own subject key identifier goes with it, which is what a
+        # verifier uses to build the chain in the first place.
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
+        )
         .add_extension(
             x509.SubjectAlternativeName(sans),
             critical=False,
@@ -205,11 +227,42 @@ def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
     return server_cert_path, server_key_path
 
 
-def _is_cert_valid(cert_path: Path, min_days_remaining: int = 30) -> bool:
-    """Check if an existing certificate is still valid."""
+def _cert_has_key_identifiers(cert: x509.Certificate, *, is_ca: bool) -> bool:
+    """Whether a certificate carries the identifiers strict verification demands.
+
+    Not a style question. A certificate without them is unusable to any client that
+    verifies properly, which is every Python client since 3.13 turned
+    VERIFY_X509_STRICT on by default - so a certificate missing them is not "valid but
+    old", it is a certificate nobody strict can use.
+    """
+    try:
+        cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+    except x509.ExtensionNotFound:
+        return False
+    if is_ca:
+        return True
+    try:
+        cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+    except x509.ExtensionNotFound:
+        return False
+    return True
+
+
+def _is_cert_valid(cert_path: Path, min_days_remaining: int = 30,
+                   *, is_ca: bool = False) -> bool:
+    """Check if an existing certificate is still valid AND usable.
+
+    Expiry was the only question until a certificate generated before the key
+    identifiers were added turned out to verify nowhere strict. Such a file is
+    reissued rather than kept: an unusable certificate that has not expired is still
+    unusable, and the only cost of replacing it is that whoever installed the old CA in
+    a trust store installs the new one.
+    """
     try:
         cert_pem = cert_path.read_bytes()
         cert = x509.load_pem_x509_certificate(cert_pem)
+        if not _cert_has_key_identifiers(cert, is_ca=is_ca):
+            return False
         remaining = cert.not_valid_after_utc - datetime.now(timezone.utc)
         return remaining.days >= min_days_remaining
     except Exception:
@@ -308,14 +361,29 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
                 sorted(required_ips),
             )
 
-    # Generate new CA if needed
+    # Generate new CA if needed. An existing one is kept across server-certificate
+    # rotations on purpose - anybody who installed it in a trust store keeps trusting
+    # this machine - but a CA that no strict client can verify is not doing that job,
+    # so one without its key identifier is replaced and the replacement is announced at
+    # WARNING rather than buried at info: every device that trusted the old file has to
+    # be handed the new one.
     if ca_key_path.exists() and ca_cert_path.exists():
         try:
             ca_key = serialization.load_pem_private_key(
                 ca_key_path.read_bytes(), password=None
             )
             ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
-            logger.info("Loaded existing CA certificate")
+            if not _cert_has_key_identifiers(ca_cert, is_ca=True):
+                logger.warning(
+                    "The local CA at %s predates the key identifiers that strict TLS "
+                    "verification requires, so no properly verifying client could "
+                    "connect. Generating a new CA: any device that installed the old "
+                    "ca.pem must install the new one.",
+                    ca_cert_path,
+                )
+                ca_key, ca_cert = _generate_ca(ssl_dir)
+            else:
+                logger.info("Loaded existing CA certificate")
         except Exception:
             logger.warning("Failed to load existing CA, regenerating")
             ca_key, ca_cert = _generate_ca(ssl_dir)

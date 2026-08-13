@@ -61,6 +61,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the warning named the problem on every start and left the reader to go
   searching for the remedy.
 
+### Fixed
+- **Network mode: programs that check the certificate properly can connect
+  again.** The certificate VAF generates for network access was missing two
+  standard fields, which browsers and `curl` overlook but a correctly written
+  program does not: any Python program written since version 3.13 refused the
+  connection outright with "certificate verify failed". Both fields are added
+  now. Because one of them belongs to the authority certificate itself, that
+  file is replaced once on the next start, and **any device on which you
+  installed `~/.vaf/ssl/ca.pem` needs the new copy** - the log says so when it
+  happens.
+
 ### Removed
 - The separate "gateway" server, together with its setup page and the
   `vaf bridge discord` command that talked to it. Nothing in VAF ever started

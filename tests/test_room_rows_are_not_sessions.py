@@ -845,3 +845,39 @@ def test_the_room_header_stays_on_screen():
     assert "backdrop-blur" in block
     assert "supports-[backdrop-filter]" in block, (
         "no fallback where the browser cannot blur, so the header would be see-through")
+
+
+def test_at_completes_room_members_while_a_room_is_open():
+    """MUTATION: keep offering workflows.
+
+    In a room "@" means a PERSON - it is the addressing rule, a leading mention wakes
+    exactly that participant. Offering workflows there answered a question nobody asked
+    while hiding the only list that matters, so the name had to be typed exactly by
+    hand. Whatever is open decides what "@" completes.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("} else if (lastWord.startsWith('@')) {")[1].split("} else {")[0]
+
+    assert "if (roomView) {" in block
+    assert "members_list" in block
+    # Against the CODE, not against the prose: the word "workflows" appears in the
+    # comment above the branch, so anchoring on the bare word measured my own sentence.
+    assert block.index("if (roomView) {") < block.index("const filtered = workflows"), (
+        "the workflow list is still consulted first")
+    assert "m.peer !== roomView.room.me" in block, "it offers to address yourself"
+
+
+def test_the_browser_corrects_a_lane_name_to_the_account_name():
+    """MUTATION: leave whatever the terminal wrote.
+
+    "terminal" is a LANE, not a person, so somebody who joined from a shell sat in the
+    room named after the thing they typed into. Their own member file is the one file
+    they are the authoritative writer for, so it is theirs to correct.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
+                  .split('elif type == "load_session"')[0]
+
+    assert "room.introduce(identity, display=wanted_name)" in block
+    assert 'current in ("terminal", "guest", None, "")' in block, (
+        "a name the person chose would be overwritten too")

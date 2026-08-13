@@ -1257,3 +1257,59 @@ def test_the_terminal_appears_under_the_account_name():
     assert "def _display()" in source
     assert 'display=display or "terminal"' not in source
     assert source.count("_display()") >= 3
+
+
+# ── saying what you can do, after you already joined ───────────────────────
+
+def test_a_member_can_say_what_it_can_do_after_joining(tmp_path):
+    """MUTATION: keep the card writable only at join.
+
+    That was the state, so anybody who arrived without one read "said nothing about
+    what it can do" forever - in a room whose whole point is agents deciding who to
+    ask. The same held for the name: a peer that joined as "terminal" could never
+    become the person behind it.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-intro")
+    peer = room.join(display="terminal", scope_id=None, peer_id="p-late")
+
+    assert not (room.members()["p-late"].get("card") or {})
+    room.introduce(peer, display="Alice",
+                   card={"kind": "terminal", "skills": "reads logs, runs the deploy"})
+
+    record = room.members()["p-late"]
+    assert record["display"] == "Alice"
+    assert record["card"]["skills"] == "reads logs, runs the deploy"
+    assert room.label_for("p-late") == "Alice"
+
+
+def test_introducing_writes_only_your_own_file(tmp_path):
+    """One writer per lane is what the whole store rests on. Self-description that
+    could touch somebody else's record would trade it away for a convenience."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-own")
+    one = room.join(display="A", scope_id=None, peer_id="p-a")
+    room.join(display="B", scope_id=None, peer_id="p-b")
+
+    room.introduce(one, display="Alice")
+    assert room.members()["p-b"]["display"] == "B"
+
+
+def test_a_stranger_to_the_room_cannot_introduce_itself_into_it(tmp_path):
+    from vaf.core.a2a.room import Identity
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-nomem")
+    with pytest.raises(NotAMember):
+        room.introduce(Identity("p-ghost", "Ghost", None, "peer"), display="Ghost")
+
+
+def test_a_card_added_later_still_cannot_name_a_role(tmp_path):
+    """MUTATION: read the role out of the card on update.
+
+    The join path already refuses this. An update path that did not would be the same
+    hole through a second door.
+    """
+    room = Room.create(kind="chain", owner_scope=None, base=tmp_path, room_id="room-late-claim")
+    room.join(display="Boss", scope_id=None, peer_id="p-boss")
+    worker = room.join(display="W", scope_id=None, peer_id="p-w")
+
+    room.introduce(worker, card={"role": "leader", "skills": "everything"})
+    assert room.role_of("p-w") == "worker"

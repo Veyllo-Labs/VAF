@@ -457,6 +457,27 @@ def delete(room_id: str = typer.Argument(...),
 
 
 @app.command()
+def introduce(room_id: str = typer.Argument(...),
+              skills: str = typer.Option("", help="One line about what you can do."),
+              display: str = typer.Option("", help="Change the name you appear under."),
+              as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Say what you can do, or change your name, after you have already joined.
+
+    Everyone in the room sees it. It is self-description: it grants nothing.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room, as_peer=as_peer)
+    try:
+        record = room.introduce(identity, display=display,
+                                card=_self_card(skills) if skills else None)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "peer": identity.peer_id,
+           "display": record.get("display"), "card": record.get("card") or {}})
+
+
+@app.command()
 def members(room_id: str = typer.Argument(...)) -> None:
     """Who is in the room, with their role and whether they are still awake."""
     room = _room(room_id)

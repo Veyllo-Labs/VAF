@@ -145,9 +145,18 @@ class RoomJoinTool(BaseTool):
         existing = room.identity_for(key)
         if existing is not None:
             room.set_mode(existing, mode)
+            # Calling this again is how a member updates what it says about itself.
+            # Without it, anybody who joined without a card was stuck on "said nothing
+            # about what it can do" forever, in a room whose whole point is agents
+            # deciding who to ask.
+            said = str(kwargs.get("skills") or "").strip()
+            if said or kwargs.get("display"):
+                room.introduce(existing, display=display if kwargs.get("display") else "",
+                               card=_card(said) if said else None)
             _announce(kwargs.get("user_scope_id"))
             return (f"Already a member of '{room_id}' as {existing.display} "
-                    f"({existing.role}); mode is now {mode}.")
+                    f"({existing.role}); mode is now {mode}"
+                    + (", and your description is updated." if said else "."))
         try:
             identity = room.join(
                 display=display, peer_id=peer_id,

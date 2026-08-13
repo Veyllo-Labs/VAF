@@ -2329,6 +2329,21 @@ function VAFDashboardContent() {
             setSelectedSuggestionIndex(0);
         } else if (lastWord.startsWith('@')) {
             const query = lastWord.slice(1).toLowerCase();
+            // In a room, "@" means a PERSON. It is the room's addressing rule - a
+            // leading mention wakes exactly that participant and nobody else - and
+            // offering workflows there answered a question nobody asked while hiding
+            // the only list that matters. Whoever is open decides what "@" completes.
+            if (roomView) {
+                const members = (roomView.room.members_list || [])
+                    .filter(m => m.peer !== roomView.room.me
+                        && m.label.toLowerCase().includes(query))
+                    .slice(0, 10)
+                    .map(m => ({ name: m.label, description: m.card?.skills || m.role }));
+                setSuggestionList(members);
+                setSuggestionType('workflow');   // same '@' prefix on completion
+                setSelectedSuggestionIndex(0);
+                return;
+            }
             // Workflows are loaded in `workflows` state
             const filtered = workflows
                 .filter(w =>

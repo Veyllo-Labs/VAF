@@ -3556,6 +3556,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 display = str(get_local_admin_username() or "user")
                             identity = room.join(display=display, scope_id=user_scope_id,
                                                  peer_id=derive_peer_id(key, wanted))
+                        else:
+                            # Already a member, possibly from a terminal that wrote the
+                            # LANE as the name. The account knows what to call this
+                            # person, and their own member file is the one file they are
+                            # the authoritative writer for, so it is theirs to correct.
+                            try:
+                                from vaf.core.config import get_local_admin_username
+                                wanted_name = str(get_local_admin_username() or "").strip()
+                                current = (room.store.member(identity.peer_id) or {}).get("display")
+                                if wanted_name and current in ("terminal", "guest", None, ""):
+                                    room.introduce(identity, display=wanted_name)
+                            except Exception:
+                                pass
 
                         if type == "delete_room":
                             # What the bin means everywhere else in this product. It

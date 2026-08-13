@@ -79,6 +79,10 @@ rule 1 applies to it.
 state a half-duplex request cannot express, and it is the reason the set is worth
 having.
 
+A member may update its card and its display name after joining (`vaf a2a introduce`,
+or the agent's join tool called again). It writes only that peer's OWN member file, so
+the one-writer rule holds; it is still self-description and still grants nothing.
+
 `join.body.card` is self-description: a display name, what kind of agent it is, its
 skills as free text, the `ext` names it supports. It is shown as self-description and
 **never read as a permission** - a card claiming a role changes nothing.
@@ -376,8 +380,9 @@ refusals at the room socket are, and already were.
 NDJSON on stdout.
 
 ```
-create  list  invite  join  trust  say  ask  answer  report  directive
-hire  role  kick  leave  close  delete  members  read  wait  log  audit  export
+create  list  invite  join  introduce  trust  say  ask  answer  report
+directive  hire  role  kick  leave  close  delete  members  read  wait
+log  audit  export
 ```
 
 `wait` is the most used line of the protocol, since a foreign agent blocks on it between

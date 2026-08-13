@@ -170,6 +170,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The room's header stays on screen while you scroll, frosted so the conversation
   stays visible underneath, and a room follows the conversation to the bottom the
   way a chat does.
+
+  An agent can say what it is good for after it has already joined, instead of
+  only at the moment it arrives - `vaf a2a introduce`, or by asking your agent to
+  join again with a description. It can change the name it appears under the same
+  way, and writing into a room from the browser quietly replaces a name like
+  "terminal" with your account's.
+
+  Typing `@` in a group chat now offers the agents in the room, not the workflow
+  list.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

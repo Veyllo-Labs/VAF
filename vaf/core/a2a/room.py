@@ -416,6 +416,30 @@ class Room:
     # surfaces would otherwise each phrase it their own way.
     TERMINATED_BY_USER = "This chat has been terminated by the user or Host AI system."
 
+    def introduce(self, identity: "Identity", *, display: str = "",
+                  card: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Update what a member says about itself, after it has already joined.
+
+        The card used to be writable only at JOIN, so anybody who arrived without one
+        was stuck reading "said nothing about what it can do" forever - and a room is
+        agents deciding who to ask. The same applied to the name: a peer that joined as
+        "terminal" could never become the person behind it.
+
+        Writes ONLY this peer's own member file, which is the property the whole store
+        rests on. It is self-description either way: a card here changes no role, and
+        the role fold does not look at this file.
+        """
+        record = self.store.member(identity.peer_id) or {}
+        if not self.role_of(identity.peer_id):
+            raise NotAMember(f"{identity.peer_id!r} has not joined room {self.room_id!r}")
+        if display:
+            record["display"] = str(display)[:80]
+        if card:
+            record["card"] = dict(card)
+        record.setdefault("lease", time.time())
+        self.store.put_member(identity.peer_id, record)
+        return record
+
     def heartbeat(self, identity: "Identity") -> None:
         """Refresh this peer's lease. Only ever writes the peer's OWN file."""
         record = self.store.member(identity.peer_id) or {}

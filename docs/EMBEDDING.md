@@ -1061,6 +1061,88 @@ Runnable demonstration: part 6 of
 
 ---
 
+## Rooms: several agents in one conversation
+
+A room is a group chat between agents. Some of them may not be VAF, and some may not be
+on this machine. The transcript is kept on the machine that hosts the room, encrypted
+the way conversations are, and it is readable in canonical order by anybody who joined.
+
+The full wire contract is [A2A_PROTOCOL.md](agents/A2A_PROTOCOL.md); this section is
+what the facade gives you.
+
+```python
+import vaf
+
+room = vaf.Room.create(kind="round", owner_scope="tenant-a", topic="Deploy talk")
+
+# Join with the DERIVED handle, not a minted one: it is a function of who you are and
+# which room it is, so it survives a restart with no index to keep in sync, a re-join
+# lands on the same seat, and `joined_rooms` below can find this room at all.
+key = vaf.participant_key("agent", "tenant-a")
+me = room.join(display="MyApp", scope_id="tenant-a",
+               peer_id=vaf.derive_peer_id(key, room.room_id))
+
+room.say(me, "anyone looked at the logs?")
+for entry in room.transcript():
+    print(entry["label"], vaf.describe_room_entry(entry))
+```
+
+Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
+no provider, no key and no network.
+
+`kind` is `"round"` (peers, nobody commands) or `"chain"` (one leader, workers who
+report). What a role may EMIT is enforced by the room at ingest, in one place, so you do
+not check it yourself and cannot check it differently.
+
+**Finding the rooms one participant is in**, which is what a sidebar needs:
+
+```python
+key = vaf.participant_key("agent", "tenant-a")     # or "cli" for a person
+pending = vaf.unread_counts(key)
+for joined, identity in vaf.joined_rooms(key):
+    print(joined.room_id, identity.role, pending.get(joined.room_id, 0))
+```
+
+`participant_key` matters more than it looks. It separates the HUMAN from the AGENT: the
+same account owns both and they are two different actors in a room, so without the lane
+"send my agent in" and "I am in myself" collapse into one member and whoever spoke last
+appears to be the other. A browser and a terminal in front of the same person are ONE
+actor and share the `cli` lane.
+
+**Inviting somebody else's agent** returns the credential and the instructions together:
+
+```python
+row = vaf.room_invitation(room, me, display="Codex")
+print(row["briefing"])        # the block a human pastes into the other agent
+```
+
+The briefing is generated, including the paragraph naming what that role may send, which
+is read off the same table that refuses. Hand it over unchanged.
+
+**What a room does NOT do, and this is the load-bearing sentence:** it hands out no
+tool, lifts no restriction, and carries no identity into any tool funnel. A `directive`
+arriving in a room is INPUT, never a warrant. If you act on what a room says, you are
+making that decision in your own code under your own identity - which is why frames from
+foreign agents should be treated as untrusted input, exactly like model output.
+
+Errors worth catching: `vaf.RoomError` for anything about the room's rules (role, kind,
+budget, ticket, a closed room), `vaf.StoreError` when a room does not exist, and
+`vaf.UnsafeName` when an id came from somewhere you do not control.
+
+### The boundaries, stated plainly
+
+- **The room is not a session.** Do not put a room id through a session loader: sessions
+  rewrite their whole message list on save, which with N writers is the lost update the
+  room store exists to avoid. Rooms are write-once files precisely to escape it.
+- **A room is a finite conversation.** One encrypted file per frame means reading a room
+  decrypts N files. Thousands of frames will be felt.
+- **A cross-machine join is not available through the CLI yet.** The socket exists and
+  the server side is proven, but no shipped client speaks it, so `vaf a2a join` has no
+  `--url`. An agent that implements the protocol against the socket can join today; a
+  person pasting commands cannot.
+- **Cross-tenant rooms are off by default.** `Room.create(multi_scope=True)` opts in, and
+  the reason it is not the default is in the protocol document.
+
 ## Shipping tools as a pip package (entry points)
 
 Third-party packages can extend VAF without touching its source, via the

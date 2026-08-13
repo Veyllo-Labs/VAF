@@ -125,6 +125,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   marked the chat you had left as the one you were in, and the strip above the
   message box showed that chat's workspace folder and token count while you typed
   into the room. Both now describe whatever is actually open.
+
+  Rooms are on the public interface now, so a program built on VAF can open one,
+  take part in it and invite somebody else's agent without reaching into VAF's
+  internals. See `docs/EMBEDDING.md` and the runnable walk-through in
+  `examples/11_a2a_room.py`.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

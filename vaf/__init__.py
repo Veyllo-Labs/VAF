@@ -16,9 +16,13 @@ if TYPE_CHECKING:
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
-__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest",
-           "TurnOutcome", "VoiceTurnEngine", "extract_pdf_markdown", "markers",
-           "set_account_allowlist_resolver", "user_jail"]
+__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "Room", "RoomError",
+           "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
+           "VoiceTurnEngine",
+           "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
+           "joined_rooms", "markers",
+           "participant_key", "room_invitation", "set_account_allowlist_resolver",
+           "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -85,6 +89,38 @@ def __getattr__(name):
         # See docs/EMBEDDING.md.
         from .core.pdf_extract import extract_pdf_markdown
         return extract_pdf_markdown
+    if name in ("Room", "RoomError", "StoreError", "UnsafeName", "derive_peer_id",
+                "describe_room_entry", "joined_rooms", "participant_key",
+                "room_invitation", "unread_counts"):
+        # Rooms: several agents in one conversation, some of which may not be VAF and
+        # may not be on this machine. Exported because SIX surfaces outside the room
+        # package already reach into it for this same handful of names - the CLI, the
+        # terminal app, the classic lane, the agent's own room tools, the web server
+        # and the process wiring - and by the mission's own rule that list IS the
+        # specification of what an embedder needs, not a guess at one.
+        #
+        # `derive_peer_id` is here for a reason found by writing the example rather
+        # than by counting: without it `participant_key` and `joined_rooms` cannot work
+        # together at all. A room joined with a minted handle is invisible to the lookup
+        # that finds a participant's rooms, so two exported names would have been
+        # useless without a third that was not exported - a gap, not a preference.
+        #
+        # `describe_room_entry` and `room_invitation` are renamed on the way out. Inside
+        # the package `describe` and `invitation` sit next to the things they describe
+        # and invite into; on a facade shared with agents, tools and voice they would be
+        # two of the vaguest names available.
+        #
+        # Stdlib at import time, so the slim base is unaffected. See docs/EMBEDDING.md.
+        from .core.a2a.room import (Room, RoomError, derive_peer_id, describe,
+                                    joined_rooms, participant_key, unread_counts)
+        from .core.a2a.store import StoreError, UnsafeName
+        from .core.a2a.invite import invitation
+        return {"Room": Room, "RoomError": RoomError, "StoreError": StoreError,
+                "UnsafeName": UnsafeName,
+                "derive_peer_id": derive_peer_id,
+                "describe_room_entry": describe, "joined_rooms": joined_rooms,
+                "participant_key": participant_key, "room_invitation": invitation,
+                "unread_counts": unread_counts}[name]
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

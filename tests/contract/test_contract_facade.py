@@ -18,14 +18,24 @@ EXPORTED = [
     "Agent",
     "BaseTool",
     "CoreAgent",
+    "Room",
+    "RoomError",
+    "StoreError",
     "ToolCaller",
     "ToolRequest",
     "TurnOutcome",
+    "UnsafeName",
     "VoiceTurnEngine",
     "__version__",
+    "derive_peer_id",
+    "describe_room_entry",
     "extract_pdf_markdown",
+    "joined_rooms",
     "markers",
+    "participant_key",
+    "room_invitation",
     "set_account_allowlist_resolver",
+    "unread_counts",
     "user_jail",
 ]
 
@@ -86,3 +96,72 @@ def test_the_tool_contract_names_are_classes_with_their_documented_members():
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
     assert callable(vaf.user_jail)
+
+
+# ── rooms ──────────────────────────────────────────────────────────────────
+
+def test_a_room_can_be_opened_read_and_closed_through_the_facade_alone(tmp_path):
+    """The contract an embedder actually depends on: a whole room, start to finish,
+    without importing anything private.
+
+    `base` keeps this off the real store. Everything else is the shipped path.
+    """
+    room = vaf.Room.create(kind="round", owner_scope="tenant-a", base=tmp_path,
+                           topic="Contract")
+    key = vaf.participant_key("agent", "tenant-a")
+    me = room.join(display="App", scope_id="tenant-a",
+                   peer_id=vaf.derive_peer_id(key, room.room_id))
+    room.say(me, "hello")
+
+    lines = [vaf.describe_room_entry(e) for e in room.transcript()]
+    assert lines[-1] == "hello"
+
+    room.close(me, reason="done")
+    with pytest.raises(vaf.RoomError):
+        room.say(me, "and again")
+
+
+def test_the_lookup_and_the_handle_derivation_work_together(tmp_path):
+    """MUTATION: drop derive_peer_id from the facade.
+
+    Without it `participant_key` and `joined_rooms` cannot be used together at all: a
+    room joined with a minted handle is invisible to the lookup, so two exported names
+    would be useless without a third that was not exported. Found by writing the
+    example rather than by counting call sites.
+    """
+    import vaf.core.a2a.store as store_mod
+
+    original = store_mod.rooms_root
+    store_mod.rooms_root = lambda base=None: tmp_path if base is None else __import__(
+        "pathlib").Path(base)
+    try:
+        room = vaf.Room.create(kind="round", owner_scope="tenant-b", base=tmp_path)
+        key = vaf.participant_key("agent", "tenant-b")
+        room.join(display="App", scope_id="tenant-b",
+                  peer_id=vaf.derive_peer_id(key, room.room_id))
+
+        found = [r.room_id for r, _identity in vaf.joined_rooms(key)]
+        assert room.room_id in found
+    finally:
+        store_mod.rooms_root = original
+
+
+def test_the_room_errors_are_distinguishable(tmp_path):
+    """An embedder branches on these: the room said no, the room is not there, or the
+    id was never a valid one."""
+    assert issubclass(vaf.RoomError, Exception)
+    with pytest.raises(vaf.StoreError):
+        vaf.Room.open("no-such-room-here", base=tmp_path)
+    with pytest.raises(vaf.UnsafeName):
+        vaf.Room.open("../escape", base=tmp_path)
+
+
+def test_an_invitation_carries_the_briefing(tmp_path):
+    room = vaf.Room.create(kind="chain", owner_scope="tenant-a", base=tmp_path)
+    key = vaf.participant_key("agent", "tenant-a")
+    me = room.join(display="App", scope_id="tenant-a",
+                   peer_id=vaf.derive_peer_id(key, room.room_id))
+
+    row = vaf.room_invitation(room, me, display="Guest")
+    assert row["ticket"] and row["role"] == "worker"
+    assert row["ticket"] in row["briefing"]

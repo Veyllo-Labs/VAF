@@ -46,9 +46,13 @@ def test_facade_exports_exactly_the_documented_surface():
     none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BaseTool", "CoreAgent", "ToolCaller", "ToolRequest", "TurnOutcome",
-        "VoiceTurnEngine", "__version__", "extract_pdf_markdown", "markers",
-        "set_account_allowlist_resolver", "user_jail",
+        "Agent", "BaseTool", "CoreAgent", "Room", "RoomError", "StoreError",
+        "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "VoiceTurnEngine",
+        "__version__",
+        "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
+        "joined_rooms", "markers",
+        "participant_key", "room_invitation", "set_account_allowlist_resolver",
+        "unread_counts", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
 
@@ -635,3 +639,78 @@ def test_session_resume_loads_and_checks_ownership(monkeypatch, tmp_path):
     # Owner (and unscoped local use) resumes.
     fw.Agent(config={"provider": "deepseek"}, session=s.id, user_scope=owner).run("hi")
     assert loads == [s.id]
+
+
+# ── rooms on the facade ────────────────────────────────────────────────────
+
+def test_the_room_surface_is_the_one_the_house_already_reaches_for():
+    """MUTATION: export the whole room package, or a smaller arbitrary slice.
+
+    The mission's rule is that every place reaching past the facade IS the
+    specification of what an embedder needs. So this list is not designed - it is
+    MEASURED, and this test re-measures it: every name exported here has to be one that
+    surfaces outside the room package actually import, and a name they reach for often
+    and cannot get from the facade is a gap rather than a preference.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    wanted: dict = {}
+    for path in list((root / "vaf").rglob("*.py")):
+        if "core/a2a" in path.as_posix():
+            continue
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        for names in re.findall(r"from vaf\.core\.a2a\.\w+ import \(?([^)\n]+)", source):
+            for raw in names.split(","):
+                name = raw.strip().split(" as ")[0].strip()
+                if name and name[0].isupper() or name in (
+                        "describe", "invitation", "joined_rooms", "participant_key",
+                        "unread_counts", "unread_frames", "frame_clock"):
+                    wanted.setdefault(name, set()).add(path.as_posix())
+
+    # Renamed on the way out: two of the vaguest words available on a shared facade.
+    exported = {n for n in vaf.__all__}
+    alias = {"describe_room_entry": "describe", "room_invitation": "invitation"}
+    covered = {alias.get(n, n) for n in exported}
+
+    for name, users in wanted.items():
+        if len(users) >= 3 and name not in covered:
+            raise AssertionError(
+                f"{name} is imported from inside the room package by {len(users)} "
+                f"surfaces and is not on the facade: {sorted(users)}")
+
+
+def test_the_exported_room_names_are_importable_and_are_the_real_thing():
+    from vaf.core.a2a.invite import invitation
+    from vaf.core.a2a.room import Room, RoomError, derive_peer_id, describe, joined_rooms
+    from vaf.core.a2a.room import participant_key, unread_counts
+    from vaf.core.a2a.store import StoreError, UnsafeName
+
+    assert vaf.Room is Room
+    assert vaf.UnsafeName is UnsafeName
+    assert vaf.RoomError is RoomError
+    assert vaf.StoreError is StoreError
+    assert vaf.derive_peer_id is derive_peer_id
+    assert vaf.describe_room_entry is describe
+    assert vaf.joined_rooms is joined_rooms
+    assert vaf.participant_key is participant_key
+    assert vaf.room_invitation is invitation
+    assert vaf.unread_counts is unread_counts
+
+
+def test_importing_vaf_still_costs_nothing():
+    """MUTATION: import the room modules at the top of the facade.
+
+    The whole point of the lazy surface is that `import vaf` stays cheap on the slim
+    base. A room brings the store, which brings encryption - none of which a program
+    that never opens a room should pay for.
+    """
+    import subprocess
+    import sys
+
+    probe = ("import sys, vaf; "
+             "assert not [m for m in sys.modules if m.startswith('vaf.core.a2a')], "
+             "'importing vaf dragged the room package in'")
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

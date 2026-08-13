@@ -51,6 +51,7 @@ Docs are grouped into category folders. Full index by category:
 ### agents/ - tools, sub-agents, workflows, reasoning
 - [AGENT_LOOP.md](agents/AGENT_LOOP.md) - High-level map of the main agent turn loop (`chat_step`).
 - [TOOL_ROUTER_ARCHITECTURE.md](agents/TOOL_ROUTER_ARCHITECTURE.md) - Tool router and per-turn scoping.
+- [A2A_PROTOCOL.md](agents/A2A_PROTOCOL.md) - The agent-to-agent room protocol: frame, roles, ordering, storage, the LAN join and the conformance list. The one document a foreign agent is implemented from.
 - [TOOL_INPUT_REPAIR.md](agents/TOOL_INPUT_REPAIR.md) - Validating and repairing model-supplied tool arguments before dispatch.
 - [TOOL_SUPERVISION.md](agents/TOOL_SUPERVISION.md) - Tool supervision/safety.
 - [ACTION_TAG.md](agents/ACTION_TAG.md) - The `<Action>` declaration tag.

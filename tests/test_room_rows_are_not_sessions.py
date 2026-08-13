@@ -24,6 +24,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SCOPE = "scope-owner"
 
 
+def _sidebar_branches():
+    """The room row and the conversation row, split on the OUTER ternary.
+
+    Anchored on the exact indentation of the branch separator: the room row now holds a
+    ternary of its own (the inline rename), so a naive split on ") : (" lands inside it
+    and every assertion afterwards is made against half a row.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    body = source.split("{sessions.map(s => isRoom(s) ? (")[1]
+    room, chat = body.split("\n                            ) : (\n", 1)
+    return room, chat[:8000]
+
+
+
 @pytest.fixture()
 def rooms(tmp_path, monkeypatch):
     monkeypatch.setattr(store_mod, "rooms_root",
@@ -233,13 +247,14 @@ def test_a_room_row_in_the_browser_opens_a_room_and_not_a_session():
     handleSessionSwitch is the session loader. A room reaching it is the lost update
     the store exists to avoid, reached through a mouse click.
     """
-    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
+    branch, _chat = _sidebar_branches()
 
     assert "type: 'open_room'" in branch
     assert "handleSessionSwitch" not in branch, "the room row still switches sessions"
-    assert "startEditing" not in branch and "delete_session" not in branch, (
-        "a room cannot be renamed or deleted from a sidebar while others are in it")
+    # Renaming and ending ARE offered here, and they are the room's own versions of
+    # both. What must never appear is the SESSION deleter, which would be handed an id
+    # it cannot resolve and would answer for the wrong thing if it ever could.
+    assert "delete_session" not in branch
 
 
 # ── the room header names who is in it ─────────────────────────────────────
@@ -338,13 +353,31 @@ def test_a_room_row_carries_the_same_pair_a_conversation_does():
     deleting - the transcript stays readable - but it is the act a person reaches for
     in that spot, and a different icon there made them hunt for it.
     """
-    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
+    branch, _chat = _sidebar_branches()
 
-    assert "Edit2" in branch and "setRoomToRename(s)" in branch
+    assert "Edit2" in branch and "startEditing(s)" in branch
     assert "Trash2" in branch and "setRoomToClose(s)" in branch
     assert "delete_session" not in branch, (
         "a room row reached the session deleter, which would not know what to delete")
+
+
+def test_a_room_renames_in_the_sidebar_the_way_a_conversation_does():
+    """MUTATION: put the rename back in a dialog.
+
+    A conversation renames in place, in the row, and that is where a person looks for
+    it. A room that opened a modal for the same act was a different interaction for the
+    same gesture, one row apart. What differs is only WHERE the new name goes.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    branch, _chat = _sidebar_branches()
+
+    assert "startEditing(s)" in branch, "the pencil no longer edits in place"
+    assert "editingId === s.id" in branch and "submitRename()" in branch
+    assert "setRoomToRename" not in branch, "the room row still opens a rename dialog"
+
+    body = source.split("const submitRename = () => {")[1][:900]
+    assert "type: 'rename_room'" in body, "a room rename would go to the session renamer"
+    assert "isRoom(s)" in body
 
 
 def test_closing_never_happens_on_one_click():
@@ -506,21 +539,6 @@ def test_the_new_dialogs_are_translated_in_every_language_we_ship():
 
 # ── the two things the owner found by using it ─────────────────────────────
 
-def test_an_open_room_is_the_active_row_and_the_chat_underneath_is_not():
-    """MUTATION: leave the active mark on the conversation.
-
-    Both live in one list. With a room open, the mark sat on the chat the user had
-    left, so the sidebar said they were somewhere they were not.
-    """
-    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
-    chat = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[1][:6000]
-
-    assert "roomView?.room.roomId === s.roomId" in branch, "the open room is never marked active"
-    assert "currentSessionId === s.id && !roomView" in chat, (
-        "a conversation still claims to be active while a room is open")
-
-
 def test_the_strip_over_the_composer_belongs_to_whatever_is_open():
     """MUTATION: keep showing the conversation's workspace and token budget.
 
@@ -534,3 +552,80 @@ def test_the_strip_over_the_composer_belongs_to_whatever_is_open():
     assert "{roomView ? (" in strip
     assert strip.index("{roomView ? (") < strip.index("workspaceInfo?.path"), (
         "the workspace chip is still rendered for a room")
+
+
+# ── the panel, and the marking that was still wrong ────────────────────────
+
+def test_the_open_room_is_the_highlighted_row_and_the_chat_is_not():
+    """MUTATION: mark only the dot and leave the title weight alone.
+
+    That was the state after the first attempt: the little indicator moved, and the
+    conversation's title stayed bold with its background lit, so the sidebar still
+    read as though the chat were open. A person looks at the WEIGHT, not the dot.
+    """
+    room_branch, chat_branch = _sidebar_branches()
+
+    assert 'roomView?.room.roomId === s.roomId ? "font-medium text-gray-900"' in room_branch, (
+        "an open room's title is never emphasised")
+    assert 'currentSessionId === s.id && !roomView ? "font-medium text-gray-900"' in chat_branch, (
+        "a conversation's title stays emphasised while a room is open")
+    assert "currentSessionId === s.id && !roomView ? 'bg-transparent'" in chat_branch, (
+        "a conversation keeps its active background while a room is open")
+
+
+def test_the_panel_answers_what_the_room_is_and_not_only_who_is_in_it():
+    """MUTATION: keep the narrow list.
+
+    A group chat's panel that answers only "who" leaves out the two things asked next -
+    what kind of room this is and since when - and a member row without a role, its
+    abilities or a way to remove it is a tooltip that got away.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    panel = source.split("{roomMembersOpen && roomView && (")[1].split("{/* Removing one agent")[0]
+
+    assert "max-w-3xl" in panel and "h-[80vh]" in panel, "the panel is still a small box"
+    for key in ("roomInfoKind", "roomInfoCreated", "roomInfoMembers", "roomInfoYou"):
+        assert f"tMain('{key}')" in panel, f"the panel does not say {key}"
+    assert "m.can || []" in panel, "a member is listed without what it may send"
+    assert "UserMinus" in panel, "there is no way to remove anybody from the panel"
+    assert "roomInfoLastSeen" in panel, "liveness is shown as a verdict rather than a time"
+
+
+def test_the_abilities_come_from_the_table_that_enforces_them():
+    """MUTATION: write the ability list into the payload by hand.
+
+    Shown next to a name, an ability list is read as a promise. Written out separately
+    it would keep promising something the room refuses, and the reader would only find
+    out by watching it fail.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split("async def _send_room_transcript")[1].split("\ndef ")[0]
+
+    assert '"can": sorted(CAPABILITIES.get(record["role"], ()))' in block
+
+
+def test_the_viewer_is_identified_by_the_lane_it_acts_on():
+    """MUTATION: answer canManage from whichever lane the sidebar row resolved.
+
+    The row resolves the AGENT lane first, and the browser acts as the person on the
+    CLI lane. Asking about the wrong one is why the remove buttons stayed hidden from
+    the host of their own room.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split("async def _send_room_transcript")[1].split("\ndef ")[0]
+
+    assert 'derive_peer_id(participant_key("cli", user_scope_id)' in block
+    assert '"canManage": bool(acting)' in block
+    assert 'row.get("role") == "leader"' not in block, "the row's role still decides"
+
+
+def test_the_panel_strings_are_translated_in_every_language_we_ship():
+    import json
+
+    keys = {"roomInfoKind", "roomInfoYou", "roomInfoMembers", "roomInfoCreated",
+            "roomInfoHostBadge", "roomInfoYouBadge", "roomInfoLastSeen",
+            "roomInfoNeverSeen"}
+    for name in ("en", "de"):
+        catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
+        missing = keys - set(catalogue.get("main", {}))
+        assert not missing, f"{name}.json is missing {sorted(missing)}"

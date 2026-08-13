@@ -162,8 +162,16 @@ type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
     canManage?: boolean;
+    /** Unix seconds, from the manifest. */
+    createdAt?: number;
+    topic?: string;
     members_list?: Array<{
         peer: string; label: string; role: string;
+        /** What this role may emit, read off the table that enforces it. */
+        can?: string[];
+        /** Unix seconds of the last check-in. Zero when none was ever recorded, which
+         *  is the normal state for a room nobody keeps a socket on. */
+        lease?: number;
         /** The room's own host handles: no remove button is offered for them. */
         protected?: boolean;
         /** Self-description from the join. Shown as self-description, never read as
@@ -5544,6 +5552,21 @@ function VAFDashboardContent() {
     };
 
     const submitRename = () => {
+        // A room renames in the sidebar exactly as a conversation does, because that is
+        // where a person looks for it. What differs is only where the new name goes: a
+        // room's topic lives in its manifest, so it takes a different command, and the
+        // row id is prefixed precisely so no session renamer can accept it by accident.
+        const editingRoom = editingId ? sessions.find(s => s.id === editingId && isRoom(s)) : undefined;
+        if (editingRoom && editName.trim()) {
+            setSessions(prev => prev.map(s =>
+                s.id === editingId ? { ...s, title: editName.trim() } : s
+            ));
+            ws?.send(JSON.stringify({
+                type: 'rename_room', room_id: editingRoom.roomId, title: editName.trim(),
+            }));
+            setEditingId(null);
+            return;
+        }
         if (editingId && editName.trim()) {
             // Optimistic update to prevent flickering
             setSessions(prev => prev.map(s =>
@@ -5942,9 +5965,27 @@ function VAFDashboardContent() {
                                     </span>
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
-                                        <span className={cn("truncate text-sm", s.closed ? "text-gray-400 line-through" : "text-gray-600")}>
-                                            {s.title}
-                                        </span>
+                                        {editingId === s.id ? (
+                                            <input
+                                                autoFocus
+                                                className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
+                                                value={editName}
+                                                onChange={e => setEditName(e.target.value)}
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter') submitRename();
+                                                    if (e.key === 'Escape') setEditingId(null);
+                                                }}
+                                                onBlur={submitRename}
+                                                onClick={e => e.stopPropagation()}
+                                            />
+                                        ) : (
+                                            <span className={cn("truncate text-sm transition-colors",
+                                                s.closed ? "text-gray-400 line-through"
+                                                    : roomView?.room.roomId === s.roomId ? "font-medium text-gray-900"
+                                                        : "text-gray-600")}>
+                                                {s.title}
+                                            </span>
+                                        )}
                                         <div className="flex items-center gap-1.5 shrink-0 pl-2">
                                             <span className="text-[10px] text-gray-400 tabular-nums">
                                                 {s.members ?? 0}
@@ -5964,7 +6005,7 @@ function VAFDashboardContent() {
                                             {!s.closed && (
                                                 <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900"
-                                                        onClick={(e) => { e.stopPropagation(); setRoomToRename(s); setRoomTitleDraft(s.title); }} />
+                                                        onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600"
                                                         onClick={(e) => { e.stopPropagation(); setRoomToClose(s); }} />
                                                 </div>
@@ -5974,7 +6015,7 @@ function VAFDashboardContent() {
                                 </div>
                             ) : (
                                 <div key={s.id} data-session-id={s.id} onClick={() => { setDrawerOpen(false); handleSessionSwitch(s.id); }}
-                                    className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
+                                    className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id && !roomView ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
                                     {/* Active Indicator (Dot) — only while the sidebar is expanded, so the
                                         collapsed rail keeps the active bubble aligned with the inactive ones
@@ -6011,7 +6052,7 @@ function VAFDashboardContent() {
                                                 onClick={e => e.stopPropagation()}
                                             />
                                         ) : (
-                                            <span className={cn("truncate text-sm transition-colors", currentSessionId === s.id ? "font-medium text-gray-900" : "text-gray-600")}>
+                                            <span className={cn("truncate text-sm transition-colors", currentSessionId === s.id && !roomView ? "font-medium text-gray-900" : "text-gray-600")}>
                                                 {s.title.replace(".json", "")}
                                             </span>
                                         )}
@@ -8660,57 +8701,116 @@ function VAFDashboardContent() {
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
             )}
-            {/* Who is in the room. A popup rather than a permanent panel: it answers a
-                question that is asked occasionally and would otherwise take width away
-                from the conversation on every screen. */}
+            {/* The room's own panel: what it is, when it was opened, and everybody in
+                it with their role, what that role may send, what they say they are, and
+                when they were last heard from. Sized like Settings because it holds the
+                same sort of content - the first version was a narrow list that answered
+                none of those questions and looked like a tooltip that had got away. */}
             {roomMembersOpen && roomView && (
                 <div className="fixed inset-0 z-[85] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-black/60" onClick={() => setRoomMembersOpen(false)} />
-                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] max-h-[80vh] flex flex-col">
-                        <div className="flex items-center gap-3 p-5 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
-                            <Users className="w-5 h-5 text-gray-400" />
-                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] flex-1 truncate">
-                                {tMain('roomMembersTitle')}
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-3xl h-[80vh] flex flex-col border border-gray-200 dark:border-[#2a2a2a] overflow-hidden">
+
+                        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
+                            <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
+                                <Users className="w-5 h-5 text-white dark:text-[#181818]" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
+                                    {roomView.room.title}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
+                                    {tMain('roomMembersTitle')}
+                                </div>
                             </div>
                             <button onClick={() => setRoomMembersOpen(false)}
-                                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400">
+                                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
                                 <X size={16} />
                             </button>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-3 space-y-1 min-h-0">
-                            {(roomView.room.members_list || []).map(m => (
-                                <div key={m.peer} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-[#242424]">
-                                    <div className={cn(
-                                        "w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium",
-                                        m.peer === roomView.room.me
-                                            ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
-                                            : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
-                                        {(m.label || '?').slice(0, 2)}
+
+                        <div className="flex-1 overflow-y-auto min-h-0">
+                            {/* What the room IS. A group chat's panel that answered only
+                                "who" left the reader without the two things they ask
+                                next: what kind of room this is, and since when. */}
+                            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] grid grid-cols-2 md:grid-cols-4 gap-4">
+                                {[
+                                    [tMain('roomInfoKind'), roomView.room.roomKind || '-'],
+                                    [tMain('roomInfoYou'), roomView.room.role || '-'],
+                                    [tMain('roomInfoMembers'), String(roomView.room.members ?? 0)],
+                                    [tMain('roomInfoCreated'), roomView.room.createdAt
+                                        ? new Date(roomView.room.createdAt * 1000).toLocaleString()
+                                        : '-'],
+                                ].map(([label, value]) => (
+                                    <div key={label} className="min-w-0">
+                                        <div className="text-[10px] uppercase tracking-wide text-gray-400">{label}</div>
+                                        <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">{value}</div>
                                     </div>
-                                    <div className="min-w-0 flex-1">
-                                        <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">{m.label}</div>
-                                        <div className="text-[11px] text-gray-400 truncate">
-                                            {m.role}
-                                            {m.card?.kind ? ` \u00b7 ${m.card.kind}` : ''}
-                                            {m.stale ? ` \u00b7 ${tMain('roomStale')}` : ''}
-                                            {m.protected ? ` \u00b7 ${tMain('roomMembersHost')}` : ''}
+                                ))}
+                            </div>
+                            {roomView.room.closed && (
+                                <div className="px-6 py-2 text-xs text-gray-400 border-b border-gray-200 dark:border-[#2a2a2a]">
+                                    {tMain('roomClosedNote')}
+                                </div>
+                            )}
+
+                            <div className="p-3 space-y-1">
+                                {(roomView.room.members_list || []).map(m => (
+                                    <div key={m.peer} className="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-[#242424]">
+                                        <div className={cn(
+                                            "w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-xs font-medium",
+                                            m.peer === roomView.room.me
+                                                ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                                : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
+                                            {(m.label || '?').slice(0, 2)}
                                         </div>
-                                        {m.card?.skills && (
-                                            <div className="text-[11px] text-gray-400 line-clamp-2">{m.card.skills}</div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]">
+                                                    {m.role}
+                                                </span>
+                                                {m.protected && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-[#2a2418] dark:text-amber-300">
+                                                        {tMain('roomInfoHostBadge')}
+                                                    </span>
+                                                )}
+                                                {m.peer === roomView.room.me && (
+                                                    <span className="text-[10px] text-gray-400">{tMain('roomInfoYouBadge')}</span>
+                                                )}
+                                            </div>
+                                            {m.card?.skills && (
+                                                <div className="text-xs text-gray-500 dark:text-[#8a8a8a] mt-0.5">{m.card.skills}</div>
+                                            )}
+                                            {/* Read off the same table the room enforces, so it
+                                                cannot promise something that would be refused. */}
+                                            <div className="flex flex-wrap gap-1 mt-1.5">
+                                                {(m.can || []).map(ability => (
+                                                    <span key={ability} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200 dark:bg-transparent dark:border-[#2a2a2a] dark:text-[#8a8a8a]">
+                                                        {ability}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="text-[11px] text-gray-400 mt-1">
+                                                {/* Said as WHEN rather than as "not responding":
+                                                    nobody heartbeats a file-only room, so the bare
+                                                    flag reads as a fault where none exists. */}
+                                                {m.lease
+                                                    ? `${tMain('roomInfoLastSeen')}: ${new Date(m.lease * 1000).toLocaleString()}`
+                                                    : tMain('roomInfoNeverSeen')}
+                                            </div>
+                                        </div>
+                                        {roomView.room.canManage && !m.protected && m.peer !== roomView.room.me && !roomView.room.closed && (
+                                            <button title={tMain('roomKickTitle')}
+                                                onClick={() => setPeerToKick({ peer: m.peer, label: m.label })}
+                                                className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-[#2a2a2a] border border-gray-200 dark:border-[#2a2a2a] transition-colors">
+                                                <UserMinus size={13} />
+                                                {tMain('roomKickConfirm')}
+                                            </button>
                                         )}
                                     </div>
-                                    {/* Absent, not disabled, for a host handle: an action offered and
-                                        then refused reads as a fault, and this is a rule with a
-                                        different answer - end the room instead. */}
-                                    {roomView.room.canManage && !m.protected && m.peer !== roomView.room.me && (
-                                        <button title={tMain('roomKickTitle')}
-                                            onClick={() => setPeerToKick({ peer: m.peer, label: m.label })}
-                                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-[#2a2a2a] shrink-0">
-                                            <UserMinus size={14} />
-                                        </button>
-                                    )}
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </div>

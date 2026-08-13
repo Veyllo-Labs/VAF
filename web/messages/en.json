@@ -162,7 +162,15 @@
     "roomKickConfirm": "Remove",
     "roomRenameTitle": "Rename the room",
     "roomRenameSave": "Save",
-    "roomStale": "not responding"
+    "roomStale": "not responding",
+    "roomInfoKind": "Kind",
+    "roomInfoYou": "Your role",
+    "roomInfoMembers": "Agents",
+    "roomInfoCreated": "Opened",
+    "roomInfoHostBadge": "host",
+    "roomInfoYouBadge": "you",
+    "roomInfoLastSeen": "last seen",
+    "roomInfoNeverSeen": "no check-in recorded"
   },
   "nav": {
     "settings": "Settings",

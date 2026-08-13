@@ -162,7 +162,15 @@
     "roomKickConfirm": "Entfernen",
     "roomRenameTitle": "Raum umbenennen",
     "roomRenameSave": "Speichern",
-    "roomStale": "meldet sich nicht"
+    "roomStale": "meldet sich nicht",
+    "roomInfoKind": "Art",
+    "roomInfoYou": "Deine Rolle",
+    "roomInfoMembers": "Agents",
+    "roomInfoCreated": "Eroeffnet",
+    "roomInfoHostBadge": "Gastgeber",
+    "roomInfoYouBadge": "du",
+    "roomInfoLastSeen": "zuletzt gesehen",
+    "roomInfoNeverSeen": "keine Rueckmeldung verzeichnet"
   },
   "nav": {
     "settings": "Einstellungen",

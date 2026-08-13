@@ -108,14 +108,23 @@ many frames have not been read.
   retrieval sources and the token budget all describe a CONVERSATION, so a room shows
   its own name and member count there instead of the hidden chat's numbers.
 - **The row carries a pencil and a bin**, in the place a conversation carries them,
-  doing the room's version of each: rename the topic (host only, and it changes the
-  manifest rather than becoming a message nobody wrote), or END the room. The header
-  carries an information button instead of a close button - a click on any conversation
-  already leaves the room, and the header's one job in a group chat is answering who is
-  in it. That list shows each member's role, its self-description and whether its lease
-  has lapsed, and offers to remove one. No remove button is drawn for the room's own
+  doing the room's version of each. The pencil edits the name IN THE ROW, exactly as a
+  conversation does - the same gesture one row apart must not be a different interaction
+  - and the new name goes to the manifest (host only) rather than becoming a message
+  nobody wrote. The bin ENDS the room.
+- **The header carries an information button, not a close button.** A click on any
+  conversation already leaves the room, so a close there was a third exit crowding out
+  the header's one job in a group chat: answering who is in it. It opens a full panel,
+  sized like Settings because it holds the same sort of content: what kind of room this
+  is, your role in it, how many agents, when it was opened, and then every member with
+  their role, what that role MAY SEND (read off the table that enforces it, so it cannot
+  promise something the room refuses), their self-description, and when they were last
+  heard from. Liveness is shown as a TIME rather than a verdict: nobody keeps a socket on
+  a file-only room, so a bare "not responding" would read as a fault where none exists.
+  Each member can be removed from there. No remove button is drawn for the room's own
   host handles: an action offered and then refused reads as a fault, and this is a rule
-  with a different answer. Speakers are shown with the name the room resolved for them, tag
+  with a different answer. Whether the viewer may remove anybody is answered for the lane
+  the BROWSER acts on, not whichever lane the sidebar row resolved first. Speakers are shown with the name the room resolved for them, tag
   included ("Codex51"), which is also the name a mention has to be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a
   full agent of its own and is never shown as a second voice of ours.

@@ -120,12 +120,21 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     would drift from the transcript the moment anything else wrote at the same time.
     The room has N writers; only the store knows what is in it.
     """
-    from vaf.core.a2a.room import describe
+    from vaf.core.a2a.room import (CAPABILITIES, derive_peer_id, describe,
+                                   participant_key)
     from vaf.core.session import _room_rows
 
     row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
     entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
     members, labels, hosts = room.members(), room.labels(), room.host_peers()
+    # The handle the browser ACTS as, which is the CLI lane - not whichever lane the
+    # sidebar row happened to resolve first. Asking about the wrong one is how the
+    # remove buttons stayed hidden for the host of their own room: the row answered for
+    # the agent while the browser was acting as the person.
+    try:
+        acting = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
+    except Exception:
+        acting = ""
     await websocket.send_json({
         "type": "room_transcript",
         "room": {
@@ -136,17 +145,17 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "role": row.get("role"),
             "closed": bool(room.closed),
             "members": len(members),
-            # Which peer is us, so the view can tell our own agent apart from the
-            # strangers in the room.
-            "me": row.get("peer"),
             # Who is in it, by the name the ROOM resolved. A header that listed join
             # names would show two agents called "Codex" and no way to tell which is
             # which, which is the same reason the tag exists at all.
             # Whether the viewer may remove anybody here at all. Answered by the room
             # rather than guessed from the role, because the host may act beyond its
             # role and a browser that decided for itself would be a second rule.
-            "canManage": bool(row.get("peer")) and (
-                row.get("peer") in hosts or row.get("role") == "leader"),
+            "createdAt": room.manifest.get("created_at"),
+            "topic": room.manifest.get("topic") or "",
+            "me": acting or row.get("peer"),
+            "canManage": bool(acting) and (
+                acting in hosts or room.role_of(acting) == "leader"),
             # Built from members(), which already resolves the role, the card and the
             # lease. Reading those out of the store again here would be a second answer
             # to "who is in this room and are they awake".
@@ -157,6 +166,13 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                     "role": record["role"],
                     "card": record.get("card") or {},
                     "stale": bool(record.get("stale")),
+                    # The raw lease, so a reader can say WHEN rather than only that it
+                    # lapsed. Nobody heartbeats a file-only room, so "not responding"
+                    # on its own reads as a fault where none exists.
+                    "lease": float((room.store.member(peer) or {}).get("lease") or 0.0),
+                    # What this role may send, from the table that enforces it. An
+                    # abilities list written anywhere else would be a second answer.
+                    "can": sorted(CAPABILITIES.get(record["role"], ())),
                     # The room's own host handles. Sent so the view can leave the remove
                     # button off entirely rather than offer one that is refused: an
                     # action offered and then denied reads as a fault, and this is a

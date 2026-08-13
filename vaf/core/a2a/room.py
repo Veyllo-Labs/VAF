@@ -82,6 +82,30 @@ DEFAULT_MAX_CHILDREN = 8
 LEASE_TTL_S = 90.0
 
 
+# Which lane a participant acts from. The lane is part of the key because the machine
+# owner's agent and the machine owner's terminal are the SAME account and two different
+# actors: without it they collapse into one member, and "send my agent into the room"
+# cannot be told from "I am in the room myself".
+PARTICIPANT_LANES = ("agent", "cli")
+
+
+def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
+    """The local identity a room handle is derived from.
+
+    One home for it, because three places used to build this string by hand - the
+    agent's room tools, the wake-up in the agent loop, and the CLI - and three copies
+    of an identity derivation is three chances for two of them to disagree about who
+    is speaking.
+    """
+    if lane not in PARTICIPANT_LANES:
+        raise RoomError(f"unknown participant lane {lane!r}; expected one of {PARTICIPANT_LANES}")
+    scope = str(scope_id or "")
+    if not scope:
+        from vaf.core.config import get_local_admin_scope_id
+        scope = str(get_local_admin_scope_id() or "local")
+    return f"{lane}:{scope}"
+
+
 def derive_peer_id(key: str, room_id: str) -> str:
     """The room-local handle one participant always gets in one room.
 

@@ -58,12 +58,17 @@ def _install_stop_handler() -> None:
 
 
 def _key() -> str:
-    """Who is acting. The machine owner, always - see the module docstring."""
+    """Who is acting: the machine owner, from the TERMINAL lane.
+
+    The lane is what keeps this apart from the same owner's agent, which is a different
+    actor in a room even though it is the same account. See the module docstring for
+    why there is no way to name another account here.
+    """
+    from vaf.core.a2a.room import participant_key
     try:
-        from vaf.core.config import get_local_admin_scope_id
-        return str(get_local_admin_scope_id() or "local")
+        return participant_key("cli")
     except Exception:
-        return "local"
+        return "cli:local"
 
 
 def _fail(message: str, code: int) -> None:

@@ -1693,11 +1693,19 @@ class Agent:
             _perm = getattr(tool_instance, "permission_level", "read")
             if _perm not in ("write", "dangerous") and name not in self._DELEGATION_TOOLS:
                 return None
+            # Talking in a room is not a write action, whatever its permission level
+            # says. This gate's own instruction is "summarize in text only", and a room
+            # IS where the agent's text goes when the conversation is with other agents.
+            # Blocking it left the agent unable to say WHY it had gone quiet, which the
+            # first live run showed: a room full of peers waiting on an agent that had
+            # been silenced mid-sentence.
+            if name in self._ROOM_TALK_TOOLS:
+                return None
             return (
                 f"[AWAITING USER] You asked the user a question and they have not answered yet. "
                 f"Do not start new write actions or delegations until their reply arrives - "
                 f"summarize the available results in text only. '{name}' is blocked in this "
-                f"background turn."
+                f"background turn. Do NOT report it as done: it did not run."
             )
         except Exception:
             return None
@@ -1718,10 +1726,8 @@ class Agent:
         except Exception:
             return None
         try:
-            key = str(getattr(self, "_current_user_scope_id", None) or "")
-            if not key:
-                from vaf.core.config import get_local_admin_scope_id
-                key = str(get_local_admin_scope_id() or "local")
+            from vaf.core.a2a.room import participant_key
+            key = participant_key("agent", getattr(self, "_current_user_scope_id", None))
             pending = unread_frames(key)
             if not pending:
                 return None
@@ -1799,17 +1805,24 @@ class Agent:
                 return None
             if mode == "assist" and name in self._ROOM_TALK_TOOLS:
                 return None
+            # Both refusals end by forbidding a false report. A blocked turn that then
+            # announces success is the confabulation class this tree already fights, and
+            # a room makes it worse: the audience is other AGENTS, which read a claim as
+            # a fact and act on it. Seen live on the first run, where a blocked write was
+            # followed by "done, the file was created" aimed straight at the room.
             if mode == "observe":
                 return (
                     f"[ROOM: OBSERVE] This turn was started by a message in room "
                     f"'{room_id}', which you joined as an observer. Read and summarize "
-                    f"for the user; do not act. '{name}' is blocked in this turn."
+                    f"for the user; do not act. '{name}' is blocked in this turn. It did "
+                    f"NOT run, so do not report it as done, here or in the room."
                 )
             return (
                 f"[ROOM: ASSIST] This turn was started by a message in room '{room_id}'. "
                 f"You may talk in the room, but nothing may change on this machine until "
                 f"the user says so. '{name}' is blocked in this turn - tell the user what "
-                f"was asked and wait for their answer."
+                f"was asked and wait for their answer. It did NOT run, so do not report it "
+                f"as done, and do not tell the room it happened."
             )
         except Exception:
             return (

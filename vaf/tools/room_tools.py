@@ -18,18 +18,17 @@ from vaf.tools.base import BaseTool
 
 
 def _acting_key(user_scope_id: Optional[str]) -> str:
-    """What identifies this participant locally.
+    """What identifies THIS AGENT locally, as opposed to its user's terminal.
 
-    A tenant's scope when there is one, the machine owner's otherwise. It is hashed
-    into a room-local handle and never travels in a frame.
+    The lane matters: the same account owns both, and they are two different actors in
+    a room. Sharing a key would mean "send my agent in" and "I am in myself" produce
+    one member, and whichever spoke last would appear to be the other.
     """
-    if user_scope_id:
-        return str(user_scope_id)
+    from vaf.core.a2a.room import participant_key
     try:
-        from vaf.core.config import get_local_admin_scope_id
-        return str(get_local_admin_scope_id() or "local")
+        return participant_key("agent", user_scope_id)
     except Exception:
-        return "local"
+        return "agent:local"
 
 
 def _open(room_id: str):

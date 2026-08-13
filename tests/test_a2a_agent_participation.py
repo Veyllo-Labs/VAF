@@ -361,3 +361,105 @@ def test_the_gate_is_reached_from_the_turn_gates():
             assert "_room_mode_gate_decision" in called
             return
     raise AssertionError("_chat_turn_gates not found")
+
+
+# ── the agent and its user's terminal are two actors ───────────────────────
+
+def test_the_agent_and_the_terminal_are_different_participants():
+    """MUTATION: drop the lane from participant_key.
+
+    The same account owns both, and they are two different actors in a room. Sharing a
+    key collapses them into one member, so "send my agent into the room" and "I am in
+    the room myself" become indistinguishable and whichever spoke last appears to be
+    the other. Found live: the agent's join reported "already a member" as the human.
+    """
+    from vaf.core.a2a.room import participant_key
+
+    agent = participant_key("agent", "scope-a")
+    terminal = participant_key("cli", "scope-a")
+    assert agent != terminal
+    assert derive_peer_id(agent, "room-1") != derive_peer_id(terminal, "room-1")
+
+
+def test_two_accounts_never_share_a_participant():
+    from vaf.core.a2a.room import participant_key
+    assert participant_key("agent", "scope-a") != participant_key("agent", "scope-b")
+
+
+def test_an_unknown_lane_is_refused():
+    from vaf.core.a2a.room import RoomError, participant_key
+    with pytest.raises(RoomError):
+        participant_key("something-else", "scope-a")
+
+
+def test_the_key_is_derived_in_exactly_one_place():
+    """MUTATION: rebuild the key inline in any consumer.
+
+    Three places used to build this string by hand - the room tools, the wake-up in the
+    agent loop, and the CLI. Three copies of an identity derivation is three chances for
+    two of them to disagree about who is speaking, which is exactly what happened.
+    """
+    consumers = [
+        ROOT / "vaf" / "tools" / "room_tools.py",
+        ROOT / "vaf" / "cli" / "cmd" / "a2a.py",
+    ]
+    for path in consumers:
+        source = path.read_text(encoding="utf-8")
+        assert "participant_key" in source, f"{path.name} does not use the primitive"
+        assert "get_local_admin_scope_id" not in source, (
+            f"{path.name} builds the room key by hand again")
+
+    agent_source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    wake = agent_source.split("def collect_room_wake")[1].split("def ")[0]
+    assert "participant_key" in wake
+    assert "get_local_admin_scope_id" not in wake
+
+
+# ── the neighbouring gate must not silence the room ────────────────────────
+
+class _AskFirstAgent:
+    """The ask-first gate, lifted off the real class the same way."""
+
+    from vaf.core.agent import Agent as _Real
+
+    _DELEGATION_TOOLS = _Real._DELEGATION_TOOLS
+    _ROOM_TALK_TOOLS = _Real._ROOM_TALK_TOOLS
+    _ask_first_gate_decision = _Real._ask_first_gate_decision
+
+    def __init__(self):
+        self._synthetic_drain_turn = True
+        self._pending_user_question = {"preview": "shall I delete it?"}
+
+
+def test_a_pending_question_does_not_silence_the_room():
+    """MUTATION: drop the room-talk exemption from _ask_first_gate_decision.
+
+    Seen live: a room turn ran while a question to the user was open, and room_send was
+    blocked along with write_file. The agent went silent mid-conversation with no way to
+    say why, in front of peers that were waiting on it. This gate's own instruction is
+    "summarize in text only", and a room is where that text goes when the conversation
+    is with other agents.
+    """
+    agent = _AskFirstAgent()
+
+    assert agent._ask_first_gate_decision("room_send", _Tool("write")) is None
+    assert agent._ask_first_gate_decision("room_read", _Tool("read")) is None
+    assert agent._ask_first_gate_decision("write_file", _Tool("write")) is not None
+
+
+def test_every_refusal_forbids_claiming_the_action_happened():
+    """MUTATION: drop the "did NOT run" sentence from either gate.
+
+    A blocked turn that then announces success is the confabulation class this tree
+    already fights, and a room makes it worse: the audience is other agents, which read
+    a claim as a fact and act on it. That happened on the first live run.
+    """
+    blocked = _AskFirstAgent()._ask_first_gate_decision("write_file", _Tool("write"))
+    assert "did not run" in blocked.lower()
+
+    for mode in ("observe", "assist"):
+        room_refusal = _Agent(
+            room_turn={"room_id": "room-x", "mode": mode}
+        )._room_mode_gate_decision("write_file", _Tool("write"))
+        assert "did not run" in room_refusal.lower(), mode
+        assert "report it as done" in room_refusal.lower(), mode

@@ -1978,11 +1978,12 @@ Tab             - Autocomplete
                             if not _rows:
                                 tui.info(f"{args[0]} is empty")
                             else:
+                                from vaf.core.a2a.room import describe as _describe
                                 for _entry in _rows:
                                     _label = f"{_entry['display']} [{_entry['role']}]"
                                     if _entry["kind"] != "say":
                                         _label += f" ({_entry['kind']})"
-                                    tui.info(f"{_label}: {_entry['text']}")
+                                    tui.info(f"{_label}: {_describe(_entry)}")
                     except Exception as _room_err:
                         tui.warning(f"Rooms unavailable: {_room_err}")
                     continue

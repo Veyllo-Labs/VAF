@@ -563,6 +563,45 @@ class Room:
         return rows
 
 
+
+# ── one wording for the three renderers ─────────────────────────────────────
+
+def describe(entry: Dict[str, Any]) -> str:
+    """A transcript row as a line a human reads.
+
+    Bookkeeping frames carry no text - a join says who, not what - so a renderer that
+    prints the body alone shows "Worker (join):" and nothing after it. The wording
+    lives here, once, because three surfaces render the same transcript (the CLI's
+    log, the terminal app, and the classic lane) and three copies of a phrase are
+    three chances to drift.
+    """
+    kind = str(entry.get("kind") or "")
+    body = entry.get("body") or {}
+    text = str(entry.get("text") or "")
+    if kind == "join":
+        card = body.get("card") or {}
+        skills = str(card.get("skills") or "").strip()
+        return f"joined{f' - {skills}' if skills else ''}"
+    if kind == "leave":
+        reason = str(body.get("reason") or "").strip()
+        return f"left{f' - {reason}' if reason else ''}"
+    if kind == "close":
+        reason = str(body.get("reason") or "").strip()
+        return f"closed the room{f' - {reason}' if reason else ''}"
+    if kind == "hire":
+        return f"opened {body.get('child_room') or 'a child room'}" + (
+            f" for {body['purpose']}" if body.get("purpose") else "")
+    if kind == "role":
+        return f"made {body.get('peer')} a {body.get('role')}"
+    if kind == "ack":
+        return f"ack: {body.get('status') or 'ok'}"
+    if kind == "report" and body.get("status"):
+        return f"[{body['status']}] {text}".strip()
+    if not entry.get("known", True):
+        return f"<message type {kind!r} this version does not understand> {text}".strip()
+    return text
+
+
 # ── how a local participant finds its own rooms ─────────────────────────────
 
 def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity]]:

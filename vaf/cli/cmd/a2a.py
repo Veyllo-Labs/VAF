@@ -82,7 +82,31 @@ def _room(room_id: str):
         _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
 
 
-def _me(room, *, required: bool = True):
+def _me(room, *, required: bool = True, as_peer: str = ""):
+    """Which member of this room is acting.
+
+    By default the machine owner's derived handle. A guest that joined with an
+    invitation got a handle of its own, so it names it with ``--as`` or by exporting
+    ``VAF_A2A_PEER`` once - without that a foreign agent could join a room and then be
+    unable to say anything in it, which the first live run found immediately.
+
+    On one machine this grants nothing new: everyone here is already the same operating
+    system user, so the CLI cannot be stricter than the OS. It never crosses a network -
+    a remote peer's identity comes from its connection, not from a flag it sends.
+    """
+    import os
+    from vaf.core.a2a.room import Identity
+
+    wanted = str(as_peer or os.environ.get("VAF_A2A_PEER") or "").strip()
+    if wanted:
+        role = room.role_of(wanted)
+        if not role:
+            if required:
+                _fail(f"'{wanted}' is not a member of '{room.room_id}'.", EXIT_NO_ROOM)
+            return None
+        record = room.store.member(wanted) or {}
+        return Identity(wanted, record.get("display") or wanted, None, role)
+
     identity = room.identity_for(_key())
     if identity is None and required:
         _fail(f"You have not joined '{room.room_id}'. Run: vaf a2a join {room.room_id}",
@@ -97,10 +121,10 @@ def _emit(row: dict) -> None:
 
 
 def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
-          reply_to: str = "", status: str = "") -> None:
+          reply_to: str = "", status: str = "", as_peer: str = "") -> None:
     from vaf.core.a2a.room import RoomError
     room = _room(room_id)
-    identity = _me(room)
+    identity = _me(room, as_peer=as_peer)
     body = {"text": text}
     if status:
         body["status"] = status
@@ -184,11 +208,17 @@ def join(
     """Join a room, with an invitation if you were given one."""
     from vaf.core.a2a.room import RoomError, TicketInvalid, derive_peer_id
     room = _room(room_id)
-    existing = _me(room, required=False)
-    if existing is not None:
-        _emit({"ok": True, "room": room_id, "peer": existing.peer_id,
-               "role": existing.role, "already": True})
-        return
+    # Only WITHOUT a ticket is a second join the same participant asking twice. With
+    # one it is a different agent presenting a credential of its own, and several of
+    # those live on one machine: a foreign agent driving this CLI shares the machine
+    # owner's derived handle, so short-circuiting on it would have locked every guest
+    # out of a room the owner had already joined. Found by the first live run.
+    if not ticket:
+        existing = _me(room, required=False)
+        if existing is not None:
+            _emit({"ok": True, "room": room_id, "peer": existing.peer_id,
+                   "role": existing.role, "already": True})
+            return
     try:
         if ticket:
             identity = room.redeem_ticket(ticket, display=display or "guest", mode=mode)
@@ -208,48 +238,54 @@ def join(
 
 @app.command()
 def say(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
-        to_peer: str = typer.Option("", "--to", help="Address one peer (others still read it).")) -> None:
+        to_peer: str = typer.Option("", "--to", help="Address one peer (others still read it)."),
+        as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Say something in a room."""
-    _send(room_id, "say", text, to_peer=to_peer)
+    _send(room_id, "say", text, to_peer=to_peer, as_peer=as_peer)
 
 
 @app.command()
 def ask(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
-        to_peer: str = typer.Option("", "--to")) -> None:
+        to_peer: str = typer.Option("", "--to"),
+        as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Ask a question in a room."""
-    _send(room_id, "ask", text, to_peer=to_peer)
+    _send(room_id, "ask", text, to_peer=to_peer, as_peer=as_peer)
 
 
 @app.command()
 def answer(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
-           reply_to: str = typer.Option("", "--reply-to", help="Id of the message you answer.")) -> None:
+           reply_to: str = typer.Option("", "--reply-to", help="Id of the message you answer."),
+           as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Answer a question."""
-    _send(room_id, "answer", text, reply_to=reply_to)
+    _send(room_id, "answer", text, reply_to=reply_to, as_peer=as_peer)
 
 
 @app.command()
 def report(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
            status: str = typer.Option("completed",
                                       help="submitted, working, input_required, completed, "
-                                           "failed, rejected or canceled")) -> None:
+                                           "failed, rejected or canceled"),
+           as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Report how a task stands."""
-    _send(room_id, "report", text, status=status)
+    _send(room_id, "report", text, status=status, as_peer=as_peer)
 
 
 @app.command()
 def directive(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
-              to_peer: str = typer.Option("", "--to")) -> None:
+              to_peer: str = typer.Option("", "--to"),
+              as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Instruct a worker. Leaders only, and never in a round."""
-    _send(room_id, "directive", text, to_peer=to_peer)
+    _send(room_id, "directive", text, to_peer=to_peer, as_peer=as_peer)
 
 
 @app.command()
 def hire(room_id: str = typer.Argument(...),
-         purpose: str = typer.Option("", help="What the new room is for.")) -> None:
+         purpose: str = typer.Option("", help="What the new room is for."),
+         as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Open a child room you lead, to bring in more workers."""
     from vaf.core.a2a.room import RoomError
     room = _room(room_id)
-    identity = _me(room)
+    identity = _me(room, as_peer=as_peer)
     try:
         child, frame = room.hire(identity, purpose=purpose)
     except RoomError as e:
@@ -259,11 +295,12 @@ def hire(room_id: str = typer.Argument(...),
 
 @app.command()
 def role(room_id: str = typer.Argument(...), peer: str = typer.Argument(...),
-         new_role: str = typer.Argument(..., metavar="ROLE")) -> None:
+         new_role: str = typer.Argument(..., metavar="ROLE"),
+         as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Change someone's role. Leaders only."""
     from vaf.core.a2a.room import RoomError
     room = _room(room_id)
-    identity = _me(room)
+    identity = _me(room, as_peer=as_peer)
     try:
         frame = room.grant_role(identity, peer, new_role)
     except RoomError as e:
@@ -272,15 +309,17 @@ def role(room_id: str = typer.Argument(...), peer: str = typer.Argument(...),
 
 
 @app.command()
-def leave(room_id: str = typer.Argument(...), reason: str = typer.Option("", help="Why.")) -> None:
+def leave(room_id: str = typer.Argument(...), reason: str = typer.Option("", help="Why."),
+          as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Leave a room."""
-    _send(room_id, "leave", reason)
+    _send(room_id, "leave", reason, as_peer=as_peer)
 
 
 @app.command()
-def close(room_id: str = typer.Argument(...), reason: str = typer.Option("", help="Why.")) -> None:
+def close(room_id: str = typer.Argument(...), reason: str = typer.Option("", help="Why."),
+          as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Close a room. It stays readable forever; nothing more can be written."""
-    _send(room_id, "close", reason)
+    _send(room_id, "close", reason, as_peer=as_peer)
 
 
 @app.command()
@@ -325,10 +364,11 @@ def read(
                                        help="Do not move your read position."),
     membership: bool = typer.Option(False, "--with-membership",
                                     help="Include join, leave, role and ack frames."),
+    as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),
 ) -> None:
     """Print new messages as NDJSON, one object per line."""
     room = _room(room_id)
-    identity = _me(room)
+    identity = _me(room, as_peer=as_peer)
     since = 0 if all_messages else room.store.cursor(identity.peer_id)
     rows = _conversation(room, identity, since=since, membership=membership)
     for entry in rows:
@@ -346,6 +386,7 @@ def wait(
     interval: float = typer.Option(0.5, help="Seconds between checks."),
     membership: bool = typer.Option(False, "--with-membership",
                                     help="Also wake on join, leave, role and ack frames."),
+    as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),
 ) -> None:
     """Block until something is said, then print it as NDJSON.
 
@@ -353,7 +394,7 @@ def wait(
     """
     _install_stop_handler()
     room = _room(room_id)
-    identity = _me(room)
+    identity = _me(room, as_peer=as_peer)
     started = time.monotonic()
     seen = 0
 
@@ -392,17 +433,14 @@ def log(room_id: str = typer.Argument(...),
     _me(room, required=False)
     shown = 0
 
+    from vaf.core.a2a.room import describe
+
     def _print(rows) -> int:
         for entry in rows:
             label = f"{entry['display']} [{entry['role']}]"
             if entry["kind"] not in ("say",):
                 label += f" ({entry['kind']})"
-            text = entry["text"]
-            if entry["kind"] == "report" and (entry["body"] or {}).get("status"):
-                text = f"[{entry['body']['status']}] {text}"
-            if not entry["known"]:
-                text = f"<unknown message type '{entry['kind']}'> {text}"
-            typer.echo(f"{label}: {text}".rstrip())
+            typer.echo(f"{label}: {describe(entry)}".rstrip())
         return len(rows)
 
     rows = room.transcript()

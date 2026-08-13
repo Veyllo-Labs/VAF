@@ -879,7 +879,8 @@ class VafApp(App):
         from vaf.cli.tui_app.widgets import PeerMessage
         try:
             from vaf.core.config import get_local_admin_scope_id
-            from vaf.core.a2a.room import Room, joined_rooms, unread_frames
+            from vaf.core.a2a.room import (Room, describe, joined_rooms,
+                                            unread_frames)
             from vaf.core.a2a.store import StoreError, UnsafeName
         except Exception as exc:                      # pragma: no cover - import guard
             self.add_event_note("Rooms", f"not available: {exc}", "warning")
@@ -913,11 +914,7 @@ class VafApp(App):
             f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
             f"{len(rows)} messages")
         for entry in rows[-self.REPLAY_CAP:]:
-            text = entry["text"]
-            if entry["kind"] == "report" and (entry["body"] or {}).get("status"):
-                text = f"[{entry['body']['status']}] {text}"
-            if not entry["known"]:
-                text = f"<message type '{entry['kind']}' this version does not know> {text}"
+            text = describe(entry)
             self._mount_scrolled(PeerMessage(
                 entry["display"], text, badge=entry["role"], kind=entry["kind"],
                 when=_room_clock(entry["ts"]),

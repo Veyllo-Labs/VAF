@@ -259,15 +259,12 @@ class RoomReadTool(BaseTool):
 
 def _render(rows: List[Dict[str, Any]]) -> str:
     """Group-chat shape: speaker, role and kind kept apart from the text."""
+    from vaf.core.a2a.room import describe
+
     lines = []
     for row in rows:
         label = f"{row['display']} [{row['role']}]"
         if row["kind"] not in ("say", "join"):
             label += f" ({row['kind']})"
-        text = row["text"] or ""
-        if row["kind"] == "report" and (row["body"] or {}).get("status"):
-            text = f"[{row['body']['status']}] {text}"
-        if not row["known"]:
-            text = f"<message type '{row['kind']}' this version does not understand> {text}"
-        lines.append(f"{label}: {text}".rstrip())
+        lines.append(f"{label}: {describe(row)}".rstrip())
     return "\n".join(lines)

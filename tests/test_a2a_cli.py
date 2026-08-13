@@ -282,3 +282,75 @@ def test_a_leader_directs_a_worker_who_hires_and_reports(rooms):
     from vaf.core.a2a.room import Identity
     child.say(Identity(child_lead, "Worker", None, "leader"), "inside the child")
     assert "inside the child" not in texts
+
+
+# ── what the first live run found ───────────────────────────────────────────
+
+def test_a_guest_with_a_ticket_joins_even_when_the_owner_already_did(rooms):
+    """MUTATION: short-circuit on "already a member" before looking at the ticket.
+
+    A foreign agent driving this CLI shares the machine owner's derived handle, so the
+    short-circuit locked every guest out of any room the owner had already joined. The
+    first live run hit it on the first invitation.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    ticket = _lines(runner.invoke(a2a_cmd.app, ["invite", room_id, "--display", "Codex"]))[0]["ticket"]
+
+    joined = _lines(runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket,
+                                                "--display", "Codex"]))[0]
+    assert joined.get("already") is not True
+    assert joined["peer"] != _lines(runner.invoke(a2a_cmd.app, ["list"]))[0]["peer"]
+
+
+def test_a_guest_can_act_as_its_own_handle(rooms):
+    """MUTATION: resolve every command through the derived key only.
+
+    Without this a guest could join and then never say anything, because every later
+    command acted as the machine owner instead. Found live, one command after the one
+    above.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    ticket = _lines(runner.invoke(a2a_cmd.app, ["invite", room_id]))[0]["ticket"]
+    guest = _lines(runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket,
+                                               "--display", "Codex"]))[0]["peer"]
+
+    assert runner.invoke(a2a_cmd.app, ["say", room_id, "hello", "--as", guest]).exit_code == 0
+
+    room = Room.open(room_id, base=rooms)
+    spoken = [r for r in room.transcript() if r["kind"] == "say"][-1]
+    assert spoken["peer"] == guest and spoken["display"] == "Codex"
+
+
+def test_the_env_var_names_the_acting_peer_too(rooms, monkeypatch):
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    ticket = _lines(runner.invoke(a2a_cmd.app, ["invite", room_id]))[0]["ticket"]
+    guest = _lines(runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket,
+                                               "--display", "Codex"]))[0]["peer"]
+
+    monkeypatch.setenv("VAF_A2A_PEER", guest)
+    assert runner.invoke(a2a_cmd.app, ["say", room_id, "from the env"]).exit_code == 0
+
+    room = Room.open(room_id, base=rooms)
+    assert [r for r in room.transcript() if r["kind"] == "say"][-1]["peer"] == guest
+
+
+def test_acting_as_a_stranger_is_refused(rooms):
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create"]))[0]["room"]
+    result = runner.invoke(a2a_cmd.app, ["say", room_id, "hi", "--as", "p-nobody"])
+    assert result.exit_code == a2a_cmd.EXIT_NO_ROOM
+
+
+def test_bookkeeping_frames_read_as_sentences_not_empty_lines(rooms):
+    """MUTATION: print entry["text"] directly in any of the renderers.
+
+    A join carries no text - it says WHO, not what - so printing the body alone gives
+    "Worker (join):" and nothing after it. The live run showed exactly that.
+    """
+    room_id = _lines(runner.invoke(a2a_cmd.app, ["create", "--kind", "chain"]))[0]["room"]
+    room, worker = _guest(room_id, rooms, display="Worker")
+    room.hire(worker, purpose="log reading")
+
+    out = runner.invoke(a2a_cmd.app, ["log", room_id]).stdout
+    assert "Worker [worker] (join): joined" in out
+    assert "(hire): opened room-" in out and "for log reading" in out
+    assert not any(line.rstrip().endswith(":") for line in out.splitlines()), out

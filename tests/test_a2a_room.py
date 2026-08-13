@@ -404,3 +404,49 @@ def test_no_module_under_a2a_touches_the_tool_funnel():
         f"the account allowlist and the file jail, both of which read 'no scope' as "
         f"unrestricted."
     )
+
+
+# ── one wording, four surfaces ──────────────────────────────────────────────
+
+def test_every_kind_reads_as_a_sentence(chain, tmp_path):
+    """MUTATION: return entry["text"] for a bookkeeping kind.
+
+    Four surfaces render this transcript - the a2a CLI, the terminal app, the classic
+    lane and the agent's own room_read - and a phrase kept in four places is three
+    chances to drift.
+    """
+    from vaf.core.a2a.room import describe
+
+    room, leader, worker = chain
+    room.grant_role(leader, "p-work", "worker")
+    child, _ = room.hire(worker, purpose="log reading", base=tmp_path)
+    room.report(worker, "done", status="completed")
+    room.close(leader, reason="finished")
+
+    lines = {r["kind"]: describe(r) for r in room.transcript()}
+    assert lines["join"] == "joined"
+    assert lines["role"] == "made p-work a worker"
+    assert lines["hire"].startswith("opened ") and "log reading" in lines["hire"]
+    assert lines["report"] == "[completed] done"
+    assert lines["close"] == "closed the room - finished"
+    assert all(line.strip() for line in lines.values()), lines
+
+
+def test_an_unknown_kind_is_described_rather_than_shown_blank():
+    from vaf.core.a2a.room import describe
+
+    line = describe({"kind": "celebrate", "body": {}, "text": "hooray", "known": False})
+    assert "celebrate" in line and "hooray" in line
+
+
+def test_no_renderer_hand_rolls_the_wording():
+    """The guard that keeps the four surfaces honest."""
+    surfaces = [
+        ROOT / "vaf" / "cli" / "cmd" / "a2a.py",
+        ROOT / "vaf" / "cli" / "tui_app" / "app.py",
+        ROOT / "vaf" / "cli" / "cmd" / "run.py",
+        ROOT / "vaf" / "tools" / "room_tools.py",
+    ]
+    for path in surfaces:
+        source = path.read_text(encoding="utf-8")
+        assert "describe" in source, f"{path.name} renders a transcript without describe()"

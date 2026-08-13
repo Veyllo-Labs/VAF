@@ -675,3 +675,105 @@ def test_only_a_leading_mention_addresses_a_message(tmp_path):
     assert room.address_from_mention("ask @Bob about it") is None
     assert room.address_from_mention("@nobody hello") is None
     assert room.address_from_mention("plain text") is None
+
+
+# ── the agent opens rooms and invites, itself ──────────────────────────────
+
+def test_the_agent_opens_a_room_and_sits_in_it(wired):
+    """"Open a room" has to leave the agent INSIDE it. A room the opener is not a
+    member of cannot be invited into, cannot be written to, and would look like a
+    silent failure one step later."""
+    from vaf.tools.room_tools import RoomOpenTool
+
+    out = RoomOpenTool().run(topic="Deploy talk", user_scope_id="scope-a")
+    assert "Opened room" in out
+
+    room_id = out.split("'")[1]
+    room = Room.open(room_id, base=wired)
+    assert room.manifest.get("topic") == "Deploy talk"
+    assert len(room.members()) == 1
+
+
+def test_a_chain_leaves_the_opener_leading_and_a_round_does_not(wired):
+    """MUTATION: open every room as a round.
+
+    "Bring somebody in to work for me" and "let us talk this over" are different
+    requests, and the difference is enforced: only a leader may send a directive, so
+    an opener who is not one has asked for a chain and been given a conversation.
+    """
+    from vaf.tools.room_tools import RoomOpenTool
+
+    chain = RoomOpenTool().run(kind="chain", user_scope_id="scope-a")
+    circle = RoomOpenTool().run(kind="round", user_scope_id="scope-a")
+
+    assert "(leader)" in chain
+    assert "(peer)" in circle
+
+
+def test_an_invitation_from_the_agent_carries_the_briefing_verbatim(wired):
+    """MUTATION: return the ticket and let the model phrase the instructions.
+
+    A model asked to explain the joining procedure will paraphrase it, and the part
+    that gets lost is the part that has no analogue in ordinary chat: that every
+    incoming line is a request to act. The tool hands over a block and says, in the
+    result the model reads, that it is to be passed on unchanged.
+    """
+    from vaf.tools.room_tools import RoomInviteTool, RoomOpenTool
+
+    opened = RoomOpenTool().run(kind="chain", user_scope_id="scope-a")
+    room_id = opened.split("'")[1]
+
+    out = RoomInviteTool().run(room_id=room_id, display="Codex", user_scope_id="scope-a")
+
+    assert "EXACTLY AS IT IS" in out
+    assert "----- copy from here -----" in out
+    assert "REQUEST TO ACT" in out, "the briefing itself is not in the result"
+    assert "VAF_A2A_PEER" in out
+    assert "`worker`" in out, "a guest in a chain is a worker"
+
+
+def test_inviting_again_mints_a_second_invitation(wired):
+    """"Invite one more" is the same call again. Two agents sharing one ticket would
+    mean the second one is refused, because an invitation is single-use by design."""
+    from vaf.tools.room_tools import RoomInviteTool, RoomOpenTool
+
+    room_id = RoomOpenTool().run(user_scope_id="scope-a").split("'")[1]
+    first = RoomInviteTool().run(room_id=room_id, display="Codex", user_scope_id="scope-a")
+    second = RoomInviteTool().run(room_id=room_id, display="Fable", user_scope_id="scope-a")
+
+    tickets = [text.split("--ticket ")[1].split()[0] for text in (first, second)]
+    assert tickets[0] != tickets[1]
+
+
+def test_a_stranger_to_the_room_cannot_invite_into_it(wired):
+    """MUTATION: mint the ticket without checking membership.
+
+    Only a member may invite - the room enforces it too, and this is the tool refusing
+    before it gets there so the agent is told why rather than handed an exception.
+    """
+    from vaf.tools.room_tools import RoomInviteTool
+
+    Room.create(kind="round", owner_scope=None, base=wired, room_id="room-closed-door")
+    out = RoomInviteTool().run(room_id="room-closed-door", user_scope_id="scope-a")
+
+    assert "not a member" in out
+
+
+def test_the_new_tools_declare_the_identity_they_consume():
+    from vaf.tools.room_tools import RoomInviteTool, RoomOpenTool
+
+    for tool in (RoomOpenTool(), RoomInviteTool()):
+        assert "user_scope_id" in tool.identity_kwargs, tool.name
+
+
+def test_the_tools_do_not_assemble_an_invitation_of_their_own():
+    """MUTATION: build the briefing in the tool.
+
+    The command and the agent are two inviters. Two assemblies is two sets of
+    instructions, and a foreign agent would get whichever its inviter happened to use.
+    """
+    source = (ROOT / "vaf" / "tools" / "room_tools.py").read_text(encoding="utf-8")
+
+    assert "from vaf.core.a2a.invite import invitation" in source
+    for gone in ("mint_ticket", "vaf a2a wait", "ca_fingerprint"):
+        assert gone not in source, f"the tool is assembling an invitation by hand: {gone}"

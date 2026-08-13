@@ -267,3 +267,141 @@ def _render(rows: List[Dict[str, Any]]) -> str:
             label += f" ({row['kind']})"
         lines.append(f"{label}: {describe(row)}".rstrip())
     return "\n".join(lines)
+
+
+class RoomOpenTool(BaseTool):
+    """
+    Open a new agent-to-agent room and join it yourself.
+
+    Use this when the user asks you to start a room, open a group chat with other
+    agents, or bring somebody in to work with you. Opening a room does not invite
+    anybody; use room_invite for each agent that should take part.
+    """
+    name = "room_open"
+    description = (
+        "Open a new agent-to-agent room and join it. kind: 'round' for a conversation "
+        "among equals where nobody gives orders, 'chain' when you lead and the agents "
+        "you invite report to you. Use when the user asks you to start a room."
+    )
+    identity_kwargs = ("user_scope_id", "user_role")
+    permission_level = "write"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string",
+                      "description": "What the room is about. Shown to everyone who joins."},
+            "kind": {
+                "type": "string",
+                "enum": ["round", "chain"],
+                "description": (
+                    "'round' = everybody equal, nobody may give orders (default). "
+                    "'chain' = you lead, invited agents are workers who report to you."
+                ),
+            },
+            "display": {"type": "string",
+                        "description": "Name other participants see. Defaults to the agent's name."},
+        },
+        "required": [],
+    }
+    input_aliases = {"topic": ["subject", "about"], "kind": ["type"],
+                     "display": ["name", "as"]}
+
+    def run(self, **kwargs) -> str:
+        from vaf.core.a2a.room import ROOM_KINDS, Room, RoomError, derive_peer_id
+
+        kind = str(kwargs.get("kind") or "round").strip().lower()
+        if kind not in ROOM_KINDS:
+            return f"Error: kind must be one of {', '.join(ROOM_KINDS)}."
+        scope = kwargs.get("user_scope_id")
+        key = _acting_key(scope)
+        display = str(kwargs.get("display") or "VAF").strip() or "VAF"
+        topic = str(kwargs.get("topic") or "").strip()
+
+        try:
+            room = Room.create(kind=kind, owner_scope=scope, topic=topic)
+            # The opener joins as itself. In a chain that seat is the leader's, which
+            # is what makes "open a room and bring somebody in" mean what a user
+            # expects it to mean.
+            identity = room.join(display=display, scope_id=scope,
+                                 peer_id=derive_peer_id(key, room.room_id))
+        except RoomError as e:
+            return f"Could not open the room: {e}"
+
+        return (f"Opened room '{room.room_id}' ({kind}"
+                f"{f', about: {topic}' if topic else ''}) and joined it as "
+                f"{identity.display} ({identity.role}). "
+                f"Use room_invite with this room id to bring an agent in.")
+
+
+class RoomInviteTool(BaseTool):
+    """
+    Invite another agent into a room, and get the briefing to hand over.
+
+    Every call mints a NEW single-use invitation, so calling it again is how a second
+    or third agent is brought into the same room. The result contains a block of
+    instructions meant to be given to the other agent exactly as it is.
+    """
+    name = "room_invite"
+    description = (
+        "Create an invitation for one more agent to join a room you are in, and return "
+        "the ready-made briefing to hand to that agent. Call it again for each further "
+        "agent. Use when the user asks you to invite somebody into a room."
+    )
+    identity_kwargs = ("user_scope_id", "user_role")
+    permission_level = "write"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "room_id": {"type": "string", "description": "Id of the room to invite into."},
+            "display": {"type": "string",
+                        "description": "Name the invited agent will appear under, e.g. 'Codex'."},
+            "ttl": {"type": "integer",
+                    "description": "Seconds the invitation stays valid. Default 3600."},
+        },
+        "required": ["room_id"],
+    }
+    input_aliases = {"room_id": ["room", "id"], "display": ["name", "who", "guest"],
+                     "ttl": ["expires_in", "valid_for"]}
+
+    def run(self, **kwargs) -> str:
+        from vaf.core.a2a.invite import invitation
+        from vaf.core.a2a.room import RoomError
+        from vaf.core.a2a.store import StoreError
+
+        room_id = str(kwargs.get("room_id") or "").strip()
+        if not room_id:
+            return "Error: room_id is required."
+        display = str(kwargs.get("display") or "guest").strip() or "guest"
+        try:
+            ttl = float(kwargs.get("ttl") or 3600)
+        except (TypeError, ValueError):
+            ttl = 3600.0
+
+        try:
+            room = _open(room_id)
+        except StoreError:
+            return f"Error: there is no room called '{room_id}' on this machine."
+
+        identity = room.identity_for(_acting_key(kwargs.get("user_scope_id")))
+        if identity is None:
+            return (f"Error: you are not a member of '{room_id}', and only a member "
+                    f"may invite. Join it first.")
+        try:
+            # Assembled by the room layer, exactly as `vaf a2a invite` gets it. Two
+            # inviters telling a guest two different things is the whole reason that
+            # assembly does not live in either caller.
+            row = invitation(room, identity, display=display, ttl_s=ttl)
+        except RoomError as e:
+            return f"Could not invite into '{room_id}': {e}"
+
+        return (
+            f"Invitation for {display} to join '{room_id}' as {row['role']}, valid for "
+            f"{row['expires_in']} seconds.\n\n"
+            "GIVE THE BLOCK BELOW TO THAT AGENT EXACTLY AS IT IS, unchanged and "
+            "complete. It is written for the agent to read, not for you to summarise, "
+            "and it is single-use: a shortened version leaves the other agent unable "
+            "to join or unsure what to do once it has.\n\n"
+            "----- copy from here -----\n"
+            f"{row['briefing']}"
+            "----- to here -----"
+        )

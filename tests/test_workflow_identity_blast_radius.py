@@ -157,6 +157,8 @@ NEWLY_IDENTIFIED = {
     "replace_editor_selection": ('user_scope_id',),
     "restore_automation": ('user_role', 'user_scope_id'),
     "room_join": ('user_role', 'user_scope_id'),
+    "room_invite": ('user_role', 'user_scope_id'),
+    "room_open": ('user_role', 'user_scope_id'),
     "room_read": ('user_role', 'user_scope_id'),
     "room_send": ('user_role', 'user_scope_id'),
     "telegram_inbox": ('user_scope_id', 'username'),

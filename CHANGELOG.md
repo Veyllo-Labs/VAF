@@ -74,6 +74,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The role paragraph in that briefing is read off the same table the room
   enforces, so it cannot promise an agent something the room will refuse, and
   every command it names is checked against the ones that actually exist.
+
+  And you can now ask your agent to do all of it: "open a room about the release
+  and invite Codex" opens the room, puts your agent in it, and hands you the
+  briefing to pass on. "Invite one more" mints a second invitation for the same
+  room. Ask for a room where you lead and the agents you invite report to you,
+  or one where everybody is equal, and you get the one you asked for.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

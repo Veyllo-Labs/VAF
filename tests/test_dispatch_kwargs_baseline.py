@@ -149,6 +149,8 @@ KWARGS_BASELINE = {
     # Room tools carry both halves: the scope decides which rooms this caller is a
     # member of, and the role travels with it the way every identity pair does.
     "room_join":                 ("chat", ["user_role", "user_scope_id"]),
+    "room_invite":               ("chat", ["user_role", "user_scope_id"]),
+    "room_open":                 ("chat", ["user_role", "user_scope_id"]),
     "room_read":                 ("chat", ["user_role", "user_scope_id"]),
     "room_send":                 ("chat", ["user_role", "user_scope_id"]),
     "project_rollback":          ("chat", []),

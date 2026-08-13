@@ -1042,6 +1042,9 @@ class Agent:
         self._tool_authorizer = None
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
         self._anti_spin_streak = 0  # consecutive bookkeeping (plan/intent) calls; anti-spin guard
+        # room_id -> room-driven turns since a real person last spoke. Same shape as
+        # the streak above and reset by the same kind of signal, one layer out.
+        self._room_reply_streak = {}
         # Task-stuck guard (complement to anti-spin): a weak model can finish a step's work but never
         # call mark_task_done, so the pending-task auto-continue keeps forcing it to "keep going" — it
         # redoes the same step until the hard cap and leaves it unmarked for the next run. Track
@@ -1719,7 +1722,11 @@ class Agent:
         lost message. That is the same direction the room store takes everywhere.
 
         Its own frames are already excluded upstream: an agent woken by its own voice
-        is how a two-agent room becomes a runaway conversation.
+        is how a two-agent room becomes a runaway conversation. Excluding only its OWN
+        voice is not enough, though, and that is what the streak guard below is for: two
+        agents each ignore themselves and still answer each other forever, because each
+        one is being woken by somebody else. Two polite models thank each other until
+        somebody notices the bill, and from the cross-machine step on it is two bills.
         """
         try:
             from vaf.core.a2a.room import unread_frames
@@ -1731,8 +1738,17 @@ class Agent:
             pending = unread_frames(key)
             if not pending:
                 return None
-            room, identity, frames = pending[0]
+            picked = None
+            for candidate in pending:
+                if not self._room_loop_guard_trips(candidate[0], candidate[1]):
+                    picked = candidate
+                    break
+            if picked is None:
+                return None
+            room, identity, frames = picked
             mode = room.mode_of(identity.peer_id)
+            self._room_reply_streak[room.room_id] = (
+                self._room_reply_streak.get(room.room_id, 0) + 1)
             members = room.members()
             lines = []
             for frame in frames[-12:]:
@@ -1761,6 +1777,71 @@ class Agent:
                     "prompt": prompt, "advance": _advance, "count": len(frames)}
         except Exception:
             return None
+
+    def note_human_turn(self) -> None:
+        """A real person just spoke to this agent: let every paused room run again.
+
+        Deliberately NOT wired to the "real user message" test that clears the
+        ask-first latch (the `not skip_input and not _synthetic_drain_turn` line in
+        chat_step). That test was written for a different question and a TIMER passes
+        it: a timer enqueues an ordinary task with the user's own text and no
+        background marker, so a repeating one would reset this streak forever and the
+        brake would never bite. An automation passes it too.
+
+        The dependable discrimination exists only at the queue boundary, where the task
+        still carries its class and its metadata, so that is where the observation is
+        made and this is where it means something. The split is deliberate: the harness
+        can see WHICH task arrived, the framework decides WHAT that implies.
+        """
+        self._room_reply_streak = {}
+
+    def _room_loop_guard_trips(self, room, identity) -> bool:
+        """Whether this room has run away from its humans and must wait for one.
+
+        The counter is per ROOM and counts room-driven turns since a real person last
+        spoke to this agent. Per room rather than global, because a runaway conversation
+        in one room is no reason to stop listening in another - the cost of that choice
+        is named in the docs: an agent in five rooms can burn five budgets.
+
+        Shaped after the anti-spin guard, which is this codebase's answer to the same
+        question one layer down: an instance counter, a threshold and a kill-switch in
+        config, and a single announcement at the moment it trips rather than one per
+        turn afterwards.
+
+        FAIL OPEN, deliberately, and the opposite polarity to the mode gate. This one
+        guards a budget; the mode gate guards the machine. A broken budget check that
+        silenced every room would be a worse failure than the loop it prevents, and a
+        human is still in the conversation either way.
+        """
+        try:
+            if not Config.get("room_loop_guard_enabled", True):
+                return False
+            limit = max(2, int(Config.get("room_loop_max_turns", 6) or 6))
+            streak = self._room_reply_streak.get(room.room_id, 0)
+            if streak < limit:
+                return False
+            if streak == limit:
+                # Once, at the moment it trips. Silence would read as a broken agent to
+                # the peers waiting on it, and this notice is written by the framework
+                # rather than produced by the model, so it cannot itself cost a turn.
+                self._room_reply_streak[room.room_id] = streak + 1
+                try:
+                    append_domain_log(
+                        "backend",
+                        f"[ROOM_LOOP] {room.room_id}: {streak} turns without a human - pausing")
+                except Exception:
+                    pass
+                if room.mode_of(identity.peer_id) != "observe":
+                    try:
+                        room.say(identity, (
+                            f"Pausing here: {streak} messages have gone back and forth "
+                            f"without my user saying anything. I will pick this up when "
+                            f"they are back."))
+                    except Exception:
+                        pass
+            return True
+        except Exception:
+            return False
 
     # Talking in a room and reading it are not acts upon this machine, so they are
     # what separates "assist" from "observe": an agent that may not even reply cannot

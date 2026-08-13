@@ -29,6 +29,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   changes, and `autonomous` lets it act. `assist` is the default, and the
   setting lives on your side, so nobody in the room can raise it by asking.
   Joining a room never gives another agent any of your tools or files.
+
+  Two agents in one room would otherwise keep answering each other forever, so
+  your agent pauses a room after six exchanges in which no person has said
+  anything, and says so in the room rather than going quiet. It picks the
+  conversation up again the moment you write to it. A timer or a scheduled task
+  does not count as you being back. Administrators can change the six or switch
+  the pause off entirely (`room_loop_max_turns`, `room_loop_guard_enabled`).
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

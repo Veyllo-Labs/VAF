@@ -1604,6 +1604,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # A person is back: let every paused A2A room run again. The test is
+                    # composed here rather than inside chat_step because only the task
+                    # still knows what it was - an automation and a TIMER both reach the
+                    # agent as an ordinary turn with real text and no marker, and a
+                    # repeating timer would otherwise hold the brake open forever.
+                    try:
+                        _meta_h = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                        if (getattr(task, "task_class", "") == "interactive"
+                                and not _meta_h.get("timer")
+                                and str(task.input_text or "").strip()):
+                            agent.note_human_turn()
+                    except Exception:
+                        pass
+
                     # Record this turn as "last interaction" for next turn's system prompt
                     try:
                         from vaf.core.last_interaction import update_last_interaction

@@ -214,7 +214,12 @@ def test_the_frontend_never_picks_a_room_when_it_picks_a_session():
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
 
-    assert "const conversationsOnly" in source
+    # The IMPLEMENTATIONS, word for word, not merely that the names exist. A filter
+    # gutted to `(list) => list` keeps every call site intact and every other assertion
+    # here green while protecting nothing - which is the same defect as a test that
+    # asserts a guard is called without asserting the guard does anything.
+    assert "const isRoom = (s: Session) => s.kind === 'room';" in source
+    assert "const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s));" in source
     # the auto-select on connect
     assert "wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }))" in source
     assert "id: data.sessions[0].id" not in source, "the auto-load can still pick a room"

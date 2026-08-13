@@ -86,7 +86,12 @@ LEASE_TTL_S = 90.0
 # owner's agent and the machine owner's terminal are the SAME account and two different
 # actors: without it they collapse into one member, and "send my agent into the room"
 # cannot be told from "I am in the room myself".
-PARTICIPANT_LANES = ("agent", "cli")
+#
+# "remote" is a connection arriving over the network. It exists so a peer on the wire
+# can never derive the local agent's or the local terminal's handle no matter what it
+# presents - landing on the agent's seat would put a stranger's words where the owner's
+# own agent speaks from.
+PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 
 def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
@@ -287,10 +292,15 @@ class Room:
             resolved = role
         identity = Identity(peer_id or new_peer_id(), display, scope_id, resolved)
 
+        # An existing member's mode is NEVER overwritten by a join. The mode is the
+        # local user's standing decision about how far their own agent may act, and a
+        # join is the one operation a remote party can cause: letting it carry a mode
+        # would hand a stranger the switch. set_mode is the only way it changes, and it
+        # is reachable from the local lanes alone.
+        existing = self.store.member(identity.peer_id) or {}
         self.store.put_member(identity.peer_id, {
             "display": identity.display,
-            # The local user's decision about their own agent, not the room's.
-            "mode": mode,
+            "mode": str(existing.get("mode") or mode),
             "lease": time.time(),
             "card": dict(card) if card else {},
         })
@@ -520,14 +530,19 @@ class Room:
 
     def redeem_ticket(self, ticket_id: str, *, display: str = "",
                       mode: str = DEFAULT_MODE) -> Identity:
-        """Spend a ticket and join. Single use: it is gone before the join happens."""
-        record = self.store.ticket(ticket_id)
-        if not record or str(record.get("room")) != self.room_id:
+        """Spend a ticket and join. The claim IS the check, so it is single use.
+
+        Nothing is read before the claim. Reading first would put the decision back in
+        front of the race and let two handshakes arriving together both redeem the same
+        invitation, which is the one thing a single-use bearer credential must not do.
+        """
+        record = self.store.claim_ticket(ticket_id)
+        if record is None:
+            raise TicketInvalid("this invitation has already been used, or does not exist")
+        if str(record.get("room")) != self.room_id:
             raise TicketInvalid("this ticket is not for this room")
         if float(record.get("expires_at") or 0.0) < time.time():
-            self.store.drop_ticket(ticket_id)
             raise TicketInvalid("this ticket has expired")
-        self.store.drop_ticket(ticket_id)
         return self.join(display=display or str(record.get("display") or "guest"),
                          scope_id=None, mode=mode)
 

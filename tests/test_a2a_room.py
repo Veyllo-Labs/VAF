@@ -450,3 +450,85 @@ def test_no_renderer_hand_rolls_the_wording():
     for path in surfaces:
         source = path.read_text(encoding="utf-8")
         assert "describe" in source, f"{path.name} renders a transcript without describe()"
+
+
+# ── what an adversarial pass over the wire plan found ──────────────────────
+
+def test_one_invitation_yields_exactly_one_member_under_concurrency(tmp_path):
+    """MUTATION: read the ticket, check it, then delete it.
+
+    Read-then-delete lets two handshakes arriving at the same moment both read a valid
+    ticket, both delete it (one deletion silently failing), and both join. One
+    invitation, N members - the one thing a single-use bearer credential must not do.
+    The rename IS the gate, so exactly one caller can win it.
+    """
+    import threading
+
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-race")
+    owner = room.join(display="Owner", scope_id="s", peer_id="p-own")
+    ticket = room.mint_ticket(owner, display="Guest")
+
+    results, errors = [], []
+    barrier = threading.Barrier(8)
+
+    def _redeem():
+        barrier.wait()
+        try:
+            results.append(Room.open("room-race", base=tmp_path).redeem_ticket(ticket))
+        except TicketInvalid as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_redeem) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == 1, f"{len(results)} peers joined on one invitation"
+    assert len(errors) == 7
+    assert len([r for r in room.roles() if r != "p-own"]) == 1
+
+
+def test_a_spent_ticket_is_kept_rather_than_erased(tmp_path):
+    """The claim moves it aside instead of deleting it, so a room can still show that
+    an invitation was used and by whom - and so a failed rename is unambiguous."""
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-spent")
+    owner = room.join(display="Owner", scope_id="s", peer_id="p-own")
+    ticket = room.mint_ticket(owner, display="Guest")
+
+    room.redeem_ticket(ticket)
+
+    assert room.store.ticket(ticket) is None
+    assert (room.store.tickets_dir / "spent" / f"{ticket}.json").exists()
+
+
+def test_a_join_never_overwrites_an_existing_members_mode(tmp_path):
+    """MUTATION: let join write the mode it was given, unconditionally.
+
+    The mode is the local user's standing decision about how far their own agent may
+    act, and a join is the ONE operation a remote party can cause. A join that carried
+    a mode would hand a stranger the switch: rejoin as that peer with
+    mode="autonomous", and room text becomes tool execution under the owner's identity.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-mode2")
+    mine = room.join(display="Mine", scope_id="s", peer_id="p-mine", mode="observe")
+    assert room.mode_of("p-mine") == "observe"
+
+    room.leave(mine)
+    room.join(display="Mine", scope_id="s", peer_id="p-mine", mode="autonomous")
+
+    assert room.mode_of("p-mine") == "observe", "a rejoin raised the local autonomy"
+
+
+def test_a_connection_can_never_derive_a_local_handle():
+    """MUTATION: drop the "remote" lane and let a connection use the agent's key.
+
+    Landing on the local agent's seat would put a stranger's words where the owner's
+    own agent speaks from, and every reader would attribute them to it.
+    """
+    from vaf.core.a2a.room import PARTICIPANT_LANES, derive_peer_id, participant_key
+
+    assert "remote" in PARTICIPANT_LANES
+    handles = {lane: derive_peer_id(participant_key(lane, "scope-a"), "room-x")
+               for lane in PARTICIPANT_LANES}
+    assert len(set(handles.values())) == len(PARTICIPANT_LANES), handles

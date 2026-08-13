@@ -46,6 +46,7 @@ instant, or any ordering between two rooms.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -354,12 +355,39 @@ class RoomStore:
         )
 
     def drop_ticket(self, ticket_id: str) -> None:
-        """Single use: redeeming removes it. Refusing to reuse a bearer credential
-        is the only protection a bearer credential has."""
+        """Remove a ticket without claiming it. For expiry and cleanup only.
+
+        A REDEMPTION must go through claim_ticket instead: this one cannot tell a
+        winner from a loser, so two concurrent redeemers would both proceed.
+        """
         try:
             (self.tickets_dir / f"{check_name(ticket_id, what='ticket id')}.json").unlink()
         except OSError:
             pass
+
+    def claim_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """Take sole ownership of a ticket, or return None because somebody else did.
+
+        The RENAME is the gate, not a step after it. Read-then-delete lets two
+        handshakes arriving at the same moment both read a valid ticket, both delete
+        it (one deletion silently failing), and both join - one invitation, N members,
+        which is exactly what a single-use bearer credential must not permit.
+
+        ``os.replace`` into ``tickets/spent/`` is atomic on POSIX and on Windows, so
+        exactly one caller can win. The record is read AFTER the win, from the file the
+        winner now owns, because reading first would put the decision back before the
+        race.
+        """
+        name = check_name(ticket_id, what="ticket id")
+        source = self.tickets_dir / f"{name}.json"
+        spent_dir = self.tickets_dir / "spent"
+        try:
+            spent_dir.mkdir(parents=True, exist_ok=True)
+            harden_dir(spent_dir)
+            os.replace(str(source), str(spent_dir / f"{name}.json"))
+        except OSError:
+            return None
+        return data_files.read_json(spent_dir / f"{name}.json", default=None)
 
 
 def list_rooms(base: Optional[Path] = None) -> List[str]:

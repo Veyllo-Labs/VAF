@@ -7322,11 +7322,17 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
         room = open_room(room_id)
         identity = admit(room, credential or "")
     except HandshakeRefused as refusal:
+        # Mirrored into the security log exactly like a refused WebUI handshake. A room
+        # is the one door a stranger can knock on from another machine, so a refusal
+        # here is MORE worth seeing on the dashboard than one on the browser socket,
+        # not less.
         log("API", f"A2A rejected from {client_ip}: {refusal.reason}")
+        _emit_sec_ws(f"a2a room={room_id}: {refusal.reason}", ip=client_ip)
         await websocket.close(code=refusal.code, reason=refusal.reason)
         return
     except Exception as e:                      # pragma: no cover - defensive
         log("API", f"A2A handshake failed from {client_ip}: {e}")
+        _emit_sec_ws(f"a2a room={room_id}: handshake failed", ip=client_ip)
         await websocket.close(code=4001, reason="handshake failed")
         return
 

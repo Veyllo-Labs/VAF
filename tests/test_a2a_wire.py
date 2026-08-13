@@ -389,3 +389,35 @@ def test_the_harness_registers_a_verifier_that_demands_an_access_token():
     verifier = source.split("def _a2a_credential_verifier")[1].split("\n\n")[0]
     assert 'payload.get("type") != "access"' in verifier
     assert "return None" in verifier
+
+
+def test_an_invitation_keeps_the_name_it_was_minted_with(rooms):
+    """MUTATION: pass a default display into redeem_ticket.
+
+    A default there is not a fallback, it is an override: the ticket already carries the
+    name the inviter chose, and "vaf a2a invite --display Codex" produced a member
+    called "guest". Seen in a live room log, where two different guests were both
+    "guest" and nobody could tell them apart.
+    """
+    from vaf.core.a2a.room import Identity
+
+    owner = Identity("p-owner", "Owner", None, "peer")
+    ticket = rooms.mint_ticket(owner, display="Codex")
+
+    guest = admit(rooms, ticket)
+
+    assert guest.display == "Codex"
+    assert rooms.members()[guest.peer_id]["display"] == "Codex"
+
+
+def test_a_refused_room_handshake_reaches_the_security_log():
+    """MUTATION: log it only to the API log.
+
+    A room is the one door a stranger can knock on from another machine, so a refusal
+    here belongs on the security dashboard more than one on the browser socket does,
+    not less. The WebUI socket has mirrored its refusals there all along; this one did
+    not, which is how a rejected room join stayed invisible to the person watching.
+    """
+    body = _route_source()
+    assert "_emit_sec_ws(" in body, "a refused room handshake is not a security event"
+    assert body.count("_emit_sec_ws(") >= 2, "only one of the two refusal paths reports"

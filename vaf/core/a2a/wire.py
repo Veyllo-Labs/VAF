@@ -134,7 +134,10 @@ def admit(room: Room, credential: str, *, display: str = "") -> Identity:
 
     if looks_like_ticket(credential):
         try:
-            return room.redeem_ticket(credential, display=display or "guest")
+            # No default here: passing one would OVERRIDE the name the invitation was
+            # minted with, so "vaf a2a invite --display Codex" produced a member called
+            # "guest". The room falls back on its own if neither carries a name.
+            return room.redeem_ticket(credential, display=display)
         except TicketInvalid as e:
             raise HandshakeRefused(str(e), code=4003) from None
         except RoomError as e:

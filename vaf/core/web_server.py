@@ -3596,6 +3596,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # from the store rather than from what the browser assumed.
                         room = Room.open(wanted)
                         await _send_room_transcript(websocket, room, user_scope_id)
+
+                        # Anything that changes what the SIDEBAR says has to push the
+                        # sidebar. Closing takes the room out of the list and renaming
+                        # changes its name, and neither reaches the browser through the
+                        # transcript reply - so a closed room kept sitting there with
+                        # its own farewell in it, which is precisely what it should
+                        # never do. Broadcast rather than reply: the same person may
+                        # have the app open twice.
+                        if type in ("close_room", "rename_room"):
+                            await manager.broadcast_to_user(user_scope_id, {
+                                "type": "session_list",
+                                "sessions": session_list_payload(
+                                    session_mgr.list_ui(limit=SESSION_LIST_LIMIT,
+                                                        user_scope_id=user_scope_id)),
+                            })
                     except RoomError as e:
                         await websocket.send_json({"type": "error", "message": str(e)})
                     except Exception as e:

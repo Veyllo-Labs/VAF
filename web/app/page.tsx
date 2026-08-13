@@ -3460,6 +3460,20 @@ function VAFDashboardContent() {
                     // the backend refuses - a user in a room would open to an error.
                     const chats: Session[] = conversationsOnly(data.sessions);
 
+                    // A room that has left the list is a room nobody can still take
+                    // part in - closed, or left. Keeping its view open would leave the
+                    // user reading a conversation the sidebar says does not exist, and
+                    // typing into a composer whose messages are refused. Keyed on the
+                    // LIST rather than on a "closed" message, so this holds however the
+                    // room went away.
+                    setRoomView(prev => {
+                        if (!prev) return prev;
+                        const stillThere = (data.sessions as Session[]).some(
+                            s => isRoom(s) && s.roomId === prev.room.roomId);
+                        if (!stillThere) setRoomMembersOpen(false);
+                        return stillThere ? prev : null;
+                    });
+
                     // Only auto-create if we have NO sessions and NO active session selected
                     if (chats.length === 0 && !activeSessionId) {
                         wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));

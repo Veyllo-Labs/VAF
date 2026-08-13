@@ -665,3 +665,39 @@ def test_the_transcript_survives_the_row_going_away(rooms):
     reopened = Room.open("room-visible")
     assert reopened.closed
     assert [e["kind"] for e in reopened.transcript()].count("say") == 1
+
+
+# ── the sidebar has to be told, not only the store ─────────────────────────
+
+def test_closing_or_renaming_pushes_a_fresh_sidebar():
+    """MUTATION: answer with the transcript alone.
+
+    That was the state, and it is why a closed room kept sitting in the list with its
+    own farewell in it. The store had already dropped it; the browser was still holding
+    the list it was sent before. Anything that changes what the sidebar SAYS has to
+    push the sidebar, and it broadcasts rather than replies, because the same person
+    may have the app open twice.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = source.split('elif type in ("room_say", "close_room", "kick_peer", "rename_room"):')[1] \
+                  .split('elif type == "load_session"')[0]
+
+    assert 'if type in ("close_room", "rename_room"):' in block
+    assert "broadcast_to_user" in block and '"type": "session_list"' in block
+    assert "session_list_payload" in block, "the push would drop the room fields again"
+
+
+def test_a_room_that_leaves_the_list_closes_its_view():
+    """MUTATION: leave the view open and wait for a "closed" message.
+
+    Keyed on the LIST rather than on any one event, so it holds however the room went
+    away - closed, left, or removed by somebody else. Otherwise the user reads a
+    conversation the sidebar says does not exist and types into a composer whose
+    messages are refused.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    block = source.split("else if (data.type === 'session_list') {")[1][:2200]
+
+    assert "setRoomView(prev =>" in block
+    assert "s.roomId === prev.room.roomId" in block
+    assert "setRoomMembersOpen(false)" in block, "the members panel outlives its room"

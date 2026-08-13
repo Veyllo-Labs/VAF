@@ -20,6 +20,7 @@ import time
 from types import SimpleNamespace
 
 from vaf.cli.tui_app.agent_bridge import AgentBridge
+from vaf.core.session import Message
 
 
 def _wait(pred, timeout=5.0):
@@ -35,19 +36,42 @@ def _session(messages, sid="green123456"):
     return SimpleNamespace(id=sid, messages=messages)
 
 
-_MESSAGES = [
+_RAW = [
     {"role": "system", "content": "prompt", "timestamp": "2026-08-06T08:00:00"},
     {"role": "user", "content": "hallo", "timestamp": "2026-08-06T09:15:00"},
     {"role": "assistant", "content": "", "timestamp": "2026-08-06T09:15:01"},
     {"role": "assistant", "content": "hi!", "timestamp": "2026-08-06T09:15:30"},
 ]
 
+# What the live lane really hands over. `SessionManager.load` runs every stored
+# session through `Session.from_dict`, which rebuilds each entry as a Message
+# dataclass - a dict never reaches the bridge. Fixtures made of dicts kept this
+# file green while a session switch raised
+# "'Message' object has no attribute 'get'" on every attempt.
+_MESSAGES = [Message.from_dict(m) for m in _RAW]
+
+_EXPECTED = [("user", "hallo", "09:15"), ("assistant", "hi!", "09:15")]
+
 
 def test_entries_carry_the_conversation_and_its_times():
     entries = AgentBridge._transcript_entries(_session(_MESSAGES))
-    assert entries == [("user", "hallo", "09:15"),
-                       ("assistant", "hi!", "09:15")], (
+    assert entries == _EXPECTED, (
         "system rows and empty bodies belong out, real rows keep their time")
+
+
+def test_entries_also_read_plain_dicts():
+    """The shape older callers and hand-written fixtures use stays readable."""
+    assert AgentBridge._transcript_entries(_session(_RAW)) == _EXPECTED
+
+
+def test_untouched_reads_the_same_shapes():
+    """One definition of "did the user speak", whatever the row looks like."""
+    assert AgentBridge.session_is_untouched(_session(
+        [Message.from_dict(_RAW[0])])) is True
+    assert AgentBridge.session_is_untouched(_session(_MESSAGES)) is False
+    assert AgentBridge.session_is_untouched(_session(_RAW)) is False
+    assert AgentBridge.session_is_untouched(_session(
+        [("user", "hallo", "09:15")])) is False
 
 
 def _bridge(loaded_session):

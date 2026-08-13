@@ -733,18 +733,32 @@ class AgentBridge:
         self._submit(_run)
 
     @staticmethod
-    def _transcript_entries(session) -> list:
+    def _message_field(message, name: str, default=None):
+        """One field of a stored message, whichever shape it arrives in.
+
+        `Session.from_dict` rebuilds every entry as a `Message` dataclass, so
+        the live lane always hands over objects. Tests and older callers pass
+        plain dicts. Reading only one of the two shapes is how the transcript
+        replay came to raise `'Message' object has no attribute 'get'` on
+        every session switch while its test stayed green on dict fixtures.
+        """
+        if isinstance(message, dict):
+            return message.get(name, default)
+        return getattr(message, name, default)
+
+    @classmethod
+    def _transcript_entries(cls, session) -> list:
         """(role, text, HH:MM) rows for a transcript replay - user/assistant
         only, empty bodies dropped. The persisted timestamp is local ISO; its
         HH:MM is shown so a replayed head does not claim the message happened
         just now."""
         entries = []
         for m in getattr(session, "messages", []) or []:
-            role = m.get("role")
-            text = (m.get("content") or "").strip()
+            role = cls._message_field(m, "role")
+            text = (cls._message_field(m, "content") or "").strip()
             if role not in ("user", "assistant") or not text:
                 continue
-            ts = str(m.get("timestamp") or "")
+            ts = str(cls._message_field(m, "timestamp") or "")
             when = ts[11:16] if len(ts) >= 16 else ""
             entries.append((role, text, when))
         return entries
@@ -779,8 +793,8 @@ class AgentBridge:
                   f"    vaf session load {session_id}"]
         return "\n".join(lines)
 
-    @staticmethod
-    def session_is_untouched(session) -> bool:
+    @classmethod
+    def session_is_untouched(cls, session) -> bool:
         """True when the user never actually said anything in this session.
 
         The criterion is the one `SessionManager.cleanup_empty` already uses -
@@ -789,9 +803,8 @@ class AgentBridge:
         was opened and abandoned, and keeping it just grows the list.
         """
         for message in getattr(session, "messages", []) or []:
-            role = getattr(message, "role", None)
-            if role is None and isinstance(message, dict):
-                role = message.get("role")
+            role = cls._message_field(message, "role")
+            # Replay rows arrive as (role, text, when) tuples.
             if role is None and isinstance(message, (tuple, list)) and message:
                 role = message[0]
             if role == "user":

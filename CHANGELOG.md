@@ -19,6 +19,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- Switching sessions in the terminal app no longer fails with "turn failed".
+  Every switch into a session that already had messages ended in an error
+  instead of showing the conversation, so a perfectly intact session looked
+  broken; resuming a session at startup hit the same fault. The transcript is
+  replayed again, verified against a stored 523-message session.
 - Installing VAF from a package gave you an agent with no vocabulary. The
   built wheel contained the Python code and almost nothing else: the
   vocabulary book (every spoken line and the yes/no lexicons), the coder's

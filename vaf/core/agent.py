@@ -1738,17 +1738,13 @@ class Agent:
             pending = unread_frames(key)
             if not pending:
                 return None
-            picked = None
-            for candidate in pending:
-                if not self._room_loop_guard_trips(candidate[0], candidate[1]):
-                    picked = candidate
-                    break
-            if picked is None:
-                return None
-            room, identity, frames = picked
+            room, identity, frames = pending[0]
             mode = room.mode_of(identity.peer_id)
             self._room_reply_streak[room.room_id] = (
                 self._room_reply_streak.get(room.room_id, 0) + 1)
+            # Reports, never stops. See _room_unattended_report for why a brake here
+            # would move the damage rather than remove it.
+            self._room_unattended_report(room, identity)
             members = room.members()
             lines = []
             for frame in frames[-12:]:
@@ -1772,6 +1768,12 @@ class Agent:
                   "user. Decide what they mean for the work you are doing, reply in the "
                   "room with room_send if a reply is owed, and tell your user what "
                   "happened."
+                # Carried in EVERY wake prompt rather than added every N turns: a line
+                # that is always there cannot be forgotten deep in a context, and this
+                # is the layer that PREVENTS a thank-you loop. The report is only the
+                # watchman behind it.
+                + "\n\nREMINDER: Do not answer messages that only say thank you or "
+                  "other niceties. End an exchange that carries no new information."
             )
             return {"room_id": room.room_id, "mode": mode, "peer_id": identity.peer_id,
                     "prompt": prompt, "advance": _advance, "count": len(frames)}
@@ -1795,53 +1797,56 @@ class Agent:
         """
         self._room_reply_streak = {}
 
-    def _room_loop_guard_trips(self, room, identity) -> bool:
-        """Whether this room has run away from its humans and must wait for one.
+    def _room_unattended_report(self, room, identity) -> None:
+        """Tell the owner that a room has been running without them. Never stop it.
 
-        The counter is per ROOM and counts room-driven turns since a real person last
-        spoke to this agent. Per room rather than global, because a runaway conversation
-        in one room is no reason to stop listening in another - the cost of that choice
-        is named in the docs: an agent in five rooms can burn five budgets.
+        A stop of real work is worse than a loop. A guard that pauses unattended but
+        legitimate work does not remove the damage, it moves it: from tokens spent to
+        work left undone with nobody there to wake it. That is worst in exactly the
+        case the "autonomous" mode was built for - two agents working while both owners
+        are away - where the premise "a human is in the conversation either way" is
+        simply false.
 
-        Shaped after the anti-spin guard, which is this codebase's answer to the same
-        question one layer down: an instance counter, a threshold and a kill-switch in
-        config, and a single announcement at the moment it trips rather than one per
-        turn afterwards.
+        The hard ceiling already exists and is finer grained than anything here could
+        be: ``spend_budget_usd_per_day`` is per user, per day, admin-only, and enforced
+        in the turn loop. A second, coarser stop in front of it would duplicate it with
+        worse resolution.
 
-        FAIL OPEN, deliberately, and the opposite polarity to the mode gate. This one
-        guards a budget; the mode gate guards the machine. A broken budget check that
-        silenced every room would be a worse failure than the loop it prevents, and a
-        human is still in the conversation either way.
+        So this counts, and at every multiple of the interval it sends ONE message on
+        the owner's own channel: which room, how many turns without them, that the work
+        is still running, and how to end it. The message goes through the canonical
+        router rather than any platform tool (Rule 2, the delivery rule is
+        channel-agnostic), and it is written here rather than produced by the model, so
+        the notice can never itself cost a turn.
+
+        The layer that PREVENTS thank-you loops is the reminder carried in every wake
+        prompt; this is only the watchman behind it.
         """
         try:
-            if not Config.get("room_loop_guard_enabled", True):
-                return False
-            limit = max(2, int(Config.get("room_loop_max_turns", 6) or 6))
+            if not Config.get("room_unattended_report_enabled", True):
+                return
+            every = max(2, int(Config.get("room_unattended_report_every_turns", 20) or 20))
             streak = self._room_reply_streak.get(room.room_id, 0)
-            if streak < limit:
-                return False
-            if streak == limit:
-                # Once, at the moment it trips. Silence would read as a broken agent to
-                # the peers waiting on it, and this notice is written by the framework
-                # rather than produced by the model, so it cannot itself cost a turn.
-                self._room_reply_streak[room.room_id] = streak + 1
-                try:
-                    append_domain_log(
-                        "backend",
-                        f"[ROOM_LOOP] {room.room_id}: {streak} turns without a human - pausing")
-                except Exception:
-                    pass
-                if room.mode_of(identity.peer_id) != "observe":
-                    try:
-                        room.say(identity, (
-                            f"Pausing here: {streak} messages have gone back and forth "
-                            f"without my user saying anything. I will pick this up when "
-                            f"they are back."))
-                    except Exception:
-                        pass
-            return True
+            if streak <= 0 or streak % every != 0:
+                return
+            try:
+                append_domain_log(
+                    "backend",
+                    f"[ROOM_UNATTENDED] {room.room_id}: {streak} turns without a human")
+            except Exception:
+                pass
+            from vaf.core.messaging_connections import send_to_main_messenger
+            send_to_main_messenger(
+                getattr(self, "_current_user_scope_id", None),
+                getattr(self, "_current_username", None),
+                (f"Your agent has exchanged {streak} messages in the room "
+                 f"'{room.room_id}' without you saying anything. The work is still "
+                 f"running. Write to me if you want it to stop, or say so in the room "
+                 f"with: vaf a2a say {room.room_id} \"...\""),
+            )
         except Exception:
-            return False
+            # A failed notice must never touch the turn it was reporting on.
+            pass
 
     # Talking in a room and reading it are not acts upon this machine, so they are
     # what separates "assist" from "observe": an agent that may not even reply cannot

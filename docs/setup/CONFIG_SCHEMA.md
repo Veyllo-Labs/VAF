@@ -161,8 +161,8 @@ These are sent only on the local path; cloud APIs ignore them.
 | `plan_drift_nudge_enabled` | `True` | Soft hint when a later task is marked done before an earlier one. |
 | `anti_spin_enabled` | `True` | Stop repeated bookkeeping-tool churn without real work. |
 | `anti_spin_max_planning_calls` | `4` | Consecutive plan/intent calls before nudging. |
-| `room_loop_guard_enabled` | `True` | Admin-only. Stop two agents in an A2A room from answering each other without end. |
-| `room_loop_max_turns` | `6` | Admin-only. Room-driven turns for ONE room without a message from a real person before the agent pauses that room and says so in it. An automation does not count as a person. |
+| `room_unattended_report_enabled` | `True` | Admin-only. Tell the owner when an A2A room keeps running without them. |
+| `room_unattended_report_every_turns` | `20` | Admin-only. Room-driven turns for ONE room without a message from a real person between notices to the owner (20, 40, 60, ...). The work is never stopped: halting unattended but legitimate work only moves the damage, and the hard ceiling is `spend_budget_usd_per_day`. A timer or an automation does not count as the person being back. |
 | `nonprogress_max_turns` | `6` | Consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, …; not `web_search`/`memory_search`) before a nudge then a forced text answer. Catches a "verify forever" loop; any mutating/producing tool resets it. |
 | `chat_step_wall_clock_seconds` | `3600` | Main-loop wall-clock **backstop** (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count or provider speed. Deliberately generous - never aborts legitimate long work; the no-progress guard + per-tool timeouts stop the common case far earlier. The 75-turn cap is a secondary guard. |
 | `workflow_generation_timeout_seconds` | `30` | create_automation: time-bound the inline LLM workflow pre-generation (fast-fail to robust prompt-based execution). |

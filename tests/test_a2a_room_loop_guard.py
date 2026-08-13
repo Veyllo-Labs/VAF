@@ -1,16 +1,22 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""The brake that stops two agents from thanking each other forever.
+"""What happens when two agents keep answering each other in a room.
 
-Excluding a peer's OWN frames from its wake-up is not enough: two agents each ignore
-themselves and still answer each other without end, because each is being woken by
-somebody else. From the cross-machine step on, that burns two machines.
+Two layers, and the order matters. The one that PREVENTS a thank-you loop is a line
+carried in every wake prompt telling the agent not to answer a message that says
+nothing. The one that catches what slips through is a message to the owner - and it is
+a MESSAGE, never a stop.
 
-The counter is per room and counts room-driven turns since a real person spoke. The
-tests below pin all three halves of that sentence - per room, room-driven, and real
-person - because getting any one of them wrong makes the brake either useless or a
-gag on a legitimate conversation.
+Stopping was the first design and it was wrong: halting unattended but legitimate work
+does not remove the damage, it moves it, from tokens spent to work left undone with
+nobody there to wake it. That is worst in exactly the case the autonomous mode exists
+for, two agents working while both owners are away. The real ceiling is
+spend_budget_usd_per_day, which is per user, per day and far finer grained than
+anything here could be.
+
+So these tests pin both directions: the notice fires at every interval, AND the turn
+runs anyway.
 """
 from pathlib import Path
 
@@ -22,19 +28,21 @@ from vaf.core.config import Config
 
 SCOPE = "scope-agent"
 KEY = participant_key("agent", SCOPE)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Agent:
-    """The wake-up and the guard, lifted off the real class with no model behind them."""
+    """The wake-up and the reporter, lifted off the real class with no model behind them."""
 
     from vaf.core.agent import Agent as _Real
 
     collect_room_wake = _Real.collect_room_wake
-    _room_loop_guard_trips = _Real._room_loop_guard_trips
+    _room_unattended_report = _Real._room_unattended_report
     note_human_turn = _Real.note_human_turn
 
     def __init__(self):
         self._current_user_scope_id = SCOPE
+        self._current_username = "owner"
         self._room_reply_streak = {}
 
 
@@ -45,8 +53,17 @@ def rooms(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture()
+def sent(monkeypatch):
+    """Capture what goes out on the owner's channel, without a channel."""
+    out = []
+    import vaf.core.messaging_connections as mc
+    monkeypatch.setattr(mc, "send_to_main_messenger",
+                        lambda scope, user, text, **kw: (out.append((scope, user, text)) or (True, "telegram")))
+    return out
+
+
 def _room(base, room_id, *, mode="assist"):
-    """A room the agent has joined, plus a second peer to talk at it."""
     room = Room.create(kind="round", owner_scope=None, base=base, room_id=room_id)
     room.join(display="VAF", scope_id=None, peer_id=derive_peer_id(KEY, room_id), mode=mode)
     other = room.join(display="Other", scope_id=None, peer_id="p-other")
@@ -65,204 +82,267 @@ def _drain(agent, room, other, *, turns):
     return delivered
 
 
-# ── the loop stops ──────────────────────────────────────────────────────────
+# ── the work never stops ───────────────────────────────────────────────────
 
-def test_a_runaway_room_stops_waking_the_agent(rooms):
-    """MUTATION: never increment the streak.
+def test_the_turn_still_runs_at_the_threshold_and_far_past_it(rooms, sent):
+    """MUTATION: suppress the turn at the threshold, the way the first design did.
 
-    This is the whole point. Without it two agents answer each other until somebody
-    reads a bill, and neither of them is doing anything wrong by its own rules.
+    A stop of real work is worse than a loop. The autonomous mode exists for two agents
+    working while both owners are away, and pausing there leaves the work undone with
+    nobody to wake it - the damage moved, not removed.
     """
     agent = _Agent()
-    room, other = _room(rooms, "room-loop")
-    limit = int(Config.get("room_loop_max_turns", 6))
+    room, other = _room(rooms, "room-never-stops")
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    delivered = _drain(agent, room, other, turns=limit + 3)
+    delivered = _drain(agent, room, other, turns=every * 2 + 5)
 
-    assert all(d is not None for d in delivered[:limit]), "the brake bit too early"
-    assert all(d is None for d in delivered[limit:]), "the brake never bit"
+    assert all(d is not None for d in delivered), "a turn was suppressed"
+    assert agent._room_reply_streak["room-never-stops"] == every * 2 + 5
 
 
-def test_the_pause_is_said_in_the_room_exactly_once(rooms):
-    """MUTATION: announce on every blocked turn instead of only the first.
+def test_no_path_in_the_wake_code_suppresses_a_room():
+    """MUTATION: reintroduce the skip-this-room branch.
 
-    A silent agent reads as a broken one to the peers waiting on it, so the pause is
-    spoken. Saying it every turn would replace one runaway loop with another, quieter
-    one - and this notice is written by the framework rather than the model, so it
-    cannot itself cost a turn.
+    The wake-up must hand back the oldest pending room unconditionally. A guard that
+    could return "not this one" is the stop this design removed.
+    """
+    source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    wake = source.split("def collect_room_wake")[1].split("\n    def ")[0]
+
+    assert "pending[0]" in wake, "the wake-up no longer takes the oldest room outright"
+    for banned in ("if picked is None", "guard_trips", "continue"):
+        assert banned not in wake, f"a suppression path is back in the wake-up: {banned!r}"
+
+    report = source.split("def _room_unattended_report")[1].split("\n    def ")[0]
+    assert "-> None" in source.split("def _room_unattended_report")[1][:40], (
+        "the reporter returns a verdict again")
+    assert "return True" not in report, "the reporter can suppress a turn again"
+
+
+# ── the notice ─────────────────────────────────────────────────────────────
+
+def test_one_notice_at_the_threshold_and_one_at_every_multiple(rooms, sent):
+    """MUTATION: report once and never again.
+
+    A single notice at turn twenty is a notice somebody misses. The owner is told
+    again at forty, at sixty, and so on, for as long as the room keeps running without
+    them.
     """
     agent = _Agent()
-    room, other = _room(rooms, "room-say-once")
-    limit = int(Config.get("room_loop_max_turns", 6))
+    room, other = _room(rooms, "room-notice")
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    _drain(agent, room, other, turns=limit + 4)
+    _drain(agent, room, other, turns=every - 1)
+    assert sent == [], "the owner was bothered before the interval"
 
-    notices = [r for r in room.transcript()
-               if r["display"] == "VAF" and "Pausing here" in r["text"]]
-    assert len(notices) == 1, [n["text"] for n in notices]
+    _drain(agent, room, other, turns=1)
+    assert len(sent) == 1, "no notice at the interval"
+
+    _drain(agent, room, other, turns=every)
+    assert len(sent) == 2, "no second notice at twice the interval"
+
+    _drain(agent, room, other, turns=every)
+    assert len(sent) == 3
 
 
-def test_an_observer_pauses_without_speaking(rooms):
-    """An observer may not talk in the room, and the brake does not get to break that.
+def test_the_notice_names_the_room_the_count_and_the_way_out(rooms, sent):
+    agent = _Agent()
+    room, other = _room(rooms, "room-content")
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    MUTATION: write the pause notice regardless of mode. The user who chose observe
-    asked for an agent that reads and stays out of it.
+    _drain(agent, room, other, turns=every)
+
+    scope, user, text = sent[0]
+    assert scope == SCOPE and user == "owner"
+    assert "room-content" in text
+    assert str(every) in text
+    assert "still" in text.lower(), "the owner is not told the work continues"
+    assert "vaf a2a say room-content" in text, "no way to end it is given"
+
+
+def test_the_notice_goes_through_the_channel_agnostic_router(rooms):
+    """MUTATION: call a platform tool such as send_telegram directly.
+
+    The delivery rule in this codebase is channel-agnostic: whatever the owner's main
+    messenger is, the notice follows it. Hardwiring a platform would reach whoever
+    happens to use that one.
+    """
+    source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    report = source.split("def _room_unattended_report")[1].split("\n    def ")[0]
+
+    assert "send_to_main_messenger" in report
+    for platform in ("send_telegram", "send_discord", "send_whatsapp", "send_slack"):
+        assert platform not in report, f"{platform} is hardwired into the notice"
+
+
+def test_the_notice_is_written_by_the_framework_and_costs_no_turn(rooms, sent):
+    """MUTATION: produce the notice by asking the model.
+
+    A watchman that costs a turn every time it looks is a second loop. The text is a
+    literal in the framework, so the notice can never be the thing that keeps the room
+    awake.
     """
     agent = _Agent()
-    room, other = _room(rooms, "room-quiet", mode="observe")
-    limit = int(Config.get("room_loop_max_turns", 6))
+    room, other = _room(rooms, "room-cheap")
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    delivered = _drain(agent, room, other, turns=limit + 2)
+    _drain(agent, room, other, turns=every)
 
-    assert delivered[-1] is None, "the brake must still bite for an observer"
+    assert len(sent) == 1
+    # Nothing the agent said landed in the room: the notice went to the owner only.
     assert [r for r in room.transcript() if r["display"] == "VAF" and r["kind"] == "say"] == []
+
+
+def test_a_failing_channel_never_touches_the_turn(rooms, monkeypatch):
+    """The notice is best effort. A messenger that is down must not cost the work."""
+    import vaf.core.messaging_connections as mc
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("no channel")
+
+    monkeypatch.setattr(mc, "send_to_main_messenger", _boom)
+
+    agent = _Agent()
+    room, other = _room(rooms, "room-broken-channel")
+    every = int(Config.get("room_unattended_report_every_turns", 20))
+
+    delivered = _drain(agent, room, other, turns=every + 2)
+    assert all(d is not None for d in delivered)
 
 
 # ── what counts as a human ─────────────────────────────────────────────────
 
-def test_a_message_from_the_user_lets_the_room_run_again(rooms):
-    """MUTATION: do not reset the streak on a real user turn.
+def test_a_human_turn_clears_every_room(rooms, sent):
+    """MUTATION: make note_human_turn a no-op.
 
-    Without the reset the brake is a one-way door: the room is dead for the rest of
-    the process even after the person comes back and asks for exactly this.
+    The owner coming back is what the count is about. Without the reset the notices
+    keep arriving from a conversation the person is already part of.
     """
     agent = _Agent()
     room, other = _room(rooms, "room-reset")
-    limit = int(Config.get("room_loop_max_turns", 6))
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    _drain(agent, room, other, turns=limit + 1)
-    assert agent.collect_room_wake() is None
-
-    agent._room_reply_streak = {}          # what a real user turn does, see the wiring test
-    room.say(other, "and now?")
-    assert agent.collect_room_wake() is not None
-
-
-def test_a_human_turn_clears_every_paused_room():
-    """MUTATION: make note_human_turn a no-op.
-
-    Without it the brake is a one-way door: the room stays dead for the rest of the
-    process even after the person comes back and asks for exactly this.
-    """
-    agent = _Agent()
-    agent._room_reply_streak = {"room-a": 9, "room-b": 3}
+    _drain(agent, room, other, turns=every)
+    assert len(sent) == 1
 
     agent.note_human_turn()
-
     assert agent._room_reply_streak == {}
+
+    _drain(agent, room, other, turns=every - 1)
+    assert len(sent) == 1, "the count did not start over when the person came back"
 
 
 def test_a_timer_and_an_automation_are_not_a_person():
     """MUTATION: reset the streak from chat_step's "real user message" test instead.
 
     That test was written for a different question - clearing the ask-first latch - and
-    a TIMER passes it: a timer enqueues an ordinary task with the user's own text and no
-    background marker. A repeating one would hold the brake open forever, which is the
-    exact failure this brake exists to prevent, arriving through the reset.
+    a TIMER passes it: a timer enqueues an ordinary task with the user's own text and
+    no background marker. A repeating one would silence the notices forever.
 
-    The discrimination therefore lives at the queue boundary, where the task still knows
-    what it was. Asserted at the source, because what must not drift is the CONDITION,
-    and building a whole runner to drive one branch would test less of it.
+    The discrimination lives at the queue boundary, where the task still knows what it
+    was. Asserted at the source, because what must not drift is the CONDITION.
     """
-    root = Path(__file__).resolve().parents[1]
-    agent_src = (root / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
-    runner_src = (root / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    agent_src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    runner_src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
 
-    # chat_step must NOT touch the streak: its user-message test lets timers through.
-    latch = agent_src.split('if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):')[1]
+    latch = agent_src.split(
+        'if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):')[1]
     assert "_room_reply_streak" not in latch.split("\n\n")[0], (
         "the streak is reset from a test that a timer also satisfies")
 
-    # The runner composes all three halves before calling it.
-    call = runner_src.split("agent.note_human_turn()")[0]
-    tail = call[-700:]
+    tail = runner_src.split("agent.note_human_turn()")[0][-700:]
     assert 'task_class", "") == "interactive"' in tail
     assert '_meta_h.get("timer")' in tail
     assert "task.input_text" in tail
 
 
-# ── per room, not per agent ────────────────────────────────────────────────
+# ── the layer that prevents the loop in the first place ────────────────────
 
-def test_one_runaway_room_does_not_silence_another(rooms):
-    """MUTATION: keep a single global counter instead of one per room.
+def test_every_wake_prompt_carries_the_reminder(rooms):
+    """MUTATION: remove the reminder line, or send it only every N turns.
 
-    A conversation that ran away in one room is no reason to stop listening in another.
-    The cost of this choice is real and named in the docs: an agent in five rooms can
-    burn five budgets before anybody notices.
+    This is the layer that PREVENTS a thank-you loop; the notice is only the watchman
+    behind it. Constant rather than periodic on purpose: a line that is always there
+    cannot be forgotten deep in a context, and a line that appears every N turns is
+    absent for the N-1 turns that build the loop.
+    """
+    agent = _Agent()
+    room, other = _room(rooms, "room-reminder")
+
+    for _ in range(3):
+        room.say(other, "thanks!")
+        wake = agent.collect_room_wake()
+        assert wake is not None
+        assert "REMINDER" in wake["prompt"]
+        assert "thank you" in wake["prompt"].lower()
+        assert "no new information" in wake["prompt"].lower()
+        wake["advance"]()
+
+
+# ── counting, per room ─────────────────────────────────────────────────────
+
+def test_the_count_is_per_room(rooms, sent):
+    """MUTATION: keep one global counter.
+
+    Two busy rooms would otherwise report each other's turns, and the owner would be
+    told a number that belongs to no single conversation.
     """
     agent = _Agent()
     busy, busy_other = _room(rooms, "room-busy")
     quiet, quiet_other = _room(rooms, "room-quiet-2")
-    limit = int(Config.get("room_loop_max_turns", 6))
+    every = int(Config.get("room_unattended_report_every_turns", 20))
 
-    _drain(agent, busy, busy_other, turns=limit + 2)
+    _drain(agent, busy, busy_other, turns=every - 1)
+    _drain(agent, quiet, quiet_other, turns=3)
 
-    quiet.say(quiet_other, "anyone home?")
-    wake = agent.collect_room_wake()
-    assert wake is not None and wake["room_id"] == "room-quiet-2"
+    assert sent == []
+    assert agent._room_reply_streak["room-busy"] == every - 1
+    assert agent._room_reply_streak["room-quiet-2"] == 3
 
 
-# ── the kill switch ────────────────────────────────────────────────────────
+# ── the switches ───────────────────────────────────────────────────────────
 
-def test_the_guard_can_be_turned_off(rooms, monkeypatch):
-    """MUTATION: ignore room_loop_guard_enabled.
-
-    Every brake in this codebase has a switch, because the one time it fires wrongly is
-    the time somebody needs to get work done without editing source.
-    """
+def test_the_notices_can_be_turned_off(rooms, sent, monkeypatch):
     real_get = Config.get
     monkeypatch.setattr(Config, "get", staticmethod(
-        lambda key, default=None: False if key == "room_loop_guard_enabled" else real_get(key, default)))
+        lambda key, default=None: False if key == "room_unattended_report_enabled"
+        else real_get(key, default)))
 
     agent = _Agent()
     room, other = _room(rooms, "room-off")
-    limit = int(real_get("room_loop_max_turns", 6))
+    every = int(real_get("room_unattended_report_every_turns", 20))
 
-    delivered = _drain(agent, room, other, turns=limit + 3)
-    assert all(d is not None for d in delivered)
+    delivered = _drain(agent, room, other, turns=every + 2)
+    assert sent == []
+    assert all(d is not None for d in delivered), "turning notices off must not stop work"
 
 
-def test_the_threshold_is_read_from_config(rooms, monkeypatch):
+def test_the_interval_is_read_from_config(rooms, sent, monkeypatch):
     real_get = Config.get
     monkeypatch.setattr(Config, "get", staticmethod(
-        lambda key, default=None: 2 if key == "room_loop_max_turns" else real_get(key, default)))
+        lambda key, default=None: 3 if key == "room_unattended_report_every_turns"
+        else real_get(key, default)))
 
     agent = _Agent()
     room, other = _room(rooms, "room-tight")
 
-    delivered = _drain(agent, room, other, turns=4)
-    assert delivered[0] is not None and delivered[1] is not None
-    assert delivered[2] is None and delivered[3] is None
+    _drain(agent, room, other, turns=7)
+    assert len(sent) == 2, "expected notices at turn 3 and 6"
 
 
-def test_a_broken_guard_fails_open(rooms):
-    """MUTATION: fail closed in the guard's except branch.
+def test_both_keys_are_registered_documented_and_admin_only():
+    """Rule 2: DEFAULTS, GLOBAL_CONFIG_KEYS, the schema rows and that file's key count.
 
-    The opposite polarity to the mode gate, on purpose. This one guards a BUDGET; the
-    mode gate guards the machine. A broken budget check that silenced every room would
-    be a worse failure than the loop it prevents, and a human is in the conversation
-    either way.
+    Admin-only because a notice its own subject can silence is not a notice.
     """
-    agent = _Agent()
+    assert Config.DEFAULTS["room_unattended_report_enabled"] is True
+    assert Config.DEFAULTS["room_unattended_report_every_turns"] == 20
+    assert "room_unattended_report_enabled" in Config.GLOBAL_CONFIG_KEYS
+    assert "room_unattended_report_every_turns" in Config.GLOBAL_CONFIG_KEYS
 
-    class _Exploding:
-        @property
-        def room_id(self):
-            raise RuntimeError("no")
-
-    assert agent._room_loop_guard_trips(_Exploding(), None) is False
-
-
-# ── the keys exist where the house keeps them ──────────────────────────────
-
-def test_both_keys_are_registered_and_documented():
-    """Rule 2: a config key lives in DEFAULTS, in CONFIG_SCHEMA.md, and in that file's
-    key-count line. A key missing from any of the three drifts silently."""
-    root = Path(__file__).resolve().parents[1]
-    assert Config.DEFAULTS["room_loop_guard_enabled"] is True
-    assert Config.DEFAULTS["room_loop_max_turns"] == 6
-
-    doc = (root / "docs" / "setup" / "CONFIG_SCHEMA.md").read_text(encoding="utf-8")
-    assert "`room_loop_guard_enabled`" in doc
-    assert "`room_loop_max_turns`" in doc
+    doc = (ROOT / "docs" / "setup" / "CONFIG_SCHEMA.md").read_text(encoding="utf-8")
+    assert "`room_unattended_report_enabled`" in doc
+    assert "`room_unattended_report_every_turns`" in doc
     assert f"({len(Config.DEFAULTS)} keys)" in doc
+    assert "room_loop_max_turns" not in doc, "the renamed key still haunts the docs"

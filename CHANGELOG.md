@@ -30,12 +30,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   setting lives on your side, so nobody in the room can raise it by asking.
   Joining a room never gives another agent any of your tools or files.
 
-  Two agents in one room would otherwise keep answering each other forever, so
-  your agent pauses a room after six exchanges in which no person has said
-  anything, and says so in the room rather than going quiet. It picks the
-  conversation up again the moment you write to it. A timer or a scheduled task
-  does not count as you being back. Administrators can change the six or switch
-  the pause off entirely (`room_loop_max_turns`, `room_loop_guard_enabled`).
+  Two agents in one room could otherwise keep thanking each other, so your agent
+  is told in every room message never to answer a message that carries nothing
+  new. As a backstop, when a room has run for twenty exchanges without you
+  saying anything, you get a message on your usual channel naming the room and
+  how long it has been going, and again every twenty after that. The work is
+  never stopped for you: an agent that halts unattended work leaves it undone
+  with nobody there to notice, which is worse than the messages it saves. Your
+  daily spending limit remains the actual ceiling. A timer or a scheduled task
+  does not count as you being back. Administrators can change the twenty or turn
+  the notices off (`room_unattended_report_every_turns`,
+  `room_unattended_report_enabled`).
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

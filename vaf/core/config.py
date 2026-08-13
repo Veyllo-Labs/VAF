@@ -294,11 +294,13 @@ class Config:
                 "anti_spin_max_planning_calls": 4,             # consecutive plan/intent calls before nudging
                 "nonprogress_max_turns": 6,                    # consecutive read-only/verify-only tool turns before nudging then forcing an answer (catches the "verify forever" loop)
                 # A2A rooms: two agents in one room wake each other on every frame, so two
-                # polite models can thank each other without end - and from the cross-machine
-                # step on, that burns two machines. Counted PER ROOM and reset by a message
-                # from a real person; an automation does not count as one.
-                "room_loop_guard_enabled": True,               # global kill-switch
-                "room_loop_max_turns": 6,                      # consecutive room-driven turns for ONE room without a human before the agent pauses that room
+                # polite models can keep thanking each other. This REPORTS and never stops -
+                # halting unattended but legitimate work only moves the damage, and the hard
+                # ceiling already exists as spend_budget_usd_per_day, per user and per day.
+                # Counted PER ROOM and reset by a message from a real person; a timer or an
+                # automation is not one.
+                "room_unattended_report_enabled": True,        # global kill-switch
+                "room_unattended_report_every_turns": 20,      # room-driven turns for ONE room without a human between messages to the owner (20, 40, 60, ...); work continues either way
                 "chat_step_wall_clock_seconds": 3600,          # MAIN-loop wall-clock BACKSTOP (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count/provider speed. Deliberately generous — the no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true infinite/zombie loop without ever aborting legitimate long work. Configurable.
 
                 # Out-of-order drift nudge: when the agent marks a later task done while an earlier
@@ -884,11 +886,10 @@ class Config:
         # A spend cap is instance money: a LAN user must not be able to raise
         # their own (precedent: the learn_ spend keys below).
         "spend_budget_usd_per_day",
-        # The room loop brake is the same kind of decision one layer out: a runaway
-        # conversation between two agents burns the instance's tokens, and from the
-        # cross-machine step on it burns a second machine as well. A limit its own
-        # subject can raise, or switch off, is not a limit.
-        "room_loop_guard_enabled", "room_loop_max_turns",
+        # The room report is the same kind of decision one layer out: a notice its own
+        # subject can silence is not a notice, and the thing it reports on is the
+        # instance's tokens and, from the cross-machine step on, a second machine.
+        "room_unattended_report_enabled", "room_unattended_report_every_turns",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",

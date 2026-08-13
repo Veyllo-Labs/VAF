@@ -145,3 +145,93 @@ def test_nothing_saves_a_room_row(rooms):
         manager.load(row["id"])
     with pytest.raises(Exception):
         manager.save(row)          # a dict is not a Session, and must not become one
+
+
+# ── the browser gets the fields, and gets them from one place ──────────────
+
+def test_the_browser_payload_carries_what_a_room_row_is(rooms):
+    """MUTATION: keep the five-key projection the seven call sites used to write out.
+
+    The room row already travelled in the list; every field that says it IS a room was
+    dropped on the way to the browser, so the sidebar could only have rendered it as a
+    conversation with a strange name.
+    """
+    from vaf.core.session import SessionManager, _room_rows
+    from vaf.core.web_server import session_list_payload
+
+    payload = session_list_payload(_room_rows(SCOPE))
+
+    assert len(payload) == 1
+    row = payload[0]
+    assert row["kind"] == "room"
+    assert row["roomId"] == "room-visible"
+    assert row["unread"] == 1
+    assert row["members"] == 2
+    assert row["closed"] is False
+    assert row["id"].startswith("room:"), "the row id must stay one no loader accepts"
+
+
+def test_an_ordinary_conversation_keeps_the_keys_it_always_had():
+    """The room fields are additive. A chat row that lost or renamed a key would break
+    a sidebar that has nothing to do with rooms."""
+    from vaf.core.web_server import session_list_payload
+
+    payload = session_list_payload([{
+        "id": "chat-1", "name": "an ordinary chat", "updated_at": "2026-01-01",
+        "message_count": 4, "metadata": {"source": "thinking"},
+    }])
+
+    assert payload == [{
+        "id": "chat-1", "title": "an ordinary chat", "date": "2026-01-01",
+        "messageCount": 4, "source": "thinking", "kind": "chat",
+    }]
+
+
+def test_there_is_exactly_one_projection_left(rooms):
+    """MUTATION: hand-write an eighth copy at the next call site that needs one.
+
+    Seven identical copies is how the room fields came to be dropped in the first
+    place, and the eighth would be the eighth place to forget.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+
+    assert source.count('"title": s["name"]') == 1, (
+        "a session list is being built by hand again")
+    assert source.count("session_list_payload(web_sessions)") >= 7, (
+        "a call site stopped going through the one projection")
+
+
+# ── the browser must not treat a room as a session either ──────────────────
+
+def test_the_frontend_never_picks_a_room_when_it_picks_a_session():
+    """MUTATION: drop the conversationsOnly filter in page.tsx.
+
+    Rooms ride at the TOP of this list, so `sessions[0]` is a room for any user who is
+    in one. The frontend auto-loads that first entry on connect - it would hand a room
+    id to load_session, which the backend refuses, and the user would open to an error
+    instead of their last chat. This is the same defect the Python side already refuses
+    loudly, arriving through the browser.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "const conversationsOnly" in source
+    # the auto-select on connect
+    assert "wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }))" in source
+    assert "id: data.sessions[0].id" not in source, "the auto-load can still pick a room"
+    # the fallback after a delete
+    assert "conversationsOnly(sessions).filter" in source
+
+
+def test_a_room_row_in_the_browser_opens_a_room_and_not_a_session():
+    """MUTATION: give the room row the same onClick as the chat row.
+
+    handleSessionSwitch is the session loader. A room reaching it is the lost update
+    the store exists to avoid, reached through a mouse click.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    branch = source.split("{sessions.map(s => isRoom(s) ? (")[1].split(") : (")[0]
+
+    assert "type: 'open_room'" in branch
+    assert "handleSessionSwitch" not in branch, "the room row still switches sessions"
+    assert "startEditing" not in branch and "delete_session" not in branch, (
+        "a room cannot be renamed or deleted from a sidebar while others are in it")

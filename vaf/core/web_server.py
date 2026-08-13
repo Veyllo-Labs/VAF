@@ -27,7 +27,7 @@ from vaf.core.config import Config
 from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, Optional, List
 import logging
 from vaf.core.tray_context import TrayContext
 log("WebServer", "VAF imports done")
@@ -99,11 +99,58 @@ app.add_middleware(
 # Max sessions sent to Web UI (sidebar list); increase if users have many chats.
 SESSION_LIST_LIMIT = 500
 
+# Max room frames painted into the browser at once. A room is a finite conversation
+# by design (the named limit in the protocol doc), and every frame is a separate
+# encrypted file, so the tail is what a reader wants and the whole is what
+# `vaf a2a export` is for.
+ROOM_TRANSCRIPT_LIMIT = 500
+
 # The sidebar filter (channel + thinking sessions out) lives on the engine as
 # SessionManager.list_ui - one rule for every surface, the terminal app's
 # panel included. The channel prefixes come from the dispatch registry there;
 # this file carried a private copy of both until they diverged from nothing
 # but luck.
+
+
+def session_list_payload(rows: List[Dict]) -> List[Dict]:
+    """The sidebar list in the shape the browser reads it.
+
+    Seven call sites wrote this dict out by hand, byte for byte identical, and the
+    cost of that was not hypothetical: a room row carries fields no conversation has
+    - what it is, how many agents are in it, whether it has been closed - and every
+    one of them was dropped on the way out. A projection that names the extra fields
+    in ONE place is the fix; an eighth hand-written copy would only have been an
+    eighth place to forget.
+
+    Rows that are not rooms keep exactly the five keys they always had, plus the kind,
+    so the ordinary conversation renders from the same payload as before.
+    """
+    out: List[Dict] = []
+    for s in rows:
+        kind = s.get("kind") or "chat"
+        item = {
+            "id": s["id"],
+            "title": s["name"],
+            "date": s["updated_at"],
+            "messageCount": s["message_count"],
+            "source": (s.get("metadata") or {}).get("source"),
+            "kind": kind,
+        }
+        if kind == "room":
+            # The room id is deliberately NOT the row id: a surface that handed the
+            # row id to the session loader would open, and later SAVE, something that
+            # is not a session. It travels under its own name for the surfaces that
+            # legitimately need it, such as opening the transcript.
+            item.update({
+                "roomId": s.get("room_id"),
+                "roomKind": s.get("room_kind"),
+                "role": s.get("role"),
+                "unread": int(s.get("unread") or 0),
+                "members": int(s.get("members") or 0),
+                "closed": bool(s.get("closed")),
+            })
+        out.append(item)
+    return out
 
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
@@ -3182,10 +3229,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
         await websocket.send_json({
             "type": "session_list",
-            "sessions": [
-                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                for s in web_sessions
-            ]
+            "sessions": session_list_payload(web_sessions)
         })
         # Send cached stats if available, otherwise send defaults
         stats_to_send = manager.last_stats
@@ -3230,10 +3274,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
             await websocket.send_json({
                 "type": "session_list",
-                "sessions": [
-                    {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                    for s in web_sessions
-                ]
+                "sessions": session_list_payload(web_sessions)
             })
 
         try:
@@ -3370,11 +3411,57 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
-                        "sessions": [
-                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                            for s in web_sessions
-                        ]
+                        "sessions": session_list_payload(web_sessions)
                     })                
+                elif type == "open_room":
+                    # A room is NOT a session and must never reach the session loader:
+                    # Session.save rewrites the whole message list, which with N peers
+                    # is exactly the lost update the room store is built to avoid. It
+                    # gets its own command, and the reply is read-only.
+                    user_scope_id = manager.get_connection_user(websocket)
+                    wanted = str(cmd.get("room_id") or "")
+                    try:
+                        from vaf.core.a2a.room import Room, describe
+                        from vaf.core.session import _room_rows
+
+                        # Membership is decided by the SAME function that decided the
+                        # sidebar. A second predicate here would be a second answer to
+                        # "is this user in that room", and the two would drift.
+                        mine = {row["room_id"]: row for row in _room_rows(user_scope_id)}
+                        row = mine.get(wanted)
+                        if row is None:
+                            log("API", f"Access denied: open_room for a room the user has not joined")
+                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                            continue
+
+                        room = Room.open(wanted)
+                        entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
+                        await websocket.send_json({
+                            "type": "room_transcript",
+                            "room": {
+                                "id": row["id"],
+                                "roomId": wanted,
+                                "title": row["name"],
+                                "roomKind": row.get("room_kind"),
+                                "role": row.get("role"),
+                                "closed": bool(row.get("closed")),
+                                "members": row.get("members"),
+                                # Which peer is us, so the view can tell our own agent
+                                # apart from the strangers in the room.
+                                "me": row.get("peer"),
+                            },
+                            "messages": [
+                                {"id": e["id"], "peer": e["peer"], "label": e["label"],
+                                 "role": e["role"], "kind": e["kind"],
+                                 "text": describe(e), "ts": e["ts"],
+                                 "lamport": e["lamport"], "to": e.get("to") or {}}
+                                for e in entries
+                            ],
+                        })
+                    except Exception as e:
+                        log("API", f"open_room failed: {e}", "ERROR")
+                        await websocket.send_json({"type": "error", "message": "Room could not be opened"})
+
                 elif type == "load_session":
                     sid = cmd.get("id")
                     user_scope_id = manager.get_connection_user(websocket)
@@ -3569,10 +3656,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await manager.broadcast_to_user(user_scope_id, {
                         "type": "session_list",
-                        "sessions": [
-                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                            for s in web_sessions
-                        ]
+                        "sessions": session_list_payload(web_sessions)
                     })
 
                 elif type == "hide_session":
@@ -3587,10 +3671,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
-                            "sessions": [
-                                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                                for s in web_sessions
-                            ]
+                            "sessions": session_list_payload(web_sessions)
                         })
 
                 elif type == "new_session":
@@ -3616,10 +3697,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
-                        "sessions": [
-                            {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                            for s in web_sessions
-                        ]
+                        "sessions": session_list_payload(web_sessions)
                     })
                     # Clear frontend chat
                     await websocket.send_json({
@@ -3653,10 +3731,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
-                            "sessions": [
-                                {"id": s["id"], "title": s["name"], "date": s["updated_at"], "messageCount": s["message_count"], "source": (s.get("metadata") or {}).get("source")}
-                                for s in web_sessions
-                            ]
+                            "sessions": session_list_payload(web_sessions)
                         })
 
                 elif type == "get_config":

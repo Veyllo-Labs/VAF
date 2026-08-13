@@ -637,6 +637,15 @@ class Room:
                 if str(record.get("display") or "").strip().lower() == wanted]
         if len(hits) == 1:
             return hits[0]
+        # The tagged label resolves too, and it has to: every surface SHOWS the label,
+        # so "Codex51" is the name a reader has in front of them when they type a
+        # mention. Matching only the bare display would make the addressed message
+        # arrive at the room instead of at the person it named - a quiet mis-delivery
+        # rather than an error. Labels are unique within the room by construction, so
+        # a hit here is never the coin toss the paragraph above refuses.
+        for peer, label in self.labels().items():
+            if str(label).strip().lower() == wanted:
+                return peer
         # A peer id addresses itself, which is what a machine consumer will use.
         return name if name in self.roles() else None
 
@@ -661,12 +670,21 @@ class Room:
         so a renderer never has to parse a name back out of a message.
         """
         members = self.store.members()
+        # Resolved once for the whole transcript rather than per line: the labels have
+        # to be decided against each other (that is what makes them unique), and doing
+        # it per row would re-read the member table for every frame in the room.
+        labels = self.labels()
         rows = []
         for frame in self.store.read_since(since_lamport):
             record = members.get(frame.sender) or {}
             rows.append({
                 "peer": frame.sender,
                 "display": record.get("display") or frame.sender,
+                # The name a human uses, tag included. It travels WITH the row because
+                # four surfaces render this transcript, and a surface that tagged names
+                # for itself would call the same peer something different from the next
+                # one - which is exactly what a mention has to resolve against.
+                "label": labels.get(frame.sender) or record.get("display") or frame.sender,
                 "role": frame.role,
                 "kind": frame.kind,
                 "text": str((frame.body or {}).get("text") or ""),
@@ -692,9 +710,9 @@ def describe(entry: Dict[str, Any]) -> str:
 
     Bookkeeping frames carry no text - a join says who, not what - so a renderer that
     prints the body alone shows "Worker (join):" and nothing after it. The wording
-    lives here, once, because three surfaces render the same transcript (the CLI's
-    log, the terminal app, and the classic lane) and three copies of a phrase are
-    three chances to drift.
+    lives here, once, because four surfaces render the same transcript (the CLI's
+    log, the terminal app, the classic lane and the browser) and four copies of a
+    phrase are four chances to drift.
     """
     kind = str(entry.get("kind") or "")
     body = entry.get("body") or {}

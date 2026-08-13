@@ -12,7 +12,7 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X
+    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -131,6 +131,36 @@ type Session = {
     messageCount?: number;
     /** Thinking-mode run shown in chat list with brain icon */
     source?: 'thinking';
+    /** 'room' rows are agent rooms, not conversations - see isRoom() below. */
+    kind?: 'chat' | 'room';
+    roomId?: string;
+    roomKind?: string;
+    role?: string;
+    unread?: number;
+    members?: number;
+    closed?: boolean;
+};
+
+/**
+ * A room shares the sidebar with conversations and shares nothing else.
+ *
+ * It must never reach load_session or delete_session: the backend refuses both, and
+ * the reason it refuses is that saving a room as a session would rewrite an entire
+ * message list that has N writers. The three places that pick a session on their own
+ * (first load, after a delete, after the list changes) all filter through here.
+ */
+const isRoom = (s: Session) => s.kind === 'room';
+const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s));
+
+type RoomMessage = {
+    id: string; peer: string; label: string; role: string;
+    kind: string; text: string; ts?: number; lamport?: number;
+    to?: { peer?: string; role?: string; room?: boolean };
+};
+
+type RoomView = {
+    id: string; roomId: string; title: string; roomKind?: string;
+    role?: string; closed?: boolean; members?: number; me?: string;
 };
 
 type SessionEditorDocumentState = {
@@ -1173,6 +1203,11 @@ function VAFDashboardContent() {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [unreadSessions, setUnreadSessions] = useState<Set<string>>(new Set());
+    // The open agent room, painted as a read-only overlay. Deliberately NOT the chat
+    // view: the chat has one agent and one person, a room has N writers and no single
+    // history to load, and sharing the renderer would put the path almost every user
+    // is on at risk for the sake of a view a few users open.
+    const [roomView, setRoomView] = useState<{ room: RoomView; messages: RoomMessage[] } | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
     useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     const pendingSendRef = useRef<{ text: string } | null>(null);
@@ -3260,8 +3295,14 @@ function VAFDashboardContent() {
                 else if (data.type === 'session_list') {
                     setSessions(data.sessions);
 
+                    // Rooms ride at the top of this list and are not conversations, so
+                    // every decision below is taken over the chats alone. Without this
+                    // the first auto-load would hand a room id to load_session, which
+                    // the backend refuses - a user in a room would open to an error.
+                    const chats: Session[] = conversationsOnly(data.sessions);
+
                     // Only auto-create if we have NO sessions and NO active session selected
-                    if (data.sessions.length === 0 && !activeSessionId) {
+                    if (chats.length === 0 && !activeSessionId) {
                         wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
                         return;
                     }
@@ -3272,13 +3313,20 @@ function VAFDashboardContent() {
                     // onmessage closure is still null on the first connect, which
                     // silently dropped the initial load_session (chat stayed empty
                     // until the user switched away and back).
-                    if (data.sessions.length > 0) {
-                        const sessionIds = new Set(data.sessions.map((s: Session) => s.id));
+                    if (chats.length > 0) {
+                        const sessionIds = new Set(chats.map((s: Session) => s.id));
                         if (!activeSessionId || !sessionIds.has(activeSessionId)) {
-                            setCurrentSessionId(data.sessions[0].id);
-                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
+                            setCurrentSessionId(chats[0].id);
+                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));
                         }
                     }
+                }
+                else if (data.type === 'room_transcript') {
+                    // Already in canonical order when it arrives: the backend sorts by
+                    // (lamport, sender, seq) so that every surface shows the same
+                    // sequence. Re-sorting here by timestamp would undo that, because
+                    // wall clocks differ between the machines in a room.
+                    setRoomView({ room: data.room, messages: data.messages || [] });
                 }
                 else if (data.type === 'workflow_start') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
@@ -5694,7 +5742,39 @@ function VAFDashboardContent() {
                                 <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200">New Chat</span>
                             </div>
 
-                            {sessions.map(s => (
+                            {sessions.map(s => isRoom(s) ? (
+                                /* An agent room. It gets its own row rather than a
+                                   variant of the chat row below, because almost
+                                   everything a chat row offers is wrong here: a room
+                                   cannot be renamed, cannot be deleted from a sidebar
+                                   while other agents are in it, and above all must not
+                                   be switched to as a session. */
+                                <div key={s.id} data-room-id={s.roomId}
+                                    onClick={() => {
+                                        setDrawerOpen(false);
+                                        ws?.send(JSON.stringify({ type: 'open_room', room_id: s.roomId }));
+                                    }}
+                                    className="flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative hover:bg-gray-100">
+
+                                    {(s.unread || 0) > 0 && (
+                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                                    )}
+
+                                    <span title={`Agent room${s.closed ? ' (closed)' : ''}`}>
+                                        <Users size={16} className={cn("shrink-0", s.closed ? "text-gray-300" : "text-gray-400")} />
+                                    </span>
+
+                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
+                                        <span className={cn("truncate text-sm", s.closed ? "text-gray-400 line-through" : "text-gray-600")}>
+                                            {s.title}
+                                        </span>
+                                        <span className="text-[10px] text-gray-400 shrink-0 pl-2 tabular-nums">
+                                            {s.members ?? 0}
+                                            {(s.unread || 0) > 0 ? ` · ${s.unread}` : ''}
+                                        </span>
+                                    </div>
+                                </div>
+                            ) : (
                                 <div key={s.id} data-session-id={s.id} onClick={() => { setDrawerOpen(false); handleSessionSwitch(s.id); }}
                                     className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
@@ -5748,7 +5828,7 @@ function VAFDashboardContent() {
                                                         const isThinking = (s as { source?: string }).source === 'thinking';
                                                         ws?.send(JSON.stringify({ type: isThinking ? 'hide_session' : 'delete_session', id: s.id }));
                                                         if (currentSessionId === s.id) {
-                                                            const remaining = sessions.filter(sess => sess.id !== s.id);
+                                                            const remaining = conversationsOnly(sessions).filter(sess => sess.id !== s.id);
                                                             const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
                                                             if (empty) {
                                                                 handleSessionSwitch(empty.id);
@@ -8354,6 +8434,79 @@ function VAFDashboardContent() {
                     onSubmit={createAutomationSubmit}
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
+            )}
+            {/* Agent room, read-only. Opened from the room rows at the top of the
+                sidebar; the conversation underneath stays exactly where it was. */}
+            {roomView && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setRoomView(null)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-200 dark:border-[#2a2a2a] animate-in fade-in zoom-in-95 duration-200">
+
+                        <div className="flex items-center gap-3 p-5 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
+                            <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
+                                <Users className="w-5 h-5 text-white dark:text-[#181818]" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6] truncate">
+                                    {roomView.room.title}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
+                                    {roomView.room.roomKind}
+                                    {roomView.room.role ? ` · you are ${roomView.room.role}` : ''}
+                                    {roomView.room.members ? ` · ${roomView.room.members} agents` : ''}
+                                    {roomView.room.closed ? ' · closed' : ''}
+                                </div>
+                            </div>
+                            <button onClick={() => setRoomView(null)}
+                                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
+                            {roomView.messages.length === 0 && (
+                                <div className="text-sm text-gray-400 text-center py-8">Nothing said yet.</div>
+                            )}
+                            {roomView.messages.map(m => {
+                                // Our own agent against everybody else. A stranger's
+                                // agent is a full agent of its own and is shown as one,
+                                // never as a second voice of ours.
+                                const mine = !!roomView.room.me && m.peer === roomView.room.me;
+                                const addressed = m.to?.peer;
+                                return (
+                                    <div key={m.id} className="flex gap-3">
+                                        <div className={cn(
+                                            "w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium",
+                                            mine
+                                                ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
+                                                : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
+                                            {(m.label || '?').slice(0, 2)}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline gap-2 flex-wrap">
+                                                <span className="text-xs font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
+                                                <span className="text-[10px] text-gray-400">{m.role}</span>
+                                                {m.kind !== 'say' && (
+                                                    <span className="text-[10px] text-gray-400">({m.kind})</span>
+                                                )}
+                                                {addressed && (
+                                                    <span className="text-[10px] text-gray-400">to one peer</span>
+                                                )}
+                                            </div>
+                                            <div className="text-sm text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
+                                                {m.text}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="p-4 border-t border-gray-200 dark:border-[#2a2a2a] shrink-0 text-xs text-gray-400">
+                            Read-only here. Write into the room from the agent or with `vaf a2a say`.
+                        </div>
+                    </div>
+                </div>
             )}
             {/* Trust Gate Dialog — shown when agent needs confirmation for a risky tool */}
             {gateRequest && (

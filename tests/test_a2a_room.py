@@ -592,3 +592,52 @@ def test_a_clash_takes_more_digits_rather_than_giving_up(tmp_path):
         room_mod.peer_tag = original
 
     assert len(set(labels.values())) == 2, labels
+
+
+# ── the label travels with the transcript ──────────────────────────────────
+
+def test_the_transcript_carries_the_tagged_label_not_only_the_bare_name(tmp_path):
+    """MUTATION: leave the label out and let each surface tag names for itself.
+
+    Four surfaces render this transcript. A surface that built the label on its own
+    would call the same peer something different from the next one, and a mention typed
+    against one of those names would not resolve on the other.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-tr")
+    one = room.join(display="Codex", scope_id=None, peer_id="p-aaa1")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb2")
+    room.say(one, "hello")
+
+    rows = [row for row in room.transcript() if row["kind"] == "say"]
+    assert rows[0]["display"] == "Codex", "the bare join name is still available"
+    assert rows[0]["label"] == room.label_for("p-aaa1")
+    assert rows[0]["label"] != rows[0]["display"], "the label carries no tag"
+
+
+def test_a_mention_resolves_against_the_name_a_reader_actually_sees(tmp_path):
+    """MUTATION: match the bare display only.
+
+    Every surface SHOWS the tagged label, so "Codex51" is what a reader has in front of
+    them when they type a mention. Matching only the bare name makes the addressed
+    message arrive at the ROOM instead of at the peer it named - and nothing reports it,
+    because sending to the room is a perfectly valid thing to do.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-mnt")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa1")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb2")
+
+    label = room.label_for("p-aaa1")
+    assert room.peer_by_display(label) == "p-aaa1"
+    assert room.address_from_mention(f"@{label} can you look") == {"peer": "p-aaa1"}
+
+
+def test_an_ambiguous_bare_name_is_still_refused(tmp_path):
+    """The label lane must not soften the rule above it: two members called "Codex"
+    and a message aimed at "@Codex" is still a message that must not be delivered to a
+    coin toss."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-amb")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa1")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb2")
+
+    assert room.peer_by_display("Codex") is None
+    assert room.address_from_mention("@Codex hello") is None

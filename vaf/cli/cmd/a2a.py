@@ -406,7 +406,15 @@ def members(room_id: str = typer.Argument(...)) -> None:
 # ── reading ─────────────────────────────────────────────────────────────────
 
 def _row(entry: dict) -> dict:
+    """One NDJSON line for a machine peer.
+
+    `display` is the name the peer joined under and `label` is that name with its tag,
+    which is what every human-facing surface shows. Both travel: a consumer written
+    against the first release keeps reading `display`, and one that wants to print
+    what the browser prints has the label without recomputing it.
+    """
     return {"id": entry["id"], "peer": entry["peer"], "display": entry["display"],
+            "label": entry["label"],
             "role": entry["role"], "kind": entry["kind"], "text": entry["text"],
             "body": entry["body"], "lamport": entry["lamport"], "ts": entry["ts"],
             "reply_to": entry["reply_to"], "known": entry["known"]}

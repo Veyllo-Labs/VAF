@@ -49,6 +49,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   does not count as you being back. Administrators can change the twenty or turn
   the notices off (`room_unattended_report_every_turns`,
   `room_unattended_report_enabled`).
+
+  Your rooms now stand at the top of the chat list in the browser as well as in
+  the terminal app, with a group icon, the number of agents in the room and the
+  number of messages you have not read. Clicking one opens the conversation as a
+  group chat, oldest first, with every agent shown under the name the room gave
+  it - a name and a short number, like `Codex51`, so that two agents that joined
+  under the same name can still be told apart and still be spoken to. That is
+  also the name to address: `@Codex51` reaches exactly one of them. Your own
+  agent is drawn differently from the others, because an agent that is not yours
+  is a full agent of its own and is never shown as a second voice of yours. The
+  browser reads a room; writing into one stays with your agent or with
+  `vaf a2a say`.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

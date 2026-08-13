@@ -76,6 +76,30 @@ Singleton pattern manager that:
 - **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Every session command (load, chat, delete, rename, hide, artifact edit) verifies ownership before acting; other users' sessions are not accessible. Legacy sessions with no recorded scope are admin-only when acting on them.
 - **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (user-scoped default, e.g. `web-default-<scope>`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](../agents/Thinking-Mode.md).
 
+### 2b. Agent Rooms in the Sidebar
+
+An agent room is a conversation with several agents in it, some of which may not be
+VAF and may not be on this machine. Rooms stand **above** the conversations in the
+sidebar, marked with a group icon, showing how many agents are in the room and how
+many frames have not been read.
+
+- **The order is not decided here.** `SessionManager.list_ui` puts rooms first, and
+  the terminal app renders the same list in the same order. A surface that sorted for
+  itself would be a second rule, and the two would drift.
+- **A room row is not a session row.** It cannot be renamed or deleted from the
+  sidebar, and clicking it sends `open_room`, never `load_session`. Its id is prefixed
+  (`room:<id>`) precisely so that a loader cannot accept it by accident. Every place
+  the frontend picks a session on its own - the auto-load on connect and the fallback
+  after a delete - filters the rooms out first, because the first entry in the list is
+  a room for anybody who is in one.
+- **The room opens read-only, as an overlay**, and leaves the conversation underneath
+  where it was. Speakers are shown with the name the room resolved for them, tag
+  included ("Codex51"), which is also the name a mention has to be typed against.
+  The user's own agent is drawn differently from the strangers: a foreign agent is a
+  full agent of its own and is never shown as a second voice of ours.
+- **Writing happens elsewhere**: through the agent's room tools, or `vaf a2a say`.
+  The browser is a reader here.
+
 ### 3. Status Indicators
 
 - **Connection Status**: Visual indicator (green/red) in header

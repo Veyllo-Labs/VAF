@@ -929,7 +929,7 @@ class VafApp(App):
         for entry in rows[-self.REPLAY_CAP:]:
             text = describe(entry)
             self._mount_scrolled(PeerMessage(
-                entry["display"], text, badge=entry["role"], kind=entry["kind"],
+                entry["label"], text, badge=entry["role"], kind=entry["kind"],
                 when=_room_clock(entry["ts"]),
             ))
 

@@ -111,6 +111,8 @@ def test_format_identities_are_pinned_literals():
     assert CachedFilesystemMap.CACHE_SCHEMA == "fsmap-v3-aee248"
     from vaf.core.trust import TRUST_FORMAT
     assert TRUST_FORMAT == "trust-2-b17c4e"
+    from vaf.core.a2a.store import ROOM_FORMAT
+    assert ROOM_FORMAT == "a2aroom-1-7f4c1e"
 
 
 def test_chain_with_versioned_seed_verifies():

@@ -1068,3 +1068,39 @@ def test_a_card_still_cannot_name_its_own_role(tmp_path):
 
     assert liar.role == "worker"
     assert room.role_of("p-liar") == "worker"
+
+
+def test_the_host_is_recognised_from_a_looked_up_identity(tmp_path):
+    """MUTATION: decide the host from the identity's scope alone.
+
+    `identity_for` builds an Identity out of the LOG and leaves scope_id None, so every
+    caller that looked a member up rather than joining them got False. The browser is
+    one of those, which is how the host of a room stayed unable to close or clear it
+    through two rounds of fixing exactly that. The handle answers the same question and
+    is always present.
+    """
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-lookup")
+    key = participant_key("cli", "scope-owner")
+    room.join(display="Me", scope_id="scope-owner", peer_id=derive_peer_id(key, "room-lookup"))
+
+    looked_up = room.identity_for(key)
+    assert looked_up is not None
+    assert looked_up.scope_id is None, "the premise of this test changed"
+    assert room.is_host(looked_up) is True
+
+    room.close(looked_up, reason=Room.TERMINATED_BY_USER)
+    assert room.closed
+
+
+def test_a_guest_is_never_recognised_by_a_handle_it_holds(tmp_path):
+    """The handle is safe to decide on because nobody else can hold one: a guest's is
+    minted at random, and a derived one needs the owner's own tenant."""
+    room = Room.create(kind="round", owner_scope="scope-owner", base=tmp_path,
+                       room_id="room-guest-handle")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-guest")
+
+    assert guest.peer_id not in room.host_peers()
+    assert room.is_host(guest) is False

@@ -1601,6 +1601,10 @@ def search_sessions(
 def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
     """The agent rooms a chat surface shows above the conversations.
 
+    LIVE rooms only: a closed one is over and drops out, which is the only way a person
+    has to clear this list. Its transcript stays readable through `vaf a2a log` and
+    `vaf a2a export`.
+
     Both local lanes are looked up, because "my rooms" means the ones my agent joined
     AND the ones I joined from a terminal - they are different participants by design,
     and a person does not think of them as two lists.
@@ -1623,6 +1627,16 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
                 if room.room_id in seen:
                     continue
                 seen.add(room.room_id)
+                # A CLOSED room leaves this list. It is a live list of conversations a
+                # person can still take part in, and a closed one is over: nothing more
+                # can be written to it by anybody, including its host.
+                #
+                # The transcript is not lost and the promise it was closed under still
+                # holds - `vaf a2a log <id>` and `vaf a2a export <id>` read it forever.
+                # What was missing was any way to CLEAR the list at all: closing left
+                # the row standing, so the bin promised removal and delivered a label.
+                if room.closed:
+                    continue
                 rows.append({
                     "id": f"room:{room.room_id}",
                     "kind": "room",

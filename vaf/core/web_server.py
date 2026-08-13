@@ -3544,7 +3544,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         room = Room.open(wanted)
                         key = participant_key("cli", user_scope_id)
-                        identity = room.identity_for(key)
+                        identity = room.identity_for(key, scope_id=user_scope_id)
                         if identity is None:
                             # The room reached the sidebar because the user's AGENT is
                             # in it. Speaking for themselves makes them a member too,

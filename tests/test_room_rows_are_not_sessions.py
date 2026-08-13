@@ -629,3 +629,39 @@ def test_the_panel_strings_are_translated_in_every_language_we_ship():
         catalogue = json.loads((ROOT / "web" / "messages" / f"{name}.json").read_text(encoding="utf-8"))
         missing = keys - set(catalogue.get("main", {}))
         assert not missing, f"{name}.json is missing {sorted(missing)}"
+
+
+# ── closing is the only way to clear the list ──────────────────────────────
+
+def test_a_closed_room_leaves_the_sidebar(rooms, tmp_path):
+    """MUTATION: keep listing it with a closed flag.
+
+    That was the state, and it is why "I deleted the group chats and they will not go
+    away" was a correct report: the bin CLOSED the room and left the row standing, so
+    the only icon offering removal removed nothing. A person had no way to clear this
+    list at all.
+    """
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    assert len(_room_rows(SCOPE)) == 1
+    room = Room.open("room-visible")
+    host = room.identity_for(participant_key("agent", SCOPE))
+    assert host is not None
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    assert _room_rows(SCOPE) == [], "a closed room is still offered as somewhere to talk"
+
+
+def test_the_transcript_survives_the_row_going_away(rooms):
+    """The other half of the promise: closing takes the conversation out of the live
+    list, never out of existence. A room whose transcript vanished with its row would
+    make "it stays readable forever" false the moment somebody used the bin."""
+    from vaf.core.a2a.room import Room, participant_key
+
+    room = Room.open("room-visible")
+    host = room.identity_for(participant_key("agent", SCOPE))
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+
+    reopened = Room.open("room-visible")
+    assert reopened.closed
+    assert [e["kind"] for e in reopened.transcript()].count("say") == 1

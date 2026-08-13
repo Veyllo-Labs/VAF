@@ -111,7 +111,7 @@ many frames have not been read.
   doing the room's version of each. The pencil edits the name IN THE ROW, exactly as a
   conversation does - the same gesture one row apart must not be a different interaction
   - and the new name goes to the manifest (host only) rather than becoming a message
-  nobody wrote. The bin ENDS the room.
+  nobody wrote. The bin ENDS the room, and an ended room LEAVES this list - which is the only way a person has to clear it. Its transcript is not lost: `vaf a2a log` and `vaf a2a export` read it forever.
 - **The header carries an information button, not a close button.** A click on any
   conversation already leaves the room, so a close there was a third exit crowding out
   the header's one job in a group chat: answering who is in it. It opens a full panel,

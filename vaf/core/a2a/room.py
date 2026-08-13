@@ -397,6 +397,16 @@ class Room:
         of its own machines still is. That is the same line `_check_tenant` already
         draws, read the other way round.
         """
+        hosts = self.host_peers()
+        # The HANDLE decides, not the scope carried on the identity object. Both answer
+        # the same question, but only one of them is always there: `identity_for` builds
+        # an Identity from the log and leaves scope_id None, so every caller that looked
+        # a member up rather than joining them got False - the browser among them, which
+        # is how the host of a room stayed unable to close or clear it after two rounds
+        # of fixing exactly that. A handle cannot be presented by anybody else: a guest's
+        # is minted at random and a derived one needs the owner's own tenant.
+        if hosts and getattr(identity, "peer_id", None) in hosts:
+            return True
         owner = owner_tenant(self.manifest.get("owner_scope"))
         scope = owner_tenant(getattr(identity, "scope_id", None))
         return bool(owner) and bool(scope) and scope == owner

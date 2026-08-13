@@ -532,3 +532,63 @@ def test_a_connection_can_never_derive_a_local_handle():
     handles = {lane: derive_peer_id(participant_key(lane, "scope-a"), "room-x")
                for lane in PARTICIPANT_LANES}
     assert len(set(handles.values())) == len(PARTICIPANT_LANES), handles
+
+
+# ── who is who, when three agents share a name ─────────────────────────────
+
+def test_two_agents_with_the_same_name_are_told_apart(tmp_path):
+    """MUTATION: return the display name alone.
+
+    Three agents joining as "Codex" are indistinguishable in a transcript, and a person
+    reading it cannot ask one of them anything. The tag is what makes a room legible.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-lbl")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa1")
+    room.join(display="Codex", scope_id=None, peer_id="p-bbb2")
+    room.join(display="VAF", scope_id=None, peer_id="p-ccc3")
+
+    labels = room.labels()
+    assert len(set(labels.values())) == 3, labels
+    assert all(label.startswith(("Codex", "VAF")) for label in labels.values())
+    assert labels["p-ccc3"].startswith("VAF")
+
+
+def test_a_label_is_stable_and_needs_nothing_written_down(tmp_path):
+    """MUTATION: hand out labels from a counter stored in the room.
+
+    A counter is shared, incrementing state written on every join - the exact shape this
+    store spends its design avoiding. Derived from the handle, the label is the same
+    after a restart and after a rejoin, with nothing to keep in step.
+    """
+    from vaf.core.a2a.room import peer_tag
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-stable")
+    room.join(display="Codex", scope_id=None, peer_id="p-aaa1")
+
+    first = room.label_for("p-aaa1")
+    reopened = Room.open("room-stable", base=tmp_path)
+    assert reopened.label_for("p-aaa1") == first
+    assert peer_tag("p-aaa1") == peer_tag("p-aaa1")
+    assert peer_tag("p-aaa1") != peer_tag("p-bbb2")
+
+
+def test_a_clash_takes_more_digits_rather_than_giving_up(tmp_path):
+    """Uniqueness inside the room is the property that matters: a room without name
+    collisions has no undeliverable mentions, which is the ambiguity rule dissolving
+    rather than being worked around."""
+    from vaf.core.a2a import room as room_mod
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-clash")
+    room.join(display="Codex", scope_id=None, peer_id="p-one")
+    room.join(display="Codex", scope_id=None, peer_id="p-two")
+
+    # Force the short tag to collide, and demand the room widens instead of repeating.
+    original = room_mod.peer_tag
+    try:
+        room_mod.peer_tag = lambda peer_id, *, width=2: ("07" if width == 2
+                                                         else original(peer_id, width=width))
+        labels = room.labels()
+    finally:
+        room_mod.peer_tag = original
+
+    assert len(set(labels.values())) == 2, labels

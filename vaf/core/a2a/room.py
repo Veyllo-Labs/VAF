@@ -129,6 +129,18 @@ def derive_peer_id(key: str, room_id: str) -> str:
     return "p-" + digest[:10]
 
 
+def peer_tag(peer_id: str, *, width: int = 2) -> str:
+    """A short, stable number for a peer: the "51" in "Codex51".
+
+    Derived from the handle rather than counted, so it is the same after a restart and
+    needs nothing written down. Digits rather than letters because a human reads them
+    back to somebody else, and "Codex51" survives being said out loud in a way that
+    "CodexA7" does not.
+    """
+    digest = hashlib.blake2s(str(peer_id or "").encode("utf-8"), digest_size=8).hexdigest()
+    return str(int(digest[:8], 16) % (10 ** width)).zfill(width)
+
+
 class RoomError(Exception):
     """Base for a refusal that is about the room's rules, not its files."""
 
@@ -575,6 +587,37 @@ class Room:
         record["mode"] = mode
         self.store.put_member(identity.peer_id, record)
         return mode
+
+    def label_for(self, peer_id: str) -> str:
+        """What a human calls this member: their name plus a short tag, "Codex51".
+
+        Two agents joining as "Codex" are indistinguishable in a transcript, and a
+        person reading it has no way to ask one of them anything. The tag is derived
+        from the peer handle, so it survives restarts and needs no counter written into
+        the room - the kind of shared, incrementing state this store spends its whole
+        design avoiding.
+
+        UNIQUE WITHIN THE ROOM, which is the property that matters and the reason this
+        lives on the room rather than in a helper: a collision is resolved by taking
+        more of the digest, and a room without name collisions has no undeliverable
+        mentions at all.
+        """
+        members = self.store.members()
+        record = members.get(peer_id) or {}
+        base = str(record.get("display") or peer_id)
+        for width in (2, 4, 8):
+            tag = peer_tag(peer_id, width=width)
+            label = f"{base}{tag}"
+            clashes = [other for other, rec in members.items()
+                       if other != peer_id
+                       and f"{rec.get('display') or other}{peer_tag(other, width=width)}" == label]
+            if not clashes:
+                return label
+        return f"{base}{peer_id[-6:]}"
+
+    def labels(self) -> Dict[str, str]:
+        """Every member's human label, resolved together so they cannot clash."""
+        return {peer: self.label_for(peer) for peer in self.store.members()}
 
     def peer_by_display(self, name: str) -> Optional[str]:
         """The peer behind a display name, or None if it is unknown or ambiguous.

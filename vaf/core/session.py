@@ -738,7 +738,17 @@ class SessionManager:
             if meta.get("source") == "thinking" or sid.startswith("thinking_"):
                 continue
             out.append(s)
-        return out
+        # Agent rooms come FIRST, and the rule lives here rather than in each surface,
+        # because this function's whole reason for existing is that a session list must
+        # not diverge between the sidebar and the terminal panel again.
+        #
+        # A room is NOT a session and must never be loaded as one: Session.save rewrites
+        # the entire message list, which with N writers reproduces exactly the lost
+        # update the room store is built to avoid. That is why the rows carry
+        # kind="room" and no session id a loader would accept - a surface that treats
+        # one as a session is a bug, and tests/test_room_rows_are_not_sessions.py says
+        # so out loud.
+        return _room_rows(user_scope_id) + out
 
     def claim_unscoped(self, user_scope_id: str) -> int:
         """Stamp every session WITHOUT an owner scope as `user_scope_id`'s.
@@ -1584,4 +1594,51 @@ def search_sessions(
         )
     
     console.print(table)
+
+
+
+
+def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
+    """The agent rooms a chat surface shows above the conversations.
+
+    Both local lanes are looked up, because "my rooms" means the ones my agent joined
+    AND the ones I joined from a terminal - they are different participants by design,
+    and a person does not think of them as two lists.
+
+    Never raises: a chat sidebar that cannot draw because a room directory is damaged
+    would be a worse failure than a missing row.
+    """
+    try:
+        from vaf.core.a2a.room import joined_rooms, participant_key, unread_counts
+    except Exception:
+        return []
+
+    rows: List[Dict] = []
+    seen = set()
+    for lane in ("agent", "cli"):
+        try:
+            key = participant_key(lane, user_scope_id)
+            pending = unread_counts(key)
+            for room, identity in joined_rooms(key):
+                if room.room_id in seen:
+                    continue
+                seen.add(room.room_id)
+                rows.append({
+                    "id": f"room:{room.room_id}",
+                    "kind": "room",
+                    "room_id": room.room_id,
+                    "name": room.manifest.get("topic") or room.room_id,
+                    "room_kind": room.kind,
+                    "role": identity.role,
+                    "peer": identity.peer_id,
+                    "unread": int(pending.get(room.room_id, 0)),
+                    "members": len(room.members()),
+                    "closed": bool(room.closed),
+                    "updated_at": "",
+                    "message_count": len(room.store.frames()),
+                })
+        except Exception:
+            continue
+    rows.sort(key=lambda row: (-row["unread"], row["room_id"]))
+    return rows
 

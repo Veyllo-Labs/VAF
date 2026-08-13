@@ -31,6 +31,34 @@ def _acting_key(user_scope_id: Optional[str]) -> str:
         return "agent:local"
 
 
+def _card(skills: str = "") -> Dict[str, Any]:
+    """What this agent tells the room about itself.
+
+    The protocol has carried this slot since the first release and nothing filled it,
+    so every panel and every foreign agent saw a name, a role, and nothing about what
+    the thing behind the name can actually DO. A room is agents deciding who to ask;
+    without this they are deciding by name alone.
+
+    It is SELF-DESCRIPTION and is displayed as such. It never grants anything - a card
+    claiming a role changes no role, which is checked - so the honest thing is to let
+    the agent say what it is good for and let the reader weigh it.
+    """
+    from vaf.core.config import Config
+
+    described = str(skills or "").strip()
+    if not described:
+        # A default that is true of every VAF agent rather than a flattering guess at
+        # this one: what it can do depends on the tools it was built with, and naming
+        # abilities it may not have would be worse than naming none.
+        described = ("general assistant: reads and writes files in its own workspace, "
+                     "runs code, searches, and can delegate work to sub-agents")
+    return {
+        "kind": "VAF agent",
+        "skills": described[:400],
+        "model": str(Config.get("model_name", "") or ""),
+    }
+
+
 def _open(room_id: str):
     from vaf.core.a2a.room import Room
     return Room.open(str(room_id))
@@ -57,6 +85,14 @@ class RoomJoinTool(BaseTool):
             "room_id": {"type": "string", "description": "Id of the room to join."},
             "display": {"type": "string",
                         "description": "Name other participants see. Defaults to the agent's name."},
+            "skills": {
+                "type": "string",
+                "description": (
+                    "One line about what YOU can do that is useful in this room, so the "
+                    "other agents know who to ask - for example 'writes and reviews "
+                    "Python, reads this machine's logs'. Everyone in the room sees it."
+                ),
+            },
             "mode": {
                 "type": "string",
                 "enum": ["observe", "assist", "autonomous"],
@@ -69,7 +105,8 @@ class RoomJoinTool(BaseTool):
         },
         "required": ["room_id"],
     }
-    input_aliases = {"room_id": ["room", "id"], "display": ["name", "as"]}
+    input_aliases = {"room_id": ["room", "id"], "display": ["name", "as"],
+                     "skills": ["abilities", "can"]}
 
     def run(self, **kwargs) -> str:
         from vaf.core.a2a.room import DEFAULT_MODE, RoomError, derive_peer_id
@@ -97,6 +134,7 @@ class RoomJoinTool(BaseTool):
             identity = room.join(
                 display=display, peer_id=peer_id,
                 scope_id=kwargs.get("user_scope_id"), mode=mode,
+                card=_card(str(kwargs.get("skills") or "")),
             )
         except RoomError as e:
             return f"Could not join '{room_id}': {e}"
@@ -300,11 +338,18 @@ class RoomOpenTool(BaseTool):
             },
             "display": {"type": "string",
                         "description": "Name other participants see. Defaults to the agent's name."},
+            "skills": {
+                "type": "string",
+                "description": (
+                    "One line about what YOU can do that is useful in this room, so the "
+                    "agents you invite know who to ask. Everyone in the room sees it."
+                ),
+            },
         },
         "required": [],
     }
     input_aliases = {"topic": ["subject", "about"], "kind": ["type"],
-                     "display": ["name", "as"]}
+                     "display": ["name", "as"], "skills": ["abilities", "can"]}
 
     def run(self, **kwargs) -> str:
         from vaf.core.a2a.room import ROOM_KINDS, Room, RoomError, derive_peer_id
@@ -323,7 +368,8 @@ class RoomOpenTool(BaseTool):
             # is what makes "open a room and bring somebody in" mean what a user
             # expects it to mean.
             identity = room.join(display=display, scope_id=scope,
-                                 peer_id=derive_peer_id(key, room.room_id))
+                                 peer_id=derive_peer_id(key, room.room_id),
+                                 card=_card(str(kwargs.get("skills") or "")))
         except RoomError as e:
             return f"Could not open the room: {e}"
 

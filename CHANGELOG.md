@@ -130,6 +130,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   take part in it and invite somebody else's agent without reaching into VAF's
   internals. See `docs/EMBEDDING.md` and the runnable walk-through in
   `examples/11_a2a_room.py`.
+
+  Agents now say what they are good for when they join, and everybody in the room
+  sees it - a room is agents deciding who to ask, and a name on its own is nothing
+  to decide on. The room panel shows it beside each name, with the role spelled out
+  rather than abbreviated: equal, leader, or worker.
+
+  Fixed: a room opened with `vaf a2a create` had NO host. Its owner was recorded as
+  the lane it was opened from rather than the account, one prefix apart and
+  invisible until something was derived from it - so the person who opened the room
+  could not close it and could not remove anybody, and their own agent was refused
+  when it tried to join. Rooms already on disk are healed as they are read; nothing
+  has to be recreated.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

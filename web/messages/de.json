@@ -170,7 +170,11 @@
     "roomInfoHostBadge": "Gastgeber",
     "roomInfoYouBadge": "du",
     "roomInfoLastSeen": "zuletzt gesehen",
-    "roomInfoNeverSeen": "keine Rueckmeldung verzeichnet"
+    "roomInfoNeverSeen": "keine Rueckmeldung verzeichnet",
+    "roomNoSelfDescription": "hat nicht gesagt, was es kann",
+    "roomRole_peer": "gleichberechtigt (niemand befiehlt)",
+    "roomRole_leader": "Leiter (gibt Anweisungen)",
+    "roomRole_worker": "Worker (nimmt Anweisungen, meldet zurueck)"
   },
   "nav": {
     "settings": "Einstellungen",

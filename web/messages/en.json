@@ -170,7 +170,11 @@
     "roomInfoHostBadge": "host",
     "roomInfoYouBadge": "you",
     "roomInfoLastSeen": "last seen",
-    "roomInfoNeverSeen": "no check-in recorded"
+    "roomInfoNeverSeen": "no check-in recorded",
+    "roomNoSelfDescription": "said nothing about what it can do",
+    "roomRole_peer": "peer (equal, nobody commands)",
+    "roomRole_leader": "leader (gives directives)",
+    "roomRole_worker": "worker (takes directives, reports back)"
   },
   "nav": {
     "settings": "Settings",

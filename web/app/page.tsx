@@ -176,7 +176,7 @@ type RoomView = {
         protected?: boolean;
         /** Self-description from the join. Shown as self-description, never read as
          *  permission - a card that named a role would change nothing. */
-        card?: { kind?: string; skills?: string };
+        card?: { kind?: string; skills?: string; model?: string };
         /** Lease lapsed. Stale, never gone: a sleeping laptop is not a departure. */
         stale?: boolean;
     }>;
@@ -5961,7 +5961,10 @@ function VAFDashboardContent() {
                                     )}
 
                                     <span title={`Agent room${s.closed ? ' (closed)' : ''}`}>
-                                        <Users size={16} className={cn("shrink-0", s.closed ? "text-gray-300" : "text-gray-400")} />
+                                        <Users size={16} className={cn("shrink-0",
+                                            s.closed ? "text-gray-300"
+                                                : roomView?.room.roomId === s.roomId ? "text-gray-900"
+                                                    : "text-gray-400")} />
                                     </span>
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
@@ -6031,10 +6034,10 @@ function VAFDashboardContent() {
 
                                     {(s as Session).source === 'thinking' ? (
                                         <span title="Thinking mode">
-                                            <Brain size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+                                            <Brain size={16} className={cn("shrink-0", currentSessionId === s.id && !roomView ? "text-gray-900" : "text-gray-400")} />
                                         </span>
                                     ) : (
-                                        <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
+                                        <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id && !roomView ? "text-gray-900" : "text-gray-400")} />
                                     )}
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
@@ -8767,8 +8770,9 @@ function VAFDashboardContent() {
                                         <div className="min-w-0 flex-1">
                                             <div className="flex items-center gap-2 flex-wrap">
                                                 <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
-                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]">
-                                                    {m.role}
+                                                <span title={tMain(`roomRole_${m.role}` as never)}
+                                                    className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]">
+                                                    {tMain(`roomRole_${m.role}` as never)}
                                                 </span>
                                                 {m.protected && (
                                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-[#2a2418] dark:text-amber-300">
@@ -8779,8 +8783,18 @@ function VAFDashboardContent() {
                                                     <span className="text-[10px] text-gray-400">{tMain('roomInfoYouBadge')}</span>
                                                 )}
                                             </div>
-                                            {m.card?.skills && (
-                                                <div className="text-xs text-gray-500 dark:text-[#8a8a8a] mt-0.5">{m.card.skills}</div>
+                                            {/* What this agent says it is good for. A room is
+                                                agents deciding who to ask, and a name alone is
+                                                nothing to decide on. Shown as self-description:
+                                                it grants nothing and a card naming a role changes
+                                                no role. */}
+                                            <div className="text-xs text-gray-500 dark:text-[#8a8a8a] mt-1">
+                                                {m.card?.skills || tMain('roomNoSelfDescription')}
+                                            </div>
+                                            {m.card?.kind && (
+                                                <div className="text-[11px] text-gray-400 mt-0.5">
+                                                    {m.card.kind}{m.card.model ? ` \u00b7 ${m.card.model}` : ''}
+                                                </div>
                                             )}
                                             {/* Read off the same table the room enforces, so it
                                                 cannot promise something that would be refused. */}

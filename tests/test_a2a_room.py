@@ -985,3 +985,86 @@ def test_a_removal_reads_as_a_removal_everywhere(tmp_path):
     last = room.transcript()[-1]
     assert "removed" in describe(last) and "finished" in describe(last)
     assert audit(room)[-1]["event"] == "removed somebody"
+
+
+# ── a room's owner is a TENANT, not a participant key ──────────────────────
+
+def test_a_room_recorded_with_a_participant_key_still_has_its_host(tmp_path):
+    """MUTATION: read owner_scope raw.
+
+    `vaf a2a create` recorded `participant_key("cli")` where a tenant belongs. One
+    prefix apart, and invisible until something derived from it: the host handles came
+    out belonging to nobody, so the room had NO host - its own opener could not close
+    it and could not remove anybody, and the tenant check compared two strings that can
+    never match. Found by reading a live room rather than a test fixture.
+
+    Healed on READ, because the rooms already on disk hold conversations that are still
+    going and a migration pass over somebody's live rooms is the worse answer.
+    """
+    from vaf.core.a2a.room import derive_peer_id, owner_tenant, participant_key
+
+    room = Room.create(kind="round", owner_scope="cli:scope-owner", base=tmp_path,
+                       room_id="room-legacy-owner")
+    peer = derive_peer_id(participant_key("cli", "scope-owner"), "room-legacy-owner")
+    host = room.join(display="Me", scope_id="scope-owner", peer_id=peer)
+
+    assert owner_tenant("cli:scope-owner") == "scope-owner"
+    assert peer in room.host_peers(), "the host handles belong to nobody"
+    assert room.is_host(host) is True
+    room.close(host, reason=Room.TERMINATED_BY_USER)
+    assert room.closed
+
+
+def test_the_command_records_the_tenant_and_not_the_lane():
+    """MUTATION: pass the participant key again.
+
+    The writer is fixed as well as the reader: a room opened from now on records what
+    it should, and the healing above is for the ones already written.
+    """
+    source = (ROOT / "vaf" / "cli" / "cmd" / "a2a.py").read_text(encoding="utf-8")
+    create = source.split("\ndef create(")[1].split("\n@app.command()")[0]
+
+    assert "owner_scope=_scope()" in create
+    assert "owner_scope=_key()" not in create, "the lane is being stored as the tenant"
+
+
+def test_a_tenant_check_is_not_fooled_by_the_prefix(tmp_path):
+    """The same confusion in the other direction: the owner's own agent could not join
+    a room its own terminal had opened, because the check compared "scope" against
+    "cli:scope" and refused."""
+    room = Room.create(kind="round", owner_scope="cli:scope-owner", base=tmp_path,
+                       room_id="room-legacy-join")
+    identity = room.join(display="Agent", scope_id="scope-owner", peer_id="p-agent")
+    assert identity.role == "peer"
+
+
+# ── an agent says what it is good for ──────────────────────────────────────
+
+def test_a_join_can_carry_what_the_joiner_is_good_for(tmp_path):
+    """The protocol has carried this slot since the first release and nothing filled
+    it, so every panel and every foreign agent saw a name, a role, and nothing about
+    what the thing behind the name can DO. A room is agents deciding who to ask."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-card")
+    one = room.join(display="Codex", scope_id=None, peer_id="p-c",
+                    card={"kind": "VAF agent", "skills": "writes and reviews Python"})
+
+    assert room.members()["p-c"]["card"]["skills"] == "writes and reviews Python"
+    joined = [e for e in room.transcript() if e["kind"] == "join"][0]
+    assert joined["body"]["card"]["skills"] == "writes and reviews Python", (
+        "the card never reached the transcript, so no other agent can read it")
+    assert one.role == "peer"
+
+
+def test_a_card_still_cannot_name_its_own_role(tmp_path):
+    """MUTATION: read the role out of the card.
+
+    Self-description is displayed as self-description. The moment it is read as
+    permission, every foreign agent can promote itself by describing itself.
+    """
+    room = Room.create(kind="chain", owner_scope=None, base=tmp_path, room_id="room-claim")
+    room.join(display="Boss", scope_id=None, peer_id="p-boss")
+    liar = room.join(display="Codex", scope_id=None, peer_id="p-liar",
+                     card={"kind": "agent", "role": "leader", "skills": "everything"})
+
+    assert liar.role == "worker"
+    assert room.role_of("p-liar") == "worker"

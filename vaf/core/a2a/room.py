@@ -111,6 +111,26 @@ def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
     return f"{lane}:{scope}"
 
 
+def owner_tenant(value: Optional[str]) -> str:
+    """A room's owning TENANT, healing a participant key that was stored as one.
+
+    `vaf a2a create` recorded `participant_key("cli")` where a tenant belongs - one
+    prefix apart, invisible until something derived from it. A room written that way
+    has host handles nobody holds, so it has NO host: its own opener cannot close it
+    and cannot remove anybody, and the tenant check compares two strings that can never
+    match.
+
+    Healed on READ rather than by rewriting manifests, because the rooms already on
+    disk belong to conversations that are still going and a migration pass over
+    somebody's live rooms is a worse answer than a strip() at the one place that asks.
+    """
+    text = str(value or "").strip()
+    for lane in PARTICIPANT_LANES:
+        if text.startswith(f"{lane}:"):
+            return text[len(lane) + 1:]
+    return text
+
+
 def derive_peer_id(key: str, room_id: str) -> str:
     """The room-local handle one participant always gets in one room.
 
@@ -340,8 +360,9 @@ class Room:
         """
         if self.manifest.get("multi_scope"):
             return
-        owner = self.manifest.get("owner_scope")
-        if owner and scope_id and str(scope_id) != str(owner):
+        owner = owner_tenant(self.manifest.get("owner_scope"))
+        scope_id = owner_tenant(scope_id)
+        if owner and scope_id and scope_id != owner:
             raise NotAMember(
                 f"room {self.room_id!r} belongs to another account; cross-account "
                 f"rooms are off by default"
@@ -359,11 +380,11 @@ class Room:
         machine owner's own agent is not a membership operation - it is closing the
         room, which takes everybody out at once and is the honest way to say it.
         """
-        owner = self.manifest.get("owner_scope")
+        owner = owner_tenant(self.manifest.get("owner_scope"))
         if not owner:
             return frozenset()
         return frozenset(
-            derive_peer_id(participant_key(lane, str(owner)), self.room_id)
+            derive_peer_id(participant_key(lane, owner), self.room_id)
             for lane in PARTICIPANT_LANES
         )
 
@@ -376,9 +397,9 @@ class Room:
         of its own machines still is. That is the same line `_check_tenant` already
         draws, read the other way round.
         """
-        owner = self.manifest.get("owner_scope")
-        scope = getattr(identity, "scope_id", None)
-        return bool(owner) and bool(scope) and str(scope) == str(owner)
+        owner = owner_tenant(self.manifest.get("owner_scope"))
+        scope = owner_tenant(getattr(identity, "scope_id", None))
+        return bool(owner) and bool(scope) and scope == owner
 
     # What every participant sees when a human ends the room. One wording, because a
     # closing reason is the last thing anybody reads in a transcript and three
@@ -648,7 +669,8 @@ class Room:
         return ticket_id
 
     def redeem_ticket(self, ticket_id: str, *, display: str = "",
-                      mode: str = DEFAULT_MODE) -> Identity:
+                      mode: str = DEFAULT_MODE,
+                      card: Optional[Dict[str, Any]] = None) -> Identity:
         """Spend a ticket and join. The claim IS the check, so it is single use.
 
         Nothing is read before the claim. Reading first would put the decision back in
@@ -663,7 +685,7 @@ class Room:
         if float(record.get("expires_at") or 0.0) < time.time():
             raise TicketInvalid("this ticket has expired")
         return self.join(display=display or str(record.get("display") or "guest"),
-                         scope_id=None, mode=mode)
+                         scope_id=None, mode=mode, card=card or {})
 
     # ── reading ─────────────────────────────────────────────────────────────
 

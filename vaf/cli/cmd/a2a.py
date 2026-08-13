@@ -71,6 +71,28 @@ def _key() -> str:
         return "cli:local"
 
 
+def _scope() -> str:
+    """The TENANT this terminal acts for, which is what a room records as its owner.
+
+    Deliberately not `_key()`: that is a PARTICIPANT key, lane included, and the two
+    are one prefix apart. Handing the participant key where a tenant is expected
+    produces a room whose derived host handles belong to nobody.
+    """
+    from vaf.core.config import get_local_admin_scope_id
+    return str(get_local_admin_scope_id() or "local")
+
+
+def _self_card(skills: str = "") -> dict:
+    """What this participant tells the room about itself.
+
+    Empty when nothing was said rather than filled with a guess: a terminal peer may be
+    a person, a script or somebody else's agent, and inventing abilities for it would
+    put a claim in the transcript that nobody made.
+    """
+    described = str(skills or "").strip()
+    return {"kind": "terminal", "skills": described[:400]} if described else {}
+
+
 def _fail(message: str, code: int) -> None:
     typer.echo(message, err=True)
     raise typer.Exit(code)
@@ -161,16 +183,22 @@ def create(
     kind: str = typer.Option("round", help="round (nobody commands) or chain (leader and workers)"),
     topic: str = typer.Option("", help="What the room is for."),
     display: str = typer.Option("", help="Your name in the room."),
+    skills: str = typer.Option("", help="One line about what you can do. Everyone in the room sees it."),
     room_id: str = typer.Option("", "--id", help="Use this id instead of a generated one."),
 ) -> None:
     """Open a room and join it."""
     from vaf.core.a2a.room import Room, RoomError, derive_peer_id
     from vaf.core.a2a.store import StoreError
     try:
-        room = Room.create(kind=kind, owner_scope=_key(), topic=topic,
+        # The TENANT, not this lane's participant key. They differ by a prefix and the
+        # difference is invisible until something derives from it: a room whose owner
+        # was recorded as "cli:<scope>" has host handles nobody holds, so it has no
+        # host at all - its own opener cannot close it and cannot remove anybody.
+        room = Room.create(kind=kind, owner_scope=_scope(), topic=topic,
                            room_id=room_id or None)
         me = room.join(display=display or "terminal",
-                       peer_id=derive_peer_id(_key(), room.room_id), scope_id=_key())
+                       peer_id=derive_peer_id(_key(), room.room_id), scope_id=_scope(),
+                       card=_self_card(skills))
     except (RoomError, StoreError) as e:
         _fail(str(e), EXIT_REFUSED)
     _emit({"ok": True, "room": room.room_id, "kind": room.kind,
@@ -219,6 +247,7 @@ def join(
     room_id: str = typer.Argument(..., help="Room to join."),
     ticket: str = typer.Option("", help="Invitation, if the room was not opened by you."),
     display: str = typer.Option("", help="Your name in the room."),
+    skills: str = typer.Option("", help="One line about what you can do. Everyone in the room sees it."),
     mode: str = typer.Option(
         "assist",
         help="How far VAF's own agent may act on messages here: observe, assist or autonomous.",
@@ -240,7 +269,8 @@ def join(
             return
     try:
         if ticket:
-            identity = room.redeem_ticket(ticket, display=display or "guest", mode=mode)
+            identity = room.redeem_ticket(ticket, display=display or "guest", mode=mode,
+                                          card=_self_card(skills))
         else:
             identity = room.join(display=display or "terminal",
                                  peer_id=derive_peer_id(_key(), room_id),

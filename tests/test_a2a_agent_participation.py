@@ -406,8 +406,14 @@ def test_the_key_is_derived_in_exactly_one_place():
     for path in consumers:
         source = path.read_text(encoding="utf-8")
         assert "participant_key" in source, f"{path.name} does not use the primitive"
-        assert "get_local_admin_scope_id" not in source, (
-            f"{path.name} builds the room key by hand again")
+        # The KEY, spelled out. Banning the scope lookup itself was too broad: a room's
+        # OWNER is a tenant and not a participant key, and the two are one prefix apart
+        # - which is how "cli:<scope>" ended up recorded as a room's owner, leaving it
+        # with host handles nobody holds and therefore no host at all. What must never
+        # come back is the lane and the scope glued together outside the primitive.
+        for shape in ('f"agent:', "f'agent:", 'f"cli:', "f'cli:", 'f"remote:', "f'remote:",
+                      'f"{lane}:'):
+            assert shape not in source, f"{path.name} builds the room key by hand again"
 
     agent_source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
     wake = agent_source.split("def collect_room_wake")[1].split("def ")[0]

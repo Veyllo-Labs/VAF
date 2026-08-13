@@ -318,3 +318,32 @@ def test_a_ticket_is_single_use(store):
 
     store.drop_ticket("t1")
     assert store.ticket("t1") is None
+
+
+def test_a_frame_the_reader_cannot_fully_understand_stays_in_the_transcript(store):
+    """MUTATION: enforce must_understand while READING a stored frame.
+
+    Rule 5 governs whether a peer may ACT on a frame. Applying it to a reader deletes
+    the frame from the room's history instead, which is rule 2's mistake wearing rule
+    5's clothes: a frame removed from the log tears the lamport chain for everything
+    after it, and every later reader silently sees a shorter conversation.
+
+    Found by a surviving mutation in the hub tests, where "write first, screen after"
+    stayed green because the frame it wrote had become invisible to the reader.
+    """
+    store.append(_frame(store, "p1", seq=1, lamport=1, text="ordinary"))
+    demanding = Frame.new(
+        room=store.room_id, sender="p1", role="peer", kind="say",
+        seq=2, lamport=2, body={"text": "from a newer peer"},
+        must_understand=["deadline"], ext={}, ts=0.0, frame_id="demanding",
+    )
+    payload = demanding.to_dict()
+    payload["deadline"] = "soon"
+    import vaf.core.data_files as _df
+    _df.write_json_atomic(store.lane("p1") / "000000000002.json", payload)
+    store.append(_frame(store, "p1", seq=3, lamport=3, text="after it"))
+
+    seen = store.frames()
+    assert [f.body.get("text") for f in seen] == ["ordinary", "from a newer peer", "after it"]
+    assert seen[1].must_understand == ("deadline",)
+    assert store.gaps("p1") == [], "the chain must be intact"

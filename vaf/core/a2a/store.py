@@ -261,7 +261,13 @@ class RoomStore:
                 if not isinstance(payload, dict):
                     continue
                 try:
-                    collected.append(Frame.from_dict(payload))
+                    # A stored frame is READ here, never acted on, so rule 5 is off:
+                    # a frame whose must_understand this reader cannot satisfy must
+                    # still appear in the transcript. Dropping it would remove it from
+                    # the room's history and tear the lamport chain for everything
+                    # after it - the frame is rendered, and the decision not to ACT on
+                    # it belongs to whoever is acting.
+                    collected.append(Frame.from_dict(payload, enforce_requirements=False))
                 except Exception:
                     continue
         return sorted(collected, key=canonical_sort_key)

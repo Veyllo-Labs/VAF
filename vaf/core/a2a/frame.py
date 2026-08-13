@@ -183,12 +183,21 @@ class Frame:
         )
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], *, understood: Iterable[str] = ()) -> "Frame":
+    def from_dict(cls, data: Mapping[str, Any], *, understood: Iterable[str] = (),
+                  enforce_requirements: bool = True) -> "Frame":
         """Parse a frame, enforcing rules 4 and 5 and preserving rule 1.
 
         ``understood`` names extension fields THIS peer comprehends beyond
         ``WIRE_KEYS``. It is how an application opts in to a field that a sender may
         mark as required.
+
+        ``enforce_requirements=False`` turns rule 5 off, and exactly one caller is
+        allowed to use it: a READER reconstructing a stored transcript. Rule 5 governs
+        whether a peer may ACT on a frame, and refusing to parse one while merely
+        reading would delete it from the room's history - which is rule 2's mistake
+        wearing rule 5's clothes, because a frame removed from the log tears the lamport
+        chain for every reader after it. A reader renders what it cannot fully
+        understand; it just never acts on it.
         """
         if not isinstance(data, Mapping):
             raise MalformedFrame(f"frame must be a mapping, got {type(data).__name__}")
@@ -209,10 +218,11 @@ class Frame:
         required_fields = data.get("must_understand") or ()
         if isinstance(required_fields, (str, bytes)):
             raise MalformedFrame("must_understand must be a list of field names")
-        comprehended = WIRE_KEYS | frozenset(str(f) for f in understood)
-        missing = [str(f) for f in required_fields if str(f) not in comprehended]
-        if missing:
-            raise UnsupportedRequirement(missing)
+        if enforce_requirements:
+            comprehended = WIRE_KEYS | frozenset(str(f) for f in understood)
+            missing = [str(f) for f in required_fields if str(f) not in comprehended]
+            if missing:
+                raise UnsupportedRequirement(missing)
 
         for key in _REQUIRED:
             if data.get(key) in (None, ""):
@@ -311,6 +321,38 @@ class Frame:
             return True
         peers = to.get("peers")
         return bool(isinstance(peers, (list, tuple)) and peer_id in peers)
+
+
+def screen_inbound(payload: Mapping[str, Any], *, understood: Iterable[str] = ()) -> None:
+    """Apply rules 4 and 5 to something a peer just submitted.
+
+    A frame arriving at a door has not been assigned its ``id``, ``seq``, ``lamport`` or
+    ``from`` yet - the room does that, and refuses to honour them if the sender tried.
+    ``from_dict`` therefore cannot be used here: it would demand fields the sender is
+    not supposed to provide.
+
+    What it CAN and must check is the pair that decides whether this peer may be
+    understood at all, and both raise rather than returning a verdict, so a caller that
+    forgets to look cannot proceed by accident.
+    """
+    if not isinstance(payload, Mapping):
+        raise MalformedFrame(f"frame must be a mapping, got {type(payload).__name__}")
+
+    raw_version = payload.get("v", VERSION)
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError):
+        raise UnsupportedVersion(raw_version) from None
+    if version != VERSION:
+        raise UnsupportedVersion(raw_version)
+
+    required_fields = payload.get("must_understand") or ()
+    if isinstance(required_fields, (str, bytes)):
+        raise MalformedFrame("must_understand must be a list of field names")
+    comprehended = WIRE_KEYS | frozenset(str(f) for f in understood)
+    missing = [str(f) for f in required_fields if str(f) not in comprehended]
+    if missing:
+        raise UnsupportedRequirement(missing)
 
 
 # ── ordering ────────────────────────────────────────────────────────────────

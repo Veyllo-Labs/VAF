@@ -296,6 +296,24 @@ from vaf.auth.permissions import (
 set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 
+# Who may open a room connection. Registered for the same reason and in the same place:
+# the framework must not import the auth layer, and an unregistered verifier refuses
+# rather than waves people through. STRICTER than the WebUI socket by one demand - the
+# token must be an ACCESS token, exactly what the HTTP middleware has always required -
+# because a credential minted to renew a session should not open one.
+from vaf.core.a2a.wire import set_credential_verifier as _set_credential_verifier
+
+
+def _a2a_credential_verifier(credential: str):
+    from vaf.auth.crypto import decode_token
+    payload = decode_token(credential)
+    if not payload or payload.get("type") != "access":
+        return None
+    return payload
+
+
+_set_credential_verifier(_a2a_credential_verifier)
+
 import typer
 from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a
 from vaf.core.session import session_app

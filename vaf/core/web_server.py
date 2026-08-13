@@ -7246,6 +7246,143 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         # the process and is set once at startup.
 
 
+# ── agent rooms over the wire ────────────────────────────────────────────────
+#
+# Deliberately NOT built on the WebUI socket's plumbing, and every omission below is a
+# decision rather than an oversight:
+#
+#   manager.connect()        would accept the socket AND append it to active_connections
+#                            (so every WebUI broadcast fans out to a room peer), send it
+#                            an unasked-for state_full frame, and make the tray count an
+#                            agent as a browser. The socket is accepted directly instead.
+#   set_connection_user()    would file a room peer in the same identity table every
+#                            ownership check reads, making it indistinguishable from a
+#                            browser to _ws_session_owner_ok and everything like it.
+#   the local-admin fallback would hand the machine owner's seat to anything that
+#                            reaches the port with a token that decodes to nothing. The
+#                            WebUI has that fallback so the desktop is not locked out of
+#                            its own chats; a room has no such problem, so no credential
+#                            means no connection.
+#
+# The identity work itself lives in vaf/core/a2a/wire.py, which is stricter than the
+# WebUI handshake in the ways that matter (an access token only, never a refresh one;
+# no scope means no connection; every connection lands in the remote participant lane).
+
+# room_id -> Hub, and room_id -> {peer_id: asyncio.Queue}. Process-local by design: the
+# files are the record, so a second process serving the same room is not a second truth,
+# only a second accelerator.
+_A2A_HUBS: dict = {}
+_A2A_OUTBOXES: dict = {}
+
+
+def _a2a_hub(room):
+    """The one hub for a room in this process, created on first use."""
+    from vaf.core.a2a.hub import Hub
+
+    existing = _A2A_HUBS.get(room.room_id)
+    if existing is not None:
+        return existing
+
+    boxes = _A2A_OUTBOXES.setdefault(room.room_id, {})
+
+    def _sink(peer_id, message):
+        # Never blocks and never raises: the hub treats delivery as best effort, and a
+        # queue that is gone means a peer that disconnected between two frames.
+        box = boxes.get(peer_id)
+        if box is not None:
+            box.put_nowait(message)
+
+    hub = Hub(room, sink=_sink)
+    _A2A_HUBS[room.room_id] = hub
+    return hub
+
+
+@app.websocket("/ws/a2a/{room_id}")
+async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
+                            token: Optional[str] = Query(None)):
+    """One agent, one room, over a socket.
+
+    The credential is either an access token (an account on this machine) or a join
+    ticket (an invitation to exactly this room), and it arrives in the query string
+    because that is the only carrier that survives the integrated proxy: Authorization
+    headers and subprotocols are stripped on the relayed leg, silently and without an
+    error anywhere.
+    """
+    import asyncio
+    import json as _json
+
+    from vaf.core.a2a.wire import HandshakeRefused, admit, open_room
+
+    client_ip = _ws_client_ip(websocket)
+    credential = token
+    if not credential and getattr(websocket, "cookies", None):
+        credential = websocket.cookies.get(VAF_TOKEN_COOKIE)
+
+    try:
+        room = open_room(room_id)
+        identity = admit(room, credential or "")
+    except HandshakeRefused as refusal:
+        log("API", f"A2A rejected from {client_ip}: {refusal.reason}")
+        await websocket.close(code=refusal.code, reason=refusal.reason)
+        return
+    except Exception as e:                      # pragma: no cover - defensive
+        log("API", f"A2A handshake failed from {client_ip}: {e}")
+        await websocket.close(code=4001, reason="handshake failed")
+        return
+
+    hub = _a2a_hub(room)
+    outbox: "asyncio.Queue" = asyncio.Queue()
+    _A2A_OUTBOXES.setdefault(room.room_id, {})[identity.peer_id] = outbox
+
+    try:
+        lease = hub.attach(identity)
+    except Exception as e:
+        _A2A_OUTBOXES.get(room.room_id, {}).pop(identity.peer_id, None)
+        log("API", f"A2A refused {identity.peer_id} in {room.room_id}: {e}")
+        await websocket.close(code=4009, reason=str(e))
+        return
+
+    await websocket.accept()
+    log("API", f"A2A joined: {identity.peer_id} in {room.room_id} from {client_ip}")
+    await websocket.send_text(_json.dumps({
+        "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,
+        "role": identity.role, "protocol": "vaf-a2a", "v": 1,
+    }))
+
+    async def _pump() -> None:
+        while True:
+            message = await outbox.get()
+            await websocket.send_text(_json.dumps(message, ensure_ascii=False))
+
+    pump = asyncio.create_task(_pump())
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                payload = _json.loads(raw)
+            except Exception:
+                await websocket.send_text(_json.dumps(
+                    {"kind": "ack", "status": "malformed", "reason": "not json"}))
+                continue
+            if not isinstance(payload, dict):
+                await websocket.send_text(_json.dumps(
+                    {"kind": "ack", "status": "malformed", "reason": "not an object"}))
+                continue
+            ack = await asyncio.to_thread(hub.submit, identity, lease, payload)
+            await websocket.send_text(_json.dumps(ack, ensure_ascii=False))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        log("API", f"A2A socket error for {identity.peer_id}: {e}")
+    finally:
+        pump.cancel()
+        _A2A_OUTBOXES.get(room.room_id, {}).pop(identity.peer_id, None)
+        try:
+            hub.detach(identity, lease)
+        except Exception:
+            pass
+
+
 async def process_uploaded_files(files: list) -> str:
     """
     Process uploaded files and return their text content.

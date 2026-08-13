@@ -31,6 +31,35 @@ flowchart TB
     FE_WS --> FE_Render
 ```
 
+## The second WebSocket: agent rooms
+
+`/ws` is the browser's socket and everything below is about it. There is now a second
+one, `/ws/a2a/{room_id}`, for agents rather than people, and the two share nothing on
+purpose - so a reader of this document does not have to wonder which rules apply where.
+
+| | `/ws` (this document) | `/ws/a2a/{room_id}` |
+|---|---|---|
+| Who connects | a browser, the desktop shell | an agent, possibly not VAF and possibly on another machine |
+| Credential | access token, or the `vaf_token` cookie; a tokenless localhost socket falls back to the local admin so the desktop is not locked out of its own chats | an access token or a single-use join ticket, in the query string. NO fallback: no credential means no connection |
+| Identity storage | `manager.set_connection_user`, the table every ownership check reads | nothing. A room peer is never filed where a browser is looked up |
+| On accept | `manager.connect()`: appended to `active_connections`, sent `state_full`, counted by the tray | `websocket.accept()` alone |
+| Carried by the proxy | `WebSocketRoute("/ws")` | `WebSocketRoute("/ws/a2a/{room_id})`, and the relay carries the PATH through against an allowlist |
+| What it speaks | the message types below | the A2A frame, see the room modules under `vaf/core/a2a/` |
+
+Two things about the proxy are worth knowing before adding any third socket, because
+both fail in a way that looks like success:
+
+- Starlette's catch-all route matches HTTP scopes only, so a websocket path with no
+  explicit `WebSocketRoute` is answered with **HTTP 403 at the handshake**. It never
+  reaches the backend, and it never appears in the backend's logs.
+- The relay used to hardcode the backend path. A new route registered without also
+  carrying the path through would have opened, exchanged frames, and been answered by
+  the WebUI handler.
+
+Neither is visible on the developer's desktop, which is handed `ws://127.0.0.1:8005`
+directly and never passes through the proxy at all. **A new socket is tested over
+`wss://` on the proxy port or it is not tested.**
+
 ## Connection Sequence (Happy Path)
 
 1. WebUI opens its WebSocket using the transport from `/api/network/ws-config`: `ws://localhost:8001/ws` when TLS is off; `wss://<host>:<effective proxy port>/ws` for a LAN client behind the HTTPS proxy; and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert).

@@ -14,6 +14,7 @@ Best practice: single entry point for HTTPS, TLS termination here.
 
 import asyncio
 import logging
+import re
 import ssl
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -199,11 +200,32 @@ def _get_cookie_header(scope: dict) -> str | None:
     return None
 
 
+# Which websocket paths this proxy will relay, and to exactly which backend path.
+# An ALLOWLIST rather than a wildcard: a pattern like /ws/{rest:path} would make every
+# future websocket endpoint reachable from the LAN the moment somebody adds it, and
+# nobody would ever make that decision on purpose. The room id shape is the store's own
+# (_SAFE_COMPONENT in vaf/core/a2a/store.py), so a path that would be refused as a
+# directory name never reaches the backend either.
+_WS_ALLOWED = re.compile(r"^/ws$|^/ws/a2a/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
 async def _forward_websocket(websocket: WebSocket) -> None:
-    """Accept client WS and relay to backend ws://127.0.0.1:8005/ws (internal HTTP channel)."""
+    """Accept client WS and relay it to the SAME path on the backend (ws://127.0.0.1:8005).
+
+    The path used to be hardcoded to /ws, which meant a second websocket route would
+    have relayed to the WebUI handler: the socket opens, frames flow, the wrong handler
+    answers. That is the worst failure shape there is, because everything looks healthy,
+    so the path is carried through and checked against an allowlist instead.
+    """
     import websockets
+    path = websocket.scope.get("path") or "/ws"
+    if not _WS_ALLOWED.match(path):
+        # Refused BEFORE accept, so the client sees a handshake rejection rather than a
+        # socket that opens and then closes for no stated reason.
+        await websocket.close(code=4004)
+        return
     await websocket.accept()
-    backend_uri = "ws://127.0.0.1:8005/ws"
+    backend_uri = "ws://127.0.0.1:8005" + path
     if websocket.url.query:
         backend_uri += "?" + websocket.url.query
     extra_headers = []
@@ -298,6 +320,12 @@ def create_proxy_app() -> Starlette:
     """Create the ASGI proxy application. WebSocket /ws must use WebSocketRoute so upgrades work."""
     routes = [
         WebSocketRoute("/ws", endpoint=_ws_handler),
+        # Agent rooms. Registered explicitly: Starlette's catch-all Route matches HTTP
+        # scopes only, so without this line a websocket to /ws/a2a/... is answered with
+        # HTTP 403 at the handshake and never reaches the backend at all - while working
+        # perfectly on the desktop, which is handed ws://127.0.0.1:8005 directly and
+        # never passes through here.
+        WebSocketRoute("/ws/a2a/{room_id}", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
         Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),

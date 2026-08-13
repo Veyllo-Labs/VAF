@@ -1104,7 +1104,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     /** `status` is PRESENCE (a live WebSocket), `accountActive` is the is_active ACCOUNT flag.
      *  They are separate fields because they were once one, and the edit dialog then wrote
      *  presence back as the account state - saving an offline user deactivated them. */
-    const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; accountActive: boolean; tools: string[]; workflows: string[]; access: string }>>([]);
+    const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; accountActive: boolean; tools: string[]; workflows: string[]; access: string; confirmation_bypass?: boolean }>>([]);
     const [usersLoading, setUsersLoading] = useState(false);
     const [networkLinkCopied, setNetworkLinkCopied] = useState(false);
     /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
@@ -1449,7 +1449,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     // Fetch local network users when tab is active
     useEffect(() => {
-        if (!isOpen || activeTab !== 'local_network') return;
+        // 'advanced' needs the list too: the hands-off self-switch reads the
+        // admin's own row from it.
+        if (!isOpen || (activeTab !== 'local_network' && activeTab !== 'advanced')) return;
         loadUsers();
     }, [isOpen, activeTab, loadUsers]);
 
@@ -2064,6 +2066,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     is_active: editingUser.accountActive !== false,
                     tools: editingUser.tools || [],
                     workflows: editingUser.workflows || [],
+                    confirmation_bypass: editingUser.confirmation_bypass ?? false,
                 })
             });
 
@@ -4048,6 +4051,42 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.debug_logs_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
+                                    <div className="h-4" />
+                                    <Input
+                                        label={tAdvanced('toolTurnCap')}
+                                        value={localConfig.max_tool_turns_per_step ?? 75}
+                                        onChange={(v: string) => handleChange('max_tool_turns_per_step', Math.max(5, parseInt(v) || 75))}
+                                        type="number"
+                                        disabled={localConfig.tool_loop_unlimited ?? false}
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('toolTurnCapDesc')}</p>
+                                    <div className="h-4" />
+                                    <Switch
+                                        label={tAdvanced('toolLoopUnlimited')}
+                                        description={tAdvanced('toolLoopUnlimitedDesc')}
+                                        checked={localConfig.tool_loop_unlimited ?? false}
+                                        onChange={(v: boolean) => handleChange('tool_loop_unlimited', v)}
+                                    />
+                                    {currentUser?.role === 'admin' && (() => {
+                                        const self = users.find((u: any) => u.id === currentUser?.id);
+                                        if (!self) return null;
+                                        return (<>
+                                            <div className="h-4" />
+                                            <Switch
+                                                label={tAdvanced('confirmationBypassSelf')}
+                                                description={tAdvanced('confirmationBypassSelfDesc')}
+                                                checked={self.confirmation_bypass ?? false}
+                                                onChange={async (v: boolean) => {
+                                                    await fetch(`/api/users/${self.id}`, {
+                                                        method: 'PUT',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({ confirmation_bypass: v }),
+                                                    });
+                                                    loadUsers();
+                                                }}
+                                            />
+                                        </>);
+                                    })()}
                                     <div className="h-4" />
                                     <button
                                         onClick={() => setShowToolsModal(true)}
@@ -6203,6 +6242,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onPresetChange={setEditAccessPreset}
                                         onToolsChange={(t) => setEditingUser({ ...editingUser, tools: t })}
                                         onWorkflowsChange={(w) => setEditingUser({ ...editingUser, workflows: w })}
+                                    />
+                                    <Switch
+                                        label={tModals('editUser.confirmationBypass')}
+                                        description={tModals('editUser.confirmationBypassDesc')}
+                                        checked={editingUser.confirmation_bypass ?? false}
+                                        onChange={(v: boolean) => setEditingUser({ ...editingUser, confirmation_bypass: v })}
                                     />
                                 </div>
                             </Section>

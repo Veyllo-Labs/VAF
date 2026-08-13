@@ -66,6 +66,19 @@ def _lookup_allowed_tools(user_scope_id: str) -> Optional[frozenset]:
     return _tools_from_permissions(_fetch_permissions_row(user_scope_id))
 
 
+def _lookup_confirmation_bypass(user_scope_id: str) -> bool:
+    """True only when the admin explicitly granted this user the hands-off switch.
+
+    Absence, a missing row, a malformed dict - everything that is not a literal
+    True - is False. The bypass fails CLOSED, the opposite polarity of the tool
+    allowlist above: an unreachable DB must widen nothing here, because this
+    flag does not restrict a user, it removes a question the machine owner
+    normally gets to answer.
+    """
+    perms = _fetch_permissions_row(user_scope_id)
+    return bool(isinstance(perms, dict) and perms.get("confirmation_bypass") is True)
+
+
 def _lookup_allowed_workflows(user_scope_id: str) -> Optional[frozenset]:
     """The workflow twin of _lookup_allowed_tools; same read, other key."""
     return _workflows_from_permissions(_fetch_permissions_row(user_scope_id))
@@ -149,6 +162,22 @@ def resolve_allowed_workflows(user_scope_id: Optional[str]) -> Optional[frozense
     return _resolve_cached(scope, _wf_cache, _lookup_allowed_workflows)
 
 
+_bypass_cache: dict = {}
+
+
+def resolve_confirmation_bypass(user_scope_id: Optional[str]) -> bool:
+    """The gate's question: did the admin grant this scope the hands-off switch?
+
+    False for no scope, False when nothing is known (fail-closed; see the
+    lookup's docstring), cached like the allowlists and invalidated with them.
+    Never raises.
+    """
+    scope = str(user_scope_id or "").strip()
+    if not scope:
+        return False
+    return _resolve_cached(scope, _bypass_cache, _lookup_confirmation_bypass) is True
+
+
 def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
     """Called by the admin update route so a revocation beats the TTL. Clears BOTH
     allowlists: the route writes tools and workflows in one save."""
@@ -156,6 +185,8 @@ def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
         if user_scope_id is None:
             _cache.clear()
             _wf_cache.clear()
+            _bypass_cache.clear()
         else:
             _cache.pop(str(user_scope_id).strip(), None)
             _wf_cache.pop(str(user_scope_id).strip(), None)
+            _bypass_cache.pop(str(user_scope_id).strip(), None)

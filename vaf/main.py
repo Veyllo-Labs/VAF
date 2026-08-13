@@ -287,14 +287,17 @@ bootstrap()
 # tests/test_account_allowlist_wiring.py.
 from vaf.core.tool_dispatch import (
     set_account_allowlist_resolver,
+    set_confirmation_bypass_resolver,
     set_workflow_allowlist_resolver,
 )
 from vaf.auth.permissions import (
     resolve_allowed_tools as _account_allowlist_resolver,
     resolve_allowed_workflows as _workflow_allowlist_resolver,
+    resolve_confirmation_bypass as _confirmation_bypass_resolver,
 )
 set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
+set_confirmation_bypass_resolver(_confirmation_bypass_resolver)
 
 # Who may open a room connection. Registered for the same reason and in the same place:
 # the framework must not import the auth layer, and an unregistered verifier refuses

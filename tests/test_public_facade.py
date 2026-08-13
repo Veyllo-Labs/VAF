@@ -52,6 +52,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
         "joined_rooms", "markers",
         "participant_key", "room_invitation", "set_account_allowlist_resolver",
+        "set_confirmation_bypass_resolver",
         "unread_counts", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
@@ -73,6 +74,7 @@ def test_the_newly_public_names_actually_resolve():
     # same need. Import must stay cheap (stdlib at module level).
     assert callable(vaf.extract_pdf_markdown)
     assert callable(vaf.set_account_allowlist_resolver)
+    assert callable(vaf.set_confirmation_bypass_resolver)
 
 
 def test_the_resolver_setter_is_the_same_object_on_facade_and_engine():

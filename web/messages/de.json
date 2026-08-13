@@ -835,6 +835,12 @@
       "serverPersistenceDesc": "Lokales Modell im Speicher halten, auch wenn keine Verbindung aktiv ist.",
       "memorySystem": "Gedächtnissystem",
       "memorySystemDesc": "RAG und Langzeitgedächtnis verwalten.",
+      "confirmationBypassSelf": "Freihand-Modus für mein eigenes Konto",
+      "confirmationBypassSelfDesc": "Der Agent überspringt den Werkzeug-Bestätigungsdialog für dich. Jeder übersprungene Dialog wird als gate_bypassed-Ereignis protokolliert. Standardmäßig aus.",
+      "toolTurnCap": "Werkzeug-Schritte pro Anfrage (harter Stopp)",
+      "toolTurnCapDesc": "Wie viele Werkzeug-Schritte eine Anfrage nutzen darf, bevor der Agent gestoppt wird. Standard 75, Minimum 5.",
+      "toolLoopUnlimited": "Kein Schritt-Limit",
+      "toolLoopUnlimitedDesc": "Entfernt den harten Stopp und die Ein-Stunden-Sicherung vollständig. Das tägliche Ausgaben-Budget gilt weiterhin. Standardmäßig aus.",
       "debugLogs": "Debug-Protokolle",
       "debugLogsDesc": "Detaillierte Logs für Entwicklung und Fehlersuche.",
       "tools": "Tools",
@@ -1322,6 +1328,8 @@
       "accountActiveDesc": "Dieser Nutzer kann sich anmelden und VAF verwenden. Zum Sperren ausschalten.",
       "accountDeactivatedDesc": "Anmeldung und Token-Verlängerung sind nach dem Speichern gesperrt. Eine bereits angemeldete Sitzung endet, wenn ihr Token abläuft.",
       "selfEditHint": "Das ist dein eigenes Konto. Rolle und Kontostatus kann nur ein anderer Admin ändern - damit du dich nicht selbst aussperrst.",
+      "confirmationBypass": "Freihand-Modus (Werkzeug-Bestätigungen überspringen)",
+      "confirmationBypassDesc": "Der Agent führt bestätigungspflichtige Werkzeuge für diesen Benutzer ohne Nachfrage aus. Jeder übersprungene Dialog wird als gate_bypassed-Ereignis protokolliert. Standardmäßig aus.",
       "selfRoleLocked": "dein eigenes Konto"
     },
     "userDetail": {

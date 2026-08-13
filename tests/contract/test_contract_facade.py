@@ -35,6 +35,7 @@ EXPORTED = [
     "participant_key",
     "room_invitation",
     "set_account_allowlist_resolver",
+    "set_confirmation_bypass_resolver",
     "unread_counts",
     "user_jail",
 ]
@@ -81,6 +82,7 @@ def test_the_resolver_setter_is_the_engine_function_itself():
     import vaf.core.tool_dispatch as td  # re-export source named in EMBEDDING.md
 
     assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
+    assert vaf.set_confirmation_bypass_resolver is td.set_confirmation_bypass_resolver
 
 
 def test_pdf_extraction_is_the_engine_function_itself():

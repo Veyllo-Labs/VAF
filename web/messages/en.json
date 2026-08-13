@@ -835,6 +835,12 @@
       "serverPersistenceDesc": "Keep local model in memory even when no connection is active.",
       "memorySystem": "Memory system",
       "memorySystemDesc": "Manage RAG and long-term memory.",
+      "confirmationBypassSelf": "Hands-off for my own account",
+      "confirmationBypassSelfDesc": "The agent skips the tool-confirmation dialog for you. Every skipped dialog is still recorded as a gate_bypassed event. Off by default.",
+      "toolTurnCap": "Tool steps per turn (hard stop)",
+      "toolTurnCapDesc": "How many tool steps one request may use before the agent is stopped. Default 75, minimum 5.",
+      "toolLoopUnlimited": "No step limit",
+      "toolLoopUnlimitedDesc": "Removes the hard stop and the one-hour backstop entirely. The daily spend budget still applies. Off by default.",
       "debugLogs": "Debug logs",
       "debugLogsDesc": "Verbose logs for development and troubleshooting.",
       "tools": "Tools",
@@ -1322,6 +1328,8 @@
       "accountActiveDesc": "This user can sign in and use VAF. Turn off to block the account.",
       "accountDeactivatedDesc": "Sign-in and token renewal are blocked on save. A session that is already signed in ends when its token expires.",
       "selfEditHint": "This is your own account. Role and account status can only be changed by another admin - so you cannot lock yourself out.",
+      "confirmationBypass": "Hands-off mode (skip tool confirmations)",
+      "confirmationBypassDesc": "The agent runs confirmation-gated tools for this user without asking. Every skipped dialog is recorded as a gate_bypassed event. Off by default.",
       "selfRoleLocked": "your own account"
     },
     "userDetail": {

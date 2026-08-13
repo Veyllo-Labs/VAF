@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .core.pdf_extract import extract_pdf_markdown
-    from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver
+    from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver, set_confirmation_bypass_resolver
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
@@ -22,7 +22,7 @@ __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "Room", "RoomError",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
            "joined_rooms", "markers",
            "participant_key", "room_invitation", "set_account_allowlist_resolver",
-           "unread_counts", "user_jail"]
+           "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -79,6 +79,14 @@ def __getattr__(name):
         # underneath, so the slim base is unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import set_account_allowlist_resolver
         return set_account_allowlist_resolver
+    if name == "set_confirmation_bypass_resolver":
+        # The allowlist resolver's sibling: whether an ACCOUNT holds the admin-granted
+        # hands-off switch that skips the tool-confirmation dialog. Consulted UNDER the
+        # authorization stages, so it can only remove the human question, never widen
+        # who may call what; every use is announced as a gate_bypassed event. Unregistered
+        # means: nobody has it. Stdlib-only underneath. See docs/EMBEDDING.md.
+        from .core.tool_dispatch import set_confirmation_bypass_resolver
+        return set_confirmation_bypass_resolver
     if name == "extract_pdf_markdown":
         # PDF -> Markdown with honest coverage facts (pages_read/total_pages/
         # truncated, absolute page markers, OCR reason). Exported because in-tree

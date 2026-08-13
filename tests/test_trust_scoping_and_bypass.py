@@ -151,3 +151,65 @@ def test_the_python_exec_gate_reads_with_the_scope_it_wrote_with():
     assert 'get_tool_policy("python_exec") == "allow"' not in source, (
         "an unscoped policy read is back in agent.py")
 
+
+def _grant_gate(monkeypatch, *, scope, role="user", granted=None, events=None):
+    """Drive the funnel with a REGISTERED per-user resolver instead of the switch."""
+    from vaf.core import tool_dispatch
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy",
+                        lambda name, user_scope_id=None: "ask")
+    monkeypatch.setattr("vaf.core.trust.is_trusted_dir",
+                        lambda cwd, user_scope_id=None: False)
+    monkeypatch.setattr(tool_dispatch, "_confirmation_bypass_resolver", granted)
+    return resolve_confirmation_gate(
+        "host_bash", reason="runs a shell", args={"command": "ls"},
+        trust_dir=Path("/tmp/p"), allow_once=set(), interactive=False,
+        emit=(events.append if events is not None else None),
+        user_scope_id=scope, user_role=role)
+
+
+def test_an_admin_granted_user_skips_the_dialog_and_it_is_announced(monkeypatch):
+    """MUTATION: stop consulting the registered resolver - this goes red."""
+    events = []
+    out = _grant_gate(monkeypatch, scope=SCOPE_B, role="user",
+                      granted=lambda s: s == SCOPE_B, events=events)
+    assert out is None, "the per-user grant did not skip the dialog"
+    assert [e["type"] for e in events] == ["gate_bypassed"]
+    assert events[0]["why"] == "user_grant"
+
+
+def test_the_grant_is_per_scope_not_per_machine(monkeypatch):
+    assert _grant_gate(monkeypatch, scope=SCOPE_A, role="user",
+                       granted=lambda s: s == SCOPE_B) is not None, \
+        "another scope rode on one user's grant"
+
+
+def test_no_resolver_registered_means_nobody_has_the_grant(monkeypatch):
+    assert _grant_gate(monkeypatch, scope=SCOPE_B, role="user",
+                       granted=None) is not None
+
+
+def test_a_broken_resolver_fails_closed(monkeypatch):
+    def _boom(scope):
+        raise RuntimeError("db down")
+    assert _grant_gate(monkeypatch, scope=SCOPE_B, role="user",
+                       granted=_boom) is not None, \
+        "a resolver error became a bypass"
+
+
+def test_the_permissions_flag_must_be_a_literal_true():
+    from vaf.auth.permissions import _lookup_confirmation_bypass
+    import vaf.auth.permissions as perms
+
+    def _row(value):
+        return lambda scope: value
+
+    for value, expect in [({"confirmation_bypass": True}, True),
+                          ({"confirmation_bypass": "yes"}, False),
+                          ({"confirmation_bypass": 1}, False),
+                          ({}, False), (None, False)]:
+        orig = perms._fetch_permissions_row
+        perms._fetch_permissions_row = _row(value)
+        try:
+            assert _lookup_confirmation_bypass("s") is expect, f"{value!r} -> {expect}"
+        finally:
+            perms._fetch_permissions_row = orig

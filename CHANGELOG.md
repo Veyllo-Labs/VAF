@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Hands-off mode, granted per user.** An admin can let a user's agent run
+  confirmation-gated tools without the "once / always / cancel" dialog: a
+  switch on the user's row in the local network tab, and for the admin's own
+  account also under advanced settings. Off by default, and never silent -
+  every skipped dialog is recorded as a `gate_bypassed` security event.
+- **The tool-step budget is yours to set.** The hard stop of 75 tool steps per
+  request is now a setting (advanced settings, admin-only), and a switch can
+  remove the limit entirely; the daily spend budget still applies either way.
+
 - **Agent rooms: several agents in one conversation.** A room is a group chat
   that your agent shares with other agents, including ones that are not VAF at
   all. Anything with a terminal can take part: `vaf a2a create` opens a room,
@@ -142,43 +151,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   could not close it and could not remove anybody, and their own agent was refused
   when it tried to join. Rooms already on disk are healed as they are read; nothing
   has to be recreated.
-
-  The bin on a group chat now DELETES it, the way the bin on a conversation
-  does: the room and its transcript are removed from this machine and everybody
-  in it loses access. It closes the room first, so an agent reading it from
-  another machine is told why its access ended instead of finding a
-  conversation that is simply not there. It cannot be undone, and the
-  confirmation says so and points at `vaf a2a export` for keeping a copy.
-  Ending a conversation WITHOUT removing it is still there as `vaf a2a close`,
-  and `vaf a2a delete` does the same as the bin from a terminal.
-
-  A room your agent opens appears in the list straight away. It used to need the
-  whole interface reloaded by hand before the new room showed up.
-
-  An open group chat now follows along by itself. What the other agents say
-  appears while you watch, instead of only when you write something yourself.
-
-  Your agent can also open a group chat when you ask for one. The safety check
-  that makes it state its approach before changing anything was refusing the
-  request itself, so it went looking for another way round.
-
-  Names in a group chat are the names themselves. An agent called Nobel is called
-  Nobel, not Nobel88 - a number only appears when two participants share a name,
-  and then they are simply 1 and 2. You appear under your account's name instead
-  of under the word "terminal" when you join from a terminal.
-
-  The room's header stays on screen while you scroll, frosted so the conversation
-  stays visible underneath, and a room follows the conversation to the bottom the
-  way a chat does.
-
-  An agent can say what it is good for after it has already joined, instead of
-  only at the moment it arrives - `vaf a2a introduce`, or by asking your agent to
-  join again with a description. It can change the name it appears under the same
-  way, and writing into a room from the browser quietly replaces a name like
-  "terminal" with your account's.
-
-  Typing `@` in a group chat now offers the agents in the room, not the workflow
-  list.
 - **`vaf setup` creates the admin account from the terminal.** The first
   account could previously only be created in the browser, which does not work
   on a machine without one. The command asks for a username, a password, a

@@ -247,21 +247,49 @@ def with_subagent_debug_mirror(sink):
     return _mirrored
 
 
+_confirmation_bypass_resolver = None
+
+
+def set_confirmation_bypass_resolver(resolver) -> None:
+    """Register how a per-user confirmation bypass is looked up.
+
+    ``resolver(user_scope_id) -> bool`` - True when the ADMIN has granted this
+    user the hands-off switch. The framework never reads the harness's user
+    store itself (same direction rule as ``set_account_allowlist_resolver``);
+    the harness registers its lookup at startup, an embedder brings their own
+    or leaves it unregistered, which means: nobody has the grant.
+    """
+    global _confirmation_bypass_resolver
+    _confirmation_bypass_resolver = resolver
+
+
 def _admin_bypass_active(user_role: str | None, user_scope_id: str | None) -> bool:
     """Whether this identity may skip confirmations entirely.
 
-    Off by default. It is a CONVENIENCE layer and sits UNDER the funnel's
+    Off by default, two ways in: the machine-wide admin switch
+    (``tool_confirmation_bypass_admins``, admin identities only), or a per-user
+    grant the admin made in the user's own record, looked up through the
+    registered resolver. It is a CONVENIENCE layer and sits UNDER the funnel's
     authorization stages: admin_only and the account allowlist have already
     run, so this can only skip the human question, never widen who may call
     what. Fail-closed on any error.
     """
+    return _bypass_reason(user_role, user_scope_id) is not None
+
+
+def _bypass_reason(user_role: str | None, user_scope_id: str | None) -> str | None:
+    """The ``why`` for the ``gate_bypassed`` event, or None when there is no bypass."""
     try:
-        if not policy_admin_flag(user_role, user_scope_id):
-            return False
-        from vaf.core.config import Config
-        return bool(Config.get("tool_confirmation_bypass_admins", False))
+        if policy_admin_flag(user_role, user_scope_id):
+            from vaf.core.config import Config
+            if bool(Config.get("tool_confirmation_bypass_admins", False)):
+                return "admin_bypass"
+        if _confirmation_bypass_resolver is not None and user_scope_id:
+            if bool(_confirmation_bypass_resolver(user_scope_id)):
+                return "user_grant"
+        return None
     except Exception:
-        return False
+        return None
 
 
 def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
@@ -316,10 +344,11 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
         # Hands-off for the machine owner, when the owner asked for it. Not a
         # silent one: an unannounced bypass is exactly what made the old
         # machine-global grants impossible to audit.
-        if _admin_bypass_active(user_role, user_scope_id):
+        _bypass_why = _bypass_reason(user_role, user_scope_id)
+        if _bypass_why is not None:
             emit_event(emit, {"type": "gate_bypassed", "tool": tool_name,
                               "cwd": str(trust_dir), "reason": reason,
-                              "why": "admin_bypass"})
+                              "why": _bypass_why})
             return None
         if (get_tool_policy(tool_name, user_scope_id) == "allow"
                 or is_trusted_dir(trust_dir, user_scope_id)

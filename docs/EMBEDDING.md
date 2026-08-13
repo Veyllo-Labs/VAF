@@ -1038,6 +1038,16 @@ The contract, each choice against its failure mode:
   `None`; VAF's own product resolver does exactly that for its auth database.
 - **Consulted per call, not cached.** Revocation latency is your resolver's own
   business - cache inside it if lookups are expensive.
+
+Its sibling, `set_confirmation_bypass_resolver`, answers the opposite kind of
+question: does this account hold the admin-granted hands-off switch that skips
+the tool-confirmation DIALOG? `resolver(user_scope_id) -> bool`; unregistered
+means nobody has it, and the polarity is inverted from the allowlist on
+purpose - it fails CLOSED, because this flag removes a question rather than
+restricting a capability. It sits UNDER the authorization stages (it can never
+widen `admin_only`, the account allowlist, or override an authorizer's
+`ask()`), and every skipped dialog is announced as a `gate_bypassed` event
+with `why: "user_grant"`.
 - **Process-wide.** One resolver per process (the same topology as "one tenant
   per process" above); the last registration wins and `None` deregisters.
 

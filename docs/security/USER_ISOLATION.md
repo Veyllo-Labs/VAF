@@ -405,6 +405,14 @@ as backstop for hallucinated names. Coder-internal tools (`bash`, the git tools)
 offered to the picker via `GET /api/users/tool-universe`, sourced from the coder
 module's own declaration so the picker cannot drift from what the child runs.
 
+The same record can carry `permissions["confirmation_bypass"]` (default absent =
+off): the admin-granted hands-off switch that lets the agent run
+confirmation-gated tools for THIS user without asking. It is resolved through the
+same registered-resolver lane, fails CLOSED (an unreachable DB grants nothing),
+can only skip the human question - `admin_only`, the account allowlist and an
+authorizer's `ask()` are decided earlier and are never widened - and every use
+is announced as a `gate_bypassed` event.
+
 Pinned semantics: no row, no `"tools"` key or an EMPTY stored list mean UNRESTRICTED -
 `[]` is the API model's creation default, and "block every tool" is deliberately not
 expressible here (deactivate the account instead). Admins are never restricted. A

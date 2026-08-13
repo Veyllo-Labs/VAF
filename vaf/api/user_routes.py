@@ -162,6 +162,10 @@ class UserUpdate(BaseModel):
     tools: Optional[List[str]] = None
     workflows: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    # The hands-off switch: the agent skips the tool-confirmation dialog for this
+    # user. Admin-granted (this route is require_admin), announced per use via
+    # gate_bypassed events, default absent = off.
+    confirmation_bypass: Optional[bool] = None
 
 
 class UserResponse(BaseModel):
@@ -243,6 +247,7 @@ async def list_users(_: Dict[str, Any] = Depends(require_admin)):
                     "requires_2fa_setup": user.requires_2fa_setup,
                     "tools": user.permissions.get("tools", []) if user.permissions else [],
                     "workflows": user.permissions.get("workflows", []) if user.permissions else [],
+                    "confirmation_bypass": bool(user.permissions.get("confirmation_bypass")) if user.permissions else False,
                     "created_at": user.created_at.isoformat() if user.created_at else None,
                     "last_login": user.last_login.isoformat() if user.last_login else None,
                 }
@@ -324,6 +329,7 @@ async def get_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
                 "requires_2fa_setup": user.requires_2fa_setup,
                 "tools": user.permissions.get("tools", []) if user.permissions else [],
                 "workflows": user.permissions.get("workflows", []) if user.permissions else [],
+                "confirmation_bypass": bool(user.permissions.get("confirmation_bypass")) if user.permissions else False,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "last_login": user.last_login.isoformat() if user.last_login else None,
             }
@@ -384,6 +390,8 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
                 permissions["tools"] = data.tools
             if data.workflows is not None:
                 permissions["workflows"] = data.workflows
+            if data.confirmation_bypass is not None:
+                permissions["confirmation_bypass"] = bool(data.confirmation_bypass)
             user.permissions = permissions
             # A revocation must beat the resolver's TTL: the funnel caches the allowlist
             # for a few seconds per scope, and "the admin just unticked it" is exactly the

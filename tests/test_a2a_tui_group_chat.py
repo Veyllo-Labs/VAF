@@ -168,3 +168,65 @@ def test_a_frame_time_becomes_a_clock_and_a_broken_one_becomes_nothing():
 @pytest.mark.parametrize("bad", ["", "nope", float("nan")])
 def test_the_clock_never_raises(bad):
     _room_clock(bad)
+
+
+# ── rooms in the session panel ─────────────────────────────────────────────
+
+def _panel_source() -> str:
+    """Only the SessionsPanel class. screens.py holds a second _picked - the provider
+    picker - and a naive split lands on it and asserts against the wrong function."""
+    whole = (ROOT / "vaf" / "cli" / "tui_app" / "screens.py").read_text(encoding="utf-8")
+    return whole.split("class SessionsPanel(")[1].split("\nclass ")[0]
+
+
+def test_a_room_row_is_never_posted_as_a_session_selection():
+    """MUTATION: post Selected for a room row.
+
+    Selected means "load this session". A room loaded as one would open something whose
+    save rewrites an entire message list - the lost update the room store is built to
+    avoid, reached through a keypress. The panel posts a different message, and the app
+    routes it to the room renderer instead of the session loader.
+    """
+    source = _panel_source().split("def _picked")[1].split("\n    def ")[0]
+    assert "RoomSelected" in source, "a room row still posts a session selection"
+    # the room branch must return before the Selected below it
+    assert source.index("RoomSelected") < source.index("self.Selected("), (
+        "the room branch runs after the session post")
+    assert "return" in source.split("RoomSelected")[1].split("self.Selected(")[0]
+
+
+def test_the_app_routes_a_picked_room_to_the_room_view():
+    """MUTATION: load it as a session anyway in the app handler.
+
+    And it goes through the same handler /room uses, so there is one way to render a
+    room rather than two that drift.
+    """
+    app_source = (ROOT / "vaf" / "cli" / "tui_app" / "app.py").read_text(encoding="utf-8")
+    handler = app_source.split("def _room_picked")[1].split("\n    @on")[0]
+
+    assert "self._cmd_room(" in handler
+    assert "load_session" not in handler
+
+
+def test_a_room_row_shows_what_a_room_has_and_a_chat_does_not():
+    """A row that looked like a chat row would invite chat expectations - renaming it,
+    typing into it. It shows the mark, the agent count and the unread badge instead."""
+    source = _panel_source()
+    room_branch = source.split('if entry.get("kind") == "room":')[1].split("continue")[0]
+
+    assert "_ROOM_MARK" in room_branch
+    assert "agents" in room_branch
+    assert "unread" in room_branch
+    assert "closed" in room_branch
+
+
+def test_the_mark_is_not_an_emoji():
+    """MUTATION: use a group-chat emoji.
+
+    The panel is 32 columns. A terminal rendering an emoji double-width pushes the
+    unread count off the edge on exactly the rooms that have one.
+    """
+    from vaf.cli.tui_app.screens import _ROOM_MARK
+
+    assert len(_ROOM_MARK) == 1
+    assert ord(_ROOM_MARK) < 0x1F000, "an emoji sneaked into a 32-column panel"

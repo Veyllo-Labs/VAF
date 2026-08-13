@@ -778,6 +778,19 @@ class VafApp(App):
         elif popup.is_open:
             popup.close()
 
+    @on(SessionsPanel.RoomSelected)
+    def _room_picked(self, event: SessionsPanel.RoomSelected) -> None:
+        """A room was picked in the panel: show it, do not load it.
+
+        Routed through the same handler `/room <id>` uses, so there is one way to
+        render a room and not two that drift. The live conversation stays where it
+        was - a room is a read-only view, not a place the prompt box writes into.
+        """
+        self.query_one("#sessions", SessionsPanel).remove_class("visible")
+        self.query_one("#promptbox", PromptBox).focus()
+        if event.room_id:
+            self._cmd_room([event.room_id])
+
     @on(SessionsPanel.Selected)
     def _session_picked(self, event: SessionsPanel.Selected) -> None:
         panel = self.query_one("#sessions", SessionsPanel)

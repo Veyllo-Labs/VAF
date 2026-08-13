@@ -127,6 +127,18 @@ reported inline with the closest match rather than becoming a message. A
 sentence that merely starts with a command word (`clear the table for dinner`)
 stays a message: only commands that declare arguments match with any.
 
+Agent rooms also stand at the TOP of the sessions panel, marked and with an unread
+count. The order is decided ONCE, in `SessionManager.list_ui`, which both this panel and
+the web sidebar consume - that function exists because the two surfaces diverged before,
+so a renderer that sorted for itself would repeat the mistake it was written to end.
+
+Picking a room there posts `SessionsPanel.RoomSelected`, never `Selected`. That
+distinction is load-bearing rather than tidy: `Selected` means "load this session", and a
+room loaded as a session would open something whose save rewrites an entire message list
+- the lost update the room store avoids by being write-once files. The row's id is not
+one a session loader accepts either, and the loader raises rather than returning empty if
+somebody passes one anyway.
+
 `room` paints a READ-ONLY view into the transcript and does not switch to
 anything: a room has many writers and no single history to load, so the live
 conversation stays where it was. Its bubbles are `PeerMessage`, which takes the

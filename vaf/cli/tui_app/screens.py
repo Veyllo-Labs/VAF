@@ -1321,6 +1321,12 @@ class PaletteScreen(ModalScreen[str]):
         self.dismiss("")
 
 
+# The group-chat mark. Two blocks rather than an emoji: the panel is 32 columns wide
+# and a terminal that renders an emoji double-width would push the unread count off the
+# edge on exactly the rooms that have one.
+_ROOM_MARK = "▚"
+
+
 class SessionsPanel(Vertical):
     """Left dock: the session list, walkable and selectable.
 
@@ -1341,6 +1347,14 @@ class SessionsPanel(Vertical):
             super().__init__()
             self.session_id = session_id
             self.name = name
+
+    class RoomSelected(events.Message):
+        """A room was picked. Deliberately NOT Selected: that one means "load this
+        session", and the app must not be able to confuse the two."""
+
+        def __init__(self, room_id: str) -> None:
+            super().__init__()
+            self.room_id = room_id
 
     class NewRequested(events.Message):
         pass
@@ -1393,6 +1407,23 @@ class SessionsPanel(Vertical):
             # is 26 columns (panel 32 minus paddings and the indent), so the
             # meta line carries id and count, and the third line the summary
             # when there is one, else the date.
+            if entry.get("kind") == "room":
+                # A room, not a conversation. The list carries both because a person
+                # thinks of them as one place to look; the row says which is which so
+                # nobody expects a room to behave like a chat they can rename.
+                unread = int(entry.get("unread") or 0)
+                head = f"{marker}[$secondary]{_ROOM_MARK}[/] [$text]{_esc(name)}[/]"
+                if unread:
+                    head += f" [$warning]{unread}[/]"
+                meta = f"{entry.get('members', 0)} agents · {entry.get('room_kind', '')}"
+                tail = str(entry.get("room_id") or "")[:24]
+                if entry.get("closed"):
+                    tail += " · closed"
+                lv.append(ListItem(Static(
+                    f"{head}\n"
+                    f"  [$text-disabled]{_esc(meta)}[/]\n"
+                    f"  [$text-disabled]{_esc(tail)}[/]")))
+                continue
             meta = sid[:12] + (f" · {count} msg" if count else "")
             tail = (summary[:24] + "…") if len(summary) > 25 else summary
             if not tail:
@@ -1414,6 +1445,13 @@ class SessionsPanel(Vertical):
         idx = event.list_view.index or 0
         if 0 <= idx < len(self._entries):
             entry = self._entries[idx]
+            if entry.get("kind") == "room":
+                # Never a Selected: that message means "load this session", and a room
+                # is not one. Loading it as a session would open something whose save
+                # rewrites a whole message list - the lost update the room store exists
+                # to avoid, reached through a keypress.
+                self.post_message(self.RoomSelected(str(entry.get("room_id") or "")))
+                return
             self.post_message(self.Selected(str(entry.get("id", "")),
                                             str(entry.get("name") or "")))
 

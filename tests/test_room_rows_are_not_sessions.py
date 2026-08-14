@@ -1381,3 +1381,165 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     wi._push_session_update("sess-1", data2)
     assert "roomId" not in data2
     assert "broadcast_to_session" in scheduled[-1]
+
+
+class _WatcherSocket:
+    """A connected browser, reduced to what the broadcast maps read and write."""
+
+    def __init__(self):
+        self.received = []
+
+    async def send_text(self, text):
+        import json
+        self.received.append(json.loads(text))
+
+
+def _wire_room_task_world(monkeypatch, wi):
+    """Three sockets, one room-ordered task, patched ON THE INSTANCE.
+
+    The world the empty-window incident happened in: the coder subprocess's task
+    is in the IPC active list carrying the room that ordered it, the person
+    watching the room holds a user-registered socket with NO session
+    subscription, and nobody at all is subscribed to the turn's session.
+    """
+    watcher = _WatcherSocket()   # the owner, looking at the room
+    foreign = _WatcherSocket()   # another account, must never see anything
+    plain = _WatcherSocket()     # same account, subscribed to an ordinary chat
+
+    monkeypatch.setattr(wi, "active_connections", [watcher, foreign, plain])
+    monkeypatch.setattr(wi, "connection_users",
+                        {watcher: "scope-a", foreign: "scope-b", plain: "scope-a"})
+    monkeypatch.setattr(wi, "connection_sessions", {plain: "sess-plain"})
+    monkeypatch.setattr(wi, "connection_usernames", {})
+    monkeypatch.setattr(wi, "connection_roles", {})
+    monkeypatch.setattr(wi, "_room_route_cache", None, raising=False)
+
+    class _Task:
+        def __init__(self, sid, room):
+            self.session_id = sid
+            self.room_id = room
+
+    class _Ipc:
+        def get_active_tasks(self, _sid=None):
+            return [_Task("sess-room-turn", "room-live-x"),
+                    _Task("sess-plain", None)]
+
+        def get_pending_tasks(self, _sid=None):
+            return []
+
+    import vaf.core.subagent_ipc as ipc_mod
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _Ipc())
+
+    class _Session:
+        def __init__(self, scope):
+            self.metadata = {"user_scope_id": scope}
+
+    class _Sessions:
+        def load(self, sid):
+            return {"sess-room-turn": _Session("scope-a"),
+                    "sess-plain": _Session("scope-a")}[sid]
+
+    import vaf.core.session as session_mod
+    monkeypatch.setattr(session_mod, "get_manager", lambda: _Sessions())
+    return watcher, foreign, plain
+
+
+def test_a_subprocess_workers_bridge_events_reach_the_room_watcher(monkeypatch):
+    """MUTATION: broadcast bridged sub-agent events per session only.
+
+    The empty-window incident, measured live: a coder subprocess spawned by a
+    room turn streams its ENTIRE run through POST /api/subagent/stream, and the
+    endpoint broadcast per session - to a session no browser watches, because
+    the person is watching the ROOM. The room-turn marker cannot help there: it
+    dies with the turn, minutes before the subprocess finishes. The durable
+    truth is the IPC task record, which carries the room that ordered the work,
+    so the bridge resolves session -> active room task -> owner scope, stamps
+    the room, and sends per user. Without a room task the session lane stays
+    exactly what it was.
+    """
+    import asyncio
+
+    import vaf.core.web_interface as wi_mod
+    import vaf.core.web_server as ws_mod
+
+    wi = wi_mod.get_web_interface()
+    watcher, foreign, plain = _wire_room_task_world(monkeypatch, wi)
+
+    update = ws_mod.SubAgentStreamUpdate(
+        type="coder_state", sessionId="sess-room-turn",
+        status="Editing room_stats.py")
+    asyncio.run(ws_mod.receive_subagent_stream(update))
+
+    assert watcher.received and watcher.received[-1]["type"] == "coder_state", (
+        "the room watcher never saw the subprocess event - the window stays "
+        "empty exactly like the live incident")
+    assert watcher.received[-1].get("roomId") == "room-live-x", (
+        "without the room stamp the browser's room gate drops the event")
+    assert foreign.received == [], "another account saw a bridged event"
+    # The same account's ordinary chat socket is reached too (per-user covers it).
+    assert plain.received and plain.received[-1]["type"] == "coder_state"
+
+
+def test_a_bridge_event_without_a_room_task_keeps_the_session_lane(monkeypatch):
+    """MUTATION: stamp every bridged event, or route per user unconditionally.
+
+    An ordinary chat's sub-agent run has a task with no room on it: its events
+    must travel exactly as before - per session, unstamped - or every chat
+    would paint into whatever room happens to be open.
+    """
+    import asyncio
+
+    import vaf.core.web_interface as wi_mod
+    import vaf.core.web_server as ws_mod
+
+    wi = wi_mod.get_web_interface()
+    watcher, foreign, plain = _wire_room_task_world(monkeypatch, wi)
+
+    update = ws_mod.SubAgentStreamUpdate(
+        type="subagent_update", sessionId="sess-plain", status="running")
+    asyncio.run(ws_mod.receive_subagent_stream(update))
+
+    assert watcher.received == [], "an unroomed event leaked to the room watcher"
+    assert foreign.received == []
+    assert plain.received and plain.received[-1]["type"] == "subagent_update"
+    assert "roomId" not in plain.received[-1]
+
+
+def test_the_in_process_lane_falls_back_to_the_task_room_after_the_turn(monkeypatch):
+    """MUTATION: rely on the live room-turn marker alone.
+
+    Delegated in-process workers run AFTER the turn that ordered them - the
+    marker is already gone while they stream. The task record is the durable
+    source: with no marker up, _push_session_update resolves the room from the
+    active task and routes per user, same as the bridge.
+    """
+    import vaf.core.web_interface as wi_mod
+
+    wi = wi_mod.get_web_interface()
+    watcher, foreign, plain = _wire_room_task_world(monkeypatch, wi)
+
+    class _Agent:
+        _room_turn = None
+        _current_user_scope_id = "scope-a"
+
+    scheduled = []
+
+    def _fake_sched(coro, loop):
+        scheduled.append(coro.__qualname__)
+        coro.close()
+        return object()
+
+    monkeypatch.setattr(wi, "agent_instance", _Agent(), raising=False)
+    monkeypatch.setattr(wi, "_get_dispatch_loop", lambda: object())
+    monkeypatch.setattr(wi_mod.asyncio, "run_coroutine_threadsafe", _fake_sched)
+
+    data = {"type": "research_state", "status": "searching"}
+    wi._push_session_update("sess-room-turn", data)
+    assert data.get("roomId") == "room-live-x", (
+        "the post-turn in-process feed lost the room stamp")
+    assert scheduled and "broadcast_to_user" in scheduled[-1]
+
+    data2 = {"type": "research_state", "status": "searching"}
+    wi._push_session_update("sess-plain", data2)
+    assert "roomId" not in data2
+    assert "broadcast_to_session" in scheduled[-1]

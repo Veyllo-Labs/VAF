@@ -609,6 +609,72 @@ class WebInterfaceManager:
                 loop
             )
 
+    def room_route_for_session(self, session_id: Optional[str]):
+        """`(room_id, owner_scope)` when an active sub-agent task ORDERED BY A ROOM
+        runs for this session; None otherwise.
+
+        This is the durable half of the room live-feed routing. The room-turn
+        marker only lives as long as the turn, but a spawned subprocess streams
+        for minutes AFTER the turn that ordered it ended - measured live: the
+        sub-agent window opened on the turn's own events and then sat empty for
+        a six-minute coder run, because every bridged event was broadcast to a
+        session nobody watches. The task record is the source that survives the
+        turn: it carries the ordering room, and its session resolves to the one
+        owner allowed to see the feed (same ownership rule the worker cards
+        apply: a scopeless legacy session belongs to the local admin, never to
+        everyone). Every failure answers None, which keeps the session lane -
+        fail closed means "display stays narrow", never "event crosses users".
+
+        The IPC files are re-read at most every 1.5s, and an unknown session
+        forces at most 4 refreshes/s: live feeds arrive per token, and a disk
+        read per event would make the bridge the slowest part of the run.
+        """
+        if not session_id:
+            return None
+        sid = str(session_id)
+        now = time.monotonic()
+        cache = getattr(self, "_room_route_cache", None)
+        if (isinstance(cache, dict) and now < cache["hard"]
+                and (sid in cache["map"] or now < cache["soft"])):
+            return cache["map"].get(sid)
+        route_map: Dict[str, Any] = {}
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            ipc = get_ipc()
+            tasks = list(ipc.get_active_tasks(None)) + list(ipc.get_pending_tasks(None))
+            for task in tasks:
+                task_sid = getattr(task, "session_id", None)
+                if not task_sid:
+                    continue
+                room_id = getattr(task, "room_id", None)
+                if not room_id:
+                    # A decided negative: the task exists and no room ordered it.
+                    route_map.setdefault(str(task_sid), None)
+                    continue
+                scope = self._session_owner_scope(str(task_sid))
+                route_map[str(task_sid)] = ((str(room_id), scope) if scope else None)
+        except Exception:
+            route_map = {}
+        self._room_route_cache = {"map": route_map,
+                                  "soft": now + 0.25, "hard": now + 1.5}
+        return route_map.get(sid)
+
+    def _session_owner_scope(self, session_id: str) -> Optional[str]:
+        """The scope that owns a session, or None when ownership cannot be PROVEN.
+        A scopeless legacy session belongs to the local admin - the rule every
+        ownership reader in the harness applies - and an unloadable session
+        belongs to nobody, so its feed is never routed per user."""
+        try:
+            from vaf.core.session import get_manager
+            meta = getattr(get_manager().load(session_id), "metadata", None) or {}
+            scope = meta.get("user_scope_id")
+            if scope is not None:
+                return str(scope)
+            from vaf.core.config import get_local_admin_scope_id
+            return str(get_local_admin_scope_id())
+        except Exception:
+            return None
+
     def _push_session_update(self, session_id: Optional[str], data: dict):
         """
         Thread-safe push update with session scoping.
@@ -642,6 +708,20 @@ class WebInterfaceManager:
                 else:
                     # Same stale-loop fallback the session path keeps; the stamp
                     # travels in the payload either way.
+                    self._http_fallback_push(data)
+                return
+            # No live marker: delegated workers run AFTER the turn that ordered
+            # them. The task record is the durable source for the same routing.
+            route = self.room_route_for_session(session_id)
+            if route:
+                data['roomId'] = route[0]
+                loop = self._get_dispatch_loop()
+                if loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_to_user(route[1], data),
+                        loop
+                    )
+                else:
                     self._http_fallback_push(data)
                 return
             loop = self._get_dispatch_loop()

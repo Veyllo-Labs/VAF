@@ -1720,7 +1720,19 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
     # We're in an async handler, so we can directly await without checking the loop
     try:
         if update.sessionId:
-            await manager.broadcast_to_session(update.sessionId, data)
+            # A subprocess spawned by a ROOM turn streams its whole run through
+            # this endpoint, long after the turn (and its room marker) ended -
+            # measured live as the empty sub-agent window. The IPC task record
+            # carries the ordering room, so the event is stamped and routed per
+            # USER, which reaches the room watcher and the session subscribers
+            # alike without crossing an account boundary. No room task: the
+            # session lane stays exactly what it was.
+            route = manager.room_route_for_session(update.sessionId)
+            if route:
+                data["roomId"] = route[0]
+                await manager.broadcast_to_user(route[1], data)
+            else:
+                await manager.broadcast_to_session(update.sessionId, data)
         else:
             await manager.broadcast(data)
     except Exception as e:

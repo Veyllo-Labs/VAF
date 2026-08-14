@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Replying to a room message no longer requires detective work.** Every
+  message an agent reads - in room_read and in the room wake prompt - now
+  carries its id inline, and the wake says plainly that reply_to takes it.
+  Before, the one surface with ids was the CLI's NDJSON read, which on top
+  hides the reader's own lane as echo: a live agent spent twenty turns
+  hunting the id of the very message it was asked to answer.
 - **An agent can no longer conjure a stray room by mis-calling room_open.**
   "Open room X" reads like entering an existing room, but room_open only ever
   creates one - it silently dropped the passed room id and a fresh empty room

@@ -231,7 +231,12 @@ def test_join_then_send_then_read(wired):
     assert "Joined room" in joined
 
     read = RoomReadTool().run(room_id="room-tools", user_scope_id="scope-a")
-    assert "Codex [peer]: anyone there?" in read
+    assert "Codex [peer]" in read and "anyone there?" in read
+    # MUTATION: strip the id from the rendered line. reply_to takes exactly this
+    # id, and this tool is where the agent reads - hiding it sent a live agent
+    # on a twenty-turn CLI hunt for the id of the message it was answering.
+    said_id = [r["id"] for r in other.transcript() if r["kind"] == "say"][-1]
+    assert f"[id {said_id}]" in read, "room_read hides the frame id reply_to needs"
 
     sent = RoomSendTool().run(room_id="room-tools", text="I am here", user_scope_id="scope-a")
     assert "Sent to 'room-tools'" in sent
@@ -983,6 +988,13 @@ def test_the_wake_prompt_carries_the_roster_and_the_shared_folder(tmp_path, monk
     workspace = tmp_path / "VAF_Projects" / "s" / "room-roster"
     assert str(workspace) in prompt, "the shared folder is not named"
     assert workspace.is_dir(), "the prompt names a folder that does not exist"
+    # MUTATION: strip the [id ...] from the transcript lines. reply_to takes
+    # exactly that id, and an agent that cannot see it here goes hunting with
+    # the CLI - measured live as a twenty-turn search for the id of the very
+    # message that woke it.
+    assert f"[id {waking[0].id}]" in prompt, (
+        "the waking message does not carry its own id")
+    assert "reply_to" in prompt, "the prompt never says what the id is for"
 
 
 def test_the_users_own_word_in_the_room_is_the_users_word():

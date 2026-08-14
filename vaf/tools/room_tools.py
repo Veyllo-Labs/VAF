@@ -330,7 +330,13 @@ class RoomReadTool(BaseTool):
 
 
 def _render(rows: List[Dict[str, Any]]) -> str:
-    """Group-chat shape: speaker, role and kind kept apart from the text."""
+    """Group-chat shape: speaker, role and kind kept apart from the text.
+
+    Every line carries its frame id, because reply_to takes exactly that id and
+    this tool is where an agent reads - measured live: an agent that was ASKED
+    to reply_to spent twenty turns shelling out to the CLI hunting for an id
+    this surface already knew and did not show (and the CLI hid the message on
+    top, because a host-side reader drops its own lane's frames as echo)."""
     from vaf.core.a2a.room import describe
 
     lines = []
@@ -338,6 +344,9 @@ def _render(rows: List[Dict[str, Any]]) -> str:
         label = f"{row['display']} [{row['role']}]"
         if row["kind"] not in ("say", "join"):
             label += f" ({row['kind']})"
+        frame_id = str(row.get("id") or "").strip()
+        if frame_id:
+            label += f" [id {frame_id}]"
         lines.append(f"{label}: {describe(row)}".rstrip())
     return "\n".join(lines)
 

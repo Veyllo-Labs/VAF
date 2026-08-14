@@ -1096,3 +1096,42 @@ def test_the_agents_running_room_turn_is_the_precise_signal(tmp_path, monkeypatc
     asyncio.run(web_server_mod._send_room_transcript(
         ws2, Room.open("room-turnsig", base=tmp_path), "scope-a"))
     assert agent_peer not in {t["peer"] for t in ws2.sent[0]["room"]["typing"]}
+
+
+def test_the_payload_names_the_viewers_own_agent_and_nobody_else(tmp_path, monkeypatch):
+    """MUTATION: hand the agent treatment to any agent-shaped member.
+
+    The view draws the viewer's own agent with the living avatar. That face is an
+    identity: a foreign agent wearing it would put our face on somebody else's
+    words, so the payload only ever names the handle derived from the VIEWER'S
+    scope, and only when that handle is actually in the room.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-face")
+    agent_peer = derive_peer_id(participant_key("agent", "scope-a"), "room-face")
+    room.join(display="Nobel", scope_id="scope-a", peer_id=agent_peer)
+    room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    ws = _WS()
+    asyncio.run(_send_room_transcript(ws, Room.open("room-face", base=tmp_path),
+                                      "scope-a"))
+    assert ws.sent[0]["room"]["agentPeer"] == agent_peer
+
+    # Another account looking at a room their agent is NOT in: no face for anybody.
+    ws2 = _WS()
+    asyncio.run(_send_room_transcript(ws2, Room.open("room-face", base=tmp_path),
+                                      "scope-b"))
+    assert ws2.sent[0]["room"]["agentPeer"] == ""

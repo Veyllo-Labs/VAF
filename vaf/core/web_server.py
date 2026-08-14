@@ -118,6 +118,16 @@ ROOM_TYPING_WINDOW_S = 120.0
 # but luck.
 
 
+def _derive_or_empty(lane: str, user_scope_id, room_id: str) -> str:
+    """A derived room handle, or "" when it cannot be derived. Never raises: the
+    transcript must paint even for a viewer whose scope resolves nothing."""
+    try:
+        from vaf.core.a2a.room import derive_peer_id, participant_key
+        return derive_peer_id(participant_key(lane, user_scope_id), room_id)
+    except Exception:
+        return ""
+
+
 async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -> None:
     """The room as the browser reads it, from the store, every time.
 
@@ -224,6 +234,13 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "createdAt": room.manifest.get("created_at"),
             "topic": room.manifest.get("topic") or "",
             "me": acting or row.get("peer"),
+            # The viewer's own AGENT in this room, so the view can draw it as the
+            # agent it is (the living avatar) rather than as initials. Derived the
+            # same way every identity here is; empty when their agent is not a
+            # member. A foreign agent never gets this treatment: an agent that is
+            # not ours is a full agent of its own, never a second face of ours.
+            "agentPeer": next((p for p in [
+                _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
             "typing": typing,
             "canManage": bool(acting) and (
                 acting in hosts or room.role_of(acting) == "leader"),
@@ -5954,9 +5971,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 raise ValueError(f"invalid skill: {_parsed['error']}")
 
                             _exists = (_skr.skill_folder(_sk_id) / "SKILL.md").exists()
-                            if _is_update and not _exists:
+                            # A shipped skill has no user-dir file, and updating it IS
+                            # the supported customisation: the save lands in the user
+                            # dir and replaces the shipped copy at discovery. Creating
+                            # under a shipped id is refused the same way any taken id
+                            # is - it would shadow a working skill by accident.
+                            from vaf.skills.templates import builtin_skill_ids as _builtin_ids
+                            _sk_builtin = _sk_id in _builtin_ids()
+                            if _is_update and not _exists and not _sk_builtin:
                                 raise ValueError(f"Skill '{_sk_id}' does not exist. Use create_skill.")
-                            if not _is_update and _exists:
+                            if not _is_update and (_exists or _sk_builtin):
                                 raise ValueError(f"Skill '{_sk_id}' already exists. Use update_skill to modify it.")
 
                             # Security scan the instruction body. HIGH risk blocks unless the

@@ -134,3 +134,22 @@ def test_every_send_kind_the_skill_names_is_one_the_room_accepts(body):
     unknown = {k for k in named if k not in KINDS
                and k not in ("working", "input_required", "completed", "failed")}
     assert not unknown, f"the skill teaches kinds the room refuses: {sorted(unknown)}"
+
+
+def test_the_editor_reads_the_shipped_body_and_the_override_wins(tmp_path, monkeypatch):
+    """MUTATION: read only the user dir for the editor's source.
+
+    The list showed the shipped skill's name over an EMPTY instructions box, and
+    saving that box would have overridden a working skill with placeholder text.
+    """
+    from vaf.core import skills_registry as reg
+
+    monkeypatch.setattr(reg, "get_skills_dir", lambda: tmp_path)
+    source = reg.get_skill_md_source("a2a_rooms")
+    assert source and "Agent Rooms" in source, "the shipped body never reached the editor"
+
+    override = tmp_path / "a2a_rooms"
+    override.mkdir(parents=True)
+    (override / "SKILL.md").write_text("---\nname: Mine\ndescription: d\n---\n# mine\n",
+                                       encoding="utf-8")
+    assert "# mine" in (reg.get_skill_md_source("a2a_rooms") or "")

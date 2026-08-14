@@ -44,6 +44,10 @@ export interface SkillsEditorProps {
   };
   /** Non-admin users for the visibility picker. Fetched lazily when the editor opens. */
   users?: SkillEditorUser[];
+  /** Ships with VAF: saving stores the user's own copy; there is no folder to
+   *  delete, so the delete button is not offered (a user-dir OVERRIDE lists as
+   *  builtin=false and deleting it returns the shipped version). */
+  builtin?: boolean;
   onSave: (data: SkillSaveData) => void;
   onDelete?: (id: string) => void;
   /** Upload a folder bundle as a .zip (create mode only). */
@@ -95,6 +99,7 @@ export default function SkillsEditor({
   skillId,
   initialData,
   users = [],
+  builtin = false,
   onSave,
   onDelete,
   onUploadZip,
@@ -307,7 +312,13 @@ export default function SkillsEditor({
         {/* ── Footer ── */}
         <div className="h-16 border-t border-gray-100 flex items-center justify-between px-6 shrink-0 bg-gray-50/50">
           <div>
-            {isEdit && onDelete && (
+            {isEdit && builtin && (
+              <span className="text-[11px] text-gray-400">
+                Ships with VAF. Saving stores your own copy; deleting that copy
+                later brings the shipped version back.
+              </span>
+            )}
+            {isEdit && !builtin && onDelete && (
               showDeleteConfirm ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-red-600">Delete this skill?</span>

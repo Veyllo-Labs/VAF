@@ -309,10 +309,20 @@ def save_skill_md(skill_id: str, content: str) -> Path:
 
 
 def get_skill_md_source(skill_id: str) -> Optional[str]:
-    """Return the raw SKILL.md text for the editor, or None if missing."""
+    """Return the raw SKILL.md text for the editor, or None if missing.
+
+    The user's own copy first, the shipped one second - the same order discovery
+    resolves them in. Without the fallback the editor showed a shipped skill's
+    name and description (from the list) over an EMPTY instructions box (from
+    here), and saving that box would have overridden a working skill with the
+    placeholder text.
+    """
     path = skill_folder(skill_id) / "SKILL.md"
     if not path.exists():
-        return None
+        from vaf.skills.templates import _builtin_skills_dir
+        path = _builtin_skills_dir() / skill_id / "SKILL.md"
+        if not path.exists():
+            return None
     try:
         return path.read_text(encoding="utf-8")
     except Exception as exc:

@@ -139,7 +139,7 @@ export interface SettingsModalProps {
     /** Last error from the backend for a workflow operation */
     workflowBackendError?: string | null;
     /** Skills (Anthropic Agent Skills / SKILL.md) visible to this user */
-    skills?: Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>;
+    skills?: Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; builtin?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>;
     /** Increments when a skill op (create/update/delete) succeeds — closes the editor. */
     skillSavedTick?: number;
     /** Create a new skill (admin only) */
@@ -980,6 +980,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showSkillsModal, setShowSkillsModal] = useState(false);
     const [skillsEditor, setSkillsEditor] = useState<{
         skillId: string | null;
+        builtin?: boolean;
         initialData?: { name?: string; description?: string; source?: string; shared_with?: string[] };
     } | null>(null);
     const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
@@ -4863,6 +4864,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             {skillsEditor !== null && (
                 <SkillsEditor
                     skillId={skillsEditor.skillId}
+                    builtin={skillsEditor.builtin === true}
                     initialData={skillsEditor.initialData}
                     users={customToolUsers}
                     isSaving={isSkillSaving}
@@ -5254,7 +5256,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         return (
                                             <div
                                                 key={s.id || idx}
-                                                onClick={() => { if (canManage) { if (onGetCustomToolUsers) onGetCustomToolUsers(); setSkillsEditor({ skillId: s.id, initialData: { name: s.name, description: s.description, source: s.source, shared_with: s.shared_with } }); } }}
+                                                onClick={() => { if (canManage) { if (onGetCustomToolUsers) onGetCustomToolUsers(); setSkillsEditor({ skillId: s.id, builtin: s.builtin === true, initialData: { name: s.name, description: s.description, source: s.source, shared_with: s.shared_with } }); } }}
                                                 className={`group relative aspect-square bg-white rounded-2xl border-2 transition-all overflow-hidden flex flex-col ${canManage ? 'cursor-pointer hover:shadow-xl hover:-translate-y-1' : ''} ${invalid ? 'border-red-200 hover:border-red-400' : 'border-emerald-200 hover:border-emerald-500'}`}
                                             >
                                                 <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">

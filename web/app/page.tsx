@@ -166,6 +166,10 @@ type RoomView = {
      *  actually running, 'read' = a peer took the newest message recently and has
      *  not answered it yet. The 3s poll refreshes and expires this. */
     typing?: Array<{ peer: string; label: string; kind?: string }>;
+    /** The viewer's own AGENT in this room, drawn with the living agent avatar
+     *  instead of initials. A foreign agent never gets it: an agent that is not
+     *  ours is a full agent of its own, never a second face of ours. */
+    agentPeer?: string;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
     topic?: string;
@@ -1131,8 +1135,18 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                         </div>
                     );
                 }
+                // The viewer's own AGENT wears its real face - the living avatar the
+                // whole product knows it by - never initials. Only ours: a foreign
+                // agent is a full agent of its own, and giving it the same face
+                // would put our identity on somebody else's words.
+                const isOwnAgent = !!view.room.agentPeer && m.peer === view.room.agentPeer;
                 return (
                     <div key={m.id} className="flex gap-3 py-2">
+                        {isOwnAgent ? (
+                            <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
+                                <AgentAvatar mode="idle" />
+                            </div>
+                        ) : (
                         <div className={cn(
                             "w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5",
                             mine
@@ -1140,6 +1154,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                                 : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
                             {(m.label || '?').slice(0, 2)}
                         </div>
+                        )}
                         <div className="min-w-0 flex-1">
                             <div className="flex items-baseline gap-2 flex-wrap">
                                 <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{m.label}</span>
@@ -1167,9 +1182,17 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                 <div>
                     {view.room.typing!.map(t => (
                         <div key={t.peer} className="flex gap-3 py-2">
+                            {t.kind === 'turn' ? (
+                                // Our agent, actually working on its answer right now -
+                                // it wears its living face here too, in the working pose.
+                                <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
+                                    <AgentAvatar mode="plan" />
+                                </div>
+                            ) : (
                             <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]">
                                 {(t.label || '?').slice(0, 2)}
                             </div>
+                            )}
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-baseline gap-2 flex-wrap">
                                     <span className="text-sm font-medium text-gray-400 dark:text-[#6a6a6a]">{t.label}</span>

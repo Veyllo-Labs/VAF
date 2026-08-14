@@ -9016,7 +9016,14 @@ function VAFDashboardContent() {
                                             </button>
                                         ))}
                                     </div>
-                                    <p className="text-[11px] text-gray-400 mt-2">{tMain('roomAgentModeHint')}</p>
+                                    {/* The hint follows the STORED mode, not the click: it
+                                        describes what is actually in force, so it can never
+                                        promise a state the server did not accept. */}
+                                    <p className="text-[11px] text-gray-400 mt-2">
+                                        {tMain(roomView.room.agentMode === 'observe' ? 'roomModeObserveHint'
+                                            : roomView.room.agentMode === 'autonomous' ? 'roomModeAutonomousHint'
+                                                : 'roomModeAssistHint')}
+                                    </p>
                                 </div>
                             )}
 

@@ -1144,14 +1144,16 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     );
     const workerCards = (
         <>
+                    {/* pl-6: the card sits visibly INDENTED under the message text,
+                        like a reply to it - flush left it read as a new speaker. */}
                     {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
-                        <div className="py-1">
+                        <div className="py-1 pl-6">
                             {workerCardShell('live', liveWorker.status || 'Worker läuft',
                                 'Worker · live', null, true)}
                         </div>
                     )}
                     {(view.room.agentWorkers?.length ?? 0) > 0 && (
-                        <div className="space-y-2 py-1">
+                        <div className="space-y-2 py-1 pl-6">
                             {view.room.agentWorkers!.map((w, i) => {
                                 const running = (w.status || '').toLowerCase() === 'running';
                                 const meta = [workerTypeLabel(w.type), '1 Worker',
@@ -8011,8 +8013,11 @@ function VAFDashboardContent() {
                                     isOpen={subAgentState.isOpen}
                                     mode="dock"
                                     onClose={() => {
-                                        subAgentManualOpenRef.current = false;
-                                        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+                                        // closeSubAgentWindow(true), not a bare isOpen=false: the
+                                        // manual close must set the user-closed flag, or the very
+                                        // next streamed event reopens the window - measured live in
+                                        // a room run, where events never pause long enough to close.
+                                        closeSubAgentWindow(true);
                                     }}
                                     canClose={true}
                                     agentName={subAgentState.agentName}

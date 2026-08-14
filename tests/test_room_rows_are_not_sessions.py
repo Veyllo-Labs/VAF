@@ -1383,6 +1383,20 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_the_docks_close_button_survives_a_streaming_run():
+    """MUTATION: put the bare isOpen=false back into the dock's onClose.
+
+    A close that does not set the user-closed flag is undone by the very next
+    streamed event - measured live in a room run, where the coder never pauses
+    long enough for a bare close to stick. The dock's X must go through
+    closeSubAgentWindow(true), the one primitive that records the user's
+    decision."""
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    dock = source.split("<SubAgentWindow", 1)[1][:1200]
+    assert "closeSubAgentWindow(true)" in dock, (
+        "the dock's onClose no longer records the user's close")
+
+
 def test_an_empty_new_chat_does_not_paint_its_hero_into_an_open_room():
     """MUTATION: drop the room guard from the empty-chat hero or its wrapper.
 

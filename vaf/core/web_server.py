@@ -126,9 +126,12 @@ def _viewer_agent_workers(user_scope_id) -> list:
     CLOSED: the IPC file is global to every user and its records carry a session
     id, not a scope, so a task is shown only when its session PROVABLY belongs to
     the viewer (same ownership rule the workspace resolver applies: a scopeless
-    legacy session belongs to the local admin, never to everyone). A task with no
-    session id is never shown - its description is user content, and "probably
-    mine" is not an ownership answer.
+    legacy session belongs to the local admin, never to everyone). A task with
+    neither a session nor a room is never shown - its description is user
+    content, and "probably mine" is not an ownership answer. A SESSIONLESS task
+    that a room ordered is proven by that room's manifest instead: room turns
+    may legitimately run without a session, and the room's tenant is exactly who
+    the feed belongs to.
 
     Foreign room members never get worker cards from here: their workers run on
     their machines, which this store cannot see. A named boundary, not a gap -
@@ -141,6 +144,24 @@ def _viewer_agent_workers(user_scope_id) -> list:
         for task in get_ipc().get_active_tasks(None):
             sid = getattr(task, "session_id", None)
             if not sid:
+                # A room turn may spawn with NO session at all (the runner's
+                # room frame binds no chat). For those, the ordering room's own
+                # manifest is the ownership proof - stronger than the session
+                # proxy, and still fail-closed: no room, or a room whose tenant
+                # is not the viewer, shows nothing.
+                room_id = str(getattr(task, "room_id", "") or "").strip()
+                if not room_id:
+                    continue
+                owner = get_web_interface().room_owner_scope(room_id)
+                if owner is None or str(owner) != str(user_scope_id):
+                    continue
+                out.append({
+                    "type": str(getattr(task, "agent_type", "") or ""),
+                    "status": str(getattr(task, "status", "") or ""),
+                    "task": str(getattr(task, "task_description", "") or "")[:80],
+                    "done": getattr(task, "progress_done", None),
+                    "total": getattr(task, "progress_total", None),
+                })
                 continue
             try:
                 session_scope = (getattr(session_mgr.load(sid), "metadata", None)
@@ -1719,14 +1740,24 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
         return {"status": "ok"}
     # We're in an async handler, so we can directly await without checking the loop
     try:
-        if update.sessionId:
-            # A subprocess spawned by a ROOM turn streams its whole run through
-            # this endpoint, long after the turn (and its room marker) ended -
-            # measured live as the empty sub-agent window. The IPC task record
-            # carries the ordering room, so the event is stamped and routed per
-            # USER, which reaches the room watcher and the session subscribers
-            # alike without crossing an account boundary. No room task: the
-            # session lane stays exactly what it was.
+        # ROOM FIRST: a room turn may run with NO session at all (the runner's
+        # room frame binds no chat), so the room stamp the producers put on the
+        # event is the primary anchor - same trust as sessionId, it is the same
+        # loopback-only internal lane. The stamp routes per USER only when the
+        # room's tenant can be PROVEN from the manifest; an unresolvable room
+        # loses the stamp and falls through, so a forged or dead room id never
+        # widens delivery.
+        room_hint = str(data.get("roomId") or "").strip()
+        room_scope = manager.room_owner_scope(room_hint) if room_hint else None
+        if room_hint and room_scope is None:
+            data.pop("roomId", None)
+            room_hint = ""
+        if room_hint:
+            await manager.broadcast_to_user(room_scope, data)
+        elif update.sessionId:
+            # A room-ordered task that DID run under a session still routes to
+            # the room watcher: the IPC task record carries the ordering room.
+            # No room task: the session lane stays exactly what it was.
             route = manager.room_route_for_session(update.sessionId)
             if route:
                 data["roomId"] = route[0]

@@ -86,7 +86,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   one there. And it keeps following after the turn itself ends: a spawned
   coder streams for minutes longer, and that stream used to go dark for the
   room (the window opened and sat empty for the whole run); the feed is now
-  routed by the task the room ordered, which outlives the turn. The worker
+  routed by the task the room ordered, which outlives the turn. The room is
+  now a routing anchor in its own right, because a room turn can legitimately
+  run with no chat session at all - exactly then, every session-keyed gate
+  used to drop the whole feed silently: the ordering room travels with the
+  spawned worker and on every event, and the bridge delivers room-stamped
+  events to the room's own tenant even when no session exists. The worker
   card draws from the same live feed, so it appears even for workers that run
   inside the agent's own process, with a green pulse while they stream.
   Tapping a worker card opens the window, the same gesture the mobile preview

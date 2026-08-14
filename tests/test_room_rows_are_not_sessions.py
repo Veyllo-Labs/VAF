@@ -1520,6 +1520,49 @@ def test_a_bridge_event_without_a_room_task_keeps_the_session_lane(monkeypatch):
     assert "roomId" not in plain.received[-1]
 
 
+def test_a_sessionless_room_event_reaches_the_rooms_tenant(monkeypatch):
+    """MUTATION: route a room-stamped event by session only, or trust an
+    unresolvable room id.
+
+    The decisive live incident: a room turn ran with NO session at all (the
+    runner's room frame binds no chat), so its coder's events either died at a
+    session gate or fell to the global lane unstamped - the window stayed
+    empty however often the routing behind the session was repaired. The
+    producers now stamp the ordering room on the event itself, and the bridge
+    routes room-first: per user to the room's PROVEN tenant. An id whose room
+    cannot be resolved loses the stamp and never widens delivery.
+    """
+    import asyncio
+
+    import vaf.core.web_interface as wi_mod
+    import vaf.core.web_server as ws_mod
+
+    wi = wi_mod.get_web_interface()
+    watcher, foreign, plain = _wire_room_task_world(monkeypatch, wi)
+    monkeypatch.setattr(wi, "_room_owner_cache", {}, raising=False)
+    monkeypatch.setattr(
+        wi, "room_owner_scope",
+        lambda rid: "scope-a" if str(rid) == "room-live-x" else None)
+
+    # Sessionless, room-stamped: the shape a sessionless room turn produces.
+    update = ws_mod.SubAgentStreamUpdate(
+        type="coder_state", status="Editing", roomId="room-live-x")
+    asyncio.run(ws_mod.receive_subagent_stream(update))
+
+    assert watcher.received and watcher.received[-1]["type"] == "coder_state", (
+        "the room's tenant never saw the sessionless event")
+    assert watcher.received[-1].get("roomId") == "room-live-x"
+    assert foreign.received == [], "another account saw a room event"
+
+    # An unresolvable room: stamp dropped, delivery falls to the global lane
+    # (everyone connected), never to a narrowed user it cannot prove.
+    update2 = ws_mod.SubAgentStreamUpdate(
+        type="coder_state", status="Editing", roomId="room-forged")
+    asyncio.run(ws_mod.receive_subagent_stream(update2))
+    assert watcher.received[-1].get("roomId") != "room-forged", (
+        "a forged room id survived onto a delivered event")
+
+
 def test_the_in_process_lane_falls_back_to_the_task_room_after_the_turn(monkeypatch):
     """MUTATION: rely on the live room-turn marker alone.
 

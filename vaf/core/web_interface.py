@@ -450,6 +450,13 @@ class WebInterfaceManager:
         if _in_subagent_subprocess():
             if session_id:
                 payload["sessionId"] = session_id
+            # The ordering room rides beside the session: a room turn can spawn
+            # a child with NO session (the runner's room frame binds no chat),
+            # and the parent's endpoint routes by room when the session cannot
+            # carry the event to anybody.
+            _room = os.environ.get("VAF_ROOM_ID", "").strip()
+            if _room and "roomId" not in payload:
+                payload["roomId"] = _room
             _BRIDGE_POOL.submit(_post_to_parent, payload)
             return
         self._push_session_update(session_id, payload)
@@ -659,6 +666,37 @@ class WebInterfaceManager:
                                   "soft": now + 0.25, "hard": now + 1.5}
         return route_map.get(sid)
 
+    def room_owner_scope(self, room_id: Optional[str]) -> Optional[str]:
+        """The tenant scope that hosts a room, or None when it cannot be PROVEN.
+
+        The room manifest is the authority: a room-ordered worker's feed belongs
+        to the room's own tenant, whatever session the turn happened to run in -
+        and a room turn may legitimately run with NO session at all, which is
+        exactly when this answer is the only one left. Cached briefly: the
+        manifest is a disk read and live feeds arrive per token."""
+        rid = str(room_id or "").strip()
+        if not rid:
+            return None
+        now = time.monotonic()
+        cache = getattr(self, "_room_owner_cache", None) or {}
+        hit = cache.get(rid)
+        if hit and now < hit[1]:
+            return hit[0]
+        scope: Optional[str] = None
+        try:
+            from vaf.core.a2a.room import Room
+            raw = Room.open(rid).manifest.get("owner_scope")
+            if raw is None:
+                from vaf.core.config import get_local_admin_scope_id
+                scope = str(get_local_admin_scope_id())
+            else:
+                scope = str(raw)
+        except Exception:
+            scope = None
+        cache[rid] = (scope, now + 5.0)
+        self._room_owner_cache = cache
+        return scope
+
     def _session_owner_scope(self, session_id: str) -> Optional[str]:
         """The scope that owns a session, or None when ownership cannot be PROVEN.
         A scopeless legacy session belongs to the local admin - the rule every
@@ -740,6 +778,25 @@ class WebInterfaceManager:
             else:
                 self._http_fallback_push(data)
         else:
+            # No session, but a room turn may be the producer (the runner's room
+            # frame binds no chat): the room is a full routing anchor of its
+            # own. Only a PROVEN room tenant narrows the send; otherwise the
+            # global lane stays exactly what it was.
+            room_turn = getattr(getattr(self, "agent_instance", None),
+                                "_room_turn", None)
+            room_hint = str(data.get("roomId") or "").strip()
+            if not room_hint and isinstance(room_turn, dict):
+                room_hint = str(room_turn.get("room_id") or "").strip()
+            room_scope = self.room_owner_scope(room_hint) if room_hint else None
+            if room_hint and room_scope:
+                data['roomId'] = room_hint
+                loop = self._get_dispatch_loop()
+                if loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_to_user(room_scope, data), loop)
+                else:
+                    self._http_fallback_push(data)
+                return
             self.push_update(data)
 
     def _http_fallback_push(self, data: dict):

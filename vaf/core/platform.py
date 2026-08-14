@@ -689,11 +689,25 @@ class Platform:
                     _api_port = 8005 if tls_on else 8001
                     _api_base = f"http://127.0.0.1:{_api_port}"
 
+                    try:
+                        from vaf.core.subagent_ipc import get_current_room_id
+                        _spawn_room = str(get_current_room_id() or "").strip()
+                    except Exception:
+                        _spawn_room = ""
+
                     def _send_web_update(data: dict):
-                        if not session_id:
+                        # A room turn may spawn with NO session (the runner's
+                        # room frame binds no chat) - measured live: this gate
+                        # silently dropped the whole spawn feed of a room-
+                        # ordered coder. The room is a full routing anchor of
+                        # its own, so either identity is enough to send.
+                        if not session_id and not _spawn_room:
                             return
                         try:
-                            data["sessionId"] = session_id
+                            if session_id:
+                                data["sessionId"] = session_id
+                            if _spawn_room:
+                                data["roomId"] = _spawn_room
                             requests.post(
                                 f"{_api_base}/api/subagent/stream",
                                 json=data,

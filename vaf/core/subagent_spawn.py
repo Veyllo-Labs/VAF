@@ -116,6 +116,18 @@ def spawn_subagent(
     effective_session = session_id or get_current_session_id()
     if effective_session:
         sub_env["VAF_SESSION_ID"] = str(effective_session)
+    # The ordering ROOM travels beside the session, because a room turn may
+    # legitimately run with NO session at all (the runner's room frame binds no
+    # chat) - measured live: a sessionless room turn spawned a coder whose
+    # entire live feed was dropped at the first session gate. The room is the
+    # durable routing anchor for everything this child streams.
+    try:
+        from vaf.core.subagent_ipc import get_current_room_id
+        _room = get_current_room_id()
+        if _room:
+            sub_env["VAF_ROOM_ID"] = str(_room)
+    except Exception:
+        pass
     provider = subagent_provider_override()
     if provider:
         sub_env["VAF_PROVIDER"] = provider

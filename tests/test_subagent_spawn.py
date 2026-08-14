@@ -80,6 +80,30 @@ def test_spawn_builds_task_env_argv_and_marker(rig):
     assert opened["title"] == "VAF Coding Agent [tid12345]"
 
 
+def test_the_ordering_room_rides_into_the_child_env(rig, monkeypatch):
+    """MUTATION: drop the VAF_ROOM_ID stamp from the child env.
+
+    A room turn may run with NO session at all (the runner's room frame binds
+    no chat) - measured live: a sessionless room turn spawned a coder whose
+    whole live feed died at the first session gate. The room in the spawn
+    context is the durable anchor the child's events are routed by, so it must
+    survive into the child's environment beside the session.
+    """
+    ipc, opened = rig
+    monkeypatch.setattr("vaf.core.subagent_ipc.get_current_room_id",
+                        lambda: "room-orderer")
+    out = spawn_subagent("coding_agent", "extend the stats script")
+    assert out is not None
+    assert opened["env"]["VAF_ROOM_ID"] == "room-orderer"
+
+    # And no room in context leaves the env clean - a stale stamp would route
+    # a plain chat worker's feed into a room it never touched.
+    monkeypatch.setattr("vaf.core.subagent_ipc.get_current_room_id",
+                        lambda: None)
+    spawn_subagent("coding_agent", "another task")
+    assert "VAF_ROOM_ID" not in opened["env"]
+
+
 def test_failed_spawn_cancels_the_ipc_task(rig):
     """The guard every copy carried: a task left pending would count against
     duplicate guards and make the drain report a zombie that never lived."""

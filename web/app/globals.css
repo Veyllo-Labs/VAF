@@ -475,23 +475,25 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   50%     { transform:scale(1.18) }
 }
 
-/* A message arriving in a room, written out rather than borrowed: the app is
-   full of `animate-in fade-in slide-in-from-*` utilities and NONE of them do
-   anything - tailwindcss-animate is not installed and the plugin list is
-   empty, so those classes have always been dead and every message simply
-   appeared. Transform and opacity only, per the rule above. It drifts in from
-   the upper left over 0.7s, long enough to be noticed in a group chat where
-   several speakers write at once. `both` holds the start frame until the
-   animation runs, so nothing flashes at its final position first. */
+/* A message arriving in a room. Written out rather than borrowed from a
+   utility class, and kept here even now that the animate plugin is installed:
+   the shape is deliberate and was chosen by looking at it (2rem of travel,
+   0.75s), which no stock utility combination gives.
+   HORIZONTAL ONLY - it slides in from the left and grows the last three
+   percent. A vertical component made it read as "dropping in" from above, and
+   the transcript is already moving upward when a message lands. Transform and
+   opacity only, per the rule above; `both` holds the start frame so nothing
+   flashes at its final position first. */
 @keyframes roomMessageEnter {
-  from { opacity: 0; transform: translate3d(-0.9rem, -0.5rem, 0) }
-  to   { opacity: 1; transform: translate3d(0, 0, 0) }
+  from { opacity: 0; transform: translate3d(-2rem, 0, 0) scale(.97) }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1) }
 }
-.room-msg-enter { animation: roomMessageEnter .7s cubic-bezier(.16,.84,.44,1) both }
+.room-msg-enter { animation: roomMessageEnter .75s cubic-bezier(.16,.84,.44,1) both }
 @media (prefers-reduced-motion: reduce) {
-  /* A person who asked the system for less motion gets the message, not the
-     movement. */
-  .room-msg-enter { animation: none }
+  /* A person who asked the system for less motion still gets a message that
+     arrives - it fades without travelling, rather than not animating at all. */
+  @keyframes roomMessageEnter { from { opacity: 0 } to { opacity: 1 } }
+  .room-msg-enter { animation: roomMessageEnter .2s linear both }
 }
 @keyframes agentAvatarTalk {
   0%,100% { transform:scale(1);   border-radius:50% }

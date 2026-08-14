@@ -6002,17 +6002,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if not _parsed["valid"]:
                                 raise ValueError(f"invalid skill: {_parsed['error']}")
 
-                            _exists = (_skr.skill_folder(_sk_id) / "SKILL.md").exists()
-                            # A shipped skill has no user-dir file, and updating it IS
-                            # the supported customisation: the save lands in the user
-                            # dir and replaces the shipped copy at discovery. Creating
-                            # under a shipped id is refused the same way any taken id
-                            # is - it would shadow a working skill by accident.
-                            from vaf.skills.templates import builtin_skill_ids as _builtin_ids
-                            _sk_builtin = _sk_id in _builtin_ids()
-                            if _is_update and not _exists and not _sk_builtin:
+                            # resolve_skill_folder counts the shipped copy too. Updating
+                            # a shipped skill IS the supported customisation: the save
+                            # lands in the user dir and replaces the shipped copy at
+                            # discovery. Creating under a shipped id is refused the same
+                            # way any taken id is - it would shadow a working skill.
+                            _sk_resolved = _skr.resolve_skill_folder(_sk_id)
+                            if _is_update and _sk_resolved is None:
                                 raise ValueError(f"Skill '{_sk_id}' does not exist. Use create_skill.")
-                            if not _is_update and (_exists or _sk_builtin):
+                            if not _is_update and _sk_resolved is not None:
                                 raise ValueError(f"Skill '{_sk_id}' already exists. Use update_skill to modify it.")
 
                             # Security scan the instruction body. HIGH risk blocks unless the

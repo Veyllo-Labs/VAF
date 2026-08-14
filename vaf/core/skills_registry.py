@@ -78,7 +78,29 @@ def get_skills_dir() -> Path:
 
 
 def skill_folder(skill_id: str) -> Path:
+    """The skill's folder in the USER dir - the WRITE location, whether or not it
+    exists yet. Readers that look up a skill by id must use resolve_skill_folder
+    instead: this path alone does not know the skills that ship with the package."""
     return get_skills_dir() / skill_id
+
+
+def resolve_skill_folder(skill_id: str) -> Optional[Path]:
+    """The folder whose SKILL.md answers for this id, or None when neither exists.
+
+    The user's own copy first, the shipped one second - the same order discovery
+    resolves them in. This is the ONE existence lookup for readers: a check against
+    skill_folder() alone calls every shipped skill missing (the loader refused a
+    skill the router had just offered), and an existence check that skips the
+    shipped dir lets a new skill shadow a shipped id for every other user.
+    """
+    folder = skill_folder(skill_id)
+    if (folder / "SKILL.md").exists():
+        return folder
+    from vaf.skills.templates import _builtin_skills_dir
+    builtin = _builtin_skills_dir() / skill_id
+    if (builtin / "SKILL.md").exists():
+        return builtin
+    return None
 
 
 def _manifest_path() -> Path:
@@ -311,18 +333,15 @@ def save_skill_md(skill_id: str, content: str) -> Path:
 def get_skill_md_source(skill_id: str) -> Optional[str]:
     """Return the raw SKILL.md text for the editor, or None if missing.
 
-    The user's own copy first, the shipped one second - the same order discovery
-    resolves them in. Without the fallback the editor showed a shipped skill's
-    name and description (from the list) over an EMPTY instructions box (from
-    here), and saving that box would have overridden a working skill with the
-    placeholder text.
+    Resolution order comes from resolve_skill_folder. Without the shipped-dir
+    fallback the editor showed a shipped skill's name and description (from the
+    list) over an EMPTY instructions box (from here), and saving that box would
+    have overridden a working skill with the placeholder text.
     """
-    path = skill_folder(skill_id) / "SKILL.md"
-    if not path.exists():
-        from vaf.skills.templates import _builtin_skills_dir
-        path = _builtin_skills_dir() / skill_id / "SKILL.md"
-        if not path.exists():
-            return None
+    folder = resolve_skill_folder(skill_id)
+    if folder is None:
+        return None
+    path = folder / "SKILL.md"
     try:
         return path.read_text(encoding="utf-8")
     except Exception as exc:

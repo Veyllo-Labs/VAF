@@ -59,15 +59,20 @@ def test_a_user_dir_skill_under_the_same_id_wins(tmp_path, monkeypatch):
 
 
 def test_a_builtin_skill_is_visible_and_loadable_for_a_plain_user(tmp_path, monkeypatch):
-    """MUTATION: leave the builtin ids out of the registry's visibility answer.
+    """MUTATION: leave the builtin ids out of the registry's visibility answer,
+    OR point use_skill's existence check back at skill_folder() alone.
 
     list_skills and use_skill ask two different functions. A builtin skill only
     listed would be offered by the router and then refused by the loader, which
-    reads as a broken product on every fresh install.
+    reads as a broken product on every fresh install. Both halves run for real
+    here: the earlier version of this test asserted visibility only, and the
+    loader refused the shipped skill in production while the test stayed green.
     """
     from vaf.core import skills_registry
+    from vaf.tools.use_skill import UseSkillTool
 
     monkeypatch.setattr(templates, "_skills_dir", lambda: tmp_path / "none")
+    monkeypatch.setattr(skills_registry, "get_skills_dir", lambda: tmp_path / "none")
     monkeypatch.setattr(skills_registry, "load_manifest",
                         lambda: {"version": 1, "skills": {}})
     templates.reload_skills()
@@ -75,8 +80,56 @@ def test_a_builtin_skill_is_visible_and_loadable_for_a_plain_user(tmp_path, monk
         listed = {s["id"] for s in templates.list_skills(user_scope_id="scope-user")}
         assert "a2a_rooms" in listed
         assert skills_registry.is_skill_visible_to_user("a2a_rooms", "scope-user")
+
+        out = UseSkillTool().run(skill_id="a2a_rooms", user_scope_id="scope-user")
+        assert not out.startswith("error:"), out
+        assert '[SKILL: a2a_rooms' in out
+        assert "room_open" in out  # the body arrived, not just the header
     finally:
         templates.reload_skills()
+
+
+def test_use_skill_resolves_the_user_override_over_the_shipped_copy(tmp_path, monkeypatch):
+    """MUTATION: resolve the shipped dir first. Loading the package copy over the
+    user's override would silently undo every customisation on upgrade - the same
+    order discovery pins, checked on the loader's own lookup."""
+    from vaf.core import skills_registry
+    from vaf.tools.use_skill import UseSkillTool
+
+    override = tmp_path / "a2a_rooms"
+    override.mkdir(parents=True)
+    (override / "SKILL.md").write_text(
+        "---\nname: My Rooms\ndescription: my own words\n---\n# mine\n",
+        encoding="utf-8")
+    monkeypatch.setattr(templates, "_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skills_registry, "get_skills_dir", lambda: tmp_path)
+    monkeypatch.setattr(skills_registry, "load_manifest", lambda: {
+        "version": 1, "skills": {"a2a_rooms": {"shared_with": ["*"]}},
+    })
+    templates.reload_skills()
+    try:
+        out = UseSkillTool().run(skill_id="a2a_rooms", user_scope_id="scope-user")
+        assert "My Rooms" in out and "# mine" in out
+    finally:
+        templates.reload_skills()
+
+
+def test_create_skill_refuses_a_shipped_id(tmp_path, monkeypatch):
+    """MUTATION: check the user dir alone for a taken id. A user-dir copy replaces
+    the shipped skill at discovery for EVERYONE, so create_skill accepting a
+    shipped id lets any user knock a working skill out from under every other
+    user and put their own words in its place."""
+    from vaf.core import skills_registry
+    from vaf.tools.create_skill import CreateSkillTool
+
+    monkeypatch.setattr(skills_registry, "get_skills_dir", lambda: tmp_path)
+    out = CreateSkillTool().run(
+        skill_id="a2a_rooms", name="Mine", description="mine now",
+        body="# mine", user_scope_id="scope-user", username="user",
+    )
+    assert out.startswith("error:"), out
+    assert "ships with VAF" in out
+    assert not (tmp_path / "a2a_rooms").exists()
 
 
 def test_a_quarantined_override_does_not_resurrect_through_the_builtin(tmp_path, monkeypatch):

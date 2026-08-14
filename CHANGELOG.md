@@ -214,6 +214,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- **The agent can load the skills that ship with VAF.** Asking the agent to use
+  a shipped skill (such as the agent-rooms one) failed with "not found" even
+  though the very same message listed it as available: the loader only looked
+  in your own skills folder, never in the package. Both now resolve the same
+  way, your copy first, the shipped one second. The same blind spot let anyone
+  create a personal skill under a shipped skill's id, which would have replaced
+  that skill for every user on the instance; a shipped id now counts as taken.
 - **The skill editor shows a multi-line description again.** A skill whose
   SKILL.md writes the description as a YAML block (`description: >-`, the way
   the shipped skills do) opened in the editor with a literal `>-` in the

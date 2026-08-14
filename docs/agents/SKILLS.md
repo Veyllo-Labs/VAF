@@ -90,6 +90,19 @@ commands as they were on install day. Rules that follow from the two roots:
   construction; `get_visible_skill_ids_for_user` adds the builtin ids exactly
   when the manifest does not know the id (so a quarantined user-dir override
   stays gone rather than resurrecting through the package copy).
+- Every READER that looks a skill up by id resolves through
+  `skills_registry.resolve_skill_folder` (user copy first, shipped second):
+  `use_skill`, the editor's source fetch, and both create/update existence
+  checks. `skill_folder()` alone is the WRITE location and knows only the user
+  dir - an existence check against it calls every shipped skill missing (live
+  incident: the router offered `a2a_rooms` and the loader refused it in the
+  same tool result). For the same reason a shipped id counts as TAKEN on
+  create, everywhere: a user-dir copy replaces the shipped skill at discovery
+  for every user, so `create_skill` accepting one would let any user knock a
+  shipped skill out from under everyone else. Customising a shipped skill is
+  the admin editor's update path (the save lands in the user dir as the
+  override); the agent-side `update_skill`/`delete_skill` stay ownership-gated
+  and a shipped skill has no owner, so they refuse it uniformly.
 - The security scanner keeps to the user dir. A builtin skill is repository
   content, reviewed the way code is; scanning it would rate our own release
   with a tool meant for strangers' uploads.
@@ -445,7 +458,7 @@ Components: `web/components/settings/SkillsEditor.tsx`,
 | `vaf/skills/templates.py` | Discovery, `list_skills`, `reload_skills`. |
 | `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`; `emit_skill_security_event`; content-hashing helpers (`hash_bytes`/`hash_text`/`hash_skill_folder`, SHA-2/SHA-3). |
 | `vaf/skills/rescan.py` | Periodic post-install re-scan; auto-quarantine on worsened-to-high. |
-| `vaf/core/skills_registry.py` | Manifest, scoping, quarantine gate, `save_skill_md`, `import_skill_zip`, scan gate. |
+| `vaf/core/skills_registry.py` | Manifest, scoping, quarantine gate, `resolve_skill_folder` (the one by-id lookup for readers), `save_skill_md`, `import_skill_zip`, scan gate. |
 | `vaf/api/security_routes.py` | Admin resolution endpoints (scan/acknowledge/isolate/restore/delete). |
 | `vaf/tools/use_skill.py` | On-demand delivery tool. |
 | `vaf/tools/{list,read,create,update,delete}_skill.py` | Per-user self-service skill-management tools (owner-isolated). |

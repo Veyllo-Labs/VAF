@@ -68,8 +68,11 @@ class UseSkillTool(BaseTool):
         if not skill_id:
             return f"error: no skill_id given. Available skills: {_available()}"
 
-        folder = skills_registry.skill_folder(skill_id)
-        if not (folder / "SKILL.md").exists():
+        # resolve_skill_folder, not skill_folder: a shipped skill has no user-dir
+        # copy, and the user-dir check alone refused exactly what _available() had
+        # just offered.
+        folder = skills_registry.resolve_skill_folder(skill_id)
+        if folder is None:
             return f"error: skill '{skill_id}' not found. Available skills: {_available()}"
 
         if not skills_registry.is_skill_visible_to_user(skill_id, user_scope_id):

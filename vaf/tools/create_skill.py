@@ -67,8 +67,14 @@ class CreateSkillTool(BaseTool):
             sid = skills_registry.validate_skill_id(str(kwargs.get("skill_id", "")))
         except ValueError as e:
             return f"error: {e}"
-        if (skills_registry.skill_folder(sid) / "SKILL.md").exists():
-            return f"error: skill '{sid}' already exists. Use update_skill to modify it."
+        # resolve_skill_folder so a SHIPPED id counts as taken too: a user-dir copy
+        # replaces the builtin at discovery for everyone, so creating one here would
+        # let any user knock a shipped skill out for every other user.
+        taken = skills_registry.resolve_skill_folder(sid)
+        if taken is not None:
+            if taken == skills_registry.skill_folder(sid):
+                return f"error: skill '{sid}' already exists. Use update_skill to modify it."
+            return f"error: skill id '{sid}' ships with VAF; choose a different id."
 
         content = _build_skill_md(kwargs)
         parsed = parse_skill_md_text(content, sid)

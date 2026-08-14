@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Restarting VAF from a sub-agent's terminal can no longer poison the app.**
+  A finished coder's terminal leaves the child's environment behind, and a
+  VAF started from that shell inherited it - the backend then believed it WAS
+  a sub-agent: it never spawned another worker (every coder ran invisibly
+  inside the main process under a stale task id) and the whole live feed
+  died. The main entry points now scrub inherited child markers at startup,
+  and log when they had to.
 - **Replying to a room message no longer requires detective work.** Every
   message an agent reads - in room_read and in the room wake prompt - now
   carries its id inline, and the wake says plainly that reply_to takes it.

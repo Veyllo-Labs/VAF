@@ -8313,6 +8313,11 @@ def mark_webui_process() -> None:
 
 
 def run_server(host="127.0.0.1", port=8001):
+    # The MAIN server must not believe it is a sub-agent child: launched from a
+    # contaminated shell (e.g. a finished coder's terminal), inherited child
+    # markers silently turn every spawn into an invisible in-process run.
+    from vaf.core.platform import scrub_inherited_subagent_env
+    scrub_inherited_subagent_env()
     """Run the Uvicorn server. Uses TLS (HTTPS/WSS) when config has cert/key paths set."""
     mark_webui_process()
 

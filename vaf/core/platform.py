@@ -17,6 +17,47 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import webbrowser
 
+# Sub-agent child markers that must never survive into the MAIN app's process.
+# The main entry points scrub them at birth via scrub_inherited_subagent_env().
+_SUBAGENT_ENV_MARKERS = (
+    "VAF_IN_SUBAGENT_TERMINAL",
+    "VAF_TASK_ID",
+    "VAF_AGENT_TYPE",
+    "VAF_SPAWN_MODE",
+    "VAF_PARENT_CWD",
+    "VAF_SESSION_ID",
+    "VAF_ROOM_ID",
+)
+
+
+def scrub_inherited_subagent_env() -> None:
+    """Strip sub-agent child markers a MAIN app inherited from its parent shell.
+
+    Measured live: the backend was restarted from the terminal a finished coder
+    child had run in, inherited VAF_IN_SUBAGENT_TERMINAL=1 plus the child's
+    stale task id, and from then on believed it WAS a sub-agent - it never
+    spawned another child (every coder ran invisibly in-process under the stale
+    id), the event bridge took the child branch inside the main process, and
+    the whole live feed died. Rule 4.5 guards leaks WITHIN a process; this
+    guards the same markers at process BIRTH, where only the environment of
+    whatever shell launched us decides. A real sub-agent child never runs the
+    main entry points that call this, so nothing legitimate is lost.
+    """
+    leaked = [k for k in _SUBAGENT_ENV_MARKERS if os.environ.get(k)]
+    for key in leaked:
+        os.environ.pop(key, None)
+    if leaked:
+        try:
+            from vaf.core.log_helper import append_domain_log
+            append_domain_log(
+                "webui",
+                "[startup] scrubbed inherited sub-agent env markers: "
+                + ", ".join(leaked),
+            )
+        except Exception:
+            pass
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PLATFORM DETECTION
 # ═══════════════════════════════════════════════════════════════════════════════

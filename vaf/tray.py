@@ -1379,6 +1379,11 @@ def run_headless():
 
 
 def run_app():
+    # The tray IS the main app's process: launched from a contaminated shell
+    # (e.g. a finished coder's terminal), inherited child markers make the
+    # backend believe it is a sub-agent and kill every spawn silently.
+    from vaf.core.platform import scrub_inherited_subagent_env
+    scrub_inherited_subagent_env()
     _tray_startup_log("Tray run_app started (Pystray)")
     clear_log()
     log("Tray", "run_app called (Pystray)")

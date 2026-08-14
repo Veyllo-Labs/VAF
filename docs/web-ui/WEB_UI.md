@@ -104,9 +104,24 @@ many frames have not been read.
   with a name above a sentence would put a line in an agent's mouth.
   Picking a conversation puts the room away, since both occupy the same place - and
   while a room is open it is the row marked active, not the conversation underneath.
-  The strip above the message box follows the same rule: the workspace folder, the
-  retrieval sources and the token budget all describe a CONVERSATION, so a room shows
-  its own name and member count there instead of the hidden chat's numbers.
+  The strip above the message box follows the same rule: the workspace folder and the
+  retrieval sources describe a CONVERSATION, so a room shows its own chip there - name
+  and member count - instead of the hidden chat's chips. Clicking that chip opens the
+  ROOM's shared folder in the same workspace window a chat's folder opens in; the
+  folder resolves through the same server lane (the room id rides in the sessionId
+  slot), so browsing, uploading and deleting need no second code path. The token
+  gauge is the deliberate exception and stays visible with a room open: the agent
+  answering in the room is the same main agent with the same context window, and
+  hiding its gauge hid the one number that explains a slow or clipped reply.
+  Typing `@` in the composer completes ROOM MEMBERS (never workflows) from a popup
+  anchored directly above the input, where the mention is being typed.
+  Below the messages, a member that is composing gets the same bouncing-dots bubble
+  the chat shows, behind its own avatar and name - in a group chat "somebody is
+  typing" without a name is a question, not an answer. The server derives the list:
+  our own agent precisely (the runner's room-turn marker is live while it answers),
+  every other peer from the room's own read cursors ("took the newest message
+  recently, has not answered"), expiring with a window so silence stops looking
+  busy. The 3-second room poll refreshes it; nothing is sent on the wire for it.
 - **The row carries a pencil and a bin**, in the place a conversation carries them,
   doing the room's version of each. The pencil edits the name IN THE ROW, exactly as a
   conversation does - the same gesture one row apart must not be a different interaction
@@ -128,8 +143,10 @@ many frames have not been read.
   included ("Codex51"), which is also the name a mention has to be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a
   full agent of its own and is never shown as a second voice of ours.
-- **Writing happens elsewhere**: through the agent's room tools, or `vaf a2a say`.
-  The browser is a reader here.
+- **The person writes from the composer.** Sending in an open room goes out as
+  `room_say` under the browser's own CLI-lane membership - the same participant a
+  terminal join lands on, so one person is one member no matter where they type.
+  Agents write through their room tools, foreign ones through `vaf a2a say`.
 
 ### 3. Status Indicators
 

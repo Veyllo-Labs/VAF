@@ -105,6 +105,12 @@ SESSION_LIST_LIMIT = 500
 # `vaf a2a export` is for.
 ROOM_TRANSCRIPT_LIMIT = 500
 
+# How long "has read the newest message, has not answered" counts as composing.
+# Presentation taste, deliberately NOT in the framework: Room.activity() hands over
+# facts, and a peer that read something and chose silence should stop looking busy
+# on its own. Two minutes is roughly how long a person forgives a typing bubble.
+ROOM_TYPING_WINDOW_S = 120.0
+
 # The sidebar filter (channel + thinking sessions out) lives on the engine as
 # SessionManager.list_ui - one rule for every surface, the terminal app's
 # panel included. The channel prefixes come from the dispatch registry there;
@@ -121,7 +127,7 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     The room has N writers; only the store knows what is in it.
     """
     from vaf.core.a2a.room import (CAPABILITIES, derive_peer_id, describe,
-                                   participant_key)
+                                   owner_tenant, participant_key)
     from vaf.core.session import _room_rows
 
     row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
@@ -135,6 +141,70 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
         acting = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
     except Exception:
         acting = ""
+    # The name the room shows for this person is corrected the moment they LOOK at the
+    # room, not only when they act in it. The heal used to live in the command branch
+    # (say/close/kick/rename), which meant a member record written as the lane literal
+    # by an older CLI stayed "terminal" for anyone who only ever read their room - and
+    # reading is what a person does most. Every room command ends here, so this is the
+    # one place that covers all of them. Admin-only by the same measure that makes it
+    # safe: today the room's own tenant is the only account that can act on it at all
+    # (Room._check_tenant), so the account name IS the local admin's; a per-user name
+    # lookup becomes necessary exactly when cross-account rooms do.
+    try:
+        if acting and user_scope_id is not None:
+            from vaf.core.config import (get_local_admin_scope_id,
+                                         get_local_admin_username)
+            record = room.store.member(acting) or {}
+            if (record and str(record.get("display") or "") in ("terminal", "guest", "")
+                    and str(user_scope_id) == str(get_local_admin_scope_id())):
+                wanted_name = str(get_local_admin_username() or "").strip()
+                healed = room.identity_for(participant_key("cli", user_scope_id))
+                if wanted_name and healed is not None:
+                    room.introduce(healed, display=wanted_name)
+                    members, labels = room.members(), room.labels()
+    except Exception:
+        pass
+    # Who is composing, for the typing bubble. Two signals, each honest in its own
+    # way: the host's own agent is PRECISE - the runner's turn marker says it is
+    # answering this room right now - and everybody else is DERIVED - their cursor
+    # says they took the newest message (every reader advances it only AFTER the
+    # frame is in hand), their lane says they have not answered it, and the clock
+    # says that was recent. The window is what keeps the derivation honest: a peer
+    # that read and chose silence stops looking busy on its own. None of this is a
+    # wire concept - see Room.activity() for why there is no "typing" frame kind.
+    typing = []
+    try:
+        import time as _time
+        latest = room.store.highest_lamport()
+        if latest and not room.closed:
+            busy_agent = ""
+            try:
+                turn = getattr(getattr(manager, "agent_instance", None),
+                               "_room_turn", None)
+                if isinstance(turn, dict) and str(turn.get("room_id")) == room.room_id:
+                    # The marker names the room, not the peer; the answering agent
+                    # on this machine is the host account's agent lane.
+                    owner = owner_tenant(room.manifest.get("owner_scope"))
+                    if owner:
+                        busy_agent = derive_peer_id(participant_key("agent", owner),
+                                                    room.room_id)
+            except Exception:
+                busy_agent = ""
+            now = _time.time()
+            for peer, facts in room.activity().items():
+                if peer in (acting, busy_agent) or peer not in members:
+                    continue
+                if (facts["read_to"] >= latest and facts["last_wrote"] < latest
+                        and (now - facts["read_at"]) <= ROOM_TYPING_WINDOW_S):
+                    typing.append({"peer": peer,
+                                   "label": labels.get(peer) or members[peer]["display"],
+                                   "kind": "read"})
+            if busy_agent and busy_agent in members:
+                typing.append({"peer": busy_agent,
+                               "label": labels.get(busy_agent) or members[busy_agent]["display"],
+                               "kind": "turn"})
+    except Exception:
+        typing = []
     await websocket.send_json({
         "type": "room_transcript",
         "room": {
@@ -154,6 +224,7 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "createdAt": room.manifest.get("created_at"),
             "topic": room.manifest.get("topic") or "",
             "me": acting or row.get("peer"),
+            "typing": typing,
             "canManage": bool(acting) and (
                 acting in hosts or room.role_of(acting) == "leader"),
             # Built from members(), which already resolves the role, the card and the
@@ -1588,6 +1659,33 @@ async def get_tool_source(name: str):
 SOUNDS_DIR = Path(__file__).resolve().parents[1] / "media" / "sounds"
 ALLOWED_SOUND_FILES = {"tts01.mp3", "sst.mp3"}  # Only serve known files
 
+def _resolve_room_workspace(room_id: str, request: Request, create: bool = False) -> str:
+    """Workspace dir of an a2a room ('' if none, or the requester is not in it).
+
+    Deliberately a fallback INSIDE _resolve_session_workspace rather than its own
+    endpoint: the browser, the upload lane and the delete lane all resolve through
+    that one function, so a room id resolving here is what makes all three work for
+    rooms with no second code path. Membership is the same question the room WS
+    commands ask (_room_rows): the requester must be IN the room through one of
+    their lanes - merely being logged in on the host is not enough, because a room
+    holds other people's words and its folder holds their files.
+    """
+    try:
+        from vaf.api.config_routes import get_current_user_or_local_admin
+        from vaf.core.a2a.room import Room
+        from vaf.core.session import _room_rows
+        user = get_current_user_or_local_admin(request) or {}
+        user_scope_id = user.get("user_scope_id")
+        if room_id not in {row["room_id"] for row in _room_rows(user_scope_id)}:
+            return ""
+        path = Room.open(room_id).workspace_dir(create=create)
+        if path is None or not path.is_dir():
+            return ""
+        return str(path)
+    except Exception:
+        return ""
+
+
 def _resolve_session_workspace(session_id: str, request: Request, create: bool = False) -> str:
     """Workspace dir of a chat session ('' if none/unsafe).
 
@@ -1613,7 +1711,9 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
     try:
         sess = session_mgr.load(session_id)
     except Exception:
-        return ""
+        # Not a session. A room id lands here by design: rooms share the whole
+        # workspace lane (browse, upload, delete) through this one resolver.
+        return _resolve_room_workspace(session_id, request, create=create)
     try:
         from vaf.api.config_routes import get_current_user_or_local_admin
         from vaf.core.config import get_local_admin_scope_id
@@ -3556,19 +3656,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 display = str(get_local_admin_username() or "user")
                             identity = room.join(display=display, scope_id=user_scope_id,
                                                  peer_id=derive_peer_id(key, wanted))
-                        else:
-                            # Already a member, possibly from a terminal that wrote the
-                            # LANE as the name. The account knows what to call this
-                            # person, and their own member file is the one file they are
-                            # the authoritative writer for, so it is theirs to correct.
-                            try:
-                                from vaf.core.config import get_local_admin_username
-                                wanted_name = str(get_local_admin_username() or "").strip()
-                                current = (room.store.member(identity.peer_id) or {}).get("display")
-                                if wanted_name and current in ("terminal", "guest", None, ""):
-                                    room.introduce(identity, display=wanted_name)
-                            except Exception:
-                                pass
+                        # A member record still carrying the lane literal as its name is
+                        # healed in _send_room_transcript, which every one of these
+                        # commands answers with - a second heal here would be a second
+                        # copy of the same rule waiting to drift.
 
                         if type == "delete_room":
                             # What the bin means everywhere else in this product. It

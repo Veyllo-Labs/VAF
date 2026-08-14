@@ -162,6 +162,10 @@ type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
     canManage?: boolean;
+    /** Who is composing, derived by the server: 'turn' = our agent's room turn is
+     *  actually running, 'read' = a peer took the newest message recently and has
+     *  not answered it yet. The 3s poll refreshes and expires this. */
+    typing?: Array<{ peer: string; label: string; kind?: string }>;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
     topic?: string;
@@ -1154,6 +1158,32 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                     </div>
                 );
             })}
+            {/* Who is composing. The same bouncing dots the chat shows while our
+                agent generates, one row per busy member, each behind its own
+                avatar: in a group chat "somebody is typing" without a name is a
+                question, not an answer. The server derives the list (see
+                _send_room_transcript) and the 3s poll keeps it honest. */}
+            {!view.room.closed && (view.room.typing?.length ?? 0) > 0 && (
+                <div>
+                    {view.room.typing!.map(t => (
+                        <div key={t.peer} className="flex gap-3 py-2">
+                            <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]">
+                                {(t.label || '?').slice(0, 2)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline gap-2 flex-wrap">
+                                    <span className="text-sm font-medium text-gray-400 dark:text-[#6a6a6a]">{t.label}</span>
+                                </div>
+                                <div className="bg-gray-100 dark:bg-[#242424] px-4 py-2 rounded-2xl rounded-tl-none w-fit flex gap-1 animate-pulse mt-1">
+                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
         </>
     );
 }
@@ -2255,7 +2285,7 @@ function VAFDashboardContent() {
 
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
-    const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
+    const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | 'member' | null>(null);
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const ghostRef = useRef<HTMLDivElement>(null);   // inline-autocomplete mirror; kept scroll-synced with the textarea
@@ -2340,7 +2370,7 @@ function VAFDashboardContent() {
                     .slice(0, 10)
                     .map(m => ({ name: m.label, description: m.card?.skills || m.role }));
                 setSuggestionList(members);
-                setSuggestionType('workflow');   // same '@' prefix on completion
+                setSuggestionType('member');
                 setSelectedSuggestionIndex(0);
                 return;
             }
@@ -7061,49 +7091,10 @@ function VAFDashboardContent() {
                                         <p className="text-gray-400 mt-1 text-sm">{tMain('startConversationOrWorkflow')}</p>
                                     </div>
                                 )}
-                                {/* Suggestions Popup - Fixed centered, with arrow key navigation */}
-                                {suggestionList.length > 0 && (
-                                    <div
-                                        className="fixed left-1/2 -translate-x-1/2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-[9999]"
-                                        style={{ bottom: '120px' }}
-                                    >
-                                        <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
-                                            <span>{suggestionType === 'tool' ? tMain('tools') : tMain('workflows')}</span>
-                                            <span className="text-gray-300">{tMain('navigateSelect')}</span>
-                                        </div>
-                                        <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
-                                            {suggestionList.map((item, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className={cn(
-                                                        "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
-                                                        idx === selectedSuggestionIndex
-                                                            ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white"
-                                                            : "hover:bg-gray-100 text-gray-700"
-                                                    )}
-                                                    onClick={() => handleSuggestionClick(item)}
-                                                    onMouseEnter={() => setSelectedSuggestionIndex(idx)}
-                                                >
-                                                    <div className={cn(
-                                                        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
-                                                        suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-gray-100 text-gray-600",
-                                                        idx === selectedSuggestionIndex && (
-                                                            suggestionType === 'tool'
-                                                                ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105"
-                                                                : "shadow-[0_0_12px_rgba(59,130,246,0.5)] scale-105"
-                                                        )
-                                                    )}>
-                                                        {suggestionType === 'tool' ? <Wrench size={16} /> : <Workflow size={16} />}
-                                                    </div>
-                                                    <div className="flex flex-col min-w-0">
-                                                        <span className="text-sm font-medium truncate">{item.name || item.id}</span>
-                                                        {item.description && <span className={cn("text-xs truncate", idx === selectedSuggestionIndex ? "text-gray-400" : "text-gray-400")}>{item.description}</span>}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
+                                {/* The suggestions popup moved INTO the input row (anchored above
+                                    the box where the '/' or '@' is being typed) - it used to be
+                                    fixed to the screen's center, which put it nowhere near the
+                                    text it completes once a sidebar shifted the input. */}
 
                                 {/* Memory Learning Banner */}
                                 {memoryLearning && (
@@ -7284,8 +7275,22 @@ function VAFDashboardContent() {
                                         read another chat's workspace and another chat's token count
                                         while typing into a room. A room says what it is instead. */}
                                     {roomView ? (
-                                        <span className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded border border-gray-200 dark:border-[#2a2a2a] leading-none select-none">
-                                            <Users size={10} className="shrink-0" />
+                                        // Clickable like the workspace chip it replaces: the room's
+                                        // shared folder resolves through the SAME lane a chat's does
+                                        // (the room id rides in the sessionId slot; the server knows
+                                        // which one it is), so this opens the same browser window.
+                                        <span
+                                            className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 dark:border-[#2a2a2a] leading-none select-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all"
+                                            title={tMain('roomWorkspaceTitle')}
+                                            onClick={() => {
+                                                workspaceSubpathRef.current = '';
+                                                setWorkspaceNavHist([]);
+                                                setWorkspaceView('folder');
+                                                setIsWorkspaceModalOpen(true);
+                                                refreshWorkspace(roomView.room.roomId, '');
+                                            }}
+                                        >
+                                            <Folder size={10} className="shrink-0" />
                                             <span className="max-w-[220px] truncate">{roomView.room.title}</span>
                                             <span className="opacity-70">
                                                 {`\u00b7 ${roomView.room.members ?? 0}`}
@@ -7374,6 +7379,11 @@ function VAFDashboardContent() {
                                             </div>
                                         </div>
                                     )}
+                                    </>)}
+                                    {/* OUTSIDE the room/chat branch: the agent answering in a room is
+                                        the same main agent with the same context window, so hiding its
+                                        gauge there hid the one number that explains a slow or clipped
+                                        reply. */}
                                     {contextStats && (
                                         <span
                                             className="text-[10px] sm:text-xs font-mono text-gray-400 opacity-80 select-none cursor-pointer hover:text-black hover:opacity-100 transition-all leading-none"
@@ -7387,7 +7397,6 @@ function VAFDashboardContent() {
                                             {Math.round(contextStats.percent)}%<span className="max-md:hidden"> ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})</span>
                                         </span>
                                     )}
-                                    </>)}
                                     </div>
                                 </div>
 
@@ -7396,7 +7405,49 @@ function VAFDashboardContent() {
                                     call bar (its own mute/hangup controls), so reserving a 44px stop slot
                                     would make it narrower than the standard input with an empty gap on the
                                     left; hanging up ends everything, so no separate stop is needed here. */}
-                                <div className={cn(chatWidthClass, "mx-auto flex items-center")}>
+                                <div className={cn(chatWidthClass, "mx-auto flex items-center relative")}>
+                                    {/* Suggestions popup, anchored to the input it completes. bottom-full
+                                        grows it UPWARD from just above the box, so it sits where the '@'
+                                        or '/' is being typed instead of floating mid-screen. */}
+                                    {suggestionList.length > 0 && (
+                                        <div className="absolute bottom-full left-0 mb-2 w-80 max-w-full bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-[9999]">
+                                            <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider flex justify-between">
+                                                <span>{suggestionType === 'tool' ? tMain('tools') : suggestionType === 'member' ? tMain('suggestMembers') : tMain('workflows')}</span>
+                                                <span className="text-gray-300">{tMain('navigateSelect')}</span>
+                                            </div>
+                                            <div className="max-h-64 overflow-y-auto" ref={suggestionListRef}>
+                                                {suggestionList.map((item, idx) => (
+                                                    <div
+                                                        key={idx}
+                                                        className={cn(
+                                                            "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
+                                                            idx === selectedSuggestionIndex
+                                                                ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white"
+                                                                : "hover:bg-gray-100 text-gray-700"
+                                                        )}
+                                                        onClick={() => handleSuggestionClick(item)}
+                                                        onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                                                    >
+                                                        <div className={cn(
+                                                            "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
+                                                            suggestionType === 'tool' ? "bg-orange-100 text-orange-600" : "bg-gray-100 text-gray-600",
+                                                            idx === selectedSuggestionIndex && (
+                                                                suggestionType === 'tool'
+                                                                    ? "shadow-[0_0_12px_rgba(249,115,22,0.5)] scale-105"
+                                                                    : "shadow-[0_0_12px_rgba(59,130,246,0.5)] scale-105"
+                                                            )
+                                                        )}>
+                                                            {suggestionType === 'tool' ? <Wrench size={16} /> : suggestionType === 'member' ? <Users size={16} /> : <Workflow size={16} />}
+                                                        </div>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className="text-sm font-medium truncate">{item.name || item.id}</span>
+                                                            {item.description && <span className={cn("text-xs truncate", idx === selectedSuggestionIndex ? "text-gray-400" : "text-gray-400")}>{item.description}</span>}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                     {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && !voiceCallActive && (
                                         <div className="w-9 mr-2 shrink-0 flex items-center justify-center">
                                         {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (

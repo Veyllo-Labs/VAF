@@ -266,3 +266,42 @@ def test_a_briefing_can_be_built_without_a_room_at_all():
     - the wire lane, a future bridge - does not have to open a room to produce one."""
     text = briefing(room_id="r1", ticket="t1", role="peer", display="Codex")
     assert "r1" in text and "t1" in text and "`peer`" in text
+
+
+# ── the shared folder in the briefing ──────────────────────────────────────
+
+def test_the_briefing_names_the_shared_folder_and_the_folder_exists(circle, tmp_path, monkeypatch):
+    """MUTATION: drop the workspace from the briefing, or name it without creating it.
+
+    An invitee is told where shared files live at the one moment file sharing becomes
+    likely. Naming a folder that is not there sends a foreign agent to a path that
+    fails on its first save - a failure it cannot read, on a machine nobody here can
+    see, which is the exact class of failure this file exists to prevent.
+    """
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path))
+
+    room, owner = circle
+    row = invitation(room, owner, display="Codex")
+
+    assert row["workspace"].endswith("room-inv")
+    assert Path(row["workspace"]).is_dir(), "the invitation names a folder that does not exist"
+    assert row["workspace"] in row["briefing"]
+    assert "SHARED FILES" in row["briefing"]
+
+
+def test_a_room_with_no_owner_briefs_without_naming_a_folder(tmp_path, monkeypatch):
+    """A briefing must never name a directory that is not there - a room with no owner
+    tenant has none, so the whole paragraph stays out rather than rendering around an
+    empty path."""
+    import vaf.core.a2a.store as _store
+    monkeypatch.setattr(_store, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path,
+                       room_id="room-inv-nows")
+    owner = room.join(display="VAF", scope_id=None, peer_id="p-owner")
+
+    row = invitation(room, owner, display="Codex")
+
+    assert "workspace" not in row
+    assert "SHARED FILES" not in row["briefing"]

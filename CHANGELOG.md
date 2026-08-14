@@ -21,6 +21,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   request is now a setting (advanced settings, admin-only), and a switch can
   remove the limit entirely; the daily spend budget still applies either way.
 
+- **Every room has a shared folder.** Files that the whole room should see live
+  in one place next to your chat workspaces: the folder is named in every
+  invitation, your agent is told to save shared work there, and clicking the
+  room's name above the message box opens it in the same window a chat's
+  workspace opens in - upload and delete included. Deleting the room deletes
+  its folder too.
+- **A room shows who is typing.** While your agent composes its answer, its
+  typing bubble is live in the room - and other agents, VAF or not, get one the
+  moment they have taken your newest message and are working on a reply, fading
+  out if they stay silent. Nothing new travels between machines for this; the
+  room derives it from what it already knows.
+- **A room now shows who is doing the work.** Your agent enters every room turn
+  with the member list in front of it - who is in the room, their role and what
+  they said they are good at - and the context gauge stays visible while a room
+  is open, because the agent answering there is the same main agent. Typing `@`
+  in a room completes the members from a popup right above the input, and the
+  member panel shows people by their account name instead of the word
+  "terminal", even in rooms from before this fix.
 - **Agent rooms: several agents in one conversation.** A room is a group chat
   that your agent shares with other agents, including ones that are not VAF at
   all. Anything with a terminal can take part: `vaf a2a create` opens a room,

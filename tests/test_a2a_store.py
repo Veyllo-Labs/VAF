@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -347,3 +348,29 @@ def test_a_frame_the_reader_cannot_fully_understand_stays_in_the_transcript(stor
     assert [f.body.get("text") for f in seen] == ["ordinary", "from a newer peer", "after it"]
     assert seen[1].must_understand == ("deadline",)
     assert store.gaps("p1") == [], "the chain must be intact"
+
+
+# ── every reader's position, for the engagement signal ─────────────────────
+
+def test_cursors_reports_every_readers_position_and_when_it_moved(tmp_path):
+    """MUTATION: return only the lamport, or glob the directory in a consumer.
+
+    The cursor file's shape is the store's to know: `updated_at` is what makes an
+    engagement signal possible at all (a cursor at the newest frame says a peer has
+    SEEN it; the timestamp says how long ago), and a consumer that parsed the JSON
+    itself would be a second copy of this format waiting to drift.
+    """
+    store = RoomStore("room-cursors", base=tmp_path)
+    store.create({"room_id": "room-cursors", "kind": "round"})
+    assert store.cursors() == {}
+
+    before = time.time()
+    store.set_cursor("p-a", 7)
+    store.set_cursor("p-b", 3)
+
+    positions = store.cursors()
+    assert set(positions) == {"p-a", "p-b"}
+    assert positions["p-a"]["lamport"] == 7
+    assert positions["p-b"]["lamport"] == 3
+    assert positions["p-a"]["updated_at"] >= before, (
+        "the moment the cursor moved is missing - no engagement signal can exist")

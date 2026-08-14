@@ -907,3 +907,57 @@ def test_opening_a_room_rules_out_building_one():
     described = RoomOpenTool().description
     assert "ALREADY EXISTS" in described
     assert "never build" in described and "coding agent" in described
+
+
+def test_the_wake_prompt_carries_the_roster_and_the_shared_folder(tmp_path, monkeypatch):
+    """MUTATION: drop the roster, or point the prompt at no folder.
+
+    The roster is the room's answer to "who is my team", and it exists ONLY in the
+    room wake prompt: outside a room the agent's team is its sub-agents (the
+    <team_state> block), and a second, contradicting answer in every prompt is
+    exactly what keeping them apart prevents. The folder line repairs a live
+    failure: the agent saved a file for the room into its own chat workspace,
+    where nobody else in the room could ever find it.
+    """
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path))
+
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path,
+                       room_id="room-roster", topic="Deploy talk")
+    mine_key = "scope-mine"
+    room.join(display="Mine", scope_id="s",
+              peer_id=derive_peer_id(mine_key, "room-roster"))
+    other = room.join(display="Codex", scope_id="s", peer_id="p-codex",
+                      card={"skills": "builds and tests code"})
+    room.say(other, "who takes the deploy?")
+
+    waking, context = _wake(room, mine_key, tmp_path)
+
+    class _Waker:
+        from vaf.core.agent import Agent as _Real
+        collect_room_wake = _Real.collect_room_wake
+        _room_unattended_report = _Real._room_unattended_report
+
+        def __init__(self):
+            self._current_user_scope_id = "s"
+            self._current_username = "owner"
+            self._room_reply_streak = {}
+
+    import vaf.core.a2a.room as room_mod
+    original = room_mod.unread_frames
+    try:
+        room_mod.unread_frames = lambda key, base=None: [
+            (room, room.identity_for(mine_key), waking, context)]
+        wake = _Waker().collect_room_wake()
+    finally:
+        room_mod.unread_frames = original
+
+    assert wake is not None
+    prompt = wake["prompt"]
+    assert "YOUR TEAM IN THIS ROOM" in prompt, "the roster is missing"
+    assert "Codex" in prompt and "builds and tests code" in prompt, (
+        "a member's card never reached the prompt")
+    assert "you]" in prompt, "the agent cannot see which member it is"
+    workspace = tmp_path / "VAF_Projects" / "s" / "room-roster"
+    assert str(workspace) in prompt, "the shared folder is not named"
+    assert workspace.is_dir(), "the prompt names a folder that does not exist"

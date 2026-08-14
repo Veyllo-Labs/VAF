@@ -783,6 +783,12 @@ class VafApp(App):
         Routed through the same handler `/room <id>` uses, so there is one way to
         render a room and not two that drift. The live conversation stays where it
         was - a room is a read-only view, not a place the prompt box writes into.
+
+        Deliberate boundary: this is a one-shot replay with no refresh loop, so the
+        typing signal the web derives (Room.activity + the runner's turn marker)
+        has nothing to ride on here. Building a poll for ONE indicator would be the
+        tail wagging the view; the day this panel goes live-updating, the signal is
+        one call away.
         """
         self.query_one("#sessions", SessionsPanel).remove_class("visible")
         self.query_one("#promptbox", PromptBox).focus()

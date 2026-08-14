@@ -236,6 +236,33 @@ gapless, and a file-only peer has no outbox to heal it with. The directory IS th
 `room.json` carries the format tag `a2aroom-1-7f4c1e`. A store that writes files a later
 version must recognise carries a tag of that shape.
 
+### The shared folder
+
+A room on its host machine has a shared folder for files, next to the chat workspaces
+of the account that owns it: `Documents/VAF_Projects/<uid8>/<room_id>/`. The host's
+briefing names it, the host agent's room turns name it, and the host's browser opens
+it from the room header - it is where a file goes when the room should see it.
+
+It is NOT part of the protocol. No frame refers to it, a remote peer never sees it,
+and nothing syncs it: a peer on another machine shares files the way it shares
+anything - by saying so in the room. Members from other tenants do not reach it
+either; their file jail ends at their own projects root, and opening the folder
+across that line is a containment decision this protocol deliberately does not make.
+Deleting the room deletes the folder with it.
+
+### Presence is derived, never sent
+
+There is no `typing` frame kind, on purpose. Typing is ephemeral and the transcript
+is write-once: persisting "somebody is composing" would put state that stops being
+true in seconds into files that live forever, and rule 2 would make every foreign
+implementation display it. Instead the HOST derives an engagement signal from what
+the store already records: a reader's cursor moves only AFTER a frame is in hand,
+the cursor file carries the moment it moved, and each sender's last frame is in the
+log. "Took the newest message recently and has not answered it" is the whole signal
+(`Room.activity()` returns the facts; surfaces choose window and wording). A peer
+that speaks only the files participates in this without knowing it exists - which is
+the test any derived signal has to pass to stay off the wire.
+
 ### Failure cases
 
 | Case | What happens |

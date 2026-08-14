@@ -543,18 +543,32 @@ def test_the_new_dialogs_are_translated_in_every_language_we_ship():
 # ── the two things the owner found by using it ─────────────────────────────
 
 def test_the_strip_over_the_composer_belongs_to_whatever_is_open():
-    """MUTATION: keep showing the conversation's workspace and token budget.
+    """MUTATION: keep showing the conversation's workspace, or hide the token gauge.
 
-    The workspace folder, the retrieval sources and the token budget all describe the
-    CHAT. With a room open they described the one hidden behind it, so a user read
-    another chat's workspace and another chat's numbers while typing into a room.
+    The workspace folder and the retrieval sources describe the CHAT. With a room
+    open they described the one hidden behind it, so a user read another chat's
+    workspace while typing into a room - the chat chips stay in the branch a room
+    never takes, and the room's own chip opens the ROOM's folder instead.
+
+    The token gauge is the deliberate exception, and it used to be inside the
+    branch too: the agent answering in a room is the same main agent with the same
+    context window, so hiding its gauge there hid the one number that explains a
+    slow or clipped reply.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    strip = source.split("{/* Token Stats (Clickable) + RAG Badge */}")[1][:3000]
+    # Sliced to the next structural landmark, not to a character count: the RAG chip
+    # between the two claims grows and shrinks with unrelated work, and a count that
+    # once fit went stale the first time it did.
+    strip = source.split("{/* Token Stats (Clickable) + RAG Badge */}")[1] \
+                  .split("Stop button left of message box")[0]
 
     assert "{roomView ? (" in strip
     assert strip.index("{roomView ? (") < strip.index("workspaceInfo?.path"), (
         "the workspace chip is still rendered for a room")
+    assert "refreshWorkspace(roomView.room.roomId" in strip, (
+        "the room chip no longer opens the room's own folder")
+    assert strip.index("</>)}") < strip.index("contextStats && ("), (
+        "the context gauge is back inside the chat-only branch")
 
 
 # ── the panel, and the marking that was still wrong ────────────────────────
@@ -868,16 +882,217 @@ def test_at_completes_room_members_while_a_room_is_open():
 
 
 def test_the_browser_corrects_a_lane_name_to_the_account_name():
-    """MUTATION: leave whatever the terminal wrote.
+    """MUTATION: leave whatever the terminal wrote - or heal it only when the person ACTS.
 
     "terminal" is a LANE, not a person, so somebody who joined from a shell sat in the
     room named after the thing they typed into. Their own member file is the one file
     they are the authoritative writer for, so it is theirs to correct.
+
+    The heal lived in the command branch first, and the owner stayed "terminal"
+    through two rounds of fixing it, because reading a room is what a person does
+    most and the command branch only runs when they act. So the heal lives in the
+    transcript builder, which every room command answers through, and the command
+    branch must NOT grow a second copy that would drift from it.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
-                  .split('elif type == "load_session"')[0]
+    builder = source.split("async def _send_room_transcript")[1].split("\ndef ")[0]
 
-    assert "room.introduce(identity, display=wanted_name)" in block
-    assert 'current in ("terminal", "guest", None, "")' in block, (
+    assert "room.introduce(healed, display=wanted_name)" in builder
+    assert '("terminal", "guest", "")' in builder, (
         "a name the person chose would be overwritten too")
+
+    commands = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
+                     .split('elif type == "load_session"')[0]
+    assert "wanted_name" not in commands, (
+        "a second copy of the heal is growing in the command branch")
+
+
+def test_looking_at_a_room_heals_a_lane_literal_name(tmp_path, monkeypatch):
+    """MUTATION: move the heal back into the command branch.
+
+    The member record for the person was written by an older CLI as the lane literal
+    "terminal". The owner of that room only ever READ it in the browser - reading is
+    what a person does most - and the name stayed wrong through two rounds of fixing
+    the write paths, because every fix sat on a path that only runs when they ACT.
+    The transcript builder is the one place every room command answers through, so
+    the heal lives there and nowhere else.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    import vaf.core.config as config_mod
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: "scope-a")
+    monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: "Alice")
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-heal")
+    key = participant_key("cli", "scope-a")
+    stale = derive_peer_id(key, "room-heal")
+    room.join(display="terminal", scope_id="scope-a", peer_id=stale)
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    ws = _WS()
+    asyncio.run(_send_room_transcript(ws, Room.open("room-heal", base=tmp_path),
+                                      "scope-a"))
+
+    assert (room.store.member(stale) or {}).get("display") == "Alice"
+    listed = ws.sent[0]["room"]["members_list"]
+    assert any(m["label"] == "Alice" for m in listed), (
+        "healed on disk but the payload still paints the stale name")
+
+
+def test_the_heal_never_writes_someone_elses_name(tmp_path, monkeypatch):
+    """MUTATION: drop the admin-scope check from the heal.
+
+    The only name the harness knows is the local admin's. Writing it onto a member
+    acting for ANOTHER account would rename that person to somebody they are not -
+    so the heal stops at the one account whose name it actually has, and the
+    boundary moves the day cross-account rooms bring a per-user name lookup.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    import vaf.core.config as config_mod
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: "scope-a")
+    monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: "Alice")
+
+    room = Room.create(kind="round", owner_scope="scope-b", base=tmp_path,
+                       room_id="room-heal2")
+    key = participant_key("cli", "scope-b")
+    stale = derive_peer_id(key, "room-heal2")
+    room.join(display="terminal", scope_id="scope-b", peer_id=stale)
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        async def send_json(self, payload):
+            pass
+
+    asyncio.run(_send_room_transcript(_WS(), Room.open("room-heal2", base=tmp_path),
+                                      "scope-b"))
+
+    assert (room.store.member(stale) or {}).get("display") == "terminal", (
+        "another account's member was renamed to the admin")
+
+
+def test_the_typing_list_is_derived_and_expires(tmp_path, monkeypatch):
+    """MUTATION: drop the answered check, or the window, or the viewer exclusion.
+
+    A peer that took the newest message and has not answered is composing; a peer
+    that answered is done; a peer that read and chose silence stops looking busy
+    when the window passes; and the viewer is never their own typing bubble. Each
+    clause carries one of those, so losing any of them repaints somebody as busy
+    who is not.
+    """
+    import asyncio
+    import time as time_mod
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-typing")
+    me_key = participant_key("cli", "scope-a")
+    me = derive_peer_id(me_key, "room-typing")
+    mine = room.join(display="Alice", scope_id="scope-a", peer_id=me)
+    codex = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    latest = room.say(mine, "anyone there?")
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    def typing_now():
+        ws = _WS()
+        asyncio.run(_send_room_transcript(ws, Room.open("room-typing", base=tmp_path),
+                                          "scope-a"))
+        return {t["peer"]: t for t in ws.sent[0]["room"]["typing"]}
+
+    # Nobody has read anything: nobody is composing.
+    assert typing_now() == {}
+
+    # Codex takes the newest message the way every reader does - cursor AFTER the
+    # frame is in hand - and becomes the typing bubble.
+    room.store.set_cursor("p-codex", latest.lamport)
+    listed = typing_now()
+    assert "p-codex" in listed and listed["p-codex"]["kind"] == "read"
+    assert me not in listed, "the viewer is their own typing bubble"
+
+    # Codex answers and then reads again, the way a read-tool loop does - its cursor
+    # now stands ON its own newest frame. Composing is over: the answered check is
+    # the only clause separating "read the newest" from "read what I just wrote".
+    answer = room.say(codex, "here")
+    room.store.set_cursor("p-codex", answer.lamport)
+    assert "p-codex" not in typing_now(), "an answered message still shows as composing"
+
+    # A peer that read the newest and stays silent expires with the window.
+    latest2 = room.say(mine, "and now?")
+    room.store.set_cursor("p-codex", latest2.lamport)
+    assert "p-codex" in typing_now()
+    real_time = time_mod.time
+    monkeypatch.setattr(time_mod, "time", lambda: real_time() + 300.0)
+    assert "p-codex" not in typing_now(), "silence never expires"
+
+
+def test_the_agents_running_room_turn_is_the_precise_signal(tmp_path, monkeypatch):
+    """MUTATION: derive the own agent from cursors too.
+
+    The agent's cursor only advances AFTER its turn, so a cursor-derived bubble for
+    it would appear exactly when it stopped being true. The runner's turn marker is
+    live while the turn runs, and only the marker may put the agent in the list.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-turnsig")
+    agent_peer = derive_peer_id(participant_key("agent", "scope-a"), "room-turnsig")
+    room.join(display="Nobel", scope_id="scope-a", peer_id=agent_peer)
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    room.say(guest, "Nobel?")
+
+    import vaf.core.web_server as web_server_mod
+
+    class _Agent:
+        _room_turn = {"room_id": "room-turnsig", "mode": "assist"}
+
+    # On the INSTANCE, not the class: the WebInterface is a singleton and patching
+    # anywhere else has bitten this suite before.
+    monkeypatch.setattr(web_server_mod.manager, "agent_instance", _Agent(),
+                        raising=False)
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    ws = _WS()
+    asyncio.run(web_server_mod._send_room_transcript(
+        ws, Room.open("room-turnsig", base=tmp_path), "scope-a"))
+    listed = {t["peer"]: t for t in ws.sent[0]["room"]["typing"]}
+    assert agent_peer in listed and listed[agent_peer]["kind"] == "turn"
+
+    # Marker for ANOTHER room: this room shows nothing.
+    _Agent._room_turn = {"room_id": "room-elsewhere", "mode": "assist"}
+    ws2 = _WS()
+    asyncio.run(web_server_mod._send_room_transcript(
+        ws2, Room.open("room-turnsig", base=tmp_path), "scope-a"))
+    assert agent_peer not in {t["peer"] for t in ws2.sent[0]["room"]["typing"]}

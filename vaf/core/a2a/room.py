@@ -627,13 +627,61 @@ class Room:
         Host only, and for a blunter reason than kicking: this deletes somebody else's
         transcript as well as your own. A guest that could do it could end everybody's
         work on its way out and leave no record that it had been there.
+
+        The shared folder goes with it, the same way a chat's workspace goes with the
+        chat (session.SessionManager.delete): deleting the conversation IS the
+        statement that its files are no longer wanted.
         """
         if not self.is_host(identity):
             raise NotPermitted(
                 "only the machine hosting a room can delete it; leaving is `leave`")
         if not self.closed:
             self.close(identity, reason=reason or self.TERMINATED_BY_USER)
+        try:
+            ws = self.workspace_dir(create=False)
+            if ws is not None and ws.is_dir():
+                import shutil
+                shutil.rmtree(ws, ignore_errors=True)
+        except Exception:
+            pass
         return self.store.destroy()
+
+    def workspace_dir(self, *, create: bool = False) -> Optional[Path]:
+        """The room's shared folder on the HOST machine: VAF_Projects/<uid8>/<room_id>/.
+
+        Host-local by design and NOT part of the wire protocol: a remote peer reads
+        frames, never this directory. It lives under the owning account's projects
+        root - the same tree every chat workspace lives in - so the same browser,
+        the same upload lane and the same cleanup already know how to handle it,
+        and the room id is its folder name for the same reason a chat's session id
+        is (both are shaped by their own id rules, safe as a path segment).
+
+        Members from OTHER tenants do not reach it today: their file jail ends at
+        their own projects root. Opening the folder across the tenant line is a
+        containment decision, not a path question, and it is deliberately not made
+        here. A guest with no tenant at all never had a jail exception to lose.
+
+        Returns None when the room has no owner tenant to anchor the path under
+        (a manifest without an owner is a legacy shape the loader tolerates).
+        """
+        owner = owner_tenant(self.manifest.get("owner_scope"))
+        if not owner:
+            return None
+        from vaf.core.session import get_user_projects_root
+        root = get_user_projects_root(owner)
+        if root is None:
+            return None
+        path = root / self.room_id
+        if create and not path.is_dir():
+            path.mkdir(parents=True, exist_ok=True)
+            topic = str(self.manifest.get("topic") or "").strip()
+            if topic:
+                try:
+                    from vaf.core.session import write_workspace_label
+                    write_workspace_label(path, topic)
+                except Exception:
+                    pass
+        return path
 
     def kick(self, identity: Identity, peer_id: str, reason: str = "") -> Frame:
         """Remove another peer from the room.
@@ -752,6 +800,38 @@ class Room:
             return None
         record = self.store.member(peer_id) or {}
         return Identity(peer_id, display or record.get("display") or peer_id, scope_id, role)
+
+    def activity(self) -> Dict[str, Dict[str, Any]]:
+        """Who is engaged with the newest part of the conversation, as FACTS.
+
+        {peer: {"read_to": lamport, "read_at": epoch, "last_wrote": lamport}}
+
+        Facts, not a verdict, on purpose: whether "read the newest message two
+        seconds ago and has not answered" should be painted as a typing indicator
+        is presentation taste, and taste ages faster than data. The surfaces decide
+        the window and the wording; this only joins what the store already records
+        - each reader's own cursor (position and when it moved) with the last frame
+        each sender wrote.
+
+        Nothing here is a protocol concept. A frame kind for "typing" would persist
+        an ephemeral state into a write-once transcript and demand that every
+        foreign implementation understand it; deriving the signal on the host asks
+        nothing of anybody.
+        """
+        cursors = self.store.cursors()
+        last_wrote: Dict[str, int] = {}
+        for frame in self.store.frames():
+            if frame.lamport > last_wrote.get(frame.sender, 0):
+                last_wrote[frame.sender] = frame.lamport
+        out: Dict[str, Dict[str, Any]] = {}
+        for peer in set(cursors) | set(last_wrote):
+            record = cursors.get(peer) or {}
+            out[peer] = {
+                "read_to": int(record.get("lamport") or 0),
+                "read_at": float(record.get("updated_at") or 0.0),
+                "last_wrote": int(last_wrote.get(peer, 0)),
+            }
+        return out
 
     def mode_of(self, peer_id: str) -> str:
         """The LOCAL user's standing decision about how far their agent may go here.

@@ -1313,3 +1313,87 @@ def test_a_card_added_later_still_cannot_name_a_role(tmp_path):
 
     room.introduce(worker, card={"role": "leader", "skills": "everything"})
     assert room.role_of("p-w") == "worker"
+
+
+# ── the shared folder ───────────────────────────────────────────────────────
+
+def test_the_shared_folder_lives_where_chat_workspaces_live(tmp_path, monkeypatch):
+    """MUTATION: anchor the folder anywhere else, or skip the label.
+
+    The room's folder is a chat workspace to every other part of the product: the
+    browser window, the upload lane and the delete lane all resolve it through the
+    same code a chat's folder goes through. That only holds while it lives where
+    chat workspaces live - under the owning account's projects root, named by the
+    room id - and while its label carries the topic, so the workspace browser shows
+    a conversation name rather than a hex id.
+    """
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path))
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-ws", topic="Deploy talk")
+    expected = tmp_path / "VAF_Projects" / "scopea" / "room-ws"
+    assert room.workspace_dir() == expected
+    assert not expected.exists(), "asking for the path must not create it"
+
+    created = room.workspace_dir(create=True)
+    assert created == expected and created.is_dir()
+
+    from vaf.core.session import read_workspace_label
+    assert read_workspace_label(created) == "Deploy talk"
+
+
+def test_a_room_with_no_owner_tenant_has_no_folder(tmp_path, monkeypatch):
+    """A guest-hosted legacy manifest has no account to anchor a path under - the
+    honest answer is None, never a folder in nobody's tree."""
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path))
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-noowner")
+    assert room.workspace_dir(create=True) is None
+    assert not (tmp_path / "VAF_Projects").exists()
+
+
+def test_deleting_the_room_takes_the_shared_folder_with_it(tmp_path, monkeypatch):
+    """MUTATION: leave the folder behind on delete.
+
+    Deleting the conversation is the statement that its files are no longer wanted -
+    the same rule a chat's workspace follows (SessionManager.delete). A folder that
+    outlived its room would be an orphan the owner can neither see nor reach from
+    any surface that knows what it was.
+    """
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path))
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-wsdel")
+    host = room.join(display="Me", scope_id="scope-a",
+                     peer_id=derive_peer_id(participant_key("cli", "scope-a"), "room-wsdel"))
+    folder = room.workspace_dir(create=True)
+    (folder / "notes.txt").write_text("shared", encoding="utf-8")
+
+    assert room.delete(host)
+    assert not folder.exists()
+
+
+def test_activity_reports_facts_not_verdicts(tmp_path):
+    """MUTATION: fold the typing window or the viewer exclusion in here.
+
+    activity() joins what the store already records - each reader's cursor and the
+    last frame each sender wrote - and hands it over as facts. Whether "read the
+    newest message two seconds ago and has not answered" deserves a typing bubble
+    is presentation taste, and taste lives with the surface that has it.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-act")
+    alice = room.join(display="Alice", scope_id=None, peer_id="p-alice")
+    room.join(display="Bob", scope_id=None, peer_id="p-bob")
+
+    frame = room.say(alice, "anyone there?")
+    room.store.set_cursor("p-bob", frame.lamport)
+
+    facts = room.activity()
+    assert facts["p-bob"]["read_to"] == frame.lamport
+    assert facts["p-bob"]["read_at"] > 0, "when the cursor moved is the whole signal"
+    assert facts["p-bob"]["last_wrote"] < frame.lamport
+    assert facts["p-alice"]["last_wrote"] >= frame.lamport

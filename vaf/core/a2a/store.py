@@ -363,6 +363,33 @@ class RoomStore:
             indent=2,
         )
 
+    def cursors(self) -> Dict[str, Dict[str, Any]]:
+        """Every reader's position and WHEN it last moved: {peer: {lamport, updated_at}}.
+
+        The one place the cursor file's shape is read for somebody other than its own
+        peer. A consumer that globbed the directory and parsed the JSON itself would
+        be a second copy of this file format, and the format is the store's to know.
+        `updated_at` is what makes an engagement signal possible at all: a cursor at
+        the newest frame says a peer has SEEN it, and the timestamp says how long ago
+        - both facts the reader already wrote, neither invented here.
+        """
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            files = sorted(self.cursors_dir.glob("*.json"))
+        except OSError:
+            return out
+        for path in files:
+            record = data_files.read_json(path, default=None)
+            if not isinstance(record, dict):
+                continue
+            peer = str(record.get("peer_id") or path.stem)
+            try:
+                out[peer] = {"lamport": int(record.get("lamport") or 0),
+                             "updated_at": float(record.get("updated_at") or 0.0)}
+            except (TypeError, ValueError):
+                continue
+        return out
+
     # ── tickets ─────────────────────────────────────────────────────────────
 
     def put_ticket(self, ticket_id: str, record: Dict[str, Any]) -> Dict[str, Any]:

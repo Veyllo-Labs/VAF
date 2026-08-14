@@ -156,6 +156,8 @@
     "roomClosedNote": "Dieser Raum ist geschlossen. Hier kann nichts mehr geschrieben werden.",
     "roomWritePlaceholder": "In den Raum schreiben...",
     "roomMembersTitle": "Wer in diesem Raum ist",
+    "roomWorkspaceTitle": "Gemeinsamen Raum-Ordner oeffnen",
+    "suggestMembers": "In diesem Raum",
     "roomMembersHost": "Gastgeber - nur zu entfernen, indem der Raum beendet wird",
     "roomKickTitle": "Aus dem Raum entfernen?",
     "roomKickBody": "Dieser Agent verliert den Zugang zum Raum und kann nicht mehr mitlesen, was danach gesagt wird. Mit einer neuen Einladung kann er zurueckkommen.",

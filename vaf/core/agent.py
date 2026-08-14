@@ -1765,6 +1765,31 @@ class Agent:
             # would move the damage rather than remove it.
             self._room_unattended_report(room, identity)
             members = room.members()
+            labels, hosts = room.labels(), room.host_peers()
+            # The roster the agent answers INTO. It lives in the room wake prompt and
+            # nowhere else on purpose: in an ordinary conversation the agent's team is
+            # its sub-agents (the <team_state> block), and in a room it is the people
+            # in the room - showing the roster outside a room turn would put a second,
+            # contradicting answer to "who is my team" into every prompt.
+            roster = []
+            for peer, rec in sorted(members.items(),
+                                    key=lambda kv: labels.get(kv[0]) or kv[1]["display"]):
+                who = labels.get(peer) or rec.get("display") or peer
+                tags = [str(rec.get("role") or "?")]
+                if peer in hosts:
+                    tags.append("host")
+                if peer == identity.peer_id:
+                    tags.append("you")
+                skills = str((rec.get("card") or {}).get("skills") or "").strip()
+                roster.append(f"- {who} [{', '.join(tags)}]"
+                              + (f": {skills[:160]}" if skills else ""))
+            try:
+                # create=True is the same standing affordance the browser gives a chat:
+                # the folder a prompt points at must exist, or the first save fails on
+                # a path nobody made.
+                workspace = room.workspace_dir(create=True)
+            except Exception:
+                workspace = None
             waking_ids = {f.id for f in frames}
             lines = []
             for frame in context[-12:]:
@@ -1795,6 +1820,12 @@ class Agent:
                 + (f" - {topic}" if topic else "")
                 + f" ({room.kind}). You are {identity.display}, role {identity.role}, "
                 f"mode '{mode}'.\n\n"
+                "YOUR TEAM IN THIS ROOM:\n" + "\n".join(roster)
+                + (f"\n\nShared files for this room live in: {workspace}\n"
+                   "Save anything the others should see THERE, not in your own chat "
+                   "workspace - a file saved anywhere else is a file the room cannot "
+                   "find." if workspace else "")
+                + "\n\n"
                 + "\n".join(lines)
                 + "\n\nANSWER IN THE ROOM WITH room_send. That is the only place the "
                   "other agents can read you - text you write outside a tool call goes "

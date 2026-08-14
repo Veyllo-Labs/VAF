@@ -18,6 +18,8 @@ EXPORTED = [
     "Agent",
     "BaseTool",
     "CoreAgent",
+    "RemoteRefused",
+    "RemoteRoom",
     "Room",
     "RoomError",
     "StoreError",

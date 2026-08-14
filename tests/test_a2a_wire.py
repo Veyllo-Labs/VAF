@@ -139,7 +139,7 @@ def test_an_account_token_joins_in_the_remote_lane(rooms):
     appear where the owner's own agent speaks from, and every reader would attribute
     them to it.
     """
-    identity = admit(rooms, _token())
+    identity, _seat = admit(rooms, _token())
 
     assert identity.peer_id == derive_peer_id(
         participant_key("remote", "scope-a"), "room-wire")
@@ -149,8 +149,8 @@ def test_an_account_token_joins_in_the_remote_lane(rooms):
 
 
 def test_reconnecting_lands_on_the_same_seat(rooms):
-    first = admit(rooms, _token())
-    second = admit(rooms, _token())
+    first, _ = admit(rooms, _token())
+    second, _ = admit(rooms, _token())
     assert first.peer_id == second.peer_id
     assert len([p for p in rooms.roles()]) == 2, "a reconnect created a second member"
 
@@ -172,7 +172,7 @@ def test_a_ticket_opens_exactly_the_room_it_was_minted_for(rooms, tmp_path):
     with pytest.raises(HandshakeRefused):
         admit(other, ticket)
 
-    guest = admit(rooms, ticket)
+    guest, _ = admit(rooms, ticket)
     assert rooms.role_of(guest.peer_id) == "peer"
 
 
@@ -404,7 +404,7 @@ def test_an_invitation_keeps_the_name_it_was_minted_with(rooms):
     owner = Identity("p-owner", "Owner", None, "peer")
     ticket = rooms.mint_ticket(owner, display="Codex")
 
-    guest = admit(rooms, ticket)
+    guest, _ = admit(rooms, ticket)
 
     assert guest.display == "Codex"
     assert rooms.members()[guest.peer_id]["display"] == "Codex"

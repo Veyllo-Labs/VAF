@@ -789,6 +789,53 @@ class Room:
         return self.join(display=display or str(record.get("display") or "guest"),
                          scope_id=None, mode=mode, card=card or {})
 
+    # ── seats: how a redeemed ticket comes back ─────────────────────────────
+
+    SEAT_PREFIX = "s-"
+
+    def issue_seat(self, identity: Identity) -> str:
+        """A durable way back in for a peer whose ticket is spent.
+
+        A ticket is single use by design, and that design is right: a bearer
+        credential pasted into a chat window must die on first use. But a CLI is one
+        process per command, so an invited agent connects once to join and then again
+        for every wait and say - without this, the second connection has nothing to
+        present and the invitation only ever works once.
+
+        The seat is the answer: minted at redemption, handed over exactly once in the
+        welcome, and bound to this member in THIS room's store. Only its HASH is kept
+        (the member file is at rest on the host; a stored secret would make every
+        member file a credential), and the member file is one the ROOM writes here -
+        the seat is the room's promise about who may sit down again, not a claim the
+        peer gets to make about itself.
+        """
+        secret = secrets.token_hex(16)
+        record = self.store.member(identity.peer_id) or {}
+        record["seat_hash"] = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        self.store.put_member(identity.peer_id, record)
+        return f"{self.SEAT_PREFIX}{identity.peer_id}-{secret}"
+
+    def redeem_seat(self, credential: str) -> Identity:
+        """The member a seat belongs to, or a refusal. Reusable, unlike a ticket."""
+        raw = str(credential or "")
+        if not raw.startswith(self.SEAT_PREFIX):
+            raise TicketInvalid("that is not a seat credential")
+        body = raw[len(self.SEAT_PREFIX):]
+        peer_id, sep, secret = body.rpartition("-")
+        if not sep or not peer_id or not secret:
+            raise TicketInvalid("that seat credential is malformed")
+        record = self.store.member(peer_id) or {}
+        stored = str(record.get("seat_hash") or "")
+        presented = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        # compare_digest, not ==: the hash is stored, the secret is presented, and a
+        # timing oracle on the comparison would leak the stored half byte by byte.
+        if not stored or not secrets.compare_digest(stored, presented):
+            raise TicketInvalid("this seat does not exist in this room")
+        role = self.role_of(peer_id)
+        if not role:
+            raise TicketInvalid("this seat's member has left the room")
+        return Identity(peer_id, record.get("display") or peer_id, None, role)
+
     # ── reading ─────────────────────────────────────────────────────────────
 
     def identity_for(self, key: str, *, display: str = "",

@@ -1,10 +1,11 @@
 ---
 name: Agent Rooms (A2A)
-description: Open and run group chats with other agents - Claude Code, Codex, OpenCode,
-             or another VAF agent. Use when the user wants you to work together with
-             another agent, start an agent room or A2A chat, invite an agent in, or
-             answer inside one. Covers creating round and chain rooms, the briefing an
-             invited agent needs, talking, shared files, and ending a room.
+description: >-
+  Open and run group chats with other agents - Claude Code, Codex, OpenCode,
+  or another VAF agent. Use when the user wants you to work together with
+  another agent, start an agent room or A2A chat, invite an agent in, or
+  answer inside one. Covers creating round and chain rooms, the briefing an
+  invited agent needs, talking, shared files, and ending a room.
 ---
 
 # Agent Rooms (A2A)
@@ -39,8 +40,11 @@ other agent needs, and it only works whole:
   agent's session. Never summarize it, never shorten it, never describe it in your
   own words: it carries the one line that makes the other agent act on what it
   reads instead of waiting politely forever.
-- The invited agent must run the commands on THIS machine. There is no remote join
-  through the CLI today; say so if the user asks for one.
+- The invited agent runs the commands on this machine, or - when the briefing
+  shows a network address - from another machine on the same network: the briefing
+  then contains the `vaf a2a trust` line and a join with `--url`, and after that
+  join every command reads the same on both machines. Hand it over whole either
+  way; the two paths travel together in it.
 - Invite each agent separately: one invitation is one seat.
 
 ## Talk

@@ -7664,7 +7664,7 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
 
     try:
         room = open_room(room_id)
-        identity = admit(room, credential or "")
+        identity, seat = admit(room, credential or "")
     except HandshakeRefused as refusal:
         # Mirrored into the security log exactly like a refused WebUI handshake. A room
         # is the one door a stranger can knock on from another machine, so a refusal
@@ -7694,10 +7694,17 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
 
     await websocket.accept()
     log("API", f"A2A joined: {identity.peer_id} in {room.room_id} from {client_ip}")
-    await websocket.send_text(_json.dumps({
+    welcome = {
         "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,
         "role": identity.role, "protocol": "vaf-a2a", "v": 1,
-    }))
+    }
+    if seat:
+        # Handed over exactly once, on the connection that redeemed the ticket. It
+        # never appears again: the server keeps only the hash, so a client that
+        # drops it has to be invited again - which is the honest outcome for a
+        # bearer credential nobody wrote down.
+        welcome["seat"] = seat
+    await websocket.send_text(_json.dumps(welcome))
 
     async def _pump() -> None:
         while True:

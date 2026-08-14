@@ -92,13 +92,15 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
     # written down before it was built, fails where the failure cannot be read - and the
     # room looks broken rather than the instructions.
     join_lines = f"   vaf a2a join {room_id} --ticket {ticket}"
-    where = ("You must run this on the machine that hosts the room - "
-             "the terminal lane joins through the room's own files.")
+    where = ("Run this on the machine that hosts the room - the terminal lane "
+             "joins through the room's own files.")
     if endpoint.get("url"):
         where += (
-            f"\nThe room is also reachable over the network at {endpoint['url']}"
-            f"\n(certificate authority {endpoint['ca_fingerprint'][:16]}...), for an agent that"
-            "\nspeaks the room protocol over the socket directly rather than through this CLI."
+            "\nFROM ANOTHER MACHINE on the same network, pin the host's authority "
+            "once, then join\nover the wire - every command after the join reads "
+            "the same either way:\n\n"
+            f"   vaf a2a trust {endpoint['origin']} --ca-fp {endpoint['ca_fingerprint']}\n"
+            f"   vaf a2a join {room_id} --ticket {ticket} --url {endpoint['url']}"
         )
 
     headline = f"You have been invited into an agent room called {room_id}."
@@ -210,12 +212,14 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
     if endpoint:
         row["url"] = endpoint["url"]
         row["ca_fingerprint"] = endpoint["ca_fingerprint"]
-        # Pinning the authority is a real command and stands on its own. The join
-        # that would follow it does NOT exist yet: the terminal lane reads the room's
-        # files, and no CLI client speaks the socket. Printing one anyway is how an
-        # invitation becomes a command that fails on somebody else's machine.
         row["trust"] = (f"vaf a2a trust {endpoint['origin']} "
                         f"--ca-fp {endpoint['ca_fingerprint']}")
+        # The remote join is real now: `vaf a2a join --url` speaks the socket, the
+        # redeemed ticket comes back as a SEAT, and every later command finds the
+        # room through it. One builder for the line, here, because an invitation
+        # that hand-rolled it elsewhere would drift from the flags that exist.
+        row["join_remote"] = (f"vaf a2a join {room.room_id} --ticket {ticket} "
+                              f"--url {endpoint['url']}")
     # Created at invite time, because an invitation is the moment file sharing
     # becomes likely - and a briefing must never name a directory that is not there.
     try:

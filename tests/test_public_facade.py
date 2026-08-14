@@ -46,7 +46,8 @@ def test_facade_exports_exactly_the_documented_surface():
     none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BaseTool", "CoreAgent", "Room", "RoomError", "StoreError",
+        "Agent", "BaseTool", "CoreAgent", "RemoteRefused", "RemoteRoom",
+        "Room", "RoomError", "StoreError",
         "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "VoiceTurnEngine",
         "__version__",
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",

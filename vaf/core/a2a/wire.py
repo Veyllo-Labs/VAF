@@ -120,12 +120,19 @@ def resolve_account(credential: str) -> dict:
     }
 
 
-def admit(room: Room, credential: str, *, display: str = "") -> Identity:
+def admit(room: Room, credential: str, *, display: str = "") -> tuple:
     """Turn a credential into a member of THIS room, or refuse.
+
+    Returns ``(identity, seat)``. The seat is a durable way back in, minted exactly
+    when a TICKET is redeemed and None on every other path: a ticket is single use
+    (rightly - a bearer credential pasted into a chat window must die on first use),
+    but a CLI is one process per command, so the invited agent's second connection
+    needs something to present. An account credential needs no seat - it can always
+    reconnect as itself - and a seat presented back is its own proof.
 
     The room is passed in rather than looked up from the credential, because a ticket
     is bound to one room and an account token is bound to none: the caller has already
-    decided which room this connection asked for, and both credentials are checked
+    decided which room this connection asked for, and every credential is checked
     against that decision rather than allowed to choose it.
     """
     credential = str(credential or "").strip()
@@ -137,10 +144,17 @@ def admit(room: Room, credential: str, *, display: str = "") -> Identity:
             # No default here: passing one would OVERRIDE the name the invitation was
             # minted with, so "vaf a2a invite --display Codex" produced a member called
             # "guest". The room falls back on its own if neither carries a name.
-            return room.redeem_ticket(credential, display=display)
+            identity = room.redeem_ticket(credential, display=display)
+            return identity, room.issue_seat(identity)
         except TicketInvalid as e:
             raise HandshakeRefused(str(e), code=4003) from None
         except RoomError as e:
+            raise HandshakeRefused(str(e), code=4003) from None
+
+    if str(credential).startswith(Room.SEAT_PREFIX):
+        try:
+            return room.redeem_seat(credential), None
+        except TicketInvalid as e:
             raise HandshakeRefused(str(e), code=4003) from None
 
     account = resolve_account(credential)
@@ -151,10 +165,10 @@ def admit(room: Room, credential: str, *, display: str = "") -> Identity:
     if existing:
         record = room.store.member(peer_id) or {}
         return Identity(peer_id, record.get("display") or display or account["username"],
-                        account["user_scope_id"], existing)
+                        account["user_scope_id"], existing), None
     try:
         return room.join(display=display or account["username"] or "remote",
-                         peer_id=peer_id, scope_id=account["user_scope_id"])
+                         peer_id=peer_id, scope_id=account["user_scope_id"]), None
     except RoomError as e:
         raise HandshakeRefused(str(e), code=4003) from None
 

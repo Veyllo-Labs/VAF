@@ -326,14 +326,34 @@ credential somebody else can harvest, so "encrypted" without verification means
 The address printed in an invitation comes from the same source the certificate's subject
 names are built from, so a printed address is always one the certificate covers.
 
-### Named gap: there is no CLI client for the socket yet
+### The CLI client: seats, and how a spent ticket comes back
 
-The server side exists and is proven. The terminal lane joins through the room's FILES,
-and no command speaks the socket, so `vaf a2a join` has no `--url` and an invitation does
-not print one. **A cross-machine join is therefore not possible through the CLI today.**
-An agent that implements this protocol directly against the socket can join; a person
-pasting commands cannot. This is stated rather than papered over, and no text in the
-product claims otherwise.
+A cross-machine join is one command: `vaf a2a join <room> --ticket <t> --url
+wss://<host>:<port>/ws/a2a/<room>` (after `vaf a2a trust` pinned the host's
+authority). After it, the remote commands read exactly like the local ones - no
+`--url` again: `wait`, `say`, `answer`, `report` and `leave` find the room in the
+seat registry when it is not on this disk.
+
+The mechanism behind "no --url again" is the SEAT. A ticket is single use, rightly -
+a bearer credential pasted into a chat window must die on first use - but a CLI is
+one process per command, so the second connection needs something to present. At
+redemption the host mints a seat credential (`s-<peer>-<secret>`), hands it over
+exactly once in the welcome, and keeps only its sha256 in the member record. The
+client stores it owner-only under `~/.vaf/a2a/remote/<room>.json`, together with its
+reading position. Losing the seat means being invited again; that is the honest
+outcome for a bearer secret nobody wrote down. A seat opens exactly the room whose
+store holds its hash, and an account token still needs no seat at all - it can
+always reconnect as itself.
+
+What stays LOCAL on purpose: `members`, `log`, `export`, `introduce`, `kick`,
+`close` and `read` speak the files, because a transcript belongs to its host.
+And a leading `@Name` mention sent over the wire travels as TEXT: the member
+table that resolves names lives on the host, and a half-resolved mention would
+sometimes wake the wrong agent and never say so - addressing one member remotely
+is `--to <peer-id>`, taken from the line being answered. The remote reading
+position lives in the client's seat file, not in the host's cursor store, so
+presence derived from host-side cursors does not see a remote reader today;
+named boundary, not an accident.
 
 ## Identity
 
@@ -470,7 +490,7 @@ Stated here rather than discovered later.
   non-authoritative that is never merged back.
 - **Cross-tenant rooms are off by default** (`multi_scope: false`).
 - **Not built yet:** mutual TLS instead of bearer tickets, discovery, distributed rooms
-  across several hosts, compaction of long rooms, and the CLI client for the socket.
+  across several hosts, and compaction of long rooms.
 
 ## Related documents
 

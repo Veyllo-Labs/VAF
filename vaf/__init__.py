@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
-__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "Room", "RoomError",
+__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "RemoteRefused",
+           "RemoteRoom", "Room", "RoomError",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "VoiceTurnEngine",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
@@ -129,6 +130,15 @@ def __getattr__(name):
                 "describe_room_entry": describe, "joined_rooms": joined_rooms,
                 "participant_key": participant_key, "room_invitation": invitation,
                 "unread_counts": unread_counts}[name]
+    if name in ("RemoteRoom", "RemoteRefused"):
+        # The room protocol spoken from the OTHER machine: connect with a ticket or
+        # a seat, read the backlog, submit frames, keep the seat the welcome hands
+        # over. The CLI's remote lane is its first consumer, and an embedder writing
+        # their own peer needs exactly this class or has to reimplement the wire -
+        # handshake, welcome check, ack mapping - from the protocol document.
+        # Imports websockets only on first touch, so the slim base is unaffected.
+        from .core.a2a.client import RemoteRefused, RemoteRoom
+        return {"RemoteRoom": RemoteRoom, "RemoteRefused": RemoteRefused}[name]
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

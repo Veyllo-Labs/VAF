@@ -1146,10 +1146,13 @@ budget, ticket, a closed room), `vaf.StoreError` when a room does not exist, and
   room store exists to avoid. Rooms are write-once files precisely to escape it.
 - **A room is a finite conversation.** One encrypted file per frame means reading a room
   decrypts N files. Thousands of frames will be felt.
-- **A cross-machine join is not available through the CLI yet.** The socket exists and
-  the server side is proven, but no shipped client speaks it, so `vaf a2a join` has no
-  `--url`. An agent that implements the protocol against the socket can join today; a
-  person pasting commands cannot.
+- **A cross-machine join is one command now.** `vaf a2a join <room> --ticket <t>
+  --url wss://...` speaks the socket (after `vaf a2a trust` pinned the host's
+  authority), and an embedder writing its own peer uses the same client the CLI
+  does: `vaf.RemoteRoom.connect(url, credential)` performs the handshake, yields
+  the backlog and live frames, and submits payloads for acks. Keep the `seat` the
+  first welcome hands over - the ticket is spent on arrival, and the seat is the
+  only way back in. `vaf.RemoteRefused` carries the close code and a sentence.
 - **Cross-tenant rooms are off by default.** `Room.create(multi_scope=True)` opts in, and
   the reason it is not the default is in the protocol document.
 

@@ -121,16 +121,16 @@ def test_a_machine_with_no_lan_identity_still_invites(monkeypatch):
     assert lan_endpoint("room-x") == {}
 
 
-def test_the_briefing_never_promises_a_lane_that_does_not_exist(circle, monkeypatch):
-    """MUTATION: print `vaf a2a join --url ...` for a peer on another machine.
+def test_the_briefing_promises_the_remote_lane_exactly_when_it_exists(circle, monkeypatch):
+    """MUTATION: print the remote join without an endpoint, or drop it with one.
 
-    That line was written before the client behind it was, and it survived because
-    nothing ever ran it: `vaf a2a join` has no --url, the terminal lane joins through
-    the room's own files, and no CLI client speaks the socket. An invitation that
-    prints it hands a stranger a command that fails on a machine nobody here can see.
-
-    The network address is still handed over as DATA - it is true, and an agent that
-    implements the protocol directly needs it - but no command is built around it.
+    This test used to pin the OPPOSITE - that no briefing names --url - because the
+    flag did not exist and an invitation that printed it handed a stranger a command
+    that fails on a machine nobody here can see. The client exists now, so the same
+    honesty points the other way: with a reachable endpoint the briefing must show
+    the trust line and the remote join TOGETHER (a join without the pin dies on an
+    unpinned authority, which reads as a broken invitation), and without an endpoint
+    neither may appear.
     """
     monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint",
                         lambda room_id: {"origin": "wss://h:8443",
@@ -140,9 +140,22 @@ def test_the_briefing_never_promises_a_lane_that_does_not_exist(circle, monkeypa
     row = invitation(room, owner)
 
     assert row["url"] == "wss://h:8443/ws/a2a/room-inv"
-    assert "--url" not in row["briefing"], "the briefing names a flag that does not exist"
-    assert "--url" not in row.get("join_remote", ""), "so does the machine-readable half"
+    assert row["join_remote"] == (
+        f"vaf a2a join room-inv --ticket {row['ticket']} "
+        "--url wss://h:8443/ws/a2a/room-inv")
+    assert row["join_remote"] in row["briefing"], "the remote join is not in the briefing"
+    assert row["trust"] in row["briefing"], "a remote join without the pin dies unpinned"
     assert "vaf a2a join room-inv --ticket" in row["briefing"]
+
+
+def test_without_an_endpoint_the_briefing_stays_on_this_machine(circle, monkeypatch):
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint", lambda room_id: {})
+    room, owner = circle
+    row = invitation(room, owner)
+
+    assert "join_remote" not in row
+    assert "--url" not in row["briefing"], (
+        "the briefing names a wire the host is not offering")
 
 
 # ── the briefing describes the role the room will enforce ──────────────────

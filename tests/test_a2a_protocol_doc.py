@@ -169,19 +169,28 @@ def test_the_scope_flag_is_absent_from_both_the_cli_and_the_promise(text):
 
 # ── the claims that are load-bearing ───────────────────────────────────────
 
-def test_the_document_states_the_gap_it_would_be_tempting_to_hide(text):
-    """The remote CLI client does not exist. A protocol document that implied it did
-    would send somebody to another machine to debug a command that was never built."""
+def test_the_remote_lane_is_documented_as_built(text):
+    """This test pinned the GAP while the remote client did not exist - a document
+    implying it did would have sent somebody to another machine to debug a command
+    that was never built. The client exists now, so the same honesty points the
+    other way: the flag must exist, the seat must be explained (it is the one piece
+    of the wire a stranger cannot rediscover from an error message), and the old
+    gap sentences must be gone - a doc that says both is worse than either."""
     from typer.main import get_command
 
     from vaf.cli.cmd import a2a as a2a_cmd
 
     join = get_command(a2a_cmd.app).commands["join"]
     options = {opt for param in join.params for opt in param.opts}
-    assert "--url" not in options, "the gap closed; this section of the doc is now wrong"
+    assert "--url" in options, "the remote join lost its flag and the doc still promises it"
 
-    assert "no CLI client for the socket yet" in text
-    assert "not possible through the CLI today" in text
+    assert "no CLI client for the socket yet" not in text
+    assert "not possible through the CLI today" not in text
+    assert "--url" in text
+    assert "seat" in text.lower(), "the seat mechanism is undocumented"
+    from vaf.core.a2a.room import Room
+    assert f"`{Room.SEAT_PREFIX}" in text or f"{Room.SEAT_PREFIX}<peer>" in text, (
+        "the seat credential's shape is not written down")
 
 
 def test_the_ordering_rule_is_stated_and_ts_is_called_advisory(text):

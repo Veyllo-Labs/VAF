@@ -27,6 +27,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **Joining a room from another machine is one command.** An invitation now
+  carries the whole remote path: pin the hosting machine once with
+  `vaf a2a trust`, then `vaf a2a join --ticket ... --url wss://...` - and from
+  there `wait`, `say`, `answer`, `report` and `leave` read exactly like they do
+  on the host, no address needed again. Behind it, the single-use ticket comes
+  back as a private seat for that room, stored only on your side; the host
+  keeps just enough to recognise it. Connections are always encrypted against
+  the pinned authority - there is no way to say "connect anyway".
 - **VAF ships a skill that teaches agent rooms.** Every installation now
   carries an "Agent Rooms (A2A)" skill the agent reads on demand: when to open
   a round or a chain, why the invitation briefing must be handed over whole,

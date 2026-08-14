@@ -25,6 +25,7 @@ pass another tenant's scope. A test asserts the flag's absence.
 from __future__ import annotations
 
 import json
+import os
 import signal
 import sys
 import time
@@ -123,6 +124,172 @@ def _room(room_id: str):
         _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
 
 
+def _open_local(room_id: str):
+    """The room if it lives on THIS machine, None if it does not, refusal if the id
+    is not an id. The verbs that also speak the wire go through this instead of
+    _room, so 'not here' can mean 'try the seat' instead of the exit code."""
+    from vaf.core.a2a.room import Room
+    from vaf.core.a2a.store import StoreError, UnsafeName
+    try:
+        return Room.open(room_id)
+    except UnsafeName:
+        _fail(f"'{room_id}' is not a valid room id.", EXIT_REFUSED)
+    except StoreError:
+        return None
+
+
+# ── the remote lane: rooms that live on ANOTHER machine ─────────────────────
+#
+# One file per room under ~/.vaf/a2a/remote/, owner-only, holding the url, the
+# peer this machine is in that room, the SEAT (the durable way back in that the
+# ticket redemption handed over exactly once) and the reading position. The seat
+# is a bearer secret, which is why the directory is hardened and the file 0600 -
+# the same standard the trust anchors next door live by.
+
+
+def _remote_dir():
+    from vaf.core.platform import Platform
+    from vaf.core.secure_store import harden_dir
+    directory = Platform.vaf_dir() / "a2a" / "remote"
+    directory.mkdir(parents=True, exist_ok=True)
+    harden_dir(directory)
+    return directory
+
+
+def _remote_path(room_id: str):
+    from vaf.core.a2a.store import check_name
+    return _remote_dir() / f"{check_name(room_id)}.json"
+
+
+def _remote_record(room_id: str):
+    try:
+        with open(_remote_path(room_id), "r", encoding="utf-8") as fh:
+            record = json.load(fh)
+        return record if isinstance(record, dict) and record.get("seat") else None
+    except Exception:
+        return None
+
+
+def _remote_save(room_id: str, record: dict) -> None:
+    path = _remote_path(room_id)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=2)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _remote_forget(room_id: str) -> None:
+    try:
+        _remote_path(room_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _remote_fail(e) -> None:
+    """One refusal shape for the wire. The close codes come from the server's door;
+    what a script needs is the same exit codes the local lane uses."""
+    code = int(getattr(e, "code", 0) or 0)
+    if code == 4004:
+        _fail(str(e), EXIT_NO_ROOM)
+    if code in (4001, 4003, 4009):
+        _fail(str(e), EXIT_REFUSED)
+    _fail(str(e), EXIT_ERROR)
+
+
+def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
+                 to_peer: str = "", reply_to: str = "", status: str = "") -> None:
+    from vaf.core.a2a.client import RemoteRefused, RemoteRoom
+    from vaf.core.a2a.trust import TrustRefused
+
+    body = {"text": text}
+    if status:
+        body["status"] = status
+    payload = {"kind": kind, "body": body}
+    if to_peer:
+        payload["to"] = {"peer": to_peer}
+    # Deliberate: no @-mention resolution on this lane. The member table lives on
+    # the host, and a leading "@Name" sent from here travels as TEXT everyone can
+    # read - addressing ONE member remotely is `--to <peer-id>`, taken from the
+    # line you are answering. A half-resolved mention would be worse than none:
+    # it would sometimes wake the wrong agent and never say so.
+    if reply_to:
+        payload["reply_to"] = reply_to
+
+    try:
+        with RemoteRoom.connect(record["url"], record["seat"]) as remote:
+            ack = remote.submit(payload)
+    except (TrustRefused, RemoteRefused) as e:
+        _remote_fail(e)
+    if ack.get("status") == "committed":
+        _emit({"ok": True, "id": ack.get("frame"), "room": room_id, "kind": kind,
+               "lamport": ack.get("lamport"), "seq": ack.get("seq"), "remote": True})
+        if kind == "leave":
+            # The seat's member is gone; a kept record would only turn the next
+            # command into a slower refusal.
+            _remote_forget(room_id)
+        return
+    reason = str(ack.get("reason") or ack.get("status") or "refused")
+    _fail(f"The room refused it: {reason}",
+          EXIT_REFUSED if ack.get("status") in ("refused", "not_writer") else EXIT_ERROR)
+
+
+def _remote_wait(record: dict, room_id: str, *, n: int, timeout: float,
+                 membership: bool) -> None:
+    from vaf.core.a2a.client import RemoteRefused, RemoteRoom
+    from vaf.core.a2a.room import BOOKKEEPING_KINDS
+    from vaf.core.a2a.trust import TrustRefused
+
+    started = time.monotonic()
+    cursor = int(record.get("cursor") or 0)
+    seen = 0
+    try:
+        with RemoteRoom.connect(record["url"], record["seat"]) as remote:
+            frames = remote.frames(timeout=1.0)
+            while not _stop:
+                if timeout and (time.monotonic() - started) >= timeout:
+                    raise typer.Exit(EXIT_TIMEOUT)
+                try:
+                    message = next(frames)
+                except StopIteration:
+                    # The server hung up without a close frame: something is wrong,
+                    # not something finished.
+                    raise typer.Exit(EXIT_ERROR)
+                except TimeoutError:
+                    continue
+                kind = str(message.get("kind") or "")
+                if kind in ("sync", "ack", "welcome") or "lamport" not in message:
+                    continue
+                if int(message.get("lamport") or 0) <= cursor:
+                    continue                     # backlog this seat already printed
+                if message.get("from") == record.get("peer"):
+                    continue                     # own echo is not news
+                row = {"id": message.get("id"), "peer": message.get("from"),
+                       "role": message.get("role"), "kind": kind,
+                       "text": str((message.get("body") or {}).get("text") or ""),
+                       "body": message.get("body") or {},
+                       "lamport": message.get("lamport"), "ts": message.get("ts"),
+                       "reply_to": message.get("reply_to"), "remote": True}
+                if kind == "close":
+                    _emit(row)
+                    raise typer.Exit(EXIT_CLOSED)
+                if kind in BOOKKEEPING_KINDS and not membership:
+                    continue
+                _emit(row)
+                # AFTER the line exists on stdout, never before: an interrupted wait
+                # costs a repeated line, not a swallowed one - the store's own rule.
+                cursor = int(message.get("lamport") or cursor)
+                record["cursor"] = cursor
+                _remote_save(room_id, record)
+                seen += 1
+                if seen >= n:
+                    raise typer.Exit(EXIT_OK)
+    except (TrustRefused, RemoteRefused) as e:
+        _remote_fail(e)
+    raise typer.Exit(EXIT_OK if seen else EXIT_TIMEOUT)
+
+
 def _me(room, *, required: bool = True, as_peer: str = ""):
     """Which member of this room is acting.
 
@@ -164,7 +331,13 @@ def _emit(row: dict) -> None:
 def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
           reply_to: str = "", status: str = "", as_peer: str = "") -> None:
     from vaf.core.a2a.room import RoomError
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        return _remote_send(record, room_id, kind, text, to_peer=to_peer,
+                            reply_to=reply_to, status=status)
     identity = _me(room, as_peer=as_peer)
     body = {"text": text}
     if status:
@@ -266,9 +439,51 @@ def join(
         "assist",
         help="How far VAF's own agent may act on messages here: observe, assist or autonomous.",
     ),
+    url: str = typer.Option(
+        "", "--url",
+        help="The room's wss address on the machine that hosts it (from the "
+             "invitation). Joins over the wire; pin the host's authority first "
+             "with `vaf a2a trust`."),
 ) -> None:
     """Join a room, with an invitation if you were given one."""
     from vaf.core.a2a.room import RoomError, TicketInvalid, derive_peer_id
+
+    if url:
+        # The room lives on another machine. The ticket buys ONE connection; what
+        # this join keeps is the SEAT the welcome hands over, which is how every
+        # later `wait` and `say` for this room finds its way back in - after this,
+        # the commands read exactly like the local ones, no --url again.
+        from vaf.core.a2a.client import RemoteRefused, RemoteRoom, room_url
+        from vaf.core.a2a.trust import TrustRefused
+
+        existing = _remote_record(room_id)
+        if existing and not ticket:
+            _emit({"ok": True, "room": room_id, "peer": existing.get("peer"),
+                   "role": existing.get("role"), "already": True, "remote": True})
+            return
+        if not ticket:
+            _fail("Joining a room on another machine needs --ticket from an invitation.",
+                  EXIT_REFUSED)
+        try:
+            named = room_url(url)["room_id"]
+            if named != room_id:
+                _fail(f"That URL is for room '{named}', not '{room_id}'.", EXIT_REFUSED)
+            with RemoteRoom.connect(url, ticket) as remote:
+                if not remote.seat:
+                    _fail("The host issued no seat for this join; without one, only "
+                          "this single connection would ever work. The host is "
+                          "running an older VAF - update it, or work on its machine.",
+                          EXIT_ERROR)
+                _remote_save(room_id, {
+                    "url": url, "peer": remote.peer_id, "role": remote.role,
+                    "seat": remote.seat, "cursor": 0,
+                })
+                _emit({"ok": True, "room": room_id, "peer": remote.peer_id,
+                       "role": remote.role, "remote": True})
+        except (TrustRefused, RemoteRefused) as e:
+            _remote_fail(e)
+        return
+
     room = _room(room_id)
     # Only WITHOUT a ticket is a second join the same participant asking twice. With
     # one it is a different agent presenting a credential of its own, and several of
@@ -556,7 +771,13 @@ def wait(
     Exit codes: 0 got messages, 4 the timeout expired with nothing, 5 the room closed.
     """
     _install_stop_handler()
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        return _remote_wait(record, room_id, n=n, timeout=timeout,
+                            membership=membership)
     identity = _me(room, as_peer=as_peer)
     started = time.monotonic()
     seen = 0

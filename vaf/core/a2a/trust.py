@@ -131,5 +131,12 @@ def client_context(url: str) -> ssl.SSLContext:
         raise TrustRefused(
             f"nothing trusted for {url} yet - run: vaf a2a trust {url} --ca-fp <fingerprint>")
     context = ssl.create_default_context(cafile=str(anchor))
+    # Strictness is DEMANDED, not inherited: Python 3.13 turns VERIFY_X509_STRICT
+    # on by default and 3.10-3.12 do not, so a context that relied on the default
+    # verified less on exactly the interpreters most installs run. Found by CI
+    # running the suite on 3.10 while every local run was 3.13 - the class of
+    # failure the hostile-env script cannot catch, because it shares the
+    # interpreter with the developer.
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
     context.check_hostname = False
     return context

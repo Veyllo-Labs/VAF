@@ -23,6 +23,7 @@ would take.
 import shutil
 import ssl
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -63,10 +64,20 @@ def test_a_generated_chain_verifies_under_strict_checking(generated):
     assert _strict_verify(ssl_dir / "ca.pem", cert_path).endswith("OK")
 
 
+@pytest.mark.skipif(sys.version_info < (3, 13),
+                    reason="the strict default ARRIVED in 3.13; below it the claim "
+                           "is simply not about this interpreter")
 def test_the_python_default_really_is_strict():
     """The reason this file exists. If a future Python stops defaulting to strict, the
     certificates are still correct - but the urgency in the docstring above would be
-    wrong, and somebody should notice."""
+    wrong, and somebody should notice.
+
+    Bounded to 3.13+, where the claim is true by design. On 3.10-3.12 the default
+    was never strict, which is not a regression to notice but the reason
+    trust.client_context sets the flag EXPLICITLY - and the test for THAT runs on
+    every interpreter (test_a2a_trust.py::test_a_context_verifies_the_pinned_authority,
+    which is how the whole matrix went red and found this).
+    """
     context = ssl.create_default_context()
     assert bool(context.verify_flags & ssl.VERIFY_X509_STRICT)
 

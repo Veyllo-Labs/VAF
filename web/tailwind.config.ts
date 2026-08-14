@@ -125,6 +125,12 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  // The `animate-in` / `fade-in` / `zoom-in` / `slide-in-from-*` utilities. Fifty
+  // eight places in this app were written with them and none of them animated:
+  // the class names travel with copied shadcn-style markup, the plugin that
+  // defines them never did, and Tailwind drops an unknown utility without a
+  // word - verified against the built stylesheet, which contained none of them.
+  // Build-time only (it emits CSS, ships no runtime code) and MIT.
+  plugins: [require("tailwindcss-animate")],
 };
 export default config;

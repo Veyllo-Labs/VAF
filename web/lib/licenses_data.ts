@@ -14,6 +14,7 @@ export const thirdPartyLicenses = [
   { name: 'Next.js', license: 'MIT', url: 'https://github.com/vercel/next.js' },
   { name: 'React', license: 'MIT', url: 'https://github.com/facebook/react' },
   { name: 'TailwindCSS', license: 'MIT', url: 'https://github.com/tailwindlabs/tailwindcss' },
+  { name: 'tailwindcss-animate', license: 'MIT', url: 'https://github.com/jamiebuilds/tailwindcss-animate' },
   { name: 'Lucide React', license: 'ISC', url: 'https://github.com/lucide-dev/lucide' },
   { name: 'Zustand', license: 'MIT', url: 'https://github.com/pmndrs/zustand' },
   { name: 'ReactFlow', license: 'MIT', url: 'https://github.com/xyflow/xyflow' },

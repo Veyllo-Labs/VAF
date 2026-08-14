@@ -1399,6 +1399,19 @@ def test_the_context_gauge_and_the_room_messages_follow_the_open_view():
         "the context gauge accepts reports from any conversation again")
     assert '<div className="flex gap-3 py-2 room-msg-enter">' in source, (
         "the room's messages lost their entry animation")
+    # The app's OTHER animations (58 sites) come from the plugin, which was
+    # missing for so long that every one of them was inert. A plugin list that
+    # loses it again takes them all down silently - Tailwind drops an unknown
+    # utility without a word, which is exactly why nobody noticed.
+    cfg = (ROOT / "web" / "tailwind.config.ts").read_text(encoding="utf-8")
+    assert 'require("tailwindcss-animate")' in cfg, (
+        "the animate plugin is gone; every animate-in / fade-in / zoom-in "
+        "class in the app silently stops animating")
+    pkg = (ROOT / "web" / "package.json").read_text(encoding="utf-8")
+    assert "tailwindcss-animate" in pkg, "the plugin is configured but not a dependency"
+    licenses = (ROOT / "web" / "lib" / "licenses_data.ts").read_text(encoding="utf-8")
+    assert "tailwindcss-animate" in licenses, (
+        "a bundled third-party component is missing from the in-app licence list")
     css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
     assert "@keyframes roomMessageEnter" in css and ".room-msg-enter" in css, (
         "the animation must be a REAL keyframe: the app's animate-in / "

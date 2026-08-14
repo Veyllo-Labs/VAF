@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The interface animates again - all of it.** Fifty-eight places were
+  written to fade, zoom or slide in, and none of them ever did: the classes
+  came with copied markup, the plugin that defines them was never installed,
+  and an unknown utility is dropped silently. Dialogs, banners, cards and
+  messages now move the way the interface always intended. The plugin is
+  build-time only, MIT, and listed under About → Licenses.
 - **The context gauge shows the conversation you are looking at.** It took
   whatever context report arrived last, from any conversation, so an open
   group chat could show another chat's numbers and the other way round. It

@@ -1383,6 +1383,21 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_an_empty_new_chat_does_not_paint_its_hero_into_an_open_room():
+    """MUTATION: drop the room guard from the empty-chat hero or its wrapper.
+
+    `messages` is the CHAT's array and a room never fills it: a fresh chat has
+    none, so with a room open the composer wrapper centered itself mid-screen
+    and the welcome hero (avatar, greeting, "start a conversation") rendered on
+    top of the room's transcript - measured live as two views blended into one.
+    Both the wrapper's centering ternary and the hero's render gate must treat
+    an open room as not-an-empty-chat.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert source.count("messages.length === 0 && !roomView") >= 2, (
+        "the empty-chat hero or its wrapper lost the open-room guard")
+
+
 class _WatcherSocket:
     """A connected browser, reduced to what the broadcast maps read and write."""
 

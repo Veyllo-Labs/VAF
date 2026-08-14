@@ -7281,13 +7281,18 @@ function VAFDashboardContent() {
                         <div
                             className={cn(
                                 "absolute left-0 right-0 w-full z-40 transition-all duration-500 ease-out max-md:pointer-events-none",
-                                messages.length === 0
+                                // `messages` is the CHAT's array and a room never fills it, so an
+                                // open room must pin the composer to the bottom itself - measured
+                                // live: a fresh empty chat plus a click into a room floated the
+                                // input (and the welcome hero below) mid-screen over the
+                                // transcript.
+                                messages.length === 0 && !roomView
                                     ? "top-1/2 -translate-y-1/2 bottom-auto max-md:top-[38%]"
                                     : "top-auto bottom-0 translate-y-0"
                             )}
                         >
                             <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))] max-md:[&>*]:pointer-events-auto">
-                                {messages.length === 0 && !historyLoading && (
+                                {messages.length === 0 && !roomView && !historyLoading && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
                                         <div className="flex justify-center mb-8 max-md:mb-4 origin-center scale-[1.8] max-md:scale-[1.35]">
                                             <AgentAvatar mode="idle" />

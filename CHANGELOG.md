@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A fresh chat no longer paints its welcome screen into an open room.**
+  Creating a new chat and then clicking a group chat floated the big input
+  mid-screen and drew the welcome hero (avatar and greeting) over the
+  room's transcript; an open room now pins the composer to the bottom and
+  keeps the hero away.
 - **Stop now actually stops the browser agent.** A chat-turn browser run could
   not be interrupted at all: the run executes on its own thread, where the
   session id silently resolved to nothing and disarmed the stop watcher - ten

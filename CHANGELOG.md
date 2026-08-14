@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The context gauge shows the conversation you are looking at.** It took
+  whatever context report arrived last, from any conversation, so an open
+  group chat could show another chat's numbers and the other way round. It
+  follows the open view now, rooms included. Room messages also fade in the
+  way a chat's do, instead of appearing from nowhere while the view scrolls.
 - **The browser goes back to idle when it is done.** Ending a browsing task
   only closed VAF's connection to the browser; the page itself stayed open in
   the container and kept rendering. One visit to an animated site left the

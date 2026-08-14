@@ -1383,6 +1383,35 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_the_context_gauge_and_the_room_messages_follow_the_open_view():
+    """MUTATION: merge context_status ungated again, or drop the room's entry
+    animation.
+
+    Two things a room lacked next to the chat. The gauge took whatever context
+    report arrived last, from any session, so an open room showed some other
+    conversation's numbers. And the room's messages appeared from nowhere while
+    the view scrolled, because the chat's entry animation had never been
+    carried over - the room is not a lesser surface, it gets the same one.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    gauge = source.split("data.type === 'context_status'", 1)[1][:700]
+    assert "eventBelongsHere(data, activeSessionId, 'worker')" in gauge, (
+        "the context gauge accepts reports from any conversation again")
+    assert '<div className="flex gap-3 py-2 room-msg-enter">' in source, (
+        "the room's messages lost their entry animation")
+    css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
+    assert "@keyframes roomMessageEnter" in css and ".room-msg-enter" in css, (
+        "the animation must be a REAL keyframe: the app's animate-in / "
+        "fade-in / slide-in-from-* utilities do nothing at all, because "
+        "tailwindcss-animate is not installed and the plugin list is empty")
+    frames = css.split("@keyframes roomMessageEnter", 1)[1][:200]
+    assert "opacity" in frames and "transform" in frames, "the drift is gone"
+    for costly in ("box-shadow", "width", "height", "top:", "left:"):
+        assert costly not in frames, (
+            f"{costly} in a keyframe repaints every frame - transform and "
+            "opacity only (the avatar leak's lesson)")
+
+
 def test_a_frozen_room_stops_claiming_somebody_is_typing():
     """MUTATION: render view.room.typing directly again.
 
@@ -1438,6 +1467,11 @@ def test_one_filter_decides_what_the_open_view_receives():
     assert "data.sessionId !== activeSessionId" not in source, (
         "a hand-rolled session gate is back; every lane must call "
         "eventBelongsHere so the room stays a first-class view")
+    # The same gate written against the STATE instead of the local const hid
+    # five more copies from the first sweep - including the one that feeds the
+    # context gauge, which is why a room showed another conversation's numbers.
+    assert "data.sessionId !== currentSessionId" not in source, (
+        "a hand-rolled gate under the other variable name is back")
     assert "const eventBelongsHere = (" in source, "the one filter is gone"
     assert source.count("eventBelongsHere(data, activeSessionId, 'worker')") >= 10, (
         "worker feeds no longer share the room-aware lane")

@@ -1333,7 +1333,16 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 return (
                     <Fragment key={m.id}>
                     {daySeparator}
-                    <div className="flex gap-3 py-2">
+                    {/* A message drifts in from the upper left instead of appearing
+                        from nowhere while the view scrolls. `room-msg-enter` is a REAL
+                        keyframe in globals.css, not the app's usual `animate-in
+                        fade-in slide-in-from-*` utilities: tailwindcss-animate is not
+                        installed and the plugin list is empty, so those classes have
+                        never animated anything anywhere. It runs ONCE per message
+                        because the key is the frame id - the 3s poll replaces the
+                        payload, React keeps the element, and a stable element does not
+                        re-animate. */}
+                    <div className="flex gap-3 py-2 room-msg-enter">
                         {isOwnAgent ? (
                             <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
                                 <AgentAvatar mode="idle"
@@ -3413,7 +3422,7 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'stats') {
                     // Update stats if session matches OR if it's a global update (no sessionId)
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     setTokenStats(data.stats);
                     // Also drive the context bar (X / Y Tokens) from stats so it's never stuck at 0
                     // when context_status is not received (e.g. headless only sends stats)
@@ -3462,6 +3471,12 @@ function VAFDashboardContent() {
                     setGateRequest(null);
                 }
                 else if (data.type === 'context_status') {
+                    // The gauge describes the context of the view that is OPEN, and
+                    // this handler used to merge whatever arrived last, from any
+                    // session - so a room showed some other conversation's numbers,
+                    // and a chat showed the room turn's. It is a worker lane: a room
+                    // turn's context belongs beside the room it is answering.
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     // Merge into existing contextStats so partial updates (e.g. load_session
                     // sending only user_turn_count) don't wipe token counts set by 'stats'.
                     setContextStats((prev: any) => ({ ...(prev || {}), ...data.stats }));
@@ -3911,11 +3926,11 @@ function VAFDashboardContent() {
                     // Adding a message here caused duplicate workflow elements in the chat.
                 }
                 else if (data.type === 'workflow_update') {
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     updateStepStatus(data.stepId, data.status, data.progress, data.result);
                 }
                 else if (data.type === 'workflow_done') {
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     // Mark all pending steps as failed/done so the store triggers auto-close
                     const wfStore = useWorkflowStore.getState();
                     if (wfStore.workflow) {
@@ -3934,7 +3949,7 @@ function VAFDashboardContent() {
                     setSubAgentState(prev => ({ ...prev, browserFrame: '', browserUrl: '' }));
                 }
                 else if (data.type === 'workflow_output_stream') {
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     const line = typeof data.line === 'string' ? data.line : '';
                     appendWorkflowLine(line);
                 }
@@ -3945,7 +3960,7 @@ function VAFDashboardContent() {
                     // gap (live incident 2026-07-20: frozen at "step 1 running, 50%").
                     // 'ended' is NEUTRAL on purpose: the run is over, but this answer does not
                     // know how it turned out, so the panel must not invent success or failure.
-                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     const wfNow = useWorkflowStore.getState().workflow;
                     if (!wfNow) return;
                     if (data.workflowId && wfNow.id && data.workflowId !== wfNow.id) return;

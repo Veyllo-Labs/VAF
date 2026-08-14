@@ -474,6 +474,25 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   0%,100% { transform:scale(1) }
   50%     { transform:scale(1.18) }
 }
+
+/* A message arriving in a room, written out rather than borrowed: the app is
+   full of `animate-in fade-in slide-in-from-*` utilities and NONE of them do
+   anything - tailwindcss-animate is not installed and the plugin list is
+   empty, so those classes have always been dead and every message simply
+   appeared. Transform and opacity only, per the rule above. It drifts in from
+   the upper left over 0.7s, long enough to be noticed in a group chat where
+   several speakers write at once. `both` holds the start frame until the
+   animation runs, so nothing flashes at its final position first. */
+@keyframes roomMessageEnter {
+  from { opacity: 0; transform: translate3d(-0.9rem, -0.5rem, 0) }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) }
+}
+.room-msg-enter { animation: roomMessageEnter .7s cubic-bezier(.16,.84,.44,1) both }
+@media (prefers-reduced-motion: reduce) {
+  /* A person who asked the system for less motion gets the message, not the
+     movement. */
+  .room-msg-enter { animation: none }
+}
 @keyframes agentAvatarTalk {
   0%,100% { transform:scale(1);   border-radius:50% }
   18%     { transform:scale(1.38); border-radius:62% 38% 55% 45%/45% 55% 38% 62% }

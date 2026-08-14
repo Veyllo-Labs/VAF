@@ -460,7 +460,7 @@ def test_one_invitation_yields_exactly_one_member_under_concurrency(tmp_path):
     Read-then-delete lets two handshakes arriving at the same moment both read a valid
     ticket, both delete it (one deletion silently failing), and both join. One
     invitation, N members - the one thing a single-use bearer credential must not do.
-    The rename IS the gate, so exactly one caller can win it.
+    The exclusive CLAIM is the gate, so exactly one caller can win it.
     """
     import threading
 
@@ -487,6 +487,61 @@ def test_one_invitation_yields_exactly_one_member_under_concurrency(tmp_path):
     assert len(results) == 1, f"{len(results)} peers joined on one invitation"
     assert len(errors) == 7
     assert len([r for r in room.roles() if r != "p-own"]) == 1
+
+
+def test_the_claim_holds_even_where_a_rename_is_not_a_gate(tmp_path, monkeypatch):
+    """MUTATION: make the rename the gate again.
+
+    Windows CI measured three peers joining on one invitation while Linux and
+    macOS held: os.replace is not the mutex that code assumed, and a race that
+    only shows on one platform is the worst kind to rely on. The gate is an
+    exclusive create now, which the kernel refuses to grant twice everywhere.
+
+    The Windows failure is reproduced HERE, on any platform, by making every
+    rename succeed - which is what that platform effectively did. With the old
+    rename-as-gate this test yields several winners; with the claim, one.
+    """
+    import os as _os
+    import threading
+
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path,
+                       room_id="room-norename")
+    owner = room.join(display="Owner", scope_id="s", peer_id="p-own")
+    ticket = room.mint_ticket(owner, display="Guest")
+
+    import vaf.core.a2a.store as store_mod
+    real_replace = _os.replace
+
+    def _everyone_wins(src, dst):
+        """A rename that never refuses - the Windows behaviour, made portable."""
+        try:
+            real_replace(src, dst)
+        except OSError:
+            pass
+
+    monkeypatch.setattr(store_mod.os, "replace", _everyone_wins)
+
+    results, errors = [], []
+    barrier = threading.Barrier(8)
+
+    def _redeem():
+        barrier.wait()
+        try:
+            results.append(Room.open("room-norename", base=tmp_path)
+                           .redeem_ticket(ticket))
+        except TicketInvalid as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_redeem) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == 1, (
+        f"{len(results)} peers joined on one invitation - the gate depends on "
+        "the rename again, which does not hold on every platform")
+    assert len(errors) == 7
 
 
 def test_a_spent_ticket_is_kept_rather_than_erased(tmp_path):

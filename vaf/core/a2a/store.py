@@ -419,15 +419,23 @@ class RoomStore:
     def claim_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
         """Take sole ownership of a ticket, or return None because somebody else did.
 
-        The RENAME is the gate, not a step after it. Read-then-delete lets two
+        The CLAIM is the gate, not a step after it. Read-then-delete lets two
         handshakes arriving at the same moment both read a valid ticket, both delete
         it (one deletion silently failing), and both join - one invitation, N members,
         which is exactly what a single-use bearer credential must not permit.
 
-        ``os.replace`` into ``tickets/spent/`` is atomic on POSIX and on Windows, so
-        exactly one caller can win. The record is read AFTER the win, from the file the
-        winner now owns, because reading first would put the decision back before the
-        race.
+        The gate is an EXCLUSIVE CREATE (``O_CREAT | O_EXCL``), which is one atomic
+        syscall on POSIX and one ``CREATE_NEW`` on Windows: the second caller is
+        refused by the kernel, whatever the filesystem does. It used to be a rename
+        into ``tickets/spent/``, on the belief that ``os.replace`` is equally atomic
+        on both - Windows CI measured otherwise, three peers joining on a single
+        invitation while Linux and macOS held. A rename moves a file; only an
+        exclusive create is a mutex.
+
+        Order after the win, and it matters: the winner reads the record, then puts
+        the ticket beyond reach. A crash between claim and read leaves the claim
+        marker without a spent ticket, which makes that invitation unusable - the
+        safe direction for a bearer credential.
         """
         name = check_name(ticket_id, what="ticket id")
         source = self.tickets_dir / f"{name}.json"
@@ -435,10 +443,21 @@ class RoomStore:
         try:
             spent_dir.mkdir(parents=True, exist_ok=True)
             harden_dir(spent_dir)
+            fd = os.open(str(spent_dir / f"{name}.claim"),
+                         os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+        except OSError:
+            # Somebody else holds the claim, or the store is unwritable. Either way
+            # this caller did not win it.
+            return None
+        record = data_files.read_json(source, default=None)
+        try:
             os.replace(str(source), str(spent_dir / f"{name}.json"))
         except OSError:
-            return None
-        return data_files.read_json(spent_dir / f"{name}.json", default=None)
+            # The ticket is gone or unmovable; the claim still stands, so nobody
+            # else can redeem it either.
+            pass
+        return record
 
 
 def list_rooms(base: Optional[Path] = None) -> List[str]:

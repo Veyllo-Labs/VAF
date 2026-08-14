@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **An invitation to a room is single use on Windows too.** Two agents
+  redeeming the same invitation at the same instant could both get in there -
+  three did, in a test on Windows, while Linux and macOS refused correctly.
+  The claim no longer relies on a file rename being a race gate (it is not one
+  on every platform); the kernel now refuses the second claimant outright.
 - **The interface animates again - all of it.** Fifty-eight places were
   written to fade, zoom or slide in, and none of them ever did: the classes
   came with copied markup, the plugin that defines them was never installed,

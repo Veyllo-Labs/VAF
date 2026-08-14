@@ -35,8 +35,11 @@ and return early - see "Cooperative cancel" below.
 
 The per-call budget is chosen per agent by `agent_timeout_seconds(tool_name)`: a filesystem agent
 is not forced to wait the full research budget. A small set of tools manage their own lifecycle and
-are deliberately **not** wrapped (`SELF_SUPERVISED_TOOLS`): `browser_agent` (its own stop monitor +
-`max_steps`), the workflow orchestrators `create_agent_workflow` / `execute_workflow` (the engine
+are deliberately **not** wrapped (`SELF_SUPERVISED_TOOLS`): `browser_agent` (its own in-loop stop
+monitor + `max_steps`, plus a `_stop_watchdog` THREAD that survives a starved event loop: it cancels
+the whole run task from outside and, after a grace period, restarts the `vaf-browser` container to
+sever a blocked CDP socket - see the stop section in `BROWSER_AGENT.md`), the workflow
+orchestrators `create_agent_workflow` / `execute_workflow` (the engine
 already bounds each step, so bounding them again would double-bound), `python_sandbox` (it runs
 a stop-aware poll loop with its own deadline that kills the Docker exec the moment Stop is requested -
 being abandoned by `run_bounded` would race that kill against the stop flag being cleared), and

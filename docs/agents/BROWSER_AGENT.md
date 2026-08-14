@@ -129,12 +129,21 @@ Once the agent calls `browser_agent`, the following happens:
 
 ### Stopping a run
 
-For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). A background `_stop_monitor` polls this flag every 0.5 s and, when stop is requested:
+For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). Two lanes watch that flag; both need the session id, which `run()` resolves on the calling thread and hands into the browser thread as an argument - the run executes on a fresh thread whose contextvar context would answer `None`, and a `None` session id silently disarms every stop lane (a live incident shipped exactly that: ten Stop presses, none seen).
+
+**Lane 1 - the in-loop `_stop_monitor`** (a coroutine, polls every 0.5 s), for the healthy case:
 
 1. calls browser-use's cooperative `agent.stop()` - the run halts cleanly at the next step boundary. This is the reliable path: a bare asyncio cancel cannot interrupt a blocking LLM call running in the executor thread, and browser-use can swallow a single `CancelledError` mid-step.
 2. then cancels the run task to unblock as soon as the current step returns.
 
-The monitor keeps trying until the run actually ends, instead of giving up after one attempt, so a swallowed cancel can no longer leave the browser running to `max_steps`. A fully hung LLM call can only be interrupted once it returns, since the executor thread cannot be force-killed.
+The monitor keeps trying until the run actually ends, instead of giving up after one attempt, so a swallowed cancel can no longer leave the browser running to `max_steps`.
+
+**Lane 2 - the `_stop_watchdog` thread**, for the case the monitor structurally cannot handle: a synchronous block anywhere in browser-use/CDP starves the whole private event loop, so no coroutine ticks - the monitor included - and Python cannot force-kill a thread. The watchdog lives outside the loop, is armed before anything can block (startup included), and escalates:
+
+1. every poll it schedules a cancel of the whole run task via `call_soon_threadsafe` - this lands the moment the loop ticks at all, and covers the startup phase (`_resolve_cdp_url` runs in the executor, `browser.start()` is bounded to 60 s and a failed start reports instead of degrading);
+2. after a 10 s grace it restarts the `vaf-browser` container, severing the blocked socket so the loop revives and the pending cancel lands - the same answer `python_sandbox` gives (stop kills its Docker exec).
+
+The closing awaits (`export_storage_state`, `browser.stop()`) are bounded too, so a browser that died mid-run cannot turn the stop itself into the next hang.
 
 ### Result format
 

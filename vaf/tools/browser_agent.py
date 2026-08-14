@@ -22,6 +22,7 @@ import logging
 import queue as _queue
 import random
 import threading
+import time
 from typing import Any, Optional
 
 from vaf.tools.base import BaseTool
@@ -220,7 +221,10 @@ def _run_async_in_new_loop(coro):
         asyncio.set_event_loop(loop)
         try:
             result[0] = loop.run_until_complete(coro)
-        except Exception as e:
+        except BaseException as e:
+            # BaseException, not Exception: a stop cancels the whole run task,
+            # and CancelledError would otherwise die silently inside this
+            # thread - the caller would see result None instead of the stop.
             exception[0] = e
         finally:
             loop.close()
@@ -686,6 +690,16 @@ class BrowserAgentTool(BaseTool):
                 f"Browser agent is busy — all {_BROWSER_MAX_PARALLEL} slot(s) are in use. "
                 f"Please try again in a moment."
             )
+        # Session id crosses the thread boundary AS AN ARGUMENT: the run below
+        # executes on a fresh thread with a fresh contextvar context, where
+        # get_current_session_id() answers None - which silently disarmed the
+        # stop monitor for every chat browser run (measured live: ten Stop
+        # presses, none seen) and broadcast the live frames unscoped.
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            _session_id = get_current_session_id()
+        except Exception:
+            _session_id = None
         try:
             return _run_async_in_new_loop(
                 self._run_browser(
@@ -695,6 +709,7 @@ class BrowserAgentTool(BaseTool):
                     persistent=persistent,
                     session=session,
                     user_scope_id=kwargs.get("user_scope_id"),
+                    session_id=_session_id,
                 )
             )
         except ImportError as e:
@@ -705,6 +720,11 @@ class BrowserAgentTool(BaseTool):
                 "  playwright install --with-deps chromium\n"
                 f"\nDetails: {e}"
             )
+        except asyncio.CancelledError:
+            # The stop watchdog cancels the WHOLE run task, setup phase included -
+            # CancelledError is a BaseException, so without this branch a stop
+            # pressed during browser start would escape the tool as a crash.
+            return "Browser task stopped by user."
         except Exception as e:
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
@@ -720,16 +740,53 @@ class BrowserAgentTool(BaseTool):
         persistent: bool = False,
         session: str = "default",
         user_scope_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         import os
         from browser_use import Agent
         from browser_use.browser.session import BrowserSession
         from browser_use.browser.profile import BrowserProfile
 
+        # ── Session ID FIRST (stop-check + WebUI broadcast) ──────────────────
+        # Handed over by run() as an argument, because this coroutine executes
+        # on a fresh thread whose contextvar context is empty - resolving here
+        # answered None live, which disarmed every stop lane below. The
+        # contextvar fallback stays for direct callers on the original thread.
+        _session_id = session_id
+        if not _session_id:
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                _session_id = get_current_session_id()
+            except Exception:
+                _session_id = None
+
+        # ── Stop watchdog OUTSIDE the event loop ─────────────────────────────
+        # The async _stop_monitor further down handles the healthy case, but a
+        # synchronous block inside browser-use/CDP starves this private loop:
+        # no coroutine ticks, so no monitor can help, and Python cannot kill a
+        # thread. A plain thread keeps polling the stop flag regardless and
+        # escalates until the run actually ends.
+        _outer_task = asyncio.current_task()
+        _run_ended = threading.Event()
+        threading.Thread(
+            target=self._stop_watchdog,
+            args=(_session_id, asyncio.get_running_loop(), _outer_task,
+                  _run_ended, self._restart_browser_container),
+            daemon=True,
+            name="browser-stop-watchdog",
+        ).start()
+
         # Resolve the full WebSocket debugger URL from the CDP base endpoint.
         # Chromium requires the full path (ws://.../devtools/browser/{uuid}), not just the base.
-        cdp_url = self._resolve_cdp_url(
-            os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
+        # In the executor, not inline: the resolver polls with sleeps for up to
+        # 30s, and run inside the coroutine that starves the loop - the stop
+        # watchdog's cancel could not land during exactly the phase the user is
+        # most likely to abort (a browser that will not come up).
+        cdp_url = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._resolve_cdp_url(
+                os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
+            ),
         )
 
         # ── Persistent session: resolve cookie store path ─────────────────────
@@ -761,14 +818,22 @@ class BrowserAgentTool(BaseTool):
         # of browser-use's default 0.1s (instant actions are a behavioural bot tell).
         session_kwargs["wait_between_actions"] = round(random.uniform(0.6, 1.2), 2)
 
-        # ── Session ID (needed for stop-check and WebUI broadcast) ───────────
-        try:
-            from vaf.core.subagent_ipc import get_current_session_id
-            _session_id = get_current_session_id()
-        except Exception:
-            _session_id = None
-
         browser = BrowserSession(**session_kwargs)
+
+        # Bounded, and a failure REPORTS instead of degrading: the old
+        # try/except-pass continued into agent.run() with a session that never
+        # started, which is a run that can only flail against a dead browser.
+        try:
+            await asyncio.wait_for(browser.start(), timeout=60.0)
+        except (asyncio.CancelledError, InterruptedError):
+            raise
+        except Exception as e:
+            _run_ended.set()
+            return (
+                f"Error (browser_agent): browser session did not start: "
+                f"{type(e).__name__}: {e}. Is `vaf-browser` running/healthy? "
+                f"Check: docker ps | grep vaf-browser ; docker logs vaf-browser"
+            )
 
         # ── Stealth: inject ONLY the VAF supplement via a CDP init script ────
         # Our browser is a real HEADED Chromium (under Xvfb, see docker/browser/)
@@ -781,7 +846,6 @@ class BrowserAgentTool(BaseTool):
         # supplement only fixes the software-WebGL "SwiftShader" renderer and
         # adds subtle canvas/audio noise, without ever touching navigator.
         try:
-            await browser.start()
             _supp = os.path.join(os.path.dirname(__file__), "_stealth_supplement.js")
             with open(_supp, "r", encoding="utf-8") as _f:
                 await browser._cdp_add_init_script(_f.read())
@@ -831,6 +895,7 @@ class BrowserAgentTool(BaseTool):
         except (asyncio.CancelledError, InterruptedError):
             return "Browser task stopped by user."
         finally:
+            _run_ended.set()
             stop_screenshots.set()
             stop_monitor_task.cancel()
             _bu_logger.removeHandler(log_handler)
@@ -839,17 +904,113 @@ class BrowserAgentTool(BaseTool):
             except Exception:
                 pass
             # ── Save persistent session cookies before closing ────────────────
+            # Both closing awaits are bounded: a browser that died mid-run (or
+            # was container-restarted by the stop watchdog) leaves CDP calls
+            # that never answer, and an unbounded await here would turn the
+            # stop itself into the next hang.
             if session_file:
                 try:
-                    await browser.export_storage_state(output_path=session_file)
+                    await asyncio.wait_for(
+                        browser.export_storage_state(output_path=session_file),
+                        timeout=10.0,
+                    )
                 except Exception:
                     pass
             try:
-                await browser.stop()
+                await asyncio.wait_for(browser.stop(), timeout=5.0)
             except Exception:
                 pass
 
         return self._extract_result(history)
+
+    # ── Stop watchdog (thread) ───────────────────────────────────────────────
+
+    @staticmethod
+    def _stop_watchdog(
+        session_id: Optional[str],
+        loop,
+        outer_task,
+        run_ended: threading.Event,
+        kill_container,
+        grace_s: float = 10.0,
+    ) -> None:
+        """The stop escalation that still works when the event loop itself cannot.
+
+        Measured live: a browser run hung inside startup, produced no output,
+        and ten Stop presses did nothing - the async _stop_monitor is a
+        coroutine, and a synchronous block anywhere in browser-use/CDP starves
+        the whole private loop, monitor included. Python cannot kill a thread,
+        so the only honest levers from outside are these, tried in order:
+
+          1. every poll: schedule a cancel of the WHOLE run task via
+             call_soon_threadsafe - lands the moment the loop ticks at all,
+             and covers the startup phase the in-loop monitor never saw;
+          2. after ``grace_s`` of a stop that did not end the run: kill the
+             browser container. That severs the blocked socket, the sync read
+             fails, the loop revives, and the pending cancel lands - the same
+             answer python_sandbox gives (stop kills its Docker exec).
+
+        Exits on ``run_ended`` or when the run task is done, so a finished run
+        never pays for the escalation. No session id means no stop lane at all
+        (same contract as _stop_monitor).
+        """
+        if not session_id:
+            return
+        try:
+            from vaf.core.task_queue import TaskQueue
+            tq = TaskQueue()
+        except Exception:
+            return
+        stop_seen_at = None
+        container_killed = False
+        while not run_ended.wait(0.5):
+            try:
+                if outer_task.done():
+                    return
+            except Exception:
+                return
+            try:
+                if not tq.should_stop(session_id):
+                    continue
+            except Exception:
+                continue
+            now = time.monotonic()
+            if stop_seen_at is None:
+                stop_seen_at = now
+            try:
+                loop.call_soon_threadsafe(outer_task.cancel)
+            except Exception:
+                pass
+            if (not container_killed) and (now - stop_seen_at) >= grace_s:
+                container_killed = True
+                try:
+                    kill_container()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _restart_browser_container() -> None:
+        """Sever every CDP connection by restarting the vaf-browser container.
+
+        Restart rather than stop: the next browser run needs the container up
+        again, and either way the point is that the blocked socket dies NOW.
+        Best-effort - a machine without the container simply has nothing to
+        sever."""
+        try:
+            import subprocess
+            from vaf.core.log_helper import append_domain_log
+            from vaf.core.service_stack import resolve_docker_exe
+            docker = resolve_docker_exe()
+            append_domain_log(
+                "webui",
+                "[browser_agent] stop escalation: restarting vaf-browser to sever a blocked CDP connection",
+            )
+            subprocess.run(
+                [docker, "restart", "-t", "2", "vaf-browser"],
+                timeout=30, capture_output=True,
+            )
+        except Exception:
+            pass
 
     # ── Stop monitor ─────────────────────────────────────────────────────────
 

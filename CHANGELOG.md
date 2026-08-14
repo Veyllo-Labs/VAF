@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Stop now actually stops the browser agent.** A chat-turn browser run could
+  not be interrupted at all: the run executes on its own thread, where the
+  session id silently resolved to nothing and disarmed the stop watcher - ten
+  Stop presses in a row changed nothing while the agent sat in a hung browser
+  start. The session id now travels into the run explicitly, a watchdog is
+  armed before anything can block, and if a stop still cannot land within ten
+  seconds the browser container is restarted so the blocked connection dies
+  and the run ends. Browser start and shutdown are time-bounded, and a browser
+  that fails to start reports the failure instead of pretending to browse.
+  Side effect of the same defect, also fixed: the live browser frames were
+  broadcast without their session and could reach other connected accounts;
+  they are session-scoped again.
+
 ### Added
 - **Hands-off mode, granted per user.** An admin can let a user's agent run
   confirmation-gated tools without the "once / always / cancel" dialog: a

@@ -147,7 +147,13 @@ many frames have not been read.
   a file-only room, so a bare "not responding" would read as a fault where none exists.
   Each member can be removed from there. No remove button is drawn for the room's own
   host handles: an action offered and then refused reads as a fault, and this is a rule
-  with a different answer. Whether the viewer may remove anybody is answered for the lane
+  with a different answer.
+  The panel also shows and sets YOUR AGENT'S MODE for this room (observe / assist /
+  autonomous, `set_room_agent_mode`): the mode is the user's standing decision, held
+  in the agent's member file and read live by the next room wake - autonomous is
+  "work while I sleep", granted per room and revocable in the same place. The
+  command derives the agent's handle from the caller's own scope, so another
+  account's agent is unreachable by construction. Whether the viewer may remove anybody is answered for the lane
   the BROWSER acts on, not whichever lane the sidebar row resolved first. Speakers are shown with the name the room resolved for them, tag
   included ("Codex51"), which is also the name a mention has to be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a

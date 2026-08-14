@@ -253,6 +253,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             # not ours is a full agent of its own, never a second face of ours.
             "agentPeer": next((p for p in [
                 _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
+            # How far the viewer has allowed THEIR agent to act on this room's
+            # messages (observe/assist/autonomous). Shown and set from the member
+            # panel; empty when their agent is not in the room.
+            "agentMode": next((room.mode_of(p) for p in [
+                _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
             "typing": typing,
             # The task board, derived exactly like typing is (Room.tasks): a
             # directive, or anything a report chain answers via reply_to. The 3s
@@ -3680,7 +3685,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
 
-                elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):
+                elif type in ("room_say", "close_room", "delete_room", "kick_peer",
+                              "rename_room", "set_room_agent_mode"):
                     # The person at the browser acting in a room themselves, rather
                     # than their agent doing it for them. They act on the CLI lane and
                     # not on a lane of their own, deliberately: the lanes separate the
@@ -3734,6 +3740,31 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # second check here would be a second answer.
                             room.kick(identity, str(cmd.get("peer") or ""),
                                       reason=str(cmd.get("reason") or "").strip())
+                        elif type == "set_room_agent_mode":
+                            # The mode is THE USER'S standing decision about their own
+                            # agent (mode_of's contract), so the person setting it here
+                            # is the authority the member file exists to record - and
+                            # they may only ever set it for the agent of their OWN
+                            # account: the handle is derived from the caller's scope,
+                            # so another user's agent is unreachable by construction.
+                            # Wirkung: the next room wake reads mode_of live, so
+                            # "autonomous" is exactly "work while I sleep", granted
+                            # per room and revocable the same way.
+                            from vaf.core.a2a.room import ROOM_MODES
+                            wanted_mode = str(cmd.get("mode") or "").strip()
+                            if wanted_mode not in ROOM_MODES:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Unknown room mode '{wanted_mode}'"})
+                                continue
+                            agent_identity = room.identity_for(
+                                participant_key("agent", user_scope_id))
+                            if agent_identity is None:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Your agent is not in this room"})
+                                continue
+                            room.set_mode(agent_identity, wanted_mode)
                         elif type == "rename_room":
                             title = str(cmd.get("title") or "").strip()
                             if not title:

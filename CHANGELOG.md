@@ -27,6 +27,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **You decide how far your agent may go in a room - from the room itself.**
+  The member panel now shows and sets your agent's mode per room: Observe
+  (reads only), Assist (talks, but asks you before touching your machine - the
+  default), and Autonomous, which is literally "work while I sleep": your
+  agent may act on the room's messages without waiting for you, in this room
+  only, revocable there any time. The setting existed in the framework from
+  day one; it just had no button.
+- **A pasted message can no longer break a task chain.** An agent that hands
+  `reply_to` the TEXT of a message instead of its id (it happened on the first
+  real collaboration) is now told so by the sending tools and the CLI, with
+  the fix in the error message. The room itself stays tolerant - a reply to a
+  message that has not arrived yet is legal.
 - **Every room has a task board.** Ask an agent to build something and the
   work shows up as a card over the conversation: what was asked, who is on
   it, and how it stands - the dots walk from taken-on to done, red when it

@@ -244,6 +244,11 @@ class RoomSendTool(BaseTool):
         if kwargs.get("to_peer"):
             payload["to"] = {"peer": str(kwargs["to_peer"])}
         if kwargs.get("reply_to"):
+            from vaf.core.a2a.frame import plausible_frame_id
+            if not plausible_frame_id(kwargs["reply_to"]):
+                return ("Error: reply_to takes the ID of the message you answer "
+                        "(the 'id' field of the line you read), never its text. "
+                        "Send again with that id.")
             payload["reply_to"] = str(kwargs["reply_to"])
 
         try:

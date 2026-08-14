@@ -215,6 +215,10 @@ def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
     # line you are answering. A half-resolved mention would be worse than none:
     # it would sometimes wake the wrong agent and never say so.
     if reply_to:
+        from vaf.core.a2a.frame import plausible_frame_id
+        if not plausible_frame_id(reply_to):
+            _fail("reply_to takes the ID of the message you answer (its 'id' field), "
+                  "never its text.", EXIT_REFUSED)
         payload["reply_to"] = reply_to
 
     try:
@@ -354,6 +358,10 @@ def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
         if mention:
             payload["to"] = mention
     if reply_to:
+        from vaf.core.a2a.frame import plausible_frame_id
+        if not plausible_frame_id(reply_to):
+            _fail("reply_to takes the ID of the message you answer (its 'id' field), "
+                  "never its text.", EXIT_REFUSED)
         payload["reply_to"] = reply_to
     try:
         frame = room.ingest(payload, identity=identity)

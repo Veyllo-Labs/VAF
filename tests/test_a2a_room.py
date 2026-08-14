@@ -1489,3 +1489,35 @@ def test_a_peer_may_report_in_a_round_now(tmp_path):
     assert frame.kind == "report"
     with pytest.raises(WrongRoomKind):
         room.ingest({"kind": "directive", "body": {"text": "no"}}, identity=peer)
+
+
+def test_a_reply_to_that_is_prose_is_refused_at_the_tool_and_survives_in_the_fold(tmp_path, monkeypatch):
+    """MUTATION: store whatever reply_to arrives at the sending tool.
+
+    Found on the first real collaboration: a model handed room_send the MESSAGE
+    TEXT as reply_to. The room stored it faithfully - and must keep doing so (a
+    reply to a frame that has not arrived yet is legal, and foreign ids have
+    foreign shapes), so the refusal lives at the SENDING tool, and the fold has
+    to stay standing when prose reaches it through the CLI of an older build.
+    """
+    import vaf.core.a2a.store as store_mod
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    from vaf.tools.room_tools import RoomJoinTool, RoomSendTool
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-prose")
+    RoomJoinTool().run(room_id="room-prose", user_scope_id=None)
+    b = room.join(display="B", scope_id=None, peer_id="p-b")
+
+    prose = "Kleines Gemeinschaftsprojekt, wir bauen zusammen eine Team-Seite. " * 3
+    out = RoomSendTool().run(room_id="room-prose", kind="report", text="on it",
+                             reply_to=prose, user_scope_id=None)
+    assert "id" in out.lower() and "error" in out.lower(), out
+    assert all(f.kind != "report" for f in room.store.frames()), (
+        "the prose reply_to was stored anyway")
+
+    # The fold survives prose that reached the store through an older door.
+    room.ingest({"kind": "report", "reply_to": prose,
+                 "body": {"status": "working"}}, identity=b)
+    board = room.tasks()
+    assert len(board) == 1 and board[0]["status"] == "working"

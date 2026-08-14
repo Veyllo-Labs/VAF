@@ -174,6 +174,9 @@ type RoomView = {
      *  (Room.tasks). Open work first; refreshed by the 3s room poll. */
     tasks?: Array<{ id: string; title: string; status: string; requester: string;
         assignee: string; reports: number; ts?: number }>;
+    /** How far the viewer's agent may act on this room (observe/assist/autonomous).
+     *  The user's standing decision; set from the member panel. */
+    agentMode?: string;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
     topic?: string;
@@ -8978,6 +8981,42 @@ function VAFDashboardContent() {
                             {roomView.room.closed && (
                                 <div className="px-6 py-2 text-xs text-gray-400 border-b border-gray-200 dark:border-[#2a2a2a]">
                                     {tMain('roomClosedNote')}
+                                </div>
+                            )}
+
+                            {/* How far YOUR agent may act on this room's messages. The
+                                mode is the user's standing decision (never a frame's),
+                                and this is its one control surface: until it existed,
+                                "autonomous" was real in the framework and unreachable
+                                for the person it belongs to. */}
+                            {!!roomView.room.agentPeer && !roomView.room.closed && (
+                                <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a]">
+                                    <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-2">
+                                        {tMain('roomAgentModeTitle')}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {(['observe', 'assist', 'autonomous'] as const).map(mode => (
+                                            <button key={mode}
+                                                onClick={() => {
+                                                    wsSocketRef.current?.send(JSON.stringify({
+                                                        type: 'set_room_agent_mode',
+                                                        room_id: roomView.room.roomId, mode,
+                                                    }));
+                                                    wsSocketRef.current?.send(JSON.stringify({
+                                                        type: 'open_room', room_id: roomView.room.roomId,
+                                                    }));
+                                                }}
+                                                className={cn(
+                                                    "px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
+                                                    roomView.room.agentMode === mode
+                                                        ? "bg-gray-900 text-white border-gray-900 dark:bg-[#e6e6e6] dark:text-[#181818] dark:border-[#e6e6e6]"
+                                                        : "border-gray-200 text-gray-500 hover:bg-gray-50 dark:border-[#2a2a2a] dark:hover:bg-[#242424]")}>
+                                                {tMain(mode === 'observe' ? 'roomModeObserve'
+                                                    : mode === 'assist' ? 'roomModeAssist' : 'roomModeAutonomous')}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="text-[11px] text-gray-400 mt-2">{tMain('roomAgentModeHint')}</p>
                                 </div>
                             )}
 

@@ -441,7 +441,7 @@ def test_the_browser_acts_on_the_human_lane_and_not_a_lane_of_its_own():
 
     assert "web" not in PARTICIPANT_LANES
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
+    block = source.split('elif type in ("room_say",')[1].split("elif type == \"load_session\"")[0]
     assert 'participant_key("cli", user_scope_id)' in block
 
 
@@ -453,7 +453,7 @@ def test_writing_and_closing_answer_from_the_store():
     and the drift would be invisible until somebody compared two screens.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1].split("elif type == \"load_session\"")[0]
+    block = source.split('elif type in ("room_say",')[1].split("elif type == \"load_session\"")[0]
 
     assert "_send_room_transcript" in block
     # one builder for all three commands, so they cannot describe the room differently
@@ -696,7 +696,7 @@ def test_closing_or_renaming_pushes_a_fresh_sidebar():
     may have the app open twice.
     """
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
+    block = source.split('elif type in ("room_say",')[1] \
                   .split('elif type == "load_session"')[0]
 
     assert 'if type in ("close_room", "delete_room", "rename_room"):' in block
@@ -901,7 +901,7 @@ def test_the_browser_corrects_a_lane_name_to_the_account_name():
     assert '("terminal", "guest", "")' in builder, (
         "a name the person chose would be overwritten too")
 
-    commands = source.split('elif type in ("room_say", "close_room", "delete_room", "kick_peer", "rename_room"):')[1] \
+    commands = source.split('elif type in ("room_say",')[1] \
                      .split('elif type == "load_session"')[0]
     assert "wanted_name" not in commands, (
         "a second copy of the heal is growing in the command branch")
@@ -1246,3 +1246,47 @@ def test_the_task_board_travels_with_the_transcript(tmp_path, monkeypatch):
     assert board[0]["status"] == "working"
     assert board[0]["title"] == "build the site"
     assert board[0]["assignee"].startswith("Nobel")
+
+
+def test_the_mode_switch_reaches_only_the_viewers_own_agent(tmp_path, monkeypatch):
+    """MUTATION: take a peer id from the command instead of deriving it.
+
+    The mode is the user's standing decision about THEIR agent, and this is its
+    one control surface. The handle is derived from the caller's scope, so
+    another account's agent is unreachable by construction - a command that
+    accepted a peer id would undo exactly that.
+    """
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-mode")
+    agent_peer = derive_peer_id(participant_key("agent", "scope-a"), "room-mode")
+    room.join(display="Nobel", scope_id="scope-a", peer_id=agent_peer)
+
+    assert room.mode_of(agent_peer) == "assist"
+
+    # The command's core, exercised at the same seam the handler uses.
+    identity = room.identity_for(participant_key("agent", "scope-a"))
+    assert identity is not None
+    room.set_mode(identity, "autonomous")
+    assert room.mode_of(agent_peer) == "autonomous"
+
+    # Another account derives a DIFFERENT handle, so its lookup finds nothing
+    # here - there is no way to name this agent from that side.
+    assert room.identity_for(participant_key("agent", "scope-b")) is None
+
+    # And the payload carries the decision to the panel that shows it.
+    import asyncio
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    ws = _WS()
+    asyncio.run(_send_room_transcript(ws, Room.open("room-mode", base=tmp_path),
+                                      "scope-a"))
+    assert ws.sent[0]["room"]["agentMode"] == "autonomous"

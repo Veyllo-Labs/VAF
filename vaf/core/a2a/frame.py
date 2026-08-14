@@ -357,6 +357,21 @@ def screen_inbound(payload: Mapping[str, Any], *, understood: Iterable[str] = ()
 
 # ── ordering ────────────────────────────────────────────────────────────────
 
+def plausible_frame_id(value: Any) -> bool:
+    """Whether this could be a frame id at all - not whether the frame exists.
+
+    Found live, on the first real collaboration: a model handed room_send the
+    MESSAGE TEXT as reply_to, the room stored it faithfully, and the task board
+    split one task into two. The room itself must stay tolerant (a reply to a
+    frame that has not ARRIVED yet is legal under at-least-once delivery, and a
+    foreign implementation may mint ids of its own shape), so the door that
+    refuses is the SENDING tool, and this is the one rule both doors share:
+    an id has no whitespace and fits in 64 characters. A paragraph does neither.
+    """
+    text = str(value or "")
+    return 0 < len(text) <= 64 and not any(ch.isspace() for ch in text)
+
+
 def canonical_sort_key(frame: "Frame") -> Tuple[int, str, int]:
     """The total order every reader computes identically without coordination.
 

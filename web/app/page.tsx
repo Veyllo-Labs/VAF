@@ -1057,6 +1057,14 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
     closedNote: string;
     membersTitle: string;
 }) {
+    // The same liveliness rule the ordinary chat applies to its bot bubbles
+    // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
+    // alive at a time - its newest message, or its typing bubble while it
+    // composes - and every older bubble wears the dimmed face.
+    const agentComposing = !!view.room.typing?.some(t => t.kind === 'turn');
+    const lastAgentMsgId = view.room.agentPeer
+        ? view.messages.filter(m => m.peer === view.room.agentPeer).slice(-1)[0]?.id
+        : undefined;
     return (
         <>
             {/* The header stays put. It is the only thing on screen that says WHICH room
@@ -1144,7 +1152,8 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                     <div key={m.id} className="flex gap-3 py-2">
                         {isOwnAgent ? (
                             <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
-                                <AgentAvatar mode="idle" />
+                                <AgentAvatar mode="idle"
+                                    dim={m.id !== lastAgentMsgId || agentComposing} />
                             </div>
                         ) : (
                         <div className={cn(

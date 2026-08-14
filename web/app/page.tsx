@@ -1085,6 +1085,64 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     const lastAgentMsgId = view.room.agentPeer
         ? view.messages.filter(m => m.peer === view.room.agentPeer).slice(-1)[0]?.id
         : undefined;
+    // The worker cards live UNDER the agent's latest message, the way the owner's
+    // reference app draws them - work belongs to the words that announced it, not
+    // to a toolbar. Falls back to the end of the transcript when the agent has
+    // not spoken yet but is already working.
+    const workerCards = (
+        <>
+                    {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
+                        <div className="py-1">
+                            <div role={onOpenWorker ? 'button' : undefined} onClick={onOpenWorker}
+                                className={cn(
+                                    "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
+                                    onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
+                                <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                                    <AgentAvatar mode="delegate" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
+                                        worker
+                                        <span className="ml-2 text-[11px] font-normal text-gray-400">running</span>
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 truncate">{liveWorker.status}</div>
+                                </div>
+                                <span className="flex h-2 w-2 relative shrink-0" aria-hidden>
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                                </span>
+                            </div>
+                        </div>
+                    )}
+                    {(view.room.agentWorkers?.length ?? 0) > 0 && (
+                        <div className="space-y-2 py-1">
+                            {view.room.agentWorkers!.map((w, i) => (
+                                <div key={i} role={onOpenWorker ? 'button' : undefined}
+                                    onClick={onOpenWorker}
+                                    className={cn(
+                                        "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
+                                        onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
+                                    <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                                        <AgentAvatar mode="delegate" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
+                                            {(w.type || 'worker').replace(/_agent$/, '')}
+                                            <span className="ml-2 text-[11px] font-normal text-gray-400">{w.status}</span>
+                                        </div>
+                                        <div className="text-[11px] text-gray-400 truncate">{w.task}</div>
+                                    </div>
+                                    {typeof w.done === 'number' && typeof w.total === 'number' && w.total > 0 && (
+                                        <span className="text-[11px] font-mono text-gray-400 shrink-0">{w.done}/{w.total}</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+        </>
+    );
+    const hasWorkerCards = ((view.room.agentWorkers?.length ?? 0) > 0)
+        || (!!liveWorker && !view.room.closed);
     return (
         <>
             {/* The header stays put. It is the only thing on screen that says WHICH room
@@ -1181,55 +1239,6 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 who, on what, how far. Only OUR workers: a foreign agent's workers
                 run on its machine, and a card we cannot verify is a card we do not
                 draw. */}
-            {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
-                <div className="py-1">
-                    <div role={onOpenWorker ? 'button' : undefined} onClick={onOpenWorker}
-                        className={cn(
-                            "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
-                            onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
-                        <div className="w-8 h-8 shrink-0 flex items-center justify-center">
-                            <AgentAvatar mode="delegate" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
-                                worker
-                                <span className="ml-2 text-[11px] font-normal text-gray-400">running</span>
-                            </div>
-                            <div className="text-[11px] text-gray-400 truncate">{liveWorker.status}</div>
-                        </div>
-                        <span className="flex h-2 w-2 relative shrink-0" aria-hidden>
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                        </span>
-                    </div>
-                </div>
-            )}
-            {(view.room.agentWorkers?.length ?? 0) > 0 && (
-                <div className="space-y-2 py-1">
-                    {view.room.agentWorkers!.map((w, i) => (
-                        <div key={i} role={onOpenWorker ? 'button' : undefined}
-                            onClick={onOpenWorker}
-                            className={cn(
-                                "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
-                                onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
-                            <div className="w-8 h-8 shrink-0 flex items-center justify-center">
-                                <AgentAvatar mode="delegate" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                                <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
-                                    {(w.type || 'worker').replace(/_agent$/, '')}
-                                    <span className="ml-2 text-[11px] font-normal text-gray-400">{w.status}</span>
-                                </div>
-                                <div className="text-[11px] text-gray-400 truncate">{w.task}</div>
-                            </div>
-                            {typeof w.done === 'number' && typeof w.total === 'number' && w.total > 0 && (
-                                <span className="text-[11px] font-mono text-gray-400 shrink-0">{w.done}/{w.total}</span>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
-
             {view.messages.length === 0 && (
                 <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-400">
                     Nothing said yet.
@@ -1319,9 +1328,11 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             </div>
                         </div>
                     </div>
+                    {hasWorkerCards && m.id === lastAgentMsgId && workerCards}
                     </Fragment>
                 );
             })}
+            {hasWorkerCards && !lastAgentMsgId && workerCards}
             {/* Who is composing. The same bouncing dots the chat shows while our
                 agent generates, one row per busy member, each behind its own
                 avatar: in a group chat "somebody is typing" without a name is a

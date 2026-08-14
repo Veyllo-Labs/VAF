@@ -700,6 +700,28 @@ def test_the_agent_opens_a_room_and_sits_in_it(wired):
     assert len(room.members()) == 1
 
 
+def test_opening_with_a_room_id_refuses_instead_of_minting_a_stray_room(wired):
+    """MUTATION: drop the room_id guard from room_open.
+
+    "Open room X" is the natural phrasing for ENTERING an existing room, and
+    room_open only ever CREATES one - measured live: the agent passed the id of
+    the room it was already sitting in, the unknown argument was silently
+    dropped, and a stray empty room appeared in the user's sidebar. A miscall
+    must answer with the correction and create NOTHING.
+    """
+    import vaf.core.a2a.store as store_mod
+    from vaf.tools.room_tools import RoomOpenTool
+
+    before = {p.name for p in store_mod.rooms_root().glob("room-*")}
+    out = RoomOpenTool().run(room_id="room-already-there", user_scope_id="scope-a")
+
+    assert "nothing was created" in out
+    assert "room_read" in out and "room_send" in out, (
+        "the refusal must carry the correction, not just say no")
+    after = {p.name for p in store_mod.rooms_root().glob("room-*")}
+    assert after == before, "room_open minted a room despite the explicit id"
+
+
 def test_a_chain_leaves_the_opener_leading_and_a_round_does_not(wired):
     """MUTATION: open every room as a round.
 

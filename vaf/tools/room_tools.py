@@ -394,6 +394,20 @@ class RoomOpenTool(BaseTool):
     def run(self, **kwargs) -> str:
         from vaf.core.a2a.room import ROOM_KINDS, Room, RoomError, derive_peer_id
 
+        # "Open room X" is the natural phrasing for ENTERING an existing room,
+        # and this tool only ever CREATES one - measured live: a room_id passed
+        # here was silently dropped and a stray empty room appeared in the
+        # user's sidebar. A miscall must answer with the correction, never do
+        # something else without a word.
+        stray_id = str(kwargs.get("room_id") or kwargs.get("room") or "").strip()
+        if stray_id:
+            return (
+                f"Error: room_open only STARTS A NEW room and cannot enter an "
+                f"existing one - nothing was created. '{stray_id}' already "
+                f"exists: read it with room_read, write with room_send, and "
+                f"bring agents in with room_invite (all take room_id)."
+            )
+
         kind = str(kwargs.get("kind") or "round").strip().lower()
         if kind not in ROOM_KINDS:
             return f"Error: kind must be one of {', '.join(ROOM_KINDS)}."

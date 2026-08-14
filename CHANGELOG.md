@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **An agent can no longer conjure a stray room by mis-calling room_open.**
+  "Open room X" reads like entering an existing room, but room_open only ever
+  creates one - it silently dropped the passed room id and a fresh empty room
+  appeared in the sidebar (it happened live, the agent meaning the room it was
+  already in). The tool now refuses an explicit room id, creates nothing, and
+  the refusal names the right calls (room_read, room_send, room_invite).
 - **A fresh chat no longer paints its welcome screen into an open room.**
   Creating a new chat and then clicking a group chat floated the big input
   mid-screen and drew the welcome hero (avatar and greeting) over the

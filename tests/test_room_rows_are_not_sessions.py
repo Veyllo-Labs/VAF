@@ -1383,6 +1383,24 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_every_worker_feed_lights_the_rooms_card():
+    """MUTATION: feed the room's live card from subagent_update alone again.
+
+    A browser run in a room speaks browser_state and never a subagent_update -
+    measured live: the window filled, the transcript stayed cardless. Research,
+    document, librarian and learn runs have the same shape. One place notices
+    that work is alive in the open room, whatever feed it speaks, and the card
+    ages out on its own because those feeds have no 'idle' event to end them.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    for feed in ("coder_state", "research_state", "document_state",
+                 "librarian_state", "browser_state", "learn_state"):
+        assert f"{feed}: '" in source, f"{feed} no longer lights the room card"
+    assert "Date.now() - prev.at > 20000" in source, (
+        "the card no longer ages out, so a feed that just stops leaves it "
+        "pulsing forever")
+
+
 def test_one_filter_decides_what_the_open_view_receives():
     """MUTATION: hand-roll the session comparison in any handler again.
 

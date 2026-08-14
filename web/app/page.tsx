@@ -1075,7 +1075,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     /** An in-process worker derived from the live feed (it never reaches the
      *  IPC list the server cards read from). Shown when the server list is
      *  empty, so one worker never draws two cards. */
-    liveWorker?: { status: string } | null;
+    liveWorker?: { label?: string; status: string } | null;
 }) {
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
@@ -1149,7 +1149,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                     {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
                         <div className="py-1 pl-6">
                             {workerCardShell('live', liveWorker.status || 'Worker läuft',
-                                'Worker · live', null, true)}
+                                `${liveWorker.label || 'Worker'} · läuft`, null, true)}
                         </div>
                     )}
                     {(view.room.agentWorkers?.length ?? 0) > 0 && (
@@ -1633,8 +1633,21 @@ function VAFDashboardContent() {
     // cards read from (measured: the list was empty while the coder streamed),
     // so this card is derived from the live feed itself - the events carry the
     // room stamp now. Cleared when the feed says idle, or when the room closes.
-    const [roomLiveWorker, setRoomLiveWorker] = useState<{ status: string } | null>(null);
+    // The room's live worker card. Fed by EVERY worker feed, not by one of them:
+    // a browser run in a room emits browser_state and never a subagent_update, so
+    // the window filled while the card stayed away - the same "one lane knew, the
+    // others did not" defect the view filter had. `at` is the self-heal: a feed
+    // that simply stops (no idle event of its own, which browser and research
+    // runs have) must not leave a card pulsing forever.
+    const [roomLiveWorker, setRoomLiveWorker] = useState<{ label?: string; status: string; at: number } | null>(null);
     useEffect(() => { if (!roomView) setRoomLiveWorker(null); }, [roomView]);
+    useEffect(() => {
+        if (!roomLiveWorker) return;
+        const t = setInterval(() => {
+            setRoomLiveWorker(prev => (prev && Date.now() - prev.at > 20000) ? null : prev);
+        }, 5000);
+        return () => clearInterval(t);
+    }, [roomLiveWorker]);
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
@@ -3118,6 +3131,30 @@ function VAFDashboardContent() {
                     }
                 }
 
+                // ONE place notices that a worker is alive in the open room, for
+                // every kind of worker. Only subagent_update used to do it, so a
+                // browser or research run - which speak their own feed and never
+                // that one - filled the window and left the transcript without a
+                // card. The card is a fact about work, not about one message type.
+                {
+                    const workerLabels: Record<string, string> = {
+                        coder_state: 'Coder', research_state: 'Recherche',
+                        document_state: 'Dokument', librarian_state: 'Bibliothek',
+                        browser_state: 'Browser', learn_state: 'Lernen',
+                    };
+                    const label = workerLabels[String(data.type)];
+                    const rid = typeof data.roomId === 'string' ? data.roomId : '';
+                    if (label && rid && roomViewRef.current
+                        && rid === roomViewRef.current.room.roomId) {
+                        const detail = String(
+                            data.activity || data.stage || data.step || data.task
+                            || data.topic || data.title || data.phase || '',
+                        ).trim();
+                        setRoomLiveWorker({ label, status: detail || `${label} läuft`,
+                                            at: Date.now() });
+                    }
+                }
+
                 if (data.type === 'new_log') {
                     const entry = data.entry || {};
                     const src = String(entry.source || "");
@@ -4025,9 +4062,15 @@ function VAFDashboardContent() {
                 else if (data.type === 'subagent_update') {
                     if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId) {
+                        // The one feed that says WHEN a worker is finished, so it is
+                        // also the one that may take the card away.
                         const presence = String(data.presence || '').trim().toLowerCase();
                         if (presence === 'idle' || presence === 'error') setRoomLiveWorker(null);
-                        else setRoomLiveWorker({ status: String(data.status || '').trim() || 'working' });
+                        else setRoomLiveWorker({
+                            label: String(data.agentName || '').replace(/ Agent$/, '') || undefined,
+                            status: String(data.status || '').trim() || 'working',
+                            at: Date.now(),
+                        });
                     }
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';

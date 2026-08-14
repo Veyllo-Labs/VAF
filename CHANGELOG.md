@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The room's worker card appears for every kind of worker.** It was fed by
+  one event type, so a browser or research run in a group chat filled the
+  window while the transcript showed nothing at all. Any live worker now
+  lights the card, named after what it is ("Browser", "Coder", "Recherche"),
+  and a card whose run goes quiet without a finish signal disappears by
+  itself instead of pulsing forever.
 - **A room is now a full view of its own, so every sub-agent surface works
   there.** Until now only a chat counted as "what you are looking at", and
   each live feed carried its own copy of that rule - sixteen of them, half

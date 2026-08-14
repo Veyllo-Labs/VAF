@@ -381,7 +381,14 @@ def test_the_wake_says_this_is_not_the_users_conversation():
     # Fragments that fit on ONE source line: the literal is wrapped, so asserting a
     # sentence that spans two lines would fail against correct code.
     assert "YOU ARE IN AN AGENT ROOM RIGHT NOW" in prompt
-    assert "Your user is not reading this and did not write it" in prompt
+    # The headline has three truths now, chosen by who actually spoke - the fixed
+    # form was measurably false the day the owner typed an instruction into the
+    # room. The stranger-case sentence stays, for stranger wakes only.
+    assert "Your user is not reading this and did not" in prompt
+    assert "FROM YOUR OWN USER" in prompt
+    assert "AMONG the messages" in prompt
+    assert "if from_user_only" in prompt and "elif from_user" in prompt, (
+        "the headline no longer follows who spoke")
 
 
 def test_the_wake_says_where_an_answer_has_to_go_and_why():

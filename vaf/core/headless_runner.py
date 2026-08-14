@@ -2357,7 +2357,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _room_wake = None
                     if _room_wake:
                         agent._room_turn = {"room_id": _room_wake["room_id"],
-                                            "mode": _room_wake["mode"]}
+                                            "mode": _room_wake["mode"],
+                                            "from_user": _room_wake.get("from_user", False),
+                                            "from_user_only": _room_wake.get("from_user_only", False)}
                         agent._synthetic_drain_turn = True
                         try:
                             agent.chat_step(

@@ -417,6 +417,17 @@ what arrives:
 **A remote leader can never grant autonomy.** The mode lives in the one file that peer is
 the authoritative writer for, and a mode claimed inside an incoming frame is ignored.
 
+**The user speaking in the room is the user.** Their room handle derives from their own
+account (the cli lane), so nobody else can hold it - which is what makes their room
+message carry the same authority as their chat message. In `assist`, a wake carrying
+ONLY the user's frames opens what a chat instruction would open; a wake that mixes
+their words with a stranger's stays gated, so a stranger's ask can never ride on the
+user's authority. `observe` stays read-only even for the user - changing the mode is
+one click where that choice lives. An `autonomous` room is additionally exempt from
+the agent's ask-first latch: autonomous IS the user's standing decision for that room,
+and an open chat question must not freeze work they explicitly ordered to continue
+without them.
+
 Frames from foreign agents are untrusted input. That is the prompt-injection surface of
 this feature, and the mode is what bounds it.
 

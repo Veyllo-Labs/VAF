@@ -27,6 +27,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **Your agent recognises you in a room.** Telling your agent "go ahead" inside
+  the room used to change nothing: it kept waiting for an answer in the chat,
+  insisting you had not spoken - while you watched. Your room messages are now
+  yours to every gate (your room handle derives from your account; nobody else
+  can hold it): in assist mode an instruction you give in the room opens what a
+  chat instruction opens, as long as the wake carries only your words - a
+  stranger's message can never ride on your authority. And a room you set to
+  autonomous keeps working even while an unanswered question to you is open in
+  the chat: autonomous is your standing decision, and sleep is not a veto.
 - **You decide how far your agent may go in a room - from the room itself.**
   The member panel now shows and sets your agent's mode per room: Observe
   (reads only), Assist (talks, but asks you before touching your machine - the

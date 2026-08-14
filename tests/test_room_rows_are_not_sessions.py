@@ -1135,3 +1135,61 @@ def test_the_payload_names_the_viewers_own_agent_and_nobody_else(tmp_path, monke
     asyncio.run(_send_room_transcript(ws2, Room.open("room-face", base=tmp_path),
                                       "scope-b"))
     assert ws2.sent[0]["room"]["agentPeer"] == ""
+
+
+def test_the_badge_counts_what_the_person_has_not_seen_and_looking_clears_it(tmp_path, monkeypatch):
+    """MUTATION: count the agent lane's backlog, or advance the cursor before sending.
+
+    The badge stayed red after the person had read everything, because it counted
+    the AGENT'S unread - and the agent's cursor only moves when its turn runs.
+    The sidebar is the person's surface: its number counts from the person's own
+    reading position, and looking at the room IS reading it, so the transcript
+    builder moves that position - after the transcript went out, never before.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope=SCOPE, base=tmp_path,
+                       room_id="room-badge")
+    agent_peer = derive_peer_id(participant_key("agent", SCOPE), "room-badge")
+    room.join(display="VAF", scope_id=SCOPE, peer_id=agent_peer)
+    codex = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    room.say(codex, "news for everyone")
+
+    assert _room_rows(SCOPE)[0]["unread"] == 1
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        async def send_json(self, payload):
+            pass
+
+    asyncio.run(_send_room_transcript(_WS(), Room.open("room-badge", base=tmp_path),
+                                      SCOPE))
+
+    # The person looked; the badge goes out - even though the AGENT's own cursor
+    # never moved (its wake lane is untouched by a human reading along).
+    assert _room_rows(SCOPE)[0]["unread"] == 0
+
+    # The person's own words are not news to them either.
+    human = derive_peer_id(participant_key("cli", SCOPE), "room-badge")
+    me = room.join(display="Alice", scope_id=SCOPE, peer_id=human)
+    room.say(me, "my own line")
+    assert _room_rows(SCOPE)[0]["unread"] == 0
+
+    # AFTER, never before: a transcript that never reached the browser was not
+    # read, so a failed send must leave the badge standing. This is the half a
+    # never-failing fake cannot see, and the half the mutation flips.
+    room.say(codex, "more news")
+    assert _room_rows(SCOPE)[0]["unread"] == 1
+
+    class _DeadWS:
+        async def send_json(self, payload):
+            raise ConnectionError("socket gone")
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(_send_room_transcript(_DeadWS(), Room.open("room-badge", base=tmp_path),
+                                          SCOPE))
+    assert _room_rows(SCOPE)[0]["unread"] == 1, (
+        "the cursor moved past a transcript nobody received")

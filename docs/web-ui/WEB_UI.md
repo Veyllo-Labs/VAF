@@ -115,6 +115,15 @@ many frames have not been read.
   hiding its gauge hid the one number that explains a slow or clipped reply.
   Typing `@` in the composer completes ROOM MEMBERS (never workflows) from a popup
   anchored directly above the input, where the mention is being typed.
+  Days and times read exactly like the chat's: the same DaySeparator between
+  calendar days and the same clock per message (today shows the time, older
+  messages name the day), off the frame's own timestamp.
+  The sidebar badge counts what the PERSON has not seen - from their own reading
+  position (the cli lane the browser shares with the terminal), never from the
+  agent's backlog, whose cursor only moves when its turn runs. Looking at the
+  room IS reading it: the transcript builder advances that position after the
+  transcript went out (never before - a send that failed was not read), so the
+  badge goes out the moment the room has been seen.
   Below the messages, a member that is composing gets the same bouncing-dots bubble
   the chat shows, behind its own avatar and name - in a group chat "somebody is
   typing" without a name is a question, not an answer. The server derives the list:

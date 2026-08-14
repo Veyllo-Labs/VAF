@@ -280,6 +280,26 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
         ],
     })
 
+    # Looking at the room IS reading it. The person's cursor (the cli lane the
+    # browser shares with the terminal) moves to the newest frame - AFTER the
+    # transcript went out, never before, so an interruption costs a repeat and not
+    # a swallowed line - and the sidebar badge that counts from this cursor goes
+    # out with it. Needs no membership: a reading position is the reader's own
+    # file. The notify fires only on actual movement, or the 3-second room poll
+    # would broadcast a sidebar refresh forever.
+    try:
+        if acting and not room.closed:
+            latest = room.store.highest_lamport()
+            if latest and room.store.cursor(acting) < latest:
+                room.store.set_cursor(acting, latest)
+                try:
+                    from vaf.core.web_interface import notify_rooms_changed
+                    notify_rooms_changed(user_scope_id)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 
 def session_list_payload(rows: List[Dict]) -> List[Dict]:
     """The sidebar list in the shape the browser reads it.

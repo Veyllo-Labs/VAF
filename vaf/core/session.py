@@ -1613,16 +1613,36 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
     would be a worse failure than a missing row.
     """
     try:
-        from vaf.core.a2a.room import joined_rooms, participant_key, unread_counts
+        from vaf.core.a2a.room import joined_rooms, participant_key
     except Exception:
         return []
 
     rows: List[Dict] = []
     seen = set()
+
+    def _human_unread(room) -> int:
+        """What the PERSON has not looked at yet, from their own reading position.
+
+        The sidebar is the person's surface, so its badge must not count the
+        AGENT'S backlog: that number stayed red after the person had read
+        everything, because the agent's cursor only moves when its turn runs.
+        The person's cursor is the cli lane's - the browser and the terminal
+        share it on purpose - and it needs no membership: a reading position is
+        the reader's own file. Bookkeeping frames and the person's own words are
+        not news.
+        """
+        try:
+            from vaf.core.a2a.room import BOOKKEEPING_KINDS, derive_peer_id
+            human = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
+            position = room.store.cursor(human)
+            return len([f for f in room.store.read_since(position)
+                        if f.kind not in BOOKKEEPING_KINDS and f.sender != human])
+        except Exception:
+            return 0
+
     for lane in ("agent", "cli"):
         try:
             key = participant_key(lane, user_scope_id)
-            pending = unread_counts(key)
             for room, identity in joined_rooms(key):
                 if room.room_id in seen:
                     continue
@@ -1645,7 +1665,7 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
                     "room_kind": room.kind,
                     "role": identity.role,
                     "peer": identity.peer_id,
-                    "unread": int(pending.get(room.room_id, 0)),
+                    "unread": _human_unread(room),
                     "members": len(room.members()),
                     "closed": bool(room.closed),
                     "updated_at": "",

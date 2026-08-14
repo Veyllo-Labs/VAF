@@ -27,6 +27,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **A room reads like a conversation in time.** Day separators between
+  calendar days and a clock on every message, exactly like the chat. And the
+  red unread dot on a room now counts what YOU have not seen: opening the room
+  clears it, instead of it staying lit for messages your agent had not
+  processed yet.
 - **The setup wizard asks what your agent is called.** Right after the admin
   account and before the personality questions, the same question the terminal
   setup always asked: the field offers a generated suggestion, leaving it empty
@@ -209,6 +214,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- **The skill editor shows a multi-line description again.** A skill whose
+  SKILL.md writes the description as a YAML block (`description: >-`, the way
+  the shipped skills do) opened in the editor with a literal `>-` in the
+  description field, and saving from there would have replaced the real
+  description with that fragment. The editor now takes name and description
+  from the server's parser and only splits the instruction body itself.
 - An "always allow" answer for unsandboxed Python was read machine-wide
   instead of per user: one user's standing grant could open unsandboxed
   execution for every account on the instance, and another user's own grant

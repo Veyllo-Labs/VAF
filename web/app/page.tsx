@@ -1051,11 +1051,12 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
     membersTitle: string;
+    timeFormat?: '24h' | '12h';
 }) {
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
@@ -1125,10 +1126,18 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                 </div>
             )}
 
-            {view.messages.map(m => {
+            {view.messages.map((m, idx) => {
                 // Our own agent against everybody else. A stranger's agent is a full
                 // agent of its own and is shown as one, never as a second voice of ours.
                 const mine = !!view.room.me && m.peer === view.room.me;
+                // The SAME day rule the ordinary chat applies (DaySeparator): a room
+                // frame's ts is epoch SECONDS on the wire, the chat's helpers speak
+                // milliseconds, so the conversion happens once, here.
+                const prev = idx > 0 ? view.messages[idx - 1] : null;
+                const daySeparator = prev && m.ts && prev.ts
+                    && !isSameDay(prev.ts * 1000, m.ts * 1000)
+                    ? <DaySeparator endDate={prev.ts * 1000} startDate={m.ts * 1000} />
+                    : null;
                 const bookkeeping = m.kind === 'join' || m.kind === 'leave'
                     || m.kind === 'role' || m.kind === 'ack';
                 if (bookkeeping) {
@@ -1136,11 +1145,14 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                     // would put a line in an agent's mouth on the one kind of frame
                     // where that is guaranteed to be a fabrication.
                     return (
-                        <div key={m.id} className="flex justify-center py-1">
+                        <Fragment key={m.id}>
+                        {daySeparator}
+                        <div className="flex justify-center py-1">
                             <span className="text-[11px] text-gray-400 dark:text-[#6a6a6a]">
                                 {m.label} {m.text}
                             </span>
                         </div>
+                        </Fragment>
                     );
                 }
                 // The viewer's own AGENT wears its real face - the living avatar the
@@ -1149,7 +1161,9 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                 // would put our identity on somebody else's words.
                 const isOwnAgent = !!view.room.agentPeer && m.peer === view.room.agentPeer;
                 return (
-                    <div key={m.id} className="flex gap-3 py-2">
+                    <Fragment key={m.id}>
+                    {daySeparator}
+                    <div className="flex gap-3 py-2">
                         {isOwnAgent ? (
                             <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
                                 <AgentAvatar mode="idle"
@@ -1174,12 +1188,21 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle }: {
                                 {m.to?.peer && (
                                     <span className="text-[10px] text-gray-400">to one peer</span>
                                 )}
+                                {!!m.ts && (
+                                    // The chat's own clock, word for word: today shows the
+                                    // time, yesterday and older name the day too.
+                                    <span className="text-[10px] text-gray-400"
+                                        title={new Date(m.ts * 1000).toLocaleString('en-US', timeFormat ? { hour12: timeFormat === '12h' } : undefined)}>
+                                        {formatMessageTime(m.ts * 1000, timeFormat)}
+                                    </span>
+                                )}
                             </div>
                             <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
                                 {m.text}
                             </div>
                         </div>
                     </div>
+                    </Fragment>
                 );
             })}
             {/* Who is composing. The same bouncing dots the chat shows while our
@@ -6373,7 +6396,8 @@ function VAFDashboardContent() {
                                 {roomView ? (
                                     <RoomConversation view={roomView} onMembers={() => setRoomMembersOpen(true)}
                                         closedNote={tMain('roomClosedNote')}
-                                        membersTitle={tMain('roomMembersTitle')} />
+                                        membersTitle={tMain('roomMembersTitle')}
+                                        timeFormat={userTimeFormat} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (

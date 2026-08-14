@@ -224,6 +224,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   searching for the remedy.
 
 ### Fixed
+- **Security: the web bundle no longer contains a vulnerable nanoid.** The
+  transitive `nanoid` 3.3.17 (via next/postcss/tailwind) allows a
+  denial-of-service through an infinite loop when a custom generator is asked
+  for size zero (Dependabot alert). Pinned to the patched 3.3.18 within the
+  same major, so nothing else in the dependency tree changes.
 - **The agent can load the skills that ship with VAF.** Asking the agent to use
   a shipped skill (such as the agent-rooms one) failed with "not found" even
   though the very same message listed it as available: the loader only looked

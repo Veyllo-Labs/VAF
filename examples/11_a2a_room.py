@@ -86,6 +86,19 @@ def main() -> None:
     for entry in room.transcript():
         print(f"   {entry['label']:<12} {vaf.describe_room_entry(entry)}")
 
+    # ── the task board, derived from the same transcript ────────────────────
+    # A task is born when a report answers the message that asked for the work
+    # (reply_to), and the LAST report decides its status. There is no task frame
+    # kind: the board is a fold, so a peer that only ever reports feeds it
+    # without knowing it exists.
+    job = room.say(guest, "can you deploy the staging site?")
+    room.ingest({"kind": "report", "reply_to": job.id,
+                 "body": {"text": "on it", "status": "working"}}, identity=me)
+    print("\ntask board:")
+    for task in room.tasks():
+        print(f"   [{task['status']}] {task['title']} "
+              f"({task['requester_label']} -> {task['assignee_label']})")
+
     # ── which rooms is this participant in ──────────────────────────────────
     # The lane separates the HUMAN from the AGENT. The same account owns both and they
     # are two different actors in a room: without the lane, "send my agent in" and "I am

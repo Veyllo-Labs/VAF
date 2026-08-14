@@ -1,6 +1,13 @@
 {
   "onboarding": {
     "stepAdmin": "Admin",
+    "stepAgentName": "Name",
+    "agentNameHeader": "Your agent",
+    "agentNameTitle": "What do you want to call your agent?",
+    "agentNameSubtitle": "The name your agent goes by - in chat, in agent rooms, and when it introduces itself to others. You can change it any time later.",
+    "agentNameLabel": "Agent name",
+    "agentNameHint": "Leave it empty to take the suggestion. The dice rolls a new one.",
+    "agentNameDice": "Suggest another name",
     "stepSoul": "Soul",
     "stepVeyllo": "Veyllo API",
     "step2fa": "2FA",

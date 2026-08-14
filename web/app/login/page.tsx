@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
     Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink,
-    Zap, Cpu, HardDrive, Sun, Moon, SunMoon
+    Zap, Cpu, HardDrive, Sun, Moon, SunMoon, Bot, Dices
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import SoulWizard from '@/components/SoulWizard';
@@ -41,7 +41,7 @@ const VEYLLO_CREATE_URL = 'https://veyllo.app';
 export default function LoginPage() {
     const router = useRouter();
     // Default to login; only show wizard when API explicitly says needs_setup: true (no admin yet)
-    const [step, setStep] = useState<'login' | '2fa' | 'language' | 'theme' | 'phone_notice' | 'create_admin' | 'soul_wizard' | 'veyllo_api' | 'setup_2fa'>('login');
+    const [step, setStep] = useState<'login' | '2fa' | 'language' | 'theme' | 'phone_notice' | 'create_admin' | 'agent_name' | 'soul_wizard' | 'veyllo_api' | 'setup_2fa'>('login');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -59,6 +59,11 @@ export default function LoginPage() {
     const [twoFAError, setTwoFAError] = useState<string | null>(null);
     const [bootstrapError, setBootstrapError] = useState<string | null>(null);
     const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password'>('username');
+    // The agent's name, asked the way the terminal setup asks it: an empty field
+    // takes the suggestion, and the suggestion comes from the SERVER (needs-setup),
+    // so its shape is never duplicated in JavaScript.
+    const [agentName, setAgentName] = useState('');
+    const [agentNameSuggestion, setAgentNameSuggestion] = useState('');
     const [pendingSoul, setPendingSoul] = useState<string | null>(null);
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [backendUnreachable, setBackendUnreachable] = useState(false);
@@ -140,6 +145,9 @@ export default function LoginPage() {
                                 setPassword('');
                                 setConfirmPassword('');
                                 setLoginError(null);
+                                if (typeof data?.agent_name_suggestion === 'string') {
+                                    setAgentNameSuggestion(data.agent_name_suggestion);
+                                }
                                 sessionStorage.setItem('vaf_onboarding', 'true');
                                 setStep('language');
                             }
@@ -226,14 +234,29 @@ export default function LoginPage() {
             setBootstrapError(t('errPwShort'));
             return;
         }
-        // No API call yet — collect credentials locally and continue to soul setup.
+        // No API call yet — collect credentials locally and continue: first the
+        // agent gets its NAME, then its character (the soul).
         setBootstrapError(null);
-        setStep('soul_wizard');
+        setStep('agent_name');
+    };
+
+    // The dice on the name step: ask the server for a fresh suggestion. The same
+    // endpoint that announced setup mode mints them, so the shape stays the
+    // terminal setup's shape and is never rebuilt in JavaScript.
+    const rerollAgentName = async () => {
+        try {
+            const res = await fetch(`${getApiBase()}/api/auth/needs-setup`, { cache: 'no-store' });
+            const data = await res.json().catch(() => ({}));
+            if (typeof data?.agent_name_suggestion === 'string' && data.agent_name_suggestion) {
+                setAgentNameSuggestion(data.agent_name_suggestion);
+            }
+        } catch { /* keep the current suggestion */ }
     };
 
     // "Cancel" on the phone-notice resets the wizard back to the first (Language) step.
     const resetOnboarding = () => {
         setUsername(''); setPassword(''); setConfirmPassword('');
+        setAgentName('');
         setPendingSoul(null); setOnboardingConfig({});
         setVeylloKey(''); setVeylloError(null);
         setCreateAdminSubStep('username'); setBootstrapError(null);
@@ -292,7 +315,12 @@ export default function LoginPage() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ username: username.trim(), password }),
+                body: JSON.stringify({
+                    username: username.trim(), password,
+                    // An empty field takes the suggestion, exactly what the input's
+                    // placeholder promised the whole time.
+                    agent_name: (agentName.trim() || agentNameSuggestion || undefined),
+                }),
             });
             const bootstrapData = await bootstrapRes.json().catch(() => ({}));
             if (!bootstrapRes.ok) {
@@ -468,12 +496,13 @@ export default function LoginPage() {
 
     const onboardingSteps = [
         { id: 1, label: t('stepAdmin') },
-        { id: 2, label: t('stepSoul') },
-        { id: 3, label: t('stepVeyllo') },
-        { id: 4, label: t('step2fa') },
+        { id: 2, label: t('stepAgentName') },
+        { id: 3, label: t('stepSoul') },
+        { id: 4, label: t('stepVeyllo') },
+        { id: 5, label: t('step2fa') },
     ];
     const onboardingCurrentStep =
-        step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'veyllo_api' ? 3 : step === 'setup_2fa' ? 4 : 0;
+        step === 'create_admin' ? 1 : step === 'agent_name' ? 2 : step === 'soul_wizard' ? 3 : step === 'veyllo_api' ? 4 : step === 'setup_2fa' ? 5 : 0;
     const showOnboardingProgress = onboardingCurrentStep >= 1;
 
     // WebKit/WKWebView (the macOS desktop window) fix for the "double-play" step
@@ -961,6 +990,68 @@ export default function LoginPage() {
                                 >
                                     Back to login
                                 </button>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {!checkingSetup && step === 'agent_name' && (
+                    <motion.div
+                        key="agent_name"
+                        {...stepAnim}
+                        className="w-full max-w-md"
+                    >
+                        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
+                                <Bot size={18} className="text-gray-700" />
+                                <span className="text-sm font-medium text-gray-700">{t('agentNameHeader')}</span>
+                            </div>
+                            <div className="p-8">
+                                {/* The agent itself, in its real resting state - the same living
+                                    avatar the whole product knows it by, not a picture of one. */}
+                                <div className="flex justify-center mb-6 h-14 items-center">
+                                    <div style={{ transform: 'scale(1.6)' }}><AgentAvatar mode="idle" /></div>
+                                </div>
+                                <form
+                                    onSubmit={(e) => {
+                                        e.preventDefault();
+                                        setStep('soul_wizard');
+                                    }}
+                                    className="space-y-5"
+                                >
+                                    <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('agentNameTitle')}</h2>
+                                    <p className="text-sm text-gray-500 mb-6">{t('agentNameSubtitle')}</p>
+                                    <div className="space-y-1.5">
+                                        <label className="text-sm font-medium text-gray-700 ml-1">{t('agentNameLabel')}</label>
+                                        <div className="relative">
+                                            <Bot className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                                            <input
+                                                type="text"
+                                                value={agentName}
+                                                onChange={(e) => setAgentName(e.target.value)}
+                                                className="w-full pl-11 pr-11 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
+                                                placeholder={agentNameSuggestion || 'Nobel'}
+                                                maxLength={60}
+                                                autoFocus
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={rerollAgentName}
+                                                title={t('agentNameDice')}
+                                                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all"
+                                            >
+                                                <Dices size={18} />
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-400 ml-1">{t('agentNameHint')}</p>
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
+                                    >
+                                        {t('continue')} <ArrowRight size={18} />
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     </motion.div>

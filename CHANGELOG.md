@@ -27,6 +27,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **The setup wizard asks what your agent is called.** Right after the admin
+  account and before the personality questions, the same question the terminal
+  setup always asked: the field offers a generated suggestion, leaving it empty
+  takes it, and a dice button rolls a new one. The name is how your agent
+  introduces itself - in chat and in agent rooms - and can be changed later.
 - **Joining a room from another machine is one command.** An invitation now
   carries the whole remote path: pin the hosting machine once with
   `vaf a2a trust`, then `vaf a2a join --ticket ... --url wss://...` - and from

@@ -21,6 +21,7 @@ import logging
 import socket
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import pyotp
 import qrcode
@@ -137,6 +138,10 @@ def _set_auth_cookie(request: Request, response: Response, token: str) -> None:
 class BootstrapRequest(BaseModel):
     username: str
     password: str
+    # The name the agent calls itself, asked by the wizard the same way the
+    # terminal setup asks it. Optional: an empty or missing value falls back to
+    # the suggestion inside create_first_admin's workspace preparation.
+    agent_name: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -204,7 +209,14 @@ async def needs_setup():
                     select(LocalUser).where(LocalUser.role == "admin", LocalUser.is_active == True)
                 )
                 has_admin = result.scalar_one_or_none() is not None
-            return {"needs_setup": not has_admin}
+            if has_admin:
+                return {"needs_setup": False}
+            # The suggestion travels with the answer so the wizard's name step can
+            # offer the same shape the terminal setup offers - generated HERE, not
+            # duplicated in JavaScript, which is also why the dice button in the
+            # wizard simply asks this endpoint again.
+            from vaf.auth.user_admin import suggest_agent_name
+            return {"needs_setup": True, "agent_name_suggestion": suggest_agent_name()}
         except Exception as exc:
             if not _is_db_not_ready_error(exc):
                 raise
@@ -233,6 +245,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             try:
                 new_user = await create_first_admin(
                     db, username=body.username, password=body.password,
+                    agent_name=(body.agent_name or "").strip() or None,
                 )
             except UserAdminError as e:
                 raise HTTPException(status_code=e.http_status, detail=e.message)

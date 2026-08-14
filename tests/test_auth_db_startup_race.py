@@ -125,7 +125,11 @@ def test_needs_setup_true_on_fresh_db(monkeypatch):
     c = _client(monkeypatch, _fresh_db())
     r = c.get("/api/auth/needs-setup")
     assert r.status_code == 200
-    assert r.json() == {"needs_setup": True}
+    data = r.json()
+    assert data["needs_setup"] is True
+    # The wizard's name step rides along; its contract lives in
+    # tests/test_bootstrap_agent_name.py - here only the flag this file is about.
+    assert "agent_name_suggestion" in data
 
 
 # --- init_auth_db_with_retry ----------------------------------------------------------------

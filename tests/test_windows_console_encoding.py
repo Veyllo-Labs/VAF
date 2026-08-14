@@ -25,6 +25,7 @@ TWO RULES, because the failure has two shapes:
    a redirect.
 """
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,24 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _narrow_env() -> dict:
+    """A narrow-console environment a Python subprocess can actually START in.
+
+    Stripping the env to two keys was the point - the narrowness must come from
+    the environment, not from luck - but on Windows it stripped SYSTEMROOT, and a
+    Python without it dies in _Py_HashRandomization_Init before the first line of
+    the script runs (os.urandom needs the CryptoAPI, the CryptoAPI needs
+    SystemRoot). The whole full-matrix lane was red on exactly that, which is the
+    failure mode this file warns about in its own docstring: the test failed for
+    an environment reason and said nothing about the code.
+    """
+    env = {"PYTHONIOENCODING": "cp1252", "PATH": ""}
+    for keep in ("SYSTEMROOT", "SystemRoot", "SYSTEMDRIVE", "SystemDrive"):
+        if keep in os.environ:
+            env[keep] = os.environ[keep]
+    return env
 
 # vaf/main.py keeps its own inline copy on purpose: it runs before the
 # dependency bootstrap and therefore cannot import from the package yet.
@@ -133,7 +152,7 @@ def test_the_helper_survives_a_narrow_console(tmp_path, char, name):
         encoding="utf-8")
 
     proc = subprocess.run([sys.executable, str(script)], capture_output=True,
-                          env={"PYTHONIOENCODING": "cp1252", "PATH": ""},
+                          env=_narrow_env(),
                           text=True, timeout=60)
 
     assert proc.returncode == 0, f"{name} killed the process:\n{proc.stderr[-600:]}"
@@ -150,7 +169,7 @@ def test_without_the_helper_a_narrow_console_really_does_kill_it(tmp_path):
     script.write_text("print('start', '�', 'end')\n", encoding="utf-8")
 
     proc = subprocess.run([sys.executable, str(script)], capture_output=True,
-                          env={"PYTHONIOENCODING": "cp1252", "PATH": ""},
+                          env=_narrow_env(),
                           text=True, timeout=60)
 
     assert proc.returncode != 0

@@ -920,6 +920,18 @@ class BrowserAgentTool(BaseTool):
                 await asyncio.wait_for(browser.stop(), timeout=5.0)
             except Exception:
                 pass
+            # Park the shared container: stopping our session leaves its tabs
+            # rendering, and an animated page then burns CPU for as long as the
+            # container lives. In the executor - urllib is blocking.
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(
+                        None, self._park_browser_idle,
+                        os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")),
+                    timeout=10.0,
+                )
+            except Exception:
+                pass
 
         return self._extract_result(history)
 
@@ -987,6 +999,49 @@ class BrowserAgentTool(BaseTool):
                     kill_container()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _park_browser_idle(cdp_base: str) -> None:
+        """Leave the shared browser on one blank tab when a run ends.
+
+        Closing the browser-use SESSION only drops our CDP connection; the
+        container's Chromium keeps every tab exactly as the run left it, and a
+        page that animates keeps rendering forever. Measured live: one visit to
+        an animated site left `vaf-browser` at 1027% CPU (ten cores) minutes
+        after the agent had finished and reported - the machine stayed loaded
+        with nobody watching. A parked browser costs about 5%.
+
+        HTTP CDP endpoints on purpose: they are the one interface that works
+        whether or not the run ended cleanly, and this must also be reachable
+        after a crashed or cancelled run. Best-effort throughout - a browser
+        that cannot be parked is not a reason to fail a finished task.
+        """
+        import json as _json
+        import urllib.request as _req
+
+        def _call(path: str, method: str = "GET") -> str:
+            r = _req.Request(cdp_base.rstrip("/") + path, method=method)
+            with _req.urlopen(r, timeout=5) as resp:
+                return resp.read().decode()
+
+        try:
+            # A blank tab FIRST: closing the last page can take the browser with
+            # it, and the next run must find something to attach to.
+            try:
+                _call("/json/new?about:blank", "PUT")
+            except Exception:
+                _call("/json/new?about:blank")
+            for target in _json.loads(_call("/json/list")):
+                if target.get("type") != "page":
+                    continue
+                if str(target.get("url", "")).startswith("about:blank"):
+                    continue
+                try:
+                    _call("/json/close/" + target["id"])
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     @staticmethod
     def _restart_browser_container() -> None:

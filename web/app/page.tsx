@@ -1063,7 +1063,7 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -1076,12 +1076,20 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
      *  IPC list the server cards read from). Shown when the server list is
      *  empty, so one worker never draws two cards. */
     liveWorker?: { label?: string; status: string } | null;
+    /** Whether the socket that keeps this view honest is up. */
+    connected?: boolean;
 }) {
+    // Presence is a claim about NOW, and the transcript is a snapshot from the
+    // last poll: with the socket down, the last payload freezes and the room
+    // keeps insisting somebody is composing - measured live after a restart,
+    // where an agent had been typing in the payload that happened to be last.
+    // A conversation may go stale; a liveness signal may not.
+    const typing = connected ? (view.room.typing ?? []) : [];
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
     // alive at a time - its newest message, or its typing bubble while it
     // composes - and every older bubble wears the dimmed face.
-    const agentComposing = !!view.room.typing?.some(t => t.kind === 'turn');
+    const agentComposing = !!typing.some(t => t.kind === 'turn');
     const lastAgentMsgId = view.room.agentPeer
         ? view.messages.filter(m => m.peer === view.room.agentPeer).slice(-1)[0]?.id
         : undefined;
@@ -1184,9 +1192,20 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                         {view.room.title}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
-                        {view.room.roomKind}
-                        {view.room.role ? ` \u00b7 you are ${view.room.role}` : ''}
-                        {view.room.closed ? ' \u00b7 closed' : ''}
+                        {/* A room without a live socket is a SNAPSHOT, and it must say
+                            so: its transcript, its member list and its presence all
+                            come from the last poll. The chat has said this for a long
+                            time; the room used to look identical whether it was live
+                            or frozen. */}
+                        {!connected ? (
+                            <span className="text-amber-600 dark:text-amber-400">
+                                Verbindung wird wiederhergestellt\u2026
+                            </span>
+                        ) : (<>
+                            {view.room.roomKind}
+                            {view.room.role ? ` \u00b7 you are ${view.room.role}` : ''}
+                            {view.room.closed ? ' \u00b7 closed' : ''}
+                        </>)}
                     </div>
                 </div>
                 {/* Who is in it, by the name the ROOM resolved. Join names alone would
@@ -1363,9 +1382,9 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 avatar: in a group chat "somebody is typing" without a name is a
                 question, not an answer. The server derives the list (see
                 _send_room_transcript) and the 3s poll keeps it honest. */}
-            {!view.room.closed && (view.room.typing?.length ?? 0) > 0 && (
+            {!view.room.closed && typing.length > 0 && (
                 <div>
-                    {view.room.typing!.map(t => (
+                    {typing.map(t => (
                         <div key={t.peer} className="flex gap-3 py-2">
                             {t.kind === 'turn' ? (
                                 // Our agent, actually working on its answer right now -
@@ -6643,7 +6662,8 @@ function VAFDashboardContent() {
                                         membersTitle={tMain('roomMembersTitle')}
                                         timeFormat={userTimeFormat}
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
-                                        liveWorker={roomLiveWorker} />
+                                        liveWorker={roomLiveWorker}
+                                        connected={isConnected} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (

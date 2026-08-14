@@ -1383,6 +1383,25 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_a_frozen_room_stops_claiming_somebody_is_typing():
+    """MUTATION: render view.room.typing directly again.
+
+    Presence is a claim about NOW; the transcript is the last poll's snapshot.
+    With the socket down the payload freezes, and the room went on insisting an
+    agent was composing - measured live after a restart, where the last payload
+    happened to catch one mid-turn, so a typing bubble sat there for good. A
+    conversation may go stale, a liveness signal may not, and the header says
+    which of the two the reader is looking at.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "const typing = connected ? (view.room.typing ?? []) : [];" in source, (
+        "the room's typing row is no longer gated on the connection")
+    assert "view.room.typing!.map" not in source, (
+        "a raw typing render is back - a frozen payload will lie again")
+    assert "connected={isConnected}" in source, (
+        "the room view is never told whether its socket is up")
+
+
 def test_every_worker_feed_lights_the_rooms_card():
     """MUTATION: feed the room's live card from subagent_update alone again.
 

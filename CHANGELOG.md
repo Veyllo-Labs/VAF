@@ -12,6 +12,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The browser goes back to idle when it is done.** Ending a browsing task
+  only closed VAF's connection to the browser; the page itself stayed open in
+  the container and kept rendering. One visit to an animated site left the
+  machine at ten cores of load, minutes after the agent had already answered.
+  A finished run now parks the browser on a blank tab (about 5% instead of
+  1000%), and a new tab is opened before the busy ones are closed so the next
+  task still finds a browser.
+- **A room that lost its connection stops pretending.** With the socket down
+  the last payload froze, so a group chat kept showing "someone is typing"
+  from before the interruption - permanently. Presence is now only shown
+  while the connection is up, and the room's header says when it is
+  reconnecting, the way a chat has always done.
 - **The room's worker card appears for every kind of worker.** It was fed by
   one event type, so a browser or research run in a group chat filled the
   window while the transcript showed nothing at all. Any live worker now

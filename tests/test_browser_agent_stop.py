@@ -157,6 +157,63 @@ def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
     assert took < 10.0, f"stop took {took:.1f}s - the watchdog never fired"
 
 
+def test_a_finished_run_parks_the_browser_on_a_blank_tab(monkeypatch):
+    """MUTATION: stop parking the browser when a run ends.
+
+    Closing the browser-use session only drops OUR connection; the container's
+    Chromium keeps every tab as the run left it. Measured live: one visit to an
+    animated page left vaf-browser at 1027% CPU - ten cores - minutes after the
+    agent had finished and reported. The blank tab is opened BEFORE the busy
+    ones are closed, because closing the last page can take the browser down
+    and the next run needs something to attach to.
+    """
+    calls = []
+
+    class _Resp:
+        def __init__(self, body): self._b = body
+        def read(self): return self._b.encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request as _req
+
+    def _fake_urlopen(request, timeout=None):
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/json/list"):
+            return _Resp('[{"type": "page", "id": "t1", "url": "https://busy.example/anim"},'
+                         ' {"type": "page", "id": "t2", "url": "about:blank"}]')
+        return _Resp("{}")
+
+    monkeypatch.setattr(_req, "urlopen", _fake_urlopen)
+    BrowserAgentTool._park_browser_idle("http://localhost:9222")
+
+    urls = [u for _, u in calls]
+    assert any("/json/new?about:blank" in u for u in urls), "no blank tab was opened"
+    assert any(u.endswith("/json/close/t1") for u in urls), "the busy page stayed open"
+    assert not any(u.endswith("/json/close/t2") for u in urls), (
+        "the blank tab was closed too - the browser can go down with its last page")
+    assert urls.index([u for u in urls if "/json/new" in u][0]) < \
+        urls.index([u for u in urls if "/json/close/t1" in u][0]), (
+        "the blank tab must exist BEFORE the busy one is closed")
+
+
+def test_the_run_parks_the_browser_when_it_ends():
+    """MUTATION: drop the park call from the run's finally.
+
+    The helper is worthless if nothing calls it when a run ends - and the end
+    is exactly where the CPU burn starts."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "tools"
+           / "browser_agent.py").read_text(encoding="utf-8")
+    # The RUN's finally, anchored on the teardown only it does - the file has
+    # three finally blocks and the other two are the semaphore and the loop.
+    teardown = src.split("stop_screenshots.set()", 1)[1][:3000]
+    assert "_park_browser_idle" in teardown, (
+        "a finished run no longer parks the shared browser")
+    assert teardown.index("browser.stop()") < teardown.index("_park_browser_idle"), (
+        "parking must happen after the session is stopped, not instead of it")
+
+
 def test_watchdog_kills_the_container_when_the_loop_is_starved():
     """MUTATION: drop the container-kill escalation from the watchdog.
 

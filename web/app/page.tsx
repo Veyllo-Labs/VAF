@@ -1063,7 +1063,7 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -1072,6 +1072,10 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     /** Open the sub-agent window for a live worker - the mobile preview-pill
      *  gesture, applied to the room's worker cards. */
     onOpenWorker?: () => void;
+    /** An in-process worker derived from the live feed (it never reaches the
+     *  IPC list the server cards read from). Shown when the server list is
+     *  empty, so one worker never draws two cards. */
+    liveWorker?: { status: string } | null;
 }) {
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
@@ -1177,6 +1181,29 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 who, on what, how far. Only OUR workers: a foreign agent's workers
                 run on its machine, and a card we cannot verify is a card we do not
                 draw. */}
+            {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
+                <div className="py-1">
+                    <div role={onOpenWorker ? 'button' : undefined} onClick={onOpenWorker}
+                        className={cn(
+                            "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
+                            onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
+                        <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                            <AgentAvatar mode="delegate" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
+                                worker
+                                <span className="ml-2 text-[11px] font-normal text-gray-400">running</span>
+                            </div>
+                            <div className="text-[11px] text-gray-400 truncate">{liveWorker.status}</div>
+                        </div>
+                        <span className="flex h-2 w-2 relative shrink-0" aria-hidden>
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                        </span>
+                    </div>
+                </div>
+            )}
             {(view.room.agentWorkers?.length ?? 0) > 0 && (
                 <div className="space-y-2 py-1">
                     {view.room.agentWorkers!.map((w, i) => (
@@ -1537,6 +1564,12 @@ function VAFDashboardContent() {
     // session - accepting it must read the current room, not a stale capture.
     const roomViewRef = useRef<{ room: RoomView; messages: RoomMessage[] } | null>(null);
     useEffect(() => { roomViewRef.current = roomView; }, [roomView]);
+    // A room turn's IN-PROCESS worker never registers in the IPC list the server
+    // cards read from (measured: the list was empty while the coder streamed),
+    // so this card is derived from the live feed itself - the events carry the
+    // room stamp now. Cleared when the feed says idle, or when the room closes.
+    const [roomLiveWorker, setRoomLiveWorker] = useState<{ status: string } | null>(null);
+    useEffect(() => { if (!roomView) setRoomLiveWorker(null); }, [roomView]);
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
@@ -3924,6 +3957,11 @@ function VAFDashboardContent() {
                 else if (data.type === 'subagent_update') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
                         && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId) {
+                        const presence = String(data.presence || '').trim().toLowerCase();
+                        if (presence === 'idle' || presence === 'error') setRoomLiveWorker(null);
+                        else setRoomLiveWorker({ status: String(data.status || '').trim() || 'working' });
+                    }
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
                     const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();
@@ -6498,7 +6536,8 @@ function VAFDashboardContent() {
                                         closedNote={tMain('roomClosedNote')}
                                         membersTitle={tMain('roomMembersTitle')}
                                         timeFormat={userTimeFormat}
-                                        onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }} />
+                                        onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
+                                        liveWorker={roomLiveWorker} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (

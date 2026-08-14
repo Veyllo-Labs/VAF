@@ -52,8 +52,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   behalf, its sub-agent feed (the coder window, research, documents) now
   reaches the browser that is watching the ROOM, not only one watching the
   chat session the turn runs in - a real coder run used to look like a hung
-  one there. Tapping a worker card opens the window, the same gesture the
-  mobile preview pill uses. Events still never leave your account.
+  one there. The worker card draws from the same live feed, so it appears
+  even for workers that run inside the agent's own process, with a green
+  pulse while they stream. Tapping a worker card opens the window, the same
+  gesture the mobile preview pill uses. Events still never leave your
+  account.
 - **A room shows the workers your agent has running.** When your agent
   delegates - to the coder, the researcher, any sub-agent - the room now draws
   one card per live worker over the conversation: who, on what, how far. The

@@ -1383,6 +1383,31 @@ def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch
     assert "broadcast_to_session" in scheduled[-1]
 
 
+def test_one_filter_decides_what_the_open_view_receives():
+    """MUTATION: hand-roll the session comparison in any handler again.
+
+    A room is a VIEW, not an exception to sixteen copies of the same condition.
+    That is what the copies cost, measured: the socket's master filter and each
+    handler carried their own `data.sessionId !== activeSessionId`, eight had
+    grown a room clause and eight had not - so half the sub-agent surfaces
+    (tool window, artifacts, console output) were dead in a room while the
+    other half worked, and the master filter dropped everything whenever the
+    chat behind the room was a different session, which it usually is. One
+    filter answers it now, with the only distinction that is real: worker
+    feeds are shown beside whatever is open, chat lanes belong to one
+    conversation.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "data.sessionId !== activeSessionId" not in source, (
+        "a hand-rolled session gate is back; every lane must call "
+        "eventBelongsHere so the room stays a first-class view")
+    assert "const eventBelongsHere = (" in source, "the one filter is gone"
+    assert source.count("eventBelongsHere(data, activeSessionId, 'worker')") >= 10, (
+        "worker feeds no longer share the room-aware lane")
+    assert "lane === 'chat'" in source, (
+        "the chat lane no longer refuses a foreign conversation")
+
+
 def test_the_docks_close_button_survives_a_streaming_run():
     """MUTATION: put the bare isOpen=false back into the dock's onClose.
 

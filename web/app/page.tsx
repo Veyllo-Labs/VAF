@@ -1600,6 +1600,35 @@ function VAFDashboardContent() {
     // session - accepting it must read the current room, not a stale capture.
     const roomViewRef = useRef<{ room: RoomView; messages: RoomMessage[] } | null>(null);
     useEffect(() => { roomViewRef.current = roomView; }, [roomView]);
+
+    /**
+     * THE one filter: does this live event belong to what the viewer has open?
+     *
+     * What is open is not only a chat session. A ROOM is a view of its own, and
+     * for a long time only the chat session counted - so every worker feed of a
+     * room turn was dropped by the socket's master filter and by each handler's
+     * own copy of the same condition, sixteen of them, drifting apart one
+     * exception at a time. The room is a first-class view here instead, decided
+     * in one place.
+     *
+     * `lane` is the only distinction that survives, and it is a real one:
+     *  - 'worker': what an agent is DOING (sub-agent windows, tool cards,
+     *    consoles, artifacts). Shown beside whatever is open, room included.
+     *  - 'chat': what an agent SAID into a conversation. A room keeps its own
+     *    transcript, painted from the store, so a room turn's chat lane must
+     *    never be spliced into the conversation that happens to be open.
+     */
+    const eventBelongsHere = (
+        data: { sessionId?: string; roomId?: string } | null | undefined,
+        activeSessionId: string | null | undefined,
+        lane: 'worker' | 'chat',
+    ): boolean => {
+        const sid = data?.sessionId;
+        if (!sid || !activeSessionId || sid === activeSessionId) return true;
+        if (lane === 'chat') return false;
+        const rid = typeof data?.roomId === 'string' ? data.roomId : '';
+        return !!(rid && roomViewRef.current && rid === roomViewRef.current.room.roomId);
+    };
     // A room turn's IN-PROCESS worker never registers in the IPC list the server
     // cards read from (measured: the list was empty while the coder streamed),
     // so this card is derived from the live feed itself - the events carry the
@@ -3066,10 +3095,13 @@ function VAFDashboardContent() {
                 // CRITICAL: Filter by session to prevent cross-contamination!
                 const activeSessionId = currentSessionIdRef.current;
 
-                // Only filter if both IDs are present and they don't match
-                // If data.sessionId is missing, it's a global update -> Allow
-                // If activeSessionId is missing, we are in initial state -> Allow
-                if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                // THE master filter, and it asks the one question every handler
+                // below asks: is this event for the view that is OPEN? A room
+                // counts as open here - its worker feeds carry the room they were
+                // ordered from, and this gate used to drop every one of them
+                // whenever the chat behind the room was a different session (which
+                // it usually is). Per-handler lanes still narrow it further.
+                if (!eventBelongsHere(data, activeSessionId, 'worker')) {
                     // Exception: events that intentionally target other sessions must pass
                     // through so the UI can react (show an unread badge, append proactive
                     // automation results, etc.) instead of being silently dropped.
@@ -3150,7 +3182,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'tool_update') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
 
                     const { subType, toolId, name, data: eventData, timestamp } = data;
                     const toolName = String(name || '').toLowerCase();
@@ -3434,7 +3466,7 @@ function VAFDashboardContent() {
                     if (!activeSessionId && data.sessionId) {
                         setCurrentSessionId(data.sessionId);
                         wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
-                    } else if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                    } else if (!eventBelongsHere(data, activeSessionId, 'chat')) {
                         // Update per-session state even if not the active session
                         // So when user switches back, animations are correct
                         if (data.sessionId) {
@@ -3529,8 +3561,8 @@ function VAFDashboardContent() {
                         wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
                         return;
                     }
-                    // Targets a different session: surface an unread badge, don't inject here.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                    // Targets a different conversation: surface an unread badge, don't inject here.
+                    if (!eventBelongsHere(data, activeSessionId, 'chat')) {
                         setUnreadSessions(prev => new Set(prev).add(data.sessionId));
                         return;
                     }
@@ -3544,7 +3576,7 @@ function VAFDashboardContent() {
                     // We must remove the last *assistant* message, not the last message: the "Empty response..."
                     // system log is often appended before this event, so the last message can be system.
                     const activeSessionId = currentSessionIdRef.current;
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'chat')) return;
                     setMessages(prev => {
                         const lastAssistantEntry = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop();
                         if (!lastAssistantEntry) return prev;
@@ -3802,7 +3834,7 @@ function VAFDashboardContent() {
                     setRoomView({ room: data.room, messages: data.messages || [] });
                 }
                 else if (data.type === 'workflow_start') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'chat')) return;
 
                     loadWorkflow({
                         id: data.workflowId || 'wf-' + Date.now(),
@@ -3991,8 +4023,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'subagent_update') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
-                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId) {
                         const presence = String(data.presence || '').trim().toLowerCase();
                         if (presence === 'idle' || presence === 'error') setRoomLiveWorker(null);
@@ -4095,8 +4126,7 @@ function VAFDashboardContent() {
                 else if (data.type === 'coder_state') {
                     // Live project state from the coding agent: file tree, git,
                     // loop/task progress. Powers the VS-Code view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
-                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     // First custom data -> now the window may open (in its custom look)
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
@@ -4123,8 +4153,7 @@ function VAFDashboardContent() {
                 else if (data.type === 'research_state') {
                     // Live research state: outline, sources, finished section html.
                     // Powers the paper-style research view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
-                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     // First custom data -> now the window may open (in its custom look)
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
@@ -4143,8 +4172,7 @@ function VAFDashboardContent() {
                 else if (data.type === 'document_state') {
                     // Live document state: sections, growing section html, placeholders.
                     // Powers the paper-style document view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
-                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
@@ -4166,8 +4194,7 @@ function VAFDashboardContent() {
                     // Live read-only state from the librarian agent: filesystem map,
                     // folder sizes, storage/drives, Google Drive, optional search.
                     // Powers the explorer view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
-                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
@@ -4193,7 +4220,7 @@ function VAFDashboardContent() {
                     // (done/stopped/capped/failed) keep the last frame visible so the
                     // outcome is readable; the completion chat message carries the
                     // full numbers.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     const _phase = String(data.phase ?? 'learning');
                     const _docName = String(data.docName ?? '');
                     setLearnState({
@@ -4249,7 +4276,7 @@ function VAFDashboardContent() {
                     // Live structured state from the browser agent: task, step, action plan,
                     // visited URLs, vision. Powers the dock of the browser window (the
                     // screenshot arrives separately as browser_frame_update).
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
@@ -4266,7 +4293,7 @@ function VAFDashboardContent() {
                     }));
                 }
                 else if (data.type === 'artifact_update') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     setSubAgentState(prev => {
                         const incomingFile = data.file ?? prev.artifactFile;
                         const incomingCode = data.code ?? prev.artifactCode;
@@ -4290,7 +4317,7 @@ function VAFDashboardContent() {
                     });
                 }
                 else if (data.type === 'subagent_output') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     if (data.output) {
                         const prefix = data.agentType ? `### ${data.agentType.replace(/_/g, ' ')}` : '### Sub-Agent Output';
                         // If workflow is running, send to workflow terminal instead of sub-agent window
@@ -4302,7 +4329,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'subagent_output_stream') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     const line = typeof data.line === 'string' ? data.line : '';
                     if (line) {
                         const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });

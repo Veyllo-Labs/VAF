@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A room is now a full view of its own, so every sub-agent surface works
+  there.** Until now only a chat counted as "what you are looking at", and
+  each live feed carried its own copy of that rule - sixteen of them, half
+  taught about rooms and half not: the coder window filled while the tool
+  window, the artifacts and the console output stayed dark in a group chat,
+  and the whole feed vanished whenever the chat behind the room happened to
+  be a different conversation. One filter decides it now, for every feed at
+  once: work an agent is doing is shown beside whatever you have open, rooms
+  included, while a conversation's messages still belong to that
+  conversation alone.
 - **The room's worker card now wears the reference design, and the editor
   feed survives a sessionless run.** The card under the agent's message shows
   title with a live pulse, a meta line (worker type, count, start time), the

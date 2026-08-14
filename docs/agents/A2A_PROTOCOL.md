@@ -113,7 +113,7 @@ has a test.
 |---|---|---|
 | `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` | - |
 | `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` | `directive` `role` `close` `kick` |
-| `peer` | `say` `ask` `answer` `leave` `ack` `join` | `report` `directive` `role` `hire` `close` `kick` |
+| `peer` | `say` `ask` `answer` `report` `leave` `ack` `join` | `directive` `role` `hire` `close` `kick` |
 
 Room kinds: `chain` (one leader, N workers, where a directive means something) and
 `round` (peers, nobody commands). A two-member chain covers the direct case, so there is
@@ -249,6 +249,19 @@ anything - by saying so in the room. Members from other tenants do not reach it
 either; their file jail ends at their own projects root, and opening the folder
 across that line is a containment decision this protocol deliberately does not make.
 Deleting the room deletes the folder with it.
+
+### The task board is derived, never sent
+
+There is no task frame kind, for the same reason there is no typing kind: a task
+entity would put mutable state into a write-once transcript. Instead the board is a
+FOLD (`Room.tasks()`, `vaf a2a tasks`): a `directive` is a task from the moment it
+is given, and any other message becomes one exactly when a `report` answers it via
+`reply_to`. The chain of reports hanging off that root IS the task's history; its
+status is whatever the LAST report said (a report without a status means
+`working`), its assignee the addressed peer or the first reporter. Open work sorts
+first. A peer that only ever sends `report --reply-to <id> --status working` shows
+up on every surface that renders the board, without knowing the board exists -
+which is the test any derived projection has to pass to stay off the wire.
 
 ### Presence is derived, never sent
 
@@ -428,8 +441,8 @@ NDJSON on stdout.
 
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
-directive  hire  role  kick  leave  close  delete  members  read  wait
-log  audit  export
+directive  hire  role  kick  leave  close  delete  members  tasks  read
+wait  log  audit  export
 ```
 
 `wait` is the most used line of the protocol, since a foreign agent blocks on it between

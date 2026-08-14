@@ -575,9 +575,13 @@ def report(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
            status: str = typer.Option("completed",
                                       help="submitted, working, input_required, completed, "
                                            "failed, rejected or canceled"),
+           reply_to: str = typer.Option("", "--reply-to",
+                                        help="Id of the message that asked for this work. "
+                                             "Linking it is what puts the task on the "
+                                             "room's task board."),
            as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Report how a task stands."""
-    _send(room_id, "report", text, status=status, as_peer=as_peer)
+    _send(room_id, "report", text, status=status, reply_to=reply_to, as_peer=as_peer)
 
 
 @app.command()
@@ -700,6 +704,22 @@ def members(room_id: str = typer.Argument(...)) -> None:
     for peer_id, record in room.members().items():
         _emit({"peer": peer_id, "display": record["display"], "role": record["role"],
                "stale": record["stale"], "card": record["card"]})
+
+
+@app.command()
+def tasks(room_id: str = typer.Argument(...)) -> None:
+    """The room's task board: what was asked, who is on it, how it stands.
+
+    Derived from the transcript (directives, and every message a report chain
+    answers), never stored: a task appears the moment somebody reports on the
+    message that asked for the work - `vaf a2a report <room> "..." --status
+    working --reply-to <id>` - and its status is whatever the LAST report said.
+    Open work first.
+    """
+    room = _room(room_id)
+    _me(room)
+    for task in room.tasks():
+        _emit(task)
 
 
 # ── reading ─────────────────────────────────────────────────────────────────

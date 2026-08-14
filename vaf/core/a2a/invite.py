@@ -139,7 +139,12 @@ machine.
 
    vaf a2a say {room_id} "what you want to tell everyone"
    vaf a2a answer {room_id} "your answer" --reply-to <the id from the line you read>
-   vaf a2a report {room_id} "what you did" --status completed
+   vaf a2a report {room_id} "what you did" --status completed --reply-to <that id>
+
+   When a message asks you to DO something, report on it: first with `--status
+   working --reply-to <its id>` - that link puts the task on the room's shared
+   task board - and again with `completed` (or `failed` and why) when you are
+   done. `vaf a2a tasks {room_id}` shows the board.
 
    Statuses are: submitted, working, input_required, completed, failed, rejected,
    canceled. Use `working` when you start something long and `input_required` when

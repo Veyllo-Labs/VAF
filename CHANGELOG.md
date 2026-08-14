@@ -27,6 +27,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **Every room has a task board.** Ask an agent to build something and the
+  work shows up as a card over the conversation: what was asked, who is on
+  it, and how it stands - the dots walk from taken-on to done, red when it
+  failed, amber while somebody waits on an answer. Nothing new travels
+  between machines for this: a task is born when an agent reports on the
+  message that asked (`report --reply-to <id> --status working`), and the
+  last report decides its state. The terminal shows the same board in
+  `/room` and `vaf a2a tasks`, and agents in a round may now send reports -
+  giving orders stays forbidden there; saying "I am on it" never was the
+  same thing.
 - **A room reads like a conversation in time.** Day separators between
   calendar days and a clock on every message, exactly like the chat. And the
   red unread dot on a room now counts what YOU have not seen: opening the room

@@ -930,6 +930,18 @@ class VafApp(App):
         self.add_system_note(
             f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
             f"{len(rows)} messages")
+        # The task board, derived like everything else about a room (Room.tasks):
+        # a directive, or anything a report chain answers. Shown as notes above the
+        # replay so "what is in flight here" is readable without scrolling the talk.
+        try:
+            board = room.tasks()
+        except Exception:
+            board = []
+        for task in board:
+            arrow = f" -> {task['assignee_label']}" if task["assignee_label"] else ""
+            self.add_system_note(
+                f"[{task['status']}] {task['title']} "
+                f"({task['requester_label']}{arrow})")
         for entry in rows[-self.REPLAY_CAP:]:
             text = describe(entry)
             self._mount_scrolled(PeerMessage(

@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from vaf.core.a2a.frame import KINDS, Frame
+from vaf.core.a2a.frame import KINDS, REPORT_STATUSES, Frame, canonical_sort_key
 from vaf.core.a2a.store import (
     RoomStore,
     StoreError,
@@ -65,7 +65,7 @@ CAPABILITIES: Dict[str, frozenset] = {
                          "role", "hire", "close", "leave", "ack", "join", "kick"}),
     "worker": frozenset({"say", "ask", "answer", "report",
                          "hire", "leave", "ack", "join"}),
-    "peer": frozenset({"say", "ask", "answer", "leave", "ack", "join"}),
+    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join"}),
 }
 
 # How much of a room's traffic the LOCAL user has authorised their agent to act on.
@@ -879,6 +879,85 @@ class Room:
                 "last_wrote": int(last_wrote.get(peer, 0)),
             }
         return out
+
+    def tasks(self) -> List[Dict[str, Any]]:
+        """The work in flight, DERIVED - there is deliberately no task frame kind.
+
+        A task exists when somebody reports on something: the chain of `report`
+        frames hanging off a root (via reply_to) IS the task, its status the last
+        report's status. A `directive` is a task from the moment it is given, even
+        unreported - in a chain, giving work is the point. An `ask` or `say`
+        becomes a task exactly when its assignee first reports on it, which keeps
+        "bist du da?" out of the board without anybody classifying anything.
+
+        Same reasoning as activity(): a persisted task entity would put mutable
+        state into a write-once transcript and demand every foreign implementation
+        understand it. A fold asks nothing of anybody - a peer that only ever
+        sends `report --reply-to <id> --status working` shows up on every surface
+        that renders this, without knowing the board exists.
+        """
+        frames = sorted(self.store.frames(), key=canonical_sort_key)
+        by_id: Dict[str, Frame] = {f.id: f for f in frames}
+        labels = self.labels()
+
+        def _root_of(frame: Frame) -> Frame:
+            seen = set()
+            current = frame
+            while current.reply_to and current.reply_to in by_id \
+                    and current.id not in seen:
+                seen.add(current.id)
+                parent = by_id[current.reply_to]
+                if parent.kind != "report" and not parent.reply_to:
+                    return parent
+                if parent.kind != "report":
+                    return parent
+                current = parent
+            return current
+
+        tasks: Dict[str, Dict[str, Any]] = {}
+
+        def _ensure(root: Frame) -> Dict[str, Any]:
+            entry = tasks.get(root.id)
+            if entry is None:
+                entry = {
+                    "id": root.id,
+                    "title": str((root.body or {}).get("text") or "")[:160]
+                             or f"({root.kind})",
+                    "requester": root.sender,
+                    "requester_label": labels.get(root.sender) or root.sender,
+                    "assignee": str((root.to or {}).get("peer") or ""),
+                    "assignee_label": "",
+                    "status": "submitted",
+                    "reports": 0,
+                    "created_ts": root.ts,
+                    "updated_ts": root.ts,
+                    "updated_lamport": root.lamport,
+                }
+                tasks[root.id] = entry
+            return entry
+
+        for frame in frames:
+            if frame.kind == "directive":
+                _ensure(frame)
+            elif frame.kind == "report":
+                root = _root_of(frame)
+                entry = _ensure(root)
+                entry["reports"] += 1
+                status = str((frame.body or {}).get("status") or "").strip()
+                # A report without a status still says "I am on it" - the same
+                # default the wire's own vocabulary would pick.
+                entry["status"] = status if status in REPORT_STATUSES else "working"
+                entry["assignee"] = entry["assignee"] or frame.sender
+                entry["updated_ts"] = frame.ts
+                entry["updated_lamport"] = frame.lamport
+
+        for entry in tasks.values():
+            if entry["assignee"]:
+                entry["assignee_label"] = (labels.get(entry["assignee"])
+                                           or entry["assignee"])
+        done = ("completed", "failed", "rejected", "canceled")
+        return sorted(tasks.values(),
+                      key=lambda e: (e["status"] in done, -e["updated_lamport"]))
 
     def mode_of(self, peer_id: str) -> str:
         """The LOCAL user's standing decision about how far their agent may go here.

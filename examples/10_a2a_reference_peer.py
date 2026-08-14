@@ -54,7 +54,7 @@ CAPABILITIES: Dict[str, frozenset] = {
                          "role", "hire", "close", "leave", "ack", "join", "kick"}),
     "worker": frozenset({"say", "ask", "answer", "report",
                          "hire", "leave", "ack", "join"}),
-    "peer": frozenset({"say", "ask", "answer", "leave", "ack", "join"}),
+    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join"}),
 }
 
 ROOM_KINDS = ("chain", "round")

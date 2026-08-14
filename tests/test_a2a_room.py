@@ -1397,3 +1397,95 @@ def test_activity_reports_facts_not_verdicts(tmp_path):
     assert facts["p-bob"]["read_at"] > 0, "when the cursor moved is the whole signal"
     assert facts["p-bob"]["last_wrote"] < frame.lamport
     assert facts["p-alice"]["last_wrote"] >= frame.lamport
+
+
+# ── the task board ─────────────────────────────────────────────────────────
+
+def test_a_task_is_born_from_a_report_chain_and_dies_by_its_last_status(tmp_path):
+    """MUTATION: make every ask a task, or read the FIRST report's status.
+
+    A task exists when somebody reports on something - that self-selection is what
+    keeps "bist du da?" off the board without anybody classifying messages. And
+    the LAST report decides: a board that read the first would show every finished
+    task as freshly started.
+    """
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-board")
+    alice = room.join(display="Alice", scope_id=None, peer_id="p-alice")
+    nobel = room.join(display="Nobel", scope_id=None, peer_id="p-nobel")
+
+    ask = room.say(alice, "Nobel, build the website")
+    room.say(nobel, "sure")
+    assert room.tasks() == [], "small talk became a task"
+
+    first = room.ingest({"kind": "report", "reply_to": ask.id,
+                         "body": {"text": "starting", "status": "working"}},
+                        identity=nobel)
+    board = room.tasks()
+    assert len(board) == 1
+    task = board[0]
+    assert task["title"] == "Nobel, build the website"
+    assert task["status"] == "working"
+    assert task["requester_label"].startswith("Alice")
+    assert task["assignee_label"].startswith("Nobel")
+
+    room.ingest({"kind": "report", "reply_to": first.id,
+                 "body": {"text": "done", "status": "completed"}}, identity=nobel)
+    task = room.tasks()[0]
+    assert task["status"] == "completed"
+    assert task["reports"] == 2
+
+
+def test_a_directive_is_a_task_before_anyone_reports(tmp_path):
+    """In a chain, giving work is the point - the board must show it while it is
+    still unanswered, or the leader reads an empty board as an idle team."""
+    room = Room.create(kind="chain", owner_scope=None, base=tmp_path, room_id="room-chain-b")
+    boss = room.join(display="Boss", scope_id=None, peer_id="p-boss")
+    room.join(display="W", scope_id=None, peer_id="p-w")
+
+    room.ingest({"kind": "directive", "to": {"peer": "p-w"},
+                 "body": {"text": "ship it"}}, identity=boss)
+    board = room.tasks()
+    assert len(board) == 1
+    assert board[0]["status"] == "submitted"
+    assert board[0]["assignee"] == "p-w"
+
+
+def test_open_work_sorts_before_finished_work(tmp_path):
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-sort")
+    alice = room.join(display="Alice", scope_id=None, peer_id="p-alice")
+    bob = room.join(display="Bob", scope_id=None, peer_id="p-bob")
+
+    a = room.say(alice, "task one")
+    b = room.say(alice, "task two")
+    room.ingest({"kind": "report", "reply_to": a.id,
+                 "body": {"status": "completed"}}, identity=bob)
+    room.ingest({"kind": "report", "reply_to": b.id,
+                 "body": {"status": "working"}}, identity=bob)
+
+    statuses = [t["status"] for t in room.tasks()]
+    assert statuses == ["working", "completed"]
+
+
+def test_a_report_without_a_status_still_says_i_am_on_it(tmp_path):
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-nostatus")
+    alice = room.join(display="Alice", scope_id=None, peer_id="p-alice")
+    bob = room.join(display="Bob", scope_id=None, peer_id="p-bob")
+
+    ask = room.say(alice, "do the thing")
+    room.ingest({"kind": "report", "reply_to": ask.id, "body": {"text": "on it"}},
+                identity=bob)
+    assert room.tasks()[0]["status"] == "working"
+
+
+def test_a_peer_may_report_in_a_round_now(tmp_path):
+    """The protocol change this board forced, pinned on purpose: in a round nobody
+    commands (directive stays refused), but reporting on one's own work is
+    self-description, not command - without it no task in a round could ever
+    move, because every member of a round is a peer."""
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path, room_id="room-peerrep")
+    peer = room.join(display="P", scope_id=None, peer_id="p-p")
+
+    frame = room.ingest({"kind": "report", "body": {"status": "working"}}, identity=peer)
+    assert frame.kind == "report"
+    with pytest.raises(WrongRoomKind):
+        room.ingest({"kind": "directive", "body": {"text": "no"}}, identity=peer)

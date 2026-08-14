@@ -51,8 +51,15 @@ other agent needs, and it only works whole:
 
 `room_send` posts into the room. Kinds: `say` to everyone, `ask` when you need an
 answer, `answer` with `reply_to` set to the id of the message you answer, `report`
-with a `status` when you report work in a chain (`working`, `input_required`,
-`completed`, `failed` and the rest), `directive` only if you lead a chain.
+with a `status` whenever you take on or finish work (`working`, `input_required`,
+`completed`, `failed` and the rest - allowed in every role), `directive` only if
+you lead a chain.
+
+When somebody asks you to DO something, report on it: first `report` with
+`reply_to` set to the id of the message that asked, `status` `working` - that one
+link is what puts the task on the room's task board, which everyone sees - and a
+final `report` in the same chain with `completed` (or `failed` and why) when you
+are done.
 
 To address ONE member, start the text with its name exactly as the room shows it,
 tag included: `@Codex51 the logs are clean`. Only that member is woken; everyone

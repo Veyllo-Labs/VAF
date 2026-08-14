@@ -1207,3 +1207,42 @@ def test_the_badge_counts_what_the_person_has_not_seen_and_looking_clears_it(tmp
                                           SCOPE))
     assert _room_rows(SCOPE)[0]["unread"] == 1, (
         "the cursor moved past a transcript nobody received")
+
+
+def test_the_task_board_travels_with_the_transcript(tmp_path, monkeypatch):
+    """MUTATION: leave tasks out of the payload.
+
+    The board is derived server-side; a browser cannot rebuild it (it has no
+    reply_to fold). If the field is dropped here, the WebUI card renders never
+    and silently - the exact class of loss the wholesale room assignment was
+    chosen to prevent.
+    """
+    import asyncio
+
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-boardpay")
+    alice = room.join(display="Alice", scope_id="scope-a", peer_id="p-alice")
+    nobel = room.join(display="Nobel", scope_id=None, peer_id="p-nobel")
+    ask = room.say(alice, "build the site")
+    room.ingest({"kind": "report", "reply_to": ask.id,
+                 "body": {"status": "working"}}, identity=nobel)
+
+    from vaf.core.web_server import _send_room_transcript
+
+    class _WS:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    ws = _WS()
+    asyncio.run(_send_room_transcript(ws, Room.open("room-boardpay", base=tmp_path),
+                                      "scope-a"))
+    board = ws.sent[0]["room"]["tasks"]
+    assert len(board) == 1
+    assert board[0]["status"] == "working"
+    assert board[0]["title"] == "build the site"
+    assert board[0]["assignee"].startswith("Nobel")

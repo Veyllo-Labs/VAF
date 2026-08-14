@@ -254,6 +254,16 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "agentPeer": next((p for p in [
                 _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
             "typing": typing,
+            # The task board, derived exactly like typing is (Room.tasks): a
+            # directive, or anything a report chain answers via reply_to. The 3s
+            # poll keeps it fresh; nothing travels on the wire for it. Capped the
+            # way the transcript is - a board is a glance, not an archive.
+            "tasks": [
+                {"id": t["id"], "title": t["title"], "status": t["status"],
+                 "requester": t["requester_label"], "assignee": t["assignee_label"],
+                 "reports": t["reports"], "ts": t["updated_ts"]}
+                for t in room.tasks()
+            ][:12],
             "canManage": bool(acting) and (
                 acting in hosts or room.role_of(acting) == "leader"),
             # Built from members(), which already resolves the role, the card and the

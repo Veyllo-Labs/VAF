@@ -170,6 +170,10 @@ type RoomView = {
      *  instead of initials. A foreign agent never gets it: an agent that is not
      *  ours is a full agent of its own, never a second face of ours. */
     agentPeer?: string;
+    /** The task board, derived server-side from directives and report chains
+     *  (Room.tasks). Open work first; refreshed by the 3s room poll. */
+    tasks?: Array<{ id: string; title: string; status: string; requester: string;
+        assignee: string; reports: number; ts?: number }>;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
     topic?: string;
@@ -1112,6 +1116,50 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                     <Info size={16} />
                 </button>
             </div>
+
+            {/* The task board: what was asked, who is on it, how it stands. Derived
+                server-side from directives and report chains - a card per task, the
+                dots walking submitted -> working -> completed, red on a dead end,
+                amber pulse while an answer is needed. Done work dims but stays: a
+                board that forgets finished work reads as work that never happened. */}
+            {(view.room.tasks?.length ?? 0) > 0 && (
+                <div className="space-y-2 py-3">
+                    {view.room.tasks!.map(task => {
+                        const dead = task.status === 'failed' || task.status === 'rejected' || task.status === 'canceled';
+                        const done = task.status === 'completed';
+                        const waiting = task.status === 'input_required';
+                        const filled = done || dead ? 3 : task.status === 'working' || waiting ? 2 : 1;
+                        const dotColor = dead ? 'bg-red-400' : done ? 'bg-emerald-500'
+                            : waiting ? 'bg-amber-400' : 'bg-blue-400';
+                        return (
+                            <div key={task.id}
+                                className={cn(
+                                    "rounded-xl border px-4 py-2.5 flex items-center gap-3",
+                                    "border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020]",
+                                    done && "opacity-60")}>
+                                <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
+                                        {task.title}
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 truncate">
+                                        {task.requester}{task.assignee ? ` → ${task.assignee}` : ''}
+                                        {task.reports > 0 ? ` · ${task.reports}` : ''}
+                                        {` · ${task.status}`}
+                                    </div>
+                                </div>
+                                <span className="flex items-center gap-1 shrink-0" aria-hidden>
+                                    {[0, 1, 2].map(i => (
+                                        <span key={i} className={cn(
+                                            "w-1.5 h-1.5 rounded-full",
+                                            i < filled ? dotColor : "bg-gray-200 dark:bg-[#3a3a3a]",
+                                            waiting && i === 1 && "animate-pulse")} />
+                                    ))}
+                                </span>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {view.messages.length === 0 && (
                 <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-400">

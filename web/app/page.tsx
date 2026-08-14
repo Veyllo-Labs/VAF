@@ -1063,12 +1063,15 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
     membersTitle: string;
     timeFormat?: '24h' | '12h';
+    /** Open the sub-agent window for a live worker - the mobile preview-pill
+     *  gesture, applied to the room's worker cards. */
+    onOpenWorker?: () => void;
 }) {
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
@@ -1177,7 +1180,11 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
             {(view.room.agentWorkers?.length ?? 0) > 0 && (
                 <div className="space-y-2 py-1">
                     {view.room.agentWorkers!.map((w, i) => (
-                        <div key={i} className="rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3">
+                        <div key={i} role={onOpenWorker ? 'button' : undefined}
+                            onClick={onOpenWorker}
+                            className={cn(
+                                "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
+                                onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
                             <div className="w-8 h-8 shrink-0 flex items-center justify-center">
                                 <AgentAvatar mode="delegate" />
                             </div>
@@ -1525,6 +1532,11 @@ function VAFDashboardContent() {
     // history to load, and sharing the renderer would put the path almost every user
     // is on at risk for the sake of a view a few users open.
     const [roomView, setRoomView] = useState<{ room: RoomView; messages: RoomMessage[] } | null>(null);
+    // For the WS onmessage closure (installed once): which room is open RIGHT NOW.
+    // A room turn's live feed arrives stamped with roomId and per user, not per
+    // session - accepting it must read the current room, not a stale capture.
+    const roomViewRef = useRef<{ room: RoomView; messages: RoomMessage[] } | null>(null);
+    useEffect(() => { roomViewRef.current = roomView; }, [roomView]);
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
@@ -3910,7 +3922,8 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'subagent_update') {
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
+                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
                     const statusText = String(data.status || '').trim();
                     const modelLabel = data.model ? `• ${String(data.model)}` : '';
                     const statusLine = `${statusText}${modelLabel ? ` ${modelLabel}` : ''}`.trim();
@@ -4008,7 +4021,8 @@ function VAFDashboardContent() {
                 else if (data.type === 'coder_state') {
                     // Live project state from the coding agent: file tree, git,
                     // loop/task progress. Powers the VS-Code view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
+                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
                     // First custom data -> now the window may open (in its custom look)
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
@@ -4035,7 +4049,8 @@ function VAFDashboardContent() {
                 else if (data.type === 'research_state') {
                     // Live research state: outline, sources, finished section html.
                     // Powers the paper-style research view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
+                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
                     // First custom data -> now the window may open (in its custom look)
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
@@ -4054,7 +4069,8 @@ function VAFDashboardContent() {
                 else if (data.type === 'document_state') {
                     // Live document state: sections, growing section html, placeholders.
                     // Powers the paper-style document view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
+                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
@@ -4076,7 +4092,8 @@ function VAFDashboardContent() {
                     // Live read-only state from the librarian agent: filesystem map,
                     // folder sizes, storage/drives, Google Drive, optional search.
                     // Powers the explorer view in SubAgentWindow.
-                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId
+                        && !(data.roomId && roomViewRef.current && data.roomId === roomViewRef.current.room.roomId)) return;
                     if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
@@ -6480,7 +6497,8 @@ function VAFDashboardContent() {
                                     <RoomConversation view={roomView} onMembers={() => setRoomMembersOpen(true)}
                                         closedNote={tMain('roomClosedNote')}
                                         membersTitle={tMain('roomMembersTitle')}
-                                        timeFormat={userTimeFormat} />
+                                        timeFormat={userTimeFormat}
+                                        onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (

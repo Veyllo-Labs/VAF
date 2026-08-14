@@ -617,6 +617,33 @@ class WebInterfaceManager:
         """
         if session_id:
             data['sessionId'] = session_id
+            # A ROOM turn's live feed must reach the person WATCHING THE ROOM, and
+            # that browser is not subscribed to the turn's session - measured live:
+            # a real coder run looked like a hung one, because every update above
+            # was filtered at both ends. While the agent's room-turn marker is up,
+            # the event is stamped with the room and sent per USER instead of per
+            # session: that reaches the session subscribers too (no duplicates),
+            # reaches the room watcher, and never crosses an account boundary -
+            # which is the only line that matters here (the session filter was
+            # display isolation, not privacy; broadcast_to_user is the privacy).
+            room_turn = getattr(getattr(self, "agent_instance", None),
+                                "_room_turn", None)
+            room_scope = getattr(getattr(self, "agent_instance", None),
+                                 "_current_user_scope_id", None)
+            if (isinstance(room_turn, dict) and room_turn.get("room_id")
+                    and room_scope):
+                data['roomId'] = str(room_turn["room_id"])
+                loop = self._get_dispatch_loop()
+                if loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_to_user(str(room_scope), data),
+                        loop
+                    )
+                else:
+                    # Same stale-loop fallback the session path keeps; the stamp
+                    # travels in the payload either way.
+                    self._http_fallback_push(data)
+                return
             loop = self._get_dispatch_loop()
             if loop:
                 asyncio.run_coroutine_threadsafe(

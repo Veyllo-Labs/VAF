@@ -1338,3 +1338,46 @@ def test_worker_cards_show_only_the_viewers_own_workers(monkeypatch):
 
     assert _viewer_agent_workers("scope-b") and \
         _viewer_agent_workers("scope-b")[0]["task"] == "their private build"
+
+
+def test_a_room_turns_live_feed_travels_per_user_with_the_room_stamp(monkeypatch):
+    """MUTATION: keep broadcasting per session while a room turn runs.
+
+    Measured live: a real coder run looked like a hung one, because its updates
+    went to the turn's SESSION subscribers and the person was watching the ROOM.
+    While the agent's room-turn marker is up, the event is stamped with the room
+    and sent per USER - which reaches the session subscribers too, reaches the
+    room watcher, and never crosses an account boundary. Patched ON THE INSTANCE:
+    the WebInterface is a singleton, and patching anywhere else has bitten this
+    suite before.
+    """
+    import vaf.core.web_interface as wi_mod
+    wi = wi_mod.get_web_interface()
+
+    class _Agent:
+        _room_turn = {"room_id": "room-live", "mode": "autonomous"}
+        _current_user_scope_id = "scope-a"
+
+    scheduled = []
+
+    def _fake_sched(coro, loop):
+        scheduled.append(coro.__qualname__)
+        coro.close()
+        return object()
+
+    monkeypatch.setattr(wi, "agent_instance", _Agent(), raising=False)
+    monkeypatch.setattr(wi, "_get_dispatch_loop", lambda: object())
+    monkeypatch.setattr(wi_mod.asyncio, "run_coroutine_threadsafe", _fake_sched)
+
+    data = {"type": "subagent_update", "status": "running"}
+    wi._push_session_update("sess-1", data)
+    assert data.get("roomId") == "room-live", "the room stamp never made it on"
+    assert scheduled and "broadcast_to_user" in scheduled[-1], (
+        "the feed still travels per session during a room turn")
+
+    # No room turn: the session lane stays exactly what it was.
+    monkeypatch.setattr(wi.agent_instance, "_room_turn", None, raising=False)
+    data2 = {"type": "subagent_update", "status": "running"}
+    wi._push_session_update("sess-1", data2)
+    assert "roomId" not in data2
+    assert "broadcast_to_session" in scheduled[-1]

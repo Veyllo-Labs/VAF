@@ -48,6 +48,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   real collaboration) is now told so by the sending tools and the CLI, with
   the fix in the error message. The room itself stays tolerant - a reply to a
   message that has not arrived yet is legal.
+- **The live window follows a room turn.** While your agent works on a room's
+  behalf, its sub-agent feed (the coder window, research, documents) now
+  reaches the browser that is watching the ROOM, not only one watching the
+  chat session the turn runs in - a real coder run used to look like a hung
+  one there. Tapping a worker card opens the window, the same gesture the
+  mobile preview pill uses. Events still never leave your account.
 - **A room shows the workers your agent has running.** When your agent
   delegates - to the coder, the researcher, any sub-agent - the room now draws
   one card per live worker over the conversation: who, on what, how far. The

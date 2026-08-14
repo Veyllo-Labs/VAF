@@ -1290,3 +1290,51 @@ def test_the_mode_switch_reaches_only_the_viewers_own_agent(tmp_path, monkeypatc
     asyncio.run(_send_room_transcript(ws, Room.open("room-mode", base=tmp_path),
                                       "scope-a"))
     assert ws.sent[0]["room"]["agentMode"] == "autonomous"
+
+
+def test_worker_cards_show_only_the_viewers_own_workers(monkeypatch):
+    """MUTATION: show every active task, or trust a task with no session.
+
+    The IPC active file is global to every user and a task's description is user
+    content, so the room's worker cards are a cross-user leak the moment the
+    filter softens. A task is shown only when its session PROVABLY belongs to
+    the viewer; no session id means no card, whoever is asking.
+    """
+    import vaf.core.web_server as ws_mod
+    from vaf.core.web_server import _viewer_agent_workers
+
+    class _Task:
+        def __init__(self, sid, desc):
+            self.session_id = sid
+            self.agent_type = "coding_agent"
+            self.status = "running"
+            self.task_description = desc
+            self.progress_done = 1
+            self.progress_total = 3
+
+    class _Ipc:
+        def get_active_tasks(self, _sid):
+            return [_Task("sess-mine", "my private build"),
+                    _Task("sess-theirs", "their private build"),
+                    _Task(None, "orphaned build")]
+
+    import vaf.core.subagent_ipc as ipc_mod
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _Ipc())
+
+    class _Session:
+        def __init__(self, scope):
+            self.metadata = {"user_scope_id": scope}
+
+    def _load(sid):
+        return {"sess-mine": _Session("scope-a"),
+                "sess-theirs": _Session("scope-b")}[sid]
+
+    monkeypatch.setattr(ws_mod.session_mgr, "load", _load)
+
+    cards = _viewer_agent_workers("scope-a")
+    assert [c["task"] for c in cards] == ["my private build"]
+    assert cards[0]["type"] == "coding_agent"
+    assert cards[0]["done"] == 1 and cards[0]["total"] == 3
+
+    assert _viewer_agent_workers("scope-b") and \
+        _viewer_agent_workers("scope-b")[0]["task"] == "their private build"

@@ -48,6 +48,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   real collaboration) is now told so by the sending tools and the CLI, with
   the fix in the error message. The room itself stays tolerant - a reply to a
   message that has not arrived yet is legal.
+- **A room shows the workers your agent has running.** When your agent
+  delegates - to the coder, the researcher, any sub-agent - the room now draws
+  one card per live worker over the conversation: who, on what, how far. The
+  same list the chat's task line reads, shown only to you; another member's
+  workers run on their machine and stay theirs. The terminal's `/room` prints
+  the same line.
 - **Every room has a task board.** Ask an agent to build something and the
   work shows up as a card over the conversation: what was asked, who is on
   it, and how it stands - the dots walk from taken-on to done, red when it

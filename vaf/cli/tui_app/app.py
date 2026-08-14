@@ -942,6 +942,21 @@ class VafApp(App):
             self.add_system_note(
                 f"[{task['status']}] {task['title']} "
                 f"({task['requester_label']}{arrow})")
+        # The workers running locally, from the same IPC list the chat's tasks line
+        # reads. Unfiltered on purpose and safe HERE: this terminal is the machine
+        # owner's console (whoever runs it runs `vaf`), unlike the web payload,
+        # which filters the same list per viewer. Types and states only, no task
+        # text - the cheap way to keep that sentence true forever.
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            running = get_ipc().get_active_tasks(None)
+            if running:
+                self.add_system_note(
+                    "Your agent's workers: " + ", ".join(
+                        f"{getattr(t, 'agent_type', 'worker')} [{getattr(t, 'status', '?')}]"
+                        for t in running[:6]))
+        except Exception:
+            pass
         for entry in rows[-self.REPLAY_CAP:]:
             text = describe(entry)
             self._mount_scrolled(PeerMessage(

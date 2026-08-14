@@ -177,6 +177,11 @@ type RoomView = {
     /** How far the viewer's agent may act on this room (observe/assist/autonomous).
      *  The user's standing decision; set from the member panel. */
     agentMode?: string;
+    /** The sub-agents the viewer's agent is running right now (the chat's
+     *  TasksLine list, hard-scoped to the viewer). Foreign members' workers run
+     *  on their machines and are invisible here by design. */
+    agentWorkers?: Array<{ type: string; status: string; task: string;
+        done?: number | null; total?: number | null }>;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
     topic?: string;
@@ -1161,6 +1166,33 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             </div>
                         );
                     })}
+                </div>
+            )}
+
+            {/* One card per worker the viewer's agent has live - the same list the
+                chat's TasksLine reads, drawn the way an active sub-agent deserves:
+                who, on what, how far. Only OUR workers: a foreign agent's workers
+                run on its machine, and a card we cannot verify is a card we do not
+                draw. */}
+            {(view.room.agentWorkers?.length ?? 0) > 0 && (
+                <div className="space-y-2 py-1">
+                    {view.room.agentWorkers!.map((w, i) => (
+                        <div key={i} className="rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3">
+                            <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                                <AgentAvatar mode="delegate" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
+                                    {(w.type || 'worker').replace(/_agent$/, '')}
+                                    <span className="ml-2 text-[11px] font-normal text-gray-400">{w.status}</span>
+                                </div>
+                                <div className="text-[11px] text-gray-400 truncate">{w.task}</div>
+                            </div>
+                            {typeof w.done === 'number' && typeof w.total === 'number' && w.total > 0 && (
+                                <span className="text-[11px] font-mono text-gray-400 shrink-0">{w.done}/{w.total}</span>
+                            )}
+                        </div>
+                    ))}
                 </div>
             )}
 

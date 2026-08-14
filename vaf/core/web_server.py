@@ -118,6 +118,52 @@ ROOM_TYPING_WINDOW_S = 120.0
 # but luck.
 
 
+def _viewer_agent_workers(user_scope_id) -> list:
+    """The sub-agents the VIEWER'S own agent is running right now, for the room view.
+
+    Mirrors what the chat's TasksLine already shows - the IPC active list - rather
+    than inventing a second status lane. The filter is the point, and it FAILS
+    CLOSED: the IPC file is global to every user and its records carry a session
+    id, not a scope, so a task is shown only when its session PROVABLY belongs to
+    the viewer (same ownership rule the workspace resolver applies: a scopeless
+    legacy session belongs to the local admin, never to everyone). A task with no
+    session id is never shown - its description is user content, and "probably
+    mine" is not an ownership answer.
+
+    Foreign room members never get worker cards from here: their workers run on
+    their machines, which this store cannot see. A named boundary, not a gap -
+    the protocol's card is where a peer may SAY what it is running.
+    """
+    out = []
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        from vaf.core.subagent_ipc import get_ipc
+        for task in get_ipc().get_active_tasks(None):
+            sid = getattr(task, "session_id", None)
+            if not sid:
+                continue
+            try:
+                session_scope = (getattr(session_mgr.load(sid), "metadata", None)
+                                 or {}).get("user_scope_id")
+            except Exception:
+                continue
+            owned = (str(session_scope) == str(user_scope_id)
+                     if session_scope is not None
+                     else str(user_scope_id) == str(get_local_admin_scope_id()))
+            if not owned:
+                continue
+            out.append({
+                "type": str(getattr(task, "agent_type", "") or ""),
+                "status": str(getattr(task, "status", "") or ""),
+                "task": str(getattr(task, "task_description", "") or "")[:80],
+                "done": getattr(task, "progress_done", None),
+                "total": getattr(task, "progress_total", None),
+            })
+    except Exception:
+        return []
+    return out[:8]
+
+
 def _derive_or_empty(lane: str, user_scope_id, room_id: str) -> str:
     """A derived room handle, or "" when it cannot be derived. Never raises: the
     transcript must paint even for a viewer whose scope resolves nothing."""
@@ -258,6 +304,12 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             # panel; empty when their agent is not in the room.
             "agentMode": next((room.mode_of(p) for p in [
                 _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
+            # The workers the viewer's agent is running RIGHT NOW - the same list
+            # the chat's TasksLine reads, scoped hard to the viewer. Refreshed by
+            # the 3s poll like everything else here.
+            "agentWorkers": (_viewer_agent_workers(user_scope_id)
+                             if _derive_or_empty("agent", user_scope_id, room.room_id)
+                             in members else []),
             "typing": typing,
             # The task board, derived exactly like typing is (Room.tasks): a
             # directive, or anything a report chain answers via reply_to. The 3s

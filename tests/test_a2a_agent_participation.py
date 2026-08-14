@@ -1062,3 +1062,40 @@ def test_the_wake_knows_when_its_user_spoke(tmp_path):
     assert wake2["from_user"] is True
     assert wake2["from_user_only"] is False, "the impostor's frame rode along"
     assert "AMONG the messages" in wake2["prompt"]
+
+
+def test_a_task_spawned_in_a_room_turn_carries_the_room(tmp_path, monkeypatch):
+    """MUTATION: drop the room context, or leak it past the turn.
+
+    A worker ordered from a room finishes long after the turn, and its result
+    delivery knows only the session - measured live: the coder finished, the
+    drain consumed the result, and the room never heard "completed". The task
+    record is where the delivery will learn the room from, and the context must
+    die with the turn: a leaked room id would stamp the NEXT session's spawns as
+    room work.
+    """
+    import vaf.core.subagent_ipc as ipc_mod
+
+    # A REAL store against a scratch directory: create_task touches several of
+    # its own files, and a hand-stubbed instance chases them forever.
+    monkeypatch.setattr(ipc_mod.Platform, "vaf_dir",
+                        staticmethod(lambda: tmp_path))
+    ipc = ipc_mod.SubAgentIPC()
+
+    ipc_mod.set_current_room_id("room-orders")
+    try:
+        first = ipc.create_task("coding_agent", "build it", session_id="sess-1")
+    finally:
+        ipc_mod.set_current_room_id(None)
+    second = ipc.create_task("coding_agent", "build more", session_id="sess-1")
+
+    pending = {t.task_id: t for t in ipc.get_pending_tasks(None)}
+    assert pending[first].room_id == "room-orders"
+    assert pending[second].room_id is None, "the room context leaked past the turn"
+
+    # And an old record without the key still loads - the delivery lane must
+    # never choke on tasks written by an older build.
+    task = ipc_mod.SubAgentTask.from_dict({
+        "task_id": "t1", "agent_type": "coding_agent", "task_description": "x",
+        "status": "pending", "created_at": "2026-01-01T00:00:00"})
+    assert task.room_id is None

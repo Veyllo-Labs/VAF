@@ -151,6 +151,10 @@ class SubAgentTask:
     status: str              # SubAgentStatus value
     created_at: str          # ISO timestamp
     session_id: Optional[str] = None  # Session that created this task
+    # The room whose turn ordered this work, when one did. Carried so the result
+    # delivery can answer WHERE the work was ordered, not only by whom; older
+    # readers drop the key via from_dict's known-field filter.
+    room_id: Optional[str] = None
     completed_at: Optional[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
@@ -440,7 +444,8 @@ class SubAgentIPC:
             task_description=task_description[:500],  # Truncate long descriptions
             status=SubAgentStatus.PENDING.value,
             created_at=datetime.now().isoformat(),
-            session_id=effective_session_id
+            session_id=effective_session_id,
+            room_id=get_current_room_id(),
         )
 
         # Add to pending tasks
@@ -1195,6 +1200,34 @@ _session_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
 _turn_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
     "vaf_current_turn_id", default=_UNSET
 )
+
+# Which ROOM asked for this context's work, when one did. A worker spawned from
+# a room turn finishes long after that turn, and its result is delivered by a
+# plain session turn that knows nothing of the room - measured live: the coder
+# finished, the drain consumed the result, and the room that ordered the work
+# never heard "completed". The task record carries the room so the delivery CAN
+# know; six spawn call sites exist and none of them knows about rooms, which is
+# why the stamp lives here, in the same context mechanic the session id uses.
+_room_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "vaf_current_room_id", default=_UNSET
+)
+
+
+def set_current_room_id(room_id: Optional[str]):
+    """Declare which ROOM this context's work was ordered from. Mirrors
+    `set_current_session_id`: per context, `None` is a declaration, sets never
+    restores. The runner declares it around a room turn and declares None after,
+    on every exit path - a leaked room id would stamp the NEXT session's spawns
+    as room work and route their results into a room they never touched."""
+    try:
+        _room_ctx.set(room_id)
+    except Exception:
+        pass
+
+
+def get_current_room_id() -> Optional[str]:
+    value = _room_ctx.get()
+    return None if value is _UNSET else value
 
 
 def get_ipc() -> SubAgentIPC:

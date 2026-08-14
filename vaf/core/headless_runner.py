@@ -2361,6 +2361,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             "from_user": _room_wake.get("from_user", False),
                                             "from_user_only": _room_wake.get("from_user_only", False)}
                         agent._synthetic_drain_turn = True
+                        # Workers spawned during this turn inherit the room in their
+                        # IPC record (create_task reads this context), so the result
+                        # delivery can know WHERE the work was ordered. Declared None
+                        # again on every exit path, same discipline as the marker
+                        # above: a leaked room id would stamp the next session's
+                        # spawns as room work (Rule 4.5's shape).
+                        try:
+                            from vaf.core.subagent_ipc import set_current_room_id
+                            set_current_room_id(str(_room_wake["room_id"]))
+                        except Exception:
+                            pass
                         try:
                             agent.chat_step(
                                 user_input=_room_wake["prompt"],
@@ -2375,6 +2386,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         finally:
                             agent._synthetic_drain_turn = False
                             agent._room_turn = None
+                            try:
+                                from vaf.core.subagent_ipc import set_current_room_id
+                                set_current_room_id(None)
+                            except Exception:
+                                pass
                             try:
                                 _room_wake["advance"]()
                             except Exception:

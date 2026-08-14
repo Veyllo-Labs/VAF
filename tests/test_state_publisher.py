@@ -68,6 +68,25 @@ def test_no_session_sends_nothing(interface, empty) -> None:
     assert interface.sent == []
 
 
+def test_a_room_anchored_child_passes_the_session_guard(interface, monkeypatch) -> None:
+    """MUTATION: refuse every sessionless frame, room anchor or not.
+
+    A room-ordered child may run with NO session at all (the runner's room
+    frame binds no chat) - measured live: the whole editor/code stream of such
+    a coder died at this guard while its status events flowed, and the room
+    window stayed dark. VAF_ROOM_ID is the child's address then: the bridge
+    stamps it and the endpoint delivers to the room's tenant, so the frame is
+    addressed, not broadcast."""
+    monkeypatch.setenv("VAF_ROOM_ID", "room-orderer")
+    pub = StatePublisher("coder_state")
+    assert pub.publish({"a": 1}, session_id="") is True
+    assert len(interface.sent) == 1
+
+    monkeypatch.delenv("VAF_ROOM_ID")
+    assert pub.publish({"a": 2}, session_id="") is False
+    assert len(interface.sent) == 1
+
+
 def test_a_refused_frame_leaves_the_bookkeeping_untouched(interface) -> None:
     """Otherwise the first frame after a session appears lands inside a window
     opened by a send that never happened."""

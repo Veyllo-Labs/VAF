@@ -215,7 +215,15 @@ class StatePublisher:
         retried at full loop speed.
         """
         if not session_id:
-            return False
+            # A room-ordered child may run with NO session at all (the runner's
+            # room frame binds no chat) - measured live: the whole editor/code
+            # stream of such a run died here while its status events flowed.
+            # The ordering room is a full address of its own: the child's
+            # bridge stamps it from VAF_ROOM_ID and the endpoint routes it to
+            # the room's tenant. Only a frame with NEITHER anchor goes nowhere.
+            import os
+            if not os.environ.get("VAF_ROOM_ID", "").strip():
+                return False
         now = time.time()
         if not force and self.min_interval and (now - self._last_at) < self.min_interval:
             return False

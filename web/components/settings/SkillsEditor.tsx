@@ -37,7 +37,8 @@ export interface SkillsEditorProps {
   initialData?: {
     name?: string;
     description?: string;
-    /** Raw SKILL.md text (edit mode). Parsed into name/description/body below. */
+    /** Raw SKILL.md text (edit mode). Only the body is taken from it;
+     *  name/description arrive pre-parsed from the backend's YAML parser. */
     source?: string;
     /** Current shared_with (edit mode); undefined in create mode -> defaults to everyone. */
     shared_with?: string[];
@@ -71,17 +72,14 @@ function nameToId(name: string): string {
   return slug || 'my_skill';
 }
 
-/** Light client-side SKILL.md parse: pull name/description out of the frontmatter,
- *  return the body. Robust enough for the simple frontmatter the backend writes. */
-function parseSkillMd(src: string): { name: string; description: string; body: string } {
-  const m = src.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?([\s\S]*)$/);
-  if (!m) return { name: '', description: '', body: src };
-  const fm = m[1];
-  const body = (m[2] ?? '').replace(/^\n+/, '');
-  const clean = (s?: string) => (s ?? '').trim().replace(/^["']|["']$/g, '');
-  const nameM = fm.match(/^name:\s*(.+)$/m);
-  const descM = fm.match(/^description:\s*(.+)$/m);
-  return { name: clean(nameM?.[1]), description: clean(descM?.[1]), body };
+/** Strip the YAML frontmatter and return the Markdown body. Name and description
+ *  are deliberately NOT parsed here: the backend sends them pre-parsed by a real
+ *  YAML parser, and a line regex cannot read block scalars (`description: >-`),
+ *  so a client-side parse would show `>-` and clobber the description on save. */
+function skillMdBody(src: string): string {
+  const m = src.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?([\s\S]*)$/);
+  if (!m) return src;
+  return (m[1] ?? '').replace(/^\n+/, '');
 }
 
 const BODY_PLACEHOLDER = `# How to do the thing
@@ -108,13 +106,12 @@ export default function SkillsEditor({
   backendError = null,
 }: SkillsEditorProps) {
   const isEdit = skillId !== null;
-  const parsed = initialData?.source ? parseSkillMd(initialData.source) : null;
 
-  const [name, setName] = useState(parsed?.name ?? initialData?.name ?? '');
+  const [name, setName] = useState(initialData?.name ?? '');
   const [sId, setSId] = useState(isEdit ? skillId : nameToId(initialData?.name ?? ''));
   const [idEdited, setIdEdited] = useState(false);
-  const [description, setDescription] = useState(parsed?.description ?? initialData?.description ?? '');
-  const [body, setBody] = useState(parsed?.body ?? '');
+  const [description, setDescription] = useState(initialData?.description ?? '');
+  const [body, setBody] = useState(initialData?.source ? skillMdBody(initialData.source) : '');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [override, setOverride] = useState(false);

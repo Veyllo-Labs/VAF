@@ -118,6 +118,28 @@ ROOM_TYPING_WINDOW_S = 120.0
 # but luck.
 
 
+def _worker_card_entry(task) -> dict:
+    """One worker card, the shape the reference design draws: name, status, the
+    task line, progress, and WHEN it started (the meta line reads
+    'Coder · 1 Worker · gestartet HH:MM')."""
+    started = ""
+    try:
+        raw = str(getattr(task, "created_at", "") or "")
+        if raw:
+            from datetime import datetime as _dt2
+            started = _dt2.fromisoformat(raw).strftime("%H:%M")
+    except Exception:
+        started = ""
+    return {
+        "type": str(getattr(task, "agent_type", "") or ""),
+        "status": str(getattr(task, "status", "") or ""),
+        "task": str(getattr(task, "task_description", "") or "")[:80],
+        "done": getattr(task, "progress_done", None),
+        "total": getattr(task, "progress_total", None),
+        "started": started,
+    }
+
+
 def _viewer_agent_workers(user_scope_id) -> list:
     """The sub-agents the VIEWER'S own agent is running right now, for the room view.
 
@@ -155,13 +177,7 @@ def _viewer_agent_workers(user_scope_id) -> list:
                 owner = get_web_interface().room_owner_scope(room_id)
                 if owner is None or str(owner) != str(user_scope_id):
                     continue
-                out.append({
-                    "type": str(getattr(task, "agent_type", "") or ""),
-                    "status": str(getattr(task, "status", "") or ""),
-                    "task": str(getattr(task, "task_description", "") or "")[:80],
-                    "done": getattr(task, "progress_done", None),
-                    "total": getattr(task, "progress_total", None),
-                })
+                out.append(_worker_card_entry(task))
                 continue
             try:
                 session_scope = (getattr(session_mgr.load(sid), "metadata", None)
@@ -173,13 +189,7 @@ def _viewer_agent_workers(user_scope_id) -> list:
                      else str(user_scope_id) == str(get_local_admin_scope_id()))
             if not owned:
                 continue
-            out.append({
-                "type": str(getattr(task, "agent_type", "") or ""),
-                "status": str(getattr(task, "status", "") or ""),
-                "task": str(getattr(task, "task_description", "") or "")[:80],
-                "done": getattr(task, "progress_done", None),
-                "total": getattr(task, "progress_total", None),
-            })
+            out.append(_worker_card_entry(task))
     except Exception:
         return []
     return out[:8]

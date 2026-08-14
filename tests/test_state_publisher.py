@@ -87,6 +87,23 @@ def test_a_room_anchored_child_passes_the_session_guard(interface, monkeypatch) 
     assert len(interface.sent) == 1
 
 
+def test_the_coder_emit_guards_know_the_room_viewer() -> None:
+    """MUTATION: put the bare `if not _sid: return` back in either coder emit.
+
+    The publisher passing a sessionless room frame is worthless while the two
+    emit sites above it still build NOTHING without a session - measured live:
+    the console stream flowed and the editor stayed dark through a whole
+    room-ordered run, because _emit_coder_state returned before building the
+    payload. Both guards must treat the room anchor as a viewer."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "tools" / "coder.py"
+           ).read_text(encoding="utf-8")
+    guarded = src.count(
+        'if not _sid and not os.environ.get("VAF_ROOM_ID", "").strip():')
+    assert guarded >= 2, (
+        "a coder emit guard no longer accepts the room anchor as a viewer")
+
+
 def test_a_refused_frame_leaves_the_bookkeeping_untouched(interface) -> None:
     """Otherwise the first frame after a session appears lands inside a window
     opened by a send that never happened."""

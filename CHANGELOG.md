@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The room's worker card now wears the reference design, and the editor
+  feed survives a sessionless run.** The card under the agent's message shows
+  title with a live pulse, a meta line (worker type, count, start time), the
+  per-unit progress dots and a chevron that opens the window - the layout the
+  design mock defined. And the window's editor no longer stays dark for a
+  room-ordered coder: the two emit sites treated "no session" as "no viewer"
+  and built nothing, while the room's tenant was watching the whole time.
 - **Restarting VAF from a sub-agent's terminal can no longer poison the app.**
   A finished coder's terminal leaves the child's environment behind, and a
   VAF started from that shell inherited it - the backend then believed it WAS

@@ -5043,9 +5043,11 @@ Task {task_idx + 1}: {current_task}
         def _emit_coder_state(current_file: str = ""):
             try:
                 _sid = resolve_ui_session_id()
-                if not _sid:
+                if not _sid and not os.environ.get("VAF_ROOM_ID", "").strip():
                     # No viewer -> build nothing. The payload below shells out to git
                     # six or more times per call; that cost must not be paid for nobody.
+                    # A room-ordered child has a viewer WITHOUT a session: the room's
+                    # tenant, reached via the VAF_ROOM_ID stamp on the bridge.
                     return
                 # Real task list for the window's Tasks section: the generic
                 # heartbeat steps only know "Sub-Agent running"; this is the
@@ -5095,7 +5097,9 @@ Task {task_idx + 1}: {current_task}
         def _emit_live_code(filename: str, content: str, force: bool = False):
             try:
                 _sid = resolve_ui_session_id()
-                if not _sid:
+                if not _sid and not os.environ.get("VAF_ROOM_ID", "").strip():
+                    # Same rule as _emit_coder_state: a room-ordered child has a
+                    # viewer without a session - the room's tenant.
                     return
                 # Tail cap stays here: it is this view's wire contract, and a transform
                 # hook in the publisher would be an adapter.

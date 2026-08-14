@@ -180,7 +180,7 @@ type RoomView = {
     /** The sub-agents the viewer's agent is running right now (the chat's
      *  TasksLine list, hard-scoped to the viewer). Foreign members' workers run
      *  on their machines and are invisible here by design. */
-    agentWorkers?: Array<{ type: string; status: string; task: string;
+    agentWorkers?: Array<{ type: string; status: string; task: string; started?: string;
         done?: number | null; total?: number | null }>;
     /** Unix seconds, from the manifest. */
     createdAt?: number;
@@ -1089,54 +1089,77 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     // reference app draws them - work belongs to the words that announced it, not
     // to a toolbar. Falls back to the end of the transcript when the agent has
     // not spoken yet but is already working.
+    // The card anatomy is the owner's reference design (VAF_Fenster_Dummy.html):
+    // title row with a live pulse, a meta line "Coder · 1 Worker · gestartet
+    // HH:MM", a dot row (one dot per unit of work: done / running / open) and a
+    // chevron. It lives IN the transcript under the agent's message, never in
+    // a side strip.
+    const workerTypeLabel = (t?: string) => {
+        const base = (t || 'worker').replace(/_agent$/, '');
+        const map: Record<string, string> = {
+            coding: 'Coder', research: 'Recherche', document: 'Dokumente',
+            librarian: 'Bibliothekar', browser: 'Browser', learn: 'Lernen',
+        };
+        return map[base] || (base.charAt(0).toUpperCase() + base.slice(1));
+    };
+    const workerDots = (done?: number | null, total?: number | null, running?: boolean) => {
+        if (typeof done !== 'number' || typeof total !== 'number' || total <= 0) return null;
+        const shown = Math.min(total, 10);
+        return (
+            <div className="flex gap-1.5 mt-2" aria-hidden>
+                {Array.from({ length: shown }, (_, i) => {
+                    const isDone = i < done;
+                    const isRunning = running && i === done && i < shown;
+                    return (
+                        <span key={i} className={cn(
+                            "w-[9px] h-[9px] rounded-full",
+                            isDone && "bg-[#7c9cf5]",
+                            isRunning && "bg-emerald-400 animate-pulse",
+                            !isDone && !isRunning && "border-[1.5px] border-gray-300 dark:border-[#4b4b4b]"
+                        )} />
+                    );
+                })}
+            </div>
+        );
+    };
+    const workerCardShell = (key: React.Key, title: string, meta: string,
+        dots: React.ReactNode, running: boolean) => (
+        <div key={key} role={onOpenWorker ? 'button' : undefined} onClick={onOpenWorker}
+            title="Öffnet das Sub-Agent-Fenster"
+            className={cn(
+                "max-w-[480px] rounded-[14px] border border-gray-200 bg-gray-50/60 dark:border-[#3a3a3a] dark:bg-[#202020] px-4 py-3 flex items-center gap-3.5",
+                onOpenWorker && "cursor-pointer hover:border-gray-400 dark:hover:border-[#6b6b6b] transition-colors")}>
+            <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-gray-800 dark:text-[#f0f0f0] truncate flex items-center gap-2">
+                    {running && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" aria-hidden />
+                    )}
+                    {title}
+                </div>
+                <div className="text-[12px] text-gray-400 dark:text-[#8f8f8f] truncate mt-0.5">{meta}</div>
+                {dots}
+            </div>
+            <span className="text-lg text-gray-400 dark:text-[#7a7a7a] shrink-0" aria-hidden>&#8250;</span>
+        </div>
+    );
     const workerCards = (
         <>
                     {!(view.room.agentWorkers?.length) && liveWorker && !view.room.closed && (
                         <div className="py-1">
-                            <div role={onOpenWorker ? 'button' : undefined} onClick={onOpenWorker}
-                                className={cn(
-                                    "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
-                                    onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
-                                <div className="w-8 h-8 shrink-0 flex items-center justify-center">
-                                    <AgentAvatar mode="delegate" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                    <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
-                                        worker
-                                        <span className="ml-2 text-[11px] font-normal text-gray-400">running</span>
-                                    </div>
-                                    <div className="text-[11px] text-gray-400 truncate">{liveWorker.status}</div>
-                                </div>
-                                <span className="flex h-2 w-2 relative shrink-0" aria-hidden>
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                                </span>
-                            </div>
+                            {workerCardShell('live', liveWorker.status || 'Worker läuft',
+                                'Worker · live', null, true)}
                         </div>
                     )}
                     {(view.room.agentWorkers?.length ?? 0) > 0 && (
                         <div className="space-y-2 py-1">
-                            {view.room.agentWorkers!.map((w, i) => (
-                                <div key={i} role={onOpenWorker ? 'button' : undefined}
-                                    onClick={onOpenWorker}
-                                    className={cn(
-                                        "rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#2a2a2a] dark:bg-[#202020] px-4 py-2.5 flex items-center gap-3",
-                                        onOpenWorker && "cursor-pointer hover:border-gray-300 dark:hover:border-[#3a3a3a] transition-colors")}>
-                                    <div className="w-8 h-8 shrink-0 flex items-center justify-center">
-                                        <AgentAvatar mode="delegate" />
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                        <div className="text-sm font-medium text-gray-800 dark:text-[#d6d6d6] truncate">
-                                            {(w.type || 'worker').replace(/_agent$/, '')}
-                                            <span className="ml-2 text-[11px] font-normal text-gray-400">{w.status}</span>
-                                        </div>
-                                        <div className="text-[11px] text-gray-400 truncate">{w.task}</div>
-                                    </div>
-                                    {typeof w.done === 'number' && typeof w.total === 'number' && w.total > 0 && (
-                                        <span className="text-[11px] font-mono text-gray-400 shrink-0">{w.done}/{w.total}</span>
-                                    )}
-                                </div>
-                            ))}
+                            {view.room.agentWorkers!.map((w, i) => {
+                                const running = (w.status || '').toLowerCase() === 'running';
+                                const meta = [workerTypeLabel(w.type), '1 Worker',
+                                    w.started ? `gestartet ${w.started}` : '']
+                                    .filter(Boolean).join(' · ');
+                                return workerCardShell(i, w.task || workerTypeLabel(w.type),
+                                    meta, workerDots(w.done, w.total, running), running);
+                            })}
                         </div>
                     )}
         </>

@@ -148,8 +148,13 @@ def test_list_skills_excludes_invalid_by_default(skills_dir):
     reg.register_skill("broken", created_by="admin")
     st.reload_skills()
 
+    # The skills that SHIP with the package are always present alongside whatever
+    # a test writes into the user dir - asserting exact sets without them broke
+    # the day the first builtin skill arrived (tests/test_builtin_skills.py owns
+    # their behavior; here they are background).
+    builtin = set(st.builtin_skill_ids())
     ids = {s["id"] for s in st.list_skills(user_scope_id=None)}
-    assert ids == {"good"}
+    assert ids == {"good"} | builtin
     ids_all = {s["id"] for s in st.list_skills(user_scope_id=None, include_invalid=True)}
     assert {"good", "broken"} <= ids_all
 
@@ -160,9 +165,10 @@ def test_list_skills_scoped(skills_dir):
     reg.register_skill("shared", created_by="admin", shared_with=["*"])
     reg.register_skill("priv", created_by="admin", shared_with=["userX"])
     st.reload_skills()
-    assert {s["id"] for s in st.list_skills(user_scope_id="userY")} == {"shared"}
-    assert {s["id"] for s in st.list_skills(user_scope_id="userX")} == {"shared", "priv"}
-    assert {s["id"] for s in st.list_skills(user_scope_id=None)} == {"shared", "priv"}
+    builtin = set(st.builtin_skill_ids())
+    assert {s["id"] for s in st.list_skills(user_scope_id="userY")} == {"shared"} | builtin
+    assert {s["id"] for s in st.list_skills(user_scope_id="userX")} == {"shared", "priv"} | builtin
+    assert {s["id"] for s in st.list_skills(user_scope_id=None)} == {"shared", "priv"} | builtin
 
 
 # ── safe zip import ──────────────────────────────────────────────────────────-

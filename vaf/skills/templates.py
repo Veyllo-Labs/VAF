@@ -23,12 +23,26 @@ def _skills_dir() -> Path:
     return Path.home() / ".vaf" / "skills"
 
 
-def _discover_skills() -> Dict[str, Dict[str, Any]]:
-    """Map skill_id -> parsed meta dict (valid AND invalid; callers filter)."""
-    skills: Dict[str, Dict[str, Any]] = {}
-    directory = _skills_dir()
+def _builtin_skills_dir() -> Path:
+    """Skills that SHIP with VAF, inside the package: vaf/skills/builtin/<id>/SKILL.md.
+
+    A second discovery root instead of a copy-on-first-start seed, for two reasons
+    that both bit this repo before: a seeded copy never receives an update (the text
+    documents commands, and commands move), and seeding needs a verified call site
+    on every startup path - web, tray, CLI - which is exactly the wiring that has
+    been forgotten here before. A package file is simply there.
+
+    Deliberate boundary: the security scanner keeps to the USER dir. A builtin
+    skill is repository content, reviewed the way code is; scanning it would rate
+    our own release with a tool meant for strangers' uploads.
+    """
+    return Path(__file__).parent / "builtin"
+
+
+def _scan_one_root(skills: Dict[str, Dict[str, Any]], directory: Path,
+                   builtin: bool) -> None:
     if not directory.exists():
-        return skills
+        return
     for child in sorted(directory.iterdir()):
         if not child.is_dir():
             continue
@@ -39,11 +53,34 @@ def _discover_skills() -> Dict[str, Dict[str, Any]]:
             parsed = parse_skill_meta(skill_md)
             if parsed is None:
                 continue
+            parsed["builtin"] = builtin
             skills[parsed["id"]] = parsed
         except Exception as exc:  # parser shouldn't raise, but never break discovery
             logger.warning("skills: could not load skill from %s: %s", child, exc)
             continue
+
+
+def _discover_skills() -> Dict[str, Dict[str, Any]]:
+    """Map skill_id -> parsed meta dict (valid AND invalid; callers filter).
+
+    Builtin first, the user's own dir second: on an id collision the USER'S copy
+    wins, which is what makes a shipped skill customisable without a fork - copy
+    the folder into ~/.vaf/skills under the same name and edit.
+    """
+    skills: Dict[str, Dict[str, Any]] = {}
+    _scan_one_root(skills, _builtin_skills_dir(), builtin=True)
+    _scan_one_root(skills, _skills_dir(), builtin=False)
     return skills
+
+
+def builtin_skill_ids() -> List[str]:
+    """The ids that ship with the package. The registry's visibility check calls
+    this, because a builtin skill has no manifest entry to be visible through."""
+    directory = _builtin_skills_dir()
+    if not directory.exists():
+        return []
+    return sorted(child.name for child in directory.iterdir()
+                  if child.is_dir() and (child / "SKILL.md").exists())
 
 
 def _skills_signature() -> tuple:
@@ -115,7 +152,11 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
 
     out: List[Dict[str, Any]] = []
     for sid, parsed in SKILLS.items():
-        if sid not in visible_ids:
+        # A builtin skill ships with the package and has no manifest entry to be
+        # visible through: it is visible to everyone by construction. The registry
+        # answers the same way for use_skill (is_skill_visible_to_user), so the
+        # list and the loader cannot disagree about what exists.
+        if sid not in visible_ids and not parsed.get("builtin"):
             continue
         if not parsed.get("valid") and not include_invalid:
             continue
@@ -127,9 +168,10 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
             "valid": parsed.get("valid", False),
             "error": parsed.get("error"),
             "shared_with": entry.get("shared_with", ["*"]),
-            "created_by": entry.get("created_by"),
+            "created_by": entry.get("created_by") or ("vaf" if parsed.get("builtin") else None),
             "owner_scope_id": entry.get("owner_scope_id"),
             "scan": entry.get("scan"),
+            "builtin": bool(parsed.get("builtin")),
         })
     return out
 

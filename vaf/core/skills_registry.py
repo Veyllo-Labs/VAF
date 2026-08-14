@@ -161,6 +161,21 @@ def get_visible_skill_ids_for_user(user_scope_id: Optional[str]) -> List[str]:
             visible.append(sid)
         elif user_scope_id in shared_with:
             visible.append(sid)
+    # Skills that SHIP with the package are visible to everyone by construction:
+    # they have no manifest entry to be visible through, and use_skill asks THIS
+    # function - a builtin skill missing here would be listed by the router and
+    # then refused by the loader, which reads as a broken product. A user-dir
+    # skill under the same id already replaced the builtin at discovery, and if
+    # THAT copy is quarantined the block above has removed it from `visible`, so
+    # the id is only re-added when the manifest does not know it at all.
+    try:
+        from vaf.skills.templates import builtin_skill_ids
+        known = manifest.get("skills", {})
+        for sid in builtin_skill_ids():
+            if sid not in known and sid not in visible:
+                visible.append(sid)
+    except Exception:
+        pass
     return visible
 
 

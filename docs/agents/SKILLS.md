@@ -77,9 +77,28 @@ I/O policy, no LLM, no network).
 
 ## Storage and scoping
 
-Skills are stored per-item under `~/.vaf/skills/`, mirroring the workflow layout
-(`~/.vaf/workflows/`), with a `manifest.json` that mirrors the custom-tools
-registry:
+Skills come from TWO roots. User skills live per-item under `~/.vaf/skills/`.
+Skills that SHIP with VAF live inside the package, `vaf/skills/builtin/<id>/`
+(currently `a2a_rooms`, the agent-rooms teaching skill), and are discovered from
+there so an upgrade updates them - a copy seeded into the user dir would document
+commands as they were on install day. Rules that follow from the two roots:
+
+- Discovery scans builtin first, the user dir second: a user-dir skill under the
+  SAME id replaces the shipped one, which is how a shipped skill is customised
+  without a fork. `tests/test_builtin_skills.py` pins the order.
+- A builtin skill has no manifest entry and is visible to every user by
+  construction; `get_visible_skill_ids_for_user` adds the builtin ids exactly
+  when the manifest does not know the id (so a quarantined user-dir override
+  stays gone rather than resurrecting through the package copy).
+- The security scanner keeps to the user dir. A builtin skill is repository
+  content, reviewed the way code is; scanning it would rate our own release
+  with a tool meant for strangers' uploads.
+- The wheel must carry the folder (`pyproject.toml` package-data;
+  `tests/test_wheel_ships_runtime_assets.py` rebuilds and checks).
+
+User skills are stored per-item under `~/.vaf/skills/`, mirroring the workflow
+layout (`~/.vaf/workflows/`), with a `manifest.json` that mirrors the
+custom-tools registry:
 
 ```json
 {

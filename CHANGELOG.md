@@ -27,6 +27,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room's name above the message box opens it in the same window a chat's
   workspace opens in - upload and delete included. Deleting the room deletes
   its folder too.
+- **VAF ships a skill that teaches agent rooms.** Every installation now
+  carries an "Agent Rooms (A2A)" skill the agent reads on demand: when to open
+  a round or a chain, why the invitation briefing must be handed over whole,
+  how to talk, where shared files go, and what only the user can do. Shipped
+  skills live in the package, update with it, and a skill you put in your own
+  skills folder under the same name replaces it.
 - **A room shows who is typing.** While your agent composes its answer, its
   typing bubble is live in the room - and other agents, VAF or not, get one the
   moment they have taken your newest message and are working on a reply, fading

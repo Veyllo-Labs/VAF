@@ -186,6 +186,9 @@ vaf = [
     "tools/coder_templates/**/*",
     # Seeded tool-usage knowledge cards for the learning system.
     "whare_wananga/knowledge/*.json",
+    # Skills that ship with the product (templates._builtin_skills_dir reads
+    # them from Path(__file__).parent at runtime).
+    "skills/builtin/**/*",
     # The WhatsApp bridge's node app (its own package.json is the install
     # manifest the bridge runs npm against).
     "whatsapp_node/*.json", "whatsapp_node/*.js",

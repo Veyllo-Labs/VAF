@@ -30,6 +30,8 @@ RUNTIME_ASSETS = (
     ("tools/coder_templates", "vaf/tools/coder_templates/**/*", 10),
     ("whare_wananga/knowledge", "vaf/whare_wananga/knowledge/*.json", 20),
     ("media", "vaf/media/**/*", 5),
+    # Skills that ship with the product; discovery reads them from the package.
+    ("skills/builtin", "vaf/skills/builtin/**/*", 1),
 )
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -93,3 +95,6 @@ def test_the_built_wheel_carries_every_runtime_asset(tmp_path):
     # The two lexicons this guard was written for, by name.
     assert any("vocab/data/confirm_yes.json" in n for n in names)
     assert any("vocab/data/capability_denial.json" in n for n in names)
+    # And the shipped A2A skill: an installed VAF that lost it would route "work
+    # with another agent" straight past the feature that exists for it.
+    assert any("skills/builtin/a2a_rooms/SKILL.md" in n for n in names)

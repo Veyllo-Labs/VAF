@@ -1097,6 +1097,20 @@ def test_the_agents_running_room_turn_is_the_precise_signal(tmp_path, monkeypatc
         ws2, Room.open("room-turnsig", base=tmp_path), "scope-a"))
     assert agent_peer not in {t["peer"] for t in ws2.sent[0]["room"]["typing"]}
 
+    # The half the first version of this test missed, found live: right after a
+    # turn the runner advances the agent's cursor - including a turn in which it
+    # DELIBERATELY said nothing (the thank-you brake). Marker gone plus cursor at
+    # the newest is exactly the derived "is typing" shape, so without its own
+    # exclusion the agent showed as composing for the whole window at precisely
+    # the moment it had decided to stay quiet.
+    _Agent._room_turn = None
+    room.store.set_cursor(agent_peer, room.store.highest_lamport())
+    ws3 = _WS()
+    asyncio.run(web_server_mod._send_room_transcript(
+        ws3, Room.open("room-turnsig", base=tmp_path), "scope-a"))
+    assert agent_peer not in {t["peer"] for t in ws3.sent[0]["room"]["typing"]}, (
+        "the agent's own silence is painted as composing")
+
 
 def test_the_payload_names_the_viewers_own_agent_and_nobody_else(tmp_path, monkeypatch):
     """MUTATION: hand the agent treatment to any agent-shaped member.

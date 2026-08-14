@@ -187,6 +187,21 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
         import time as _time
         latest = room.store.highest_lamport()
         if latest and not room.closed:
+            # The host agent's handle, derived ALWAYS - not only while its turn
+            # marker lives. Its cursor advances right AFTER a turn, including a
+            # turn in which it deliberately said nothing (the thank-you brake),
+            # so the moment the marker cleared, the derived rule read "took the
+            # newest, answered nothing, recent" and painted it as typing for the
+            # whole window - precisely when it had just decided to stay quiet.
+            # Only the marker may put this agent in the list.
+            host_agent = ""
+            try:
+                owner = owner_tenant(room.manifest.get("owner_scope"))
+                if owner:
+                    host_agent = derive_peer_id(participant_key("agent", owner),
+                                                room.room_id)
+            except Exception:
+                host_agent = ""
             busy_agent = ""
             try:
                 turn = getattr(getattr(manager, "agent_instance", None),
@@ -194,15 +209,12 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                 if isinstance(turn, dict) and str(turn.get("room_id")) == room.room_id:
                     # The marker names the room, not the peer; the answering agent
                     # on this machine is the host account's agent lane.
-                    owner = owner_tenant(room.manifest.get("owner_scope"))
-                    if owner:
-                        busy_agent = derive_peer_id(participant_key("agent", owner),
-                                                    room.room_id)
+                    busy_agent = host_agent
             except Exception:
                 busy_agent = ""
             now = _time.time()
             for peer, facts in room.activity().items():
-                if peer in (acting, busy_agent) or peer not in members:
+                if peer in (acting, host_agent) or peer not in members:
                     continue
                 if (facts["read_to"] >= latest and facts["last_wrote"] < latest
                         and (now - facts["read_at"]) <= ROOM_TYPING_WINDOW_S):

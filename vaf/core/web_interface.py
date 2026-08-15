@@ -666,6 +666,36 @@ class WebInterfaceManager:
                                   "soft": now + 0.25, "hard": now + 1.5}
         return route_map.get(sid)
 
+    def room_audience(self, room_id: Optional[str]) -> Optional[str]:
+        """Whose screen a room event belongs on.
+
+        The account whose agent is PRODUCING it, not the one that happens to own the
+        room. The two are the same while a room holds one household and they are not
+        the moment it admits several - there, routing by ownership would put one
+        account's model text and tool activity on another account's screen, which is
+        the one thing that must not cross that line.
+
+        The acting scope is trusted ONLY while that agent's own room turn is running.
+        Outside it the bound scope is whatever the last chat left behind, so using it
+        then would be the same leak pointing the other way; the room's proven owner is
+        the honest fallback.
+
+        One answer for both lanes on purpose: the bridge and the in-process push each
+        had their own copy of this decision, and two copies of a routing rule are two
+        chances for one of them to keep sending to the wrong person.
+        """
+        room_id = str(room_id or "").strip()
+        if not room_id:
+            return None
+        agent = getattr(self, "agent_instance", None)
+        room_turn = getattr(agent, "_room_turn", None)
+        if isinstance(room_turn, dict) \
+                and str(room_turn.get("room_id") or "").strip() == room_id:
+            acting = str(getattr(agent, "_current_user_scope_id", "") or "").strip()
+            if acting:
+                return acting
+        return self.room_owner_scope(room_id)
+
     def room_owner_scope(self, room_id: Optional[str]) -> Optional[str]:
         """The tenant scope that hosts a room, or None when it cannot be PROVEN.
 
@@ -787,7 +817,7 @@ class WebInterfaceManager:
             room_hint = str(data.get("roomId") or "").strip()
             if not room_hint and isinstance(room_turn, dict):
                 room_hint = str(room_turn.get("room_id") or "").strip()
-            room_scope = self.room_owner_scope(room_hint) if room_hint else None
+            room_scope = self.room_audience(room_hint) if room_hint else None
             if room_hint and room_scope:
                 data['roomId'] = room_hint
                 loop = self._get_dispatch_loop()

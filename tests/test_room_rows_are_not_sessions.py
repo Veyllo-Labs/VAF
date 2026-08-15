@@ -1752,3 +1752,55 @@ def test_progress_travels_to_the_browser_and_draws_the_dots():
         "the dots ignore a reported count")
     assert "p.step ?" in card or "p?.step" in card, (
         "the card never shows what the worker is doing right now")
+
+
+def test_a_room_turn_reports_to_the_account_that_is_running_it(monkeypatch):
+    """MUTATION: route a sessionless room event by the room's OWNER, the way it was.
+
+    True while a room holds one household and false the moment it admits several: the
+    events of an agent belonging to account B would land on account A's screen, because
+    A happens to own the room. Model text and tool activity are exactly what must not
+    cross that line, and no guard would have noticed - the fixtures had one tenant, so
+    the property stopped being true while every assertion about it stayed green.
+
+    The acting scope is trusted ONLY while that agent's own room turn is running. The
+    bound scope at any other moment is whatever the last chat left behind, and routing
+    by it then would be the same leak pointing the other way.
+    """
+    import asyncio
+
+    import vaf.core.web_interface as wi_mod
+    import vaf.core.web_server as ws_mod
+
+    wi = wi_mod.get_web_interface()
+    watcher, foreign, plain = _wire_room_task_world(monkeypatch, wi)
+    monkeypatch.setattr(wi, "_room_owner_cache", {}, raising=False)
+    monkeypatch.setattr(
+        wi, "room_owner_scope",
+        lambda rid: "scope-a" if str(rid) == "room-live-x" else None)
+
+    class _ActingAgent:
+        # Account B's agent, mid-turn in a room account A owns.
+        _room_turn = {"room_id": "room-live-x", "mode": "assist"}
+        _current_user_scope_id = "scope-b"
+
+    monkeypatch.setattr(wi, "agent_instance", _ActingAgent(), raising=False)
+
+    update = ws_mod.SubAgentStreamUpdate(
+        type="coder_state", status="Editing", roomId="room-live-x")
+    asyncio.run(ws_mod.receive_subagent_stream(update))
+
+    assert foreign.received and foreign.received[-1]["type"] == "coder_state", (
+        "the account whose agent is working never saw its own event")
+    assert watcher.received == [], (
+        "the room's owner saw another account's agent working")
+
+    # No turn of its own running: the room's owner is the honest fallback again.
+    class _Idle:
+        _room_turn = None
+        _current_user_scope_id = "scope-b"
+
+    monkeypatch.setattr(wi, "agent_instance", _Idle(), raising=False)
+    asyncio.run(ws_mod.receive_subagent_stream(ws_mod.SubAgentStreamUpdate(
+        type="coder_state", status="Editing", roomId="room-live-x")))
+    assert watcher.received and watcher.received[-1]["type"] == "coder_state"

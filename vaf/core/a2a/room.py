@@ -293,9 +293,13 @@ class Room:
             # frame for it would put mutable state into a write-once transcript.
             "mission": str(mission or "")[:2000],
             "owner_scope": str(owner_scope) if owner_scope else None,
-            # A late joiner in a round sees only what happened after it arrived, the
-            # same rule voice_context.recent(since=...) already applies to a guest.
-            "backlog": backlog or ("all" if kind == "chain" else "since_join"),
+            # WHAT A NEW MEMBER MAY READ. "all" everywhere a room holds one account,
+            # because an agent invited into a conversation has to be able to catch up -
+            # that is what the invitation asks it to do, and it is what this has always
+            # done in practice. A room that admits SEVERAL accounts starts a newcomer
+            # at its own join instead: the history there belongs to other people, and
+            # handing it over on arrival is a leak dressed as a courtesy.
+            "backlog": backlog or ("since_join" if multi_scope else "all"),
             "depth": int(depth),
             "parent_room": parent_room,
             "parent_frame": parent_frame,
@@ -375,11 +379,25 @@ class Room:
             "lease": time.time(),
             "card": dict(card) if card else {},
         })
-        self.ingest(
+        joined = self.ingest(
             {"kind": "join", "to": {"room": True},
              "body": {"display": identity.display, "card": dict(card) if card else {}}},
             identity=identity,
         )
+        # WHAT A NEW MEMBER MAY READ, honoured here rather than promised in the
+        # manifest and forgotten. `since_join` puts the newcomer's cursor on its own
+        # join, so it reads the room from its arrival; `all` leaves the cursor at zero
+        # and it reads everything, which is what a chain wants - work handed down needs
+        # the thread that led to it.
+        #
+        # Only for a member that is actually NEW: a rejoin keeps the position it had,
+        # or every reconnect of a peer with a flaky wire would silently swallow
+        # whatever arrived while it was away.
+        if not existing and str(self.manifest.get("backlog") or "") == "since_join":
+            try:
+                self.store.set_cursor(identity.peer_id, joined.lamport)
+            except Exception:
+                pass
         return identity
 
     def _check_tenant(self, scope_id: Optional[str]) -> None:

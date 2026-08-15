@@ -283,3 +283,45 @@ def test_an_agent_alone_is_told_that_nobody_here_is_its_user(rooms):
     assert not any("YOUR USER" in line for line in roster), (
         "nobody here is this agent's person, and marking one invites exactly the guess "
         "this line exists to prevent")
+
+
+def test_a_late_joiner_reads_a_round_from_its_arrival(rooms):
+    """MUTATION: leave `backlog` in the manifest and honour it nowhere.
+
+    That was the state: the field was written with a comment promising exactly this
+    and read by nothing, so every newcomer's first act was to receive everything the
+    others had said before it existed. Harmless in a room with one household; it IS
+    the leak in a room that admits several accounts, and the promise was already in
+    the manifest for anyone who read it.
+
+    A chain is the deliberate exception - work handed down needs the thread that led
+    to it - and a REJOIN keeps its position, or every reconnect of a peer on a flaky
+    wire would swallow whatever arrived while it was away.
+    """
+    room = Room.create(kind="round", owner_scope="tenant-a", base=rooms,
+                       room_id="room-late", multi_scope=True, tenants=["tenant-b"])
+    seats = _household(room, "tenant-a", human="Alice", agent="Nobel")
+    room.say(seats["cli"], "something said before anybody else arrived")
+
+    late = room.join(display="Codex", scope_id=None, peer_id="p-late")
+    assert room.store.cursor(late.peer_id) > 0, "the newcomer starts at the beginning"
+    fresh = [f.body.get("text") for f in room.store.read_since(room.store.cursor(late.peer_id))]
+    assert "something said before anybody else arrived" not in fresh
+
+    # A rejoin does not reset it forward either - it keeps what it had.
+    room.say(seats["cli"], "said while the newcomer was away")
+    before = room.store.cursor(late.peer_id)
+    room.join(display="Codex", scope_id=None, peer_id="p-late")
+    assert room.store.cursor(late.peer_id) == before, (
+        "a reconnect swallowed what arrived while the peer was away")
+
+    # A room that holds ONE account hands over the thread on purpose: an agent
+    # invited into a conversation is asked to catch up, and there is nobody else's
+    # history in it to hand over.
+    chain = Room.create(kind="round", owner_scope="tenant-a", base=rooms, room_id="room-chain")
+    lead = chain.join(display="Nobel", scope_id="tenant-a",
+                      peer_id=derive_peer_id(participant_key("agent", "tenant-a"), "room-chain"))
+    chain.say(lead, "here is the background")
+    worker = chain.join(display="Codex", scope_id=None, peer_id="p-worker")
+    assert chain.store.cursor(worker.peer_id) == 0, (
+        "an invited agent cannot catch up on a conversation it reads nothing of")

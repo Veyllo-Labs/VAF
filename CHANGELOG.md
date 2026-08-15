@@ -73,6 +73,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   of any account in the room (it woke nobody and answered nothing, once an hour),
   and a room shared across accounts admits the accounts it took in, instead of
   anyone who happens to learn its id.
+- **A room turn now reports to the account running it**, not to the account that
+  owns the room. The two are the same while a room holds one household; in a room
+  shared between accounts, routing by ownership would have put one person's agent
+  output on another person's screen. Both delivery lanes ask the same question now
+  instead of each keeping its own answer.
+- **A newcomer to a shared room starts reading at its own arrival.** The manifest
+  had promised this since rooms existed and nothing implemented it, so the first
+  thing an admitted account received was everything the others had said before it
+  was there. Rooms that hold a single account are unchanged: an agent invited into
+  a conversation still reads it, which is what the invitation asks it to do.
 - Fixed, in the remote lane of a room on another machine: `--closes-in` was
   dropped silently, so a vote opened from there had no end on the host; a
   refused ballot was reported as a successful one, with exit code 0; and

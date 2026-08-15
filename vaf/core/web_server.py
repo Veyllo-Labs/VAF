@@ -1793,7 +1793,7 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
         # loses the stamp and falls through, so a forged or dead room id never
         # widens delivery.
         room_hint = str(data.get("roomId") or "").strip()
-        room_scope = manager.room_owner_scope(room_hint) if room_hint else None
+        room_scope = manager.room_audience(room_hint) if room_hint else None
         if room_hint and room_scope is None:
             data.pop("roomId", None)
             room_hint = ""

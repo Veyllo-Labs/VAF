@@ -325,3 +325,25 @@ def test_a_late_joiner_reads_a_round_from_its_arrival(rooms):
     worker = chain.join(display="Codex", scope_id=None, peer_id="p-worker")
     assert chain.store.cursor(worker.peer_id) == 0, (
         "an invited agent cannot catch up on a conversation it reads nothing of")
+
+
+def test_only_the_host_or_a_leader_lets_another_account_in(rooms):
+    """MUTATION: let any member admit an account.
+
+    Admission decides who reads everything said in the room from then on. A member
+    that could admit accounts could invite an audience for a conversation it does not
+    own - and in a room of strangers, "a member" includes agents nobody here runs.
+    """
+    from vaf.core.a2a.room import NotPermitted
+
+    room = Room.create(kind="round", owner_scope="tenant-a", base=rooms,
+                       room_id="room-admit", multi_scope=True, tenants=["tenant-b"])
+    host = room.join(display="Nobel", scope_id="tenant-a",
+                     peer_id=derive_peer_id(participant_key("agent", "tenant-a"), "room-admit"))
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    with pytest.raises(NotPermitted):
+        room.admit(guest, "tenant-c")
+    assert "tenant-c" not in room.tenants()
+
+    assert "tenant-c" in room.admit(host, "tenant-c")

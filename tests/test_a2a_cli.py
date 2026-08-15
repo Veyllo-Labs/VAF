@@ -683,3 +683,67 @@ def test_a_remote_peer_can_read_the_tally_it_voted_in(rooms, monkeypatch):
     assert entry["tally"] == {"ja": 1}
     assert entry["ballots"][0]["label"] == "Codex", "names come from the join frames"
     assert entry["deadline"] > entry["ts"], "and it knows when it ends"
+
+
+def test_a_shared_room_names_the_accounts_it_takes(rooms, monkeypatch):
+    """MUTATION: let --shared alone open the room to anybody who knows the id.
+
+    Everything said in a room shared across accounts is readable by every member, so
+    admission is a decision about a conversation and not a convenience. The id is no
+    protection and was never meant to be one - it travels in invitations, in prompts
+    and in log lines, and an agent can be told one inside a room message.
+    """
+    from vaf.core.a2a.room import Room, participant_key
+
+    # The real lane key: the module fixture pins a stand-in, and a stand-in never
+    # matches a host handle - which is derived from the account and the lane.
+    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+
+    opened = runner.invoke(a2a_cmd.app, ["create", "--shared", "--id", "room-shared-cli"])
+    assert opened.exit_code == 0, opened.stdout
+    assert _lines(opened)[-1]["shared"] is True
+
+    owner = a2a_cmd._scope()
+    room = Room.open("room-shared-cli", base=rooms)
+    assert room.manifest.get("multi_scope") is True
+    assert room.tenants() == [owner], "only its owner, until somebody is let in"
+
+    admitted = runner.invoke(a2a_cmd.app, ["share", "room-shared-cli", "other-account"])
+    assert admitted.exit_code == 0, admitted.stdout
+    assert _lines(admitted)[-1]["accounts"] == [owner, "other-account"]
+    assert Room.open("room-shared-cli", base=rooms).tenants() == [owner, "other-account"]
+
+    # A room that holds one account refuses instead of quietly becoming a shared one.
+    runner.invoke(a2a_cmd.app, ["create", "--id", "room-private-cli"])
+    refused = runner.invoke(a2a_cmd.app, ["share", "room-private-cli", "other-account"])
+    assert refused.exit_code != 0
+    assert "shared room" in (refused.stdout + refused.stderr)
+
+
+def test_members_says_who_belongs_to_whom(rooms, monkeypatch):
+    """MUTATION: print the roster without the pairing.
+
+    A foreign agent reads this instead of our surfaces. In a room with several
+    households "who speaks for whom" cannot be guessed from the names, and guessing it
+    is how an agent ends up answering for somebody it does not work for.
+    """
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+    runner.invoke(a2a_cmd.app, ["create", "--id", "room-who"])
+    room = Room.open("room-who", base=rooms)
+    owner = a2a_cmd._scope()
+    agent = room.join(display="Nobel", scope_id=owner,
+                      peer_id=derive_peer_id(participant_key("agent", owner), "room-who"))
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    rows = {r["display"]: r for r in _lines(runner.invoke(a2a_cmd.app, ["members", "room-who"]))}
+    assert rows["Nobel"]["kind"] == "agent"
+    assert rows["Nobel"]["partner"] == room.identity_for(a2a_cmd._key()).peer_id
+    assert rows["Nobel"]["partner_display"], "the partner is named, not just pointed at"
+    # The person on this terminal is the other half.
+    person = next(r for r in rows.values() if r["kind"] == "human")
+    assert person["partner"] == agent.peer_id
+    # And a guest that named no account is left unanswered rather than guessed at.
+    assert rows["Codex"]["kind"] == "unknown" and rows["Codex"]["partner"] == ""
+    assert guest.peer_id in rows["Codex"]["peer"]

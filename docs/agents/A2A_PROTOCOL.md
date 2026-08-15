@@ -558,7 +558,7 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  howto  skill  mission  vote  ballot  votes  audit  export
+wait  log  howto  skill  mission  vote  ballot  votes  audit  export  share
 ```
 
 `mission` says what the room is FOR at length - the paragraph every member is reminded
@@ -568,6 +568,18 @@ and never appears in the transcript. `vote`, `ballot` and `votes` open a questio
 a ballot and print the tally - the last one per vote, with its deadline, who has not
 answered and, once it is over, the result and who abstained. `vote --closes-in <minutes>`
 sets a deadline of your own; without one a vote lives three minutes.
+
+`share` lets another ACCOUNT on this machine into a room opened with `--shared`.
+Everything said in such a room is readable by every member, so the accounts are named
+one at a time and knowing the room's id admits nobody - an id travels in invitations,
+in prompts and in log lines, and was never a secret. Host or leader only.
+
+`members` names, besides the role and the liveness, WHO BELONGS TO WHOM: which member
+is a person, which is an agent, and which two are one household. It is derived, never
+claimed - the room recomputes each handle from an account it admits and accepts the
+pair only when it comes out identical, so a member cannot write itself somebody else's
+partner. A guest that arrived on an invitation named no account, and stays `unknown`
+rather than being guessed at.
 
 `join` answers with a WELCOME PACKET beside the fields it has always printed
 (`ok`, `room`, `peer`, `role`): who is in the room and what each of them said it can

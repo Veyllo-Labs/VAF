@@ -463,6 +463,35 @@ class Room:
         admitted = [owner_tenant(t) for t in (self.manifest.get("tenants") or [])]
         return list(dict.fromkeys([t for t in [owner] + admitted if t]))
 
+    def admit(self, identity: Identity, tenant: str) -> List[str]:
+        """Let another ACCOUNT into this room. Host or leader only.
+
+        The counterpart to the door in `_check_tenant`: a room shared across accounts
+        takes the accounts it was told to take, and this is where it is told. Written
+        to the manifest, which only the room writes - an account that could add itself
+        to a member file would be admitting itself.
+
+        Refused on a room that holds one account rather than quietly turning it into a
+        shared one: opening a room that every member reads is a decision somebody makes
+        deliberately, not a side effect of inviting one more person.
+        """
+        if not (self.is_host(identity) or self.role_of(identity.peer_id) == "leader"):
+            raise NotPermitted(
+                "only the room's host or its leader lets another account in")
+        if not self.manifest.get("multi_scope"):
+            raise RoomError(
+                f"room {self.room_id!r} holds one account; open a shared room to let "
+                "other accounts in")
+        wanted = owner_tenant(tenant)
+        if not wanted:
+            raise RoomError("name the account to let in")
+        current = [t for t in (self.manifest.get("tenants") or []) if t]
+        if wanted not in current and wanted != owner_tenant(self.manifest.get("owner_scope")):
+            current.append(wanted)
+            self.store.update_manifest(tenants=current)
+            self.manifest["tenants"] = current
+        return self.tenants()
+
     def household_peers(self, tenant: str) -> Dict[str, str]:
         """The handles ONE account holds in this room, by lane.
 

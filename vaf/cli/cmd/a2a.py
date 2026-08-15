@@ -522,6 +522,8 @@ def create(
     display: str = typer.Option("", help="Your name in the room."),
     skills: str = typer.Option("", help="One line about what you can do. Everyone in the room sees it."),
     room_id: str = typer.Option("", "--id", help="Use this id instead of a generated one."),
+    shared: bool = typer.Option(False, "--shared",
+                                help="Let OTHER accounts on this machine be let into this room. Every member then reads everything said in it; admit each account with `vaf a2a share`."),
 ) -> None:
     """Open a room and join it."""
     from vaf.core.a2a.room import Room, RoomError, derive_peer_id
@@ -532,14 +534,36 @@ def create(
         # was recorded as "cli:<scope>" has host handles nobody holds, so it has no
         # host at all - its own opener cannot close it and cannot remove anybody.
         room = Room.create(kind=kind, owner_scope=_scope(), topic=topic, mission=mission,
-                           room_id=room_id or None)
+                           room_id=room_id or None, multi_scope=shared)
         me = room.join(display=display or _display(),
                        peer_id=derive_peer_id(_key(), room.room_id), scope_id=_scope(),
                        card=_self_card(skills))
     except (RoomError, StoreError) as e:
         _fail(str(e), EXIT_REFUSED)
     _emit({"ok": True, "room": room.room_id, "kind": room.kind,
-           "peer": me.peer_id, "role": me.role})
+           "peer": me.peer_id, "role": me.role, "shared": bool(shared)})
+
+
+@app.command()
+def share(
+    room_id: str = typer.Argument(..., help="A room opened with --shared."),
+    account: str = typer.Argument(..., help="The account id to let in."),
+) -> None:
+    """Let another ACCOUNT on this machine into a shared room.
+
+    Everything said in such a room is readable by every member, so this is a decision
+    about a conversation and not a convenience: the account is named here, and only a
+    named account can join. Knowing the room's id is not enough, and was never meant
+    to be - an id travels in invitations, in prompts and in log lines.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    identity = _me(room)
+    try:
+        admitted = room.admit(identity, account)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room.room_id, "accounts": admitted})
 
 
 @app.command(name="list")
@@ -1086,12 +1110,27 @@ def introduce(room_id: str = typer.Argument(...),
 
 @app.command()
 def members(room_id: str = typer.Argument(...)) -> None:
-    """Who is in the room, with their role and whether they are still awake."""
+    """Who is in the room: role, liveness, and who belongs to whom."""
     room = _room(room_id)
     _me(room)
+    # Which member is a person, which is an agent, and which two are one household.
+    # Printed here so an agent that never sees our surfaces can read it too - in a
+    # room with several households, "who speaks for whom" cannot be guessed from the
+    # names, and guessing it is how an agent answers for somebody it does not work
+    # for. Derived by the room, never claimed by a member.
+    try:
+        pairs = room.pairs()
+    except Exception:
+        pairs = {}
     for peer_id, record in room.members().items():
+        pairing = pairs.get(peer_id) or {}
         _emit({"peer": peer_id, "display": record["display"], "role": record["role"],
-               "stale": record["stale"], "card": record["card"]})
+               "stale": record["stale"], "card": record["card"],
+               # "human", "agent", or "unknown" - a guest that arrived on an
+               # invitation named no account, so nothing here can say what it is.
+               "kind": pairing.get("kind") or "unknown",
+               "partner": pairing.get("partner") or "",
+               "partner_display": pairing.get("partner_label") or ""})
 
 
 @app.command()

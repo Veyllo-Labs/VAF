@@ -73,6 +73,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   of any account in the room (it woke nobody and answered nothing, once an hour),
   and a room shared across accounts admits the accounts it took in, instead of
   anyone who happens to learn its id.
+- **A room can be opened for several accounts on one installation, and it names the
+  ones it takes.** `vaf a2a create --shared` opens such a room, `vaf a2a share <room>
+  <account>` lets an account in, and only its host or a leader may. Everything said in
+  such a room is readable by every member, so knowing its id admits nobody - an id
+  travels in invitations, in prompts and in log lines. Its members reach its shared
+  folder (and nothing else of each other's), and a room still only appears in the
+  sidebar of somebody who is in it.
+- **`vaf a2a members` says who belongs to whom**: which member is a person, which is
+  an agent, and which two are one household. Derived by the room from the account each
+  handle was built from, never claimed by a member - so nobody can write themselves
+  somebody else's partner. A guest that arrived on an invitation named no account and
+  is left as unknown rather than guessed at. Agents are told the same thing in every
+  room turn: which member is their own person, whose the others are, or that nobody
+  here is theirs. It changes nothing about who may be answered - only whose word
+  carries their user's authority.
 - **A room turn now reports to the account running it**, not to the account that
   owns the room. The two are the same while a room holds one household; in a room
   shared between accounts, routing by ownership would have put one person's agent

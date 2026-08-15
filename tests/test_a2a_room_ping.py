@@ -455,8 +455,11 @@ def test_the_surfaces_count_only_what_has_been_heard_from():
     assert "open.filter(t => !t.quiet)" in page, "the strip still counts silent work"
     assert "const quiet = open.filter(r => r.quiet)" in page, "the panel does too"
     # Shown, not hidden: they are not finished, and a board that drops them would be
-    # the room forgetting work instead of reporting on it.
-    assert "[...active, ...quiet, ...done]" in page
+    # the room forgetting work instead of reporting on it. Finished work is the one
+    # thing folded away, and only because it is over.
+    assert "...active, ...quiet," in page, "silent work is no longer drawn at all"
+    assert "openDone[label] ? done : []" in page, (
+        "the fold must cover the finished ones, never the silent ones")
     assert "roomWorkSilentFor" in page, "a silent entry must say how long it has been"
 
 
@@ -544,3 +547,36 @@ def test_the_sweep_asks_agents_about_quiet_work_and_never_people(rooms, monkeypa
     asked = [f["to"].get("peer") for f in room.transcript()
              if f["kind"] == "ping" and (f.get("body") or {}).get("task")]
     assert asked == ["p-codex"], f"a person was asked about their work: {asked}"
+
+
+def test_finished_work_is_counted_before_it_is_stacked():
+    """MUTATION: send a flat slice of the board, or draw every finished task at once.
+
+    An agent that finishes twenty things in an afternoon fills the panel with work
+    that is over and buries the one task still running - and the flat cap made it
+    worse than that: sorted with finished work in the same list, the slice cuts by
+    recency and can drop OPEN work for something that has already ended.
+
+    Two rules, both about the same thing: open work is never dropped for finished
+    work, and finished work is counted rather than stacked. Neither hides anything -
+    the whole record is one click away, and complete in the transcript.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert "for t in _room_board(room)" in server, "the board is capped blindly again"
+    board = server.split("def _room_board(", 1)[1].split("\ndef ", 1)[0]
+    assert "open_work[:open_cap] + finished[:done_cap]" in board, (
+        "open work and finished work share one cap again")
+    assert "t[\"status\"] not in done_states" in board
+
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "openDone[label] ? done : []" in page, "every finished task is drawn at once"
+    assert "roomWorkShowDone" in page and "roomWorkHideDone" in page, (
+        "the count is not offered as a way in")
+    # Per member, not one switch for the panel: two agents' histories are two answers.
+    assert "setOpenDone(prev => ({ ...prev, [label]: !prev[label] }))" in page
+
+    import json
+    for locale in ("de", "en"):
+        messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
+        for key in ("roomWorkShowDone", "roomWorkHideDone"):
+            assert key in messages["main"], f"{key} missing in {locale}.json"

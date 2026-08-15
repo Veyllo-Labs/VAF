@@ -173,6 +173,8 @@
     "roomWorkQuiet": "{count} ohne Meldung",
     "roomWorkSilentFor": "seit {hours} Std. keine Meldung",
     "roomWorkNone": "keine Arbeit verzeichnet",
+    "roomWorkShowDone": "{count} erledigt - anzeigen",
+    "roomWorkHideDone": "{count} erledigte ausblenden",
     "roomWorkFrom": "von {who}",
     "roomAgentModeTitle": "Dein Agent in diesem Raum",
     "roomModeObserve": "Beobachten",

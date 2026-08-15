@@ -1310,6 +1310,12 @@ function RoomWorkPanel({ tasks, members }: {
     members: Array<{ peer: string; label: string; role: string }>;
 }) {
     const t = useTranslations('main');
+    // Which members' finished work is unfolded. Folded by default and per member:
+    // an agent that finishes twenty things in an afternoon would otherwise bury the
+    // one task still running under twenty that are over, and the panel exists to
+    // answer what is happening - the record of what was done is a click away and
+    // whole in the transcript.
+    const [openDone, setOpenDone] = useState<Record<string, boolean>>({});
     const byMember = new Map<string, RoomTask[]>();
     for (const member of members) byMember.set(member.label, []);
     for (const task of tasks) {
@@ -1346,7 +1352,8 @@ function RoomWorkPanel({ tasks, members }: {
                             </span>
                         </div>
                         <div className="space-y-1.5">
-                            {[...active, ...quiet, ...done].map(task => {
+                            {[...active, ...quiet,
+                              ...(openDone[label] ? done : [])].map(task => {
                                 const progress = task.progress || {};
                                 const counted = typeof progress.done === 'number'
                                     && typeof progress.total === 'number';
@@ -1384,6 +1391,15 @@ function RoomWorkPanel({ tasks, members }: {
                                     </div>
                                 );
                             })}
+                            {done.length > 0 && (
+                                <button type="button"
+                                    onClick={() => setOpenDone(prev => ({ ...prev, [label]: !prev[label] }))}
+                                    className="text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-[#c8c8c8] transition-colors">
+                                    {openDone[label]
+                                        ? t('roomWorkHideDone', { count: done.length })
+                                        : t('roomWorkShowDone', { count: done.length })}
+                                </button>
+                            )}
                             {rows.length === 0 && (
                                 <div className="text-[12px] text-gray-400">{t('roomWorkNone')}</div>
                             )}

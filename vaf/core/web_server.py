@@ -118,6 +118,26 @@ ROOM_TYPING_WINDOW_S = 120.0
 # but luck.
 
 
+def _room_board(room, *, open_cap: int = 40, done_cap: int = 8) -> list:
+    """The task board a browser gets: every piece of OPEN work, and the last few
+    finished ones.
+
+    The cap used to be a flat slice of the whole board, which cuts by recency and
+    therefore cuts the wrong end: an agent that finishes twenty things in an afternoon
+    pushes the one task still running off a list sorted with finished work in it. Open
+    work is what a surface is for, so it is never dropped for something that is over.
+
+    Finished work is not dropped either, only stopped at the last few - the record of
+    what was done lives in the transcript and in `vaf a2a tasks`, which is where a long
+    history belongs. A panel is not an archive.
+    """
+    done_states = ("completed", "failed", "rejected", "canceled")
+    board = room.tasks()
+    open_work = [t for t in board if t["status"] not in done_states]
+    finished = [t for t in board if t["status"] in done_states]
+    return open_work[:open_cap] + finished[:done_cap]
+
+
 def _worker_card_entry(task) -> dict:
     """One worker card, the shape the reference design draws: name, status, the
     task line, progress, and WHEN it started (the meta line reads
@@ -367,8 +387,8 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                  # one is how far the work has come, from the last report that
                  # said anything about it.
                  "progress": t.get("progress")}
-                for t in room.tasks()
-            ][:12],
+                for t in _room_board(room)
+            ],
             # Open votes, folded like the board is. Capped for the same reason:
             # a glance, not an archive.
             "votes": [

@@ -60,6 +60,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stops counting as work in progress on every surface. It is never marked finished:
   nobody said it was, and the room does not invent an ending. Any report - even
   "still on it" - puts it back among the living.
+- Finished work in the room panel is COUNTED before it is stacked: one line per
+  member ("12 erledigt - anzeigen") that unfolds on a click, per member rather than
+  for the whole panel. An agent that finishes twenty things in an afternoon used to
+  bury the one task still running under twenty that were over. The cap behind it was
+  worse than the stacking: it sliced the whole board at twelve, so open work could be
+  dropped for something that had already ended. Open work is never cut for finished
+  work now, and the complete record stays in the transcript and in `vaf a2a tasks` -
+  a panel is not an archive.
 - **What a member is working on is visible without scrolling for it.** The room's
   task board sat above the conversation, so a progress report landed correctly and
   the person who had asked to see it never did - a hundred messages up in a view

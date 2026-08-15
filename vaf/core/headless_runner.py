@@ -107,6 +107,7 @@ def _room_ping_sweep() -> None:
                 if _handle is not None:
                     human_peers.add(_handle.peer_id)
             _sweep_votes(room, host, human_peers, now)
+            _sweep_quiet_work(room, host, human_peers, now)
             if quiet_for <= 0:
                 continue
             for peer in room.idle_peers(quiet_for_s=quiet_for, now=now):
@@ -119,6 +120,32 @@ def _room_ping_sweep() -> None:
                     _remember_ping(room_id, peer, now)
                 except Exception:
                     continue
+        except Exception:
+            continue
+
+
+def _sweep_quiet_work(room, host, human_peers, now: float) -> None:
+    """Ask about open work nothing has been said about for half an hour.
+
+    The room cannot tell a long run from an abandoned one - that is the whole reason
+    it asks rather than deciding. A report either way costs one line and is what keeps
+    the board from filling with work nobody is doing; measured on the first long-lived
+    room, ten entries counted as running and eight had last been reported on more than
+    a day earlier.
+
+    Skips the same two members every check-in skips, for the same two reasons: a person
+    is not an agent to wake, and a frame the host addressed to itself cannot wake it
+    because a peer's unread set never contains its own writes.
+    """
+    try:
+        due = room.task_nudges(now=now)
+    except Exception:
+        return
+    for peer, task in due:
+        if peer == host.peer_id or peer in human_peers:
+            continue
+        try:
+            room.nudge_task(host, peer, task)
         except Exception:
             continue
 

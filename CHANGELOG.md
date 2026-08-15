@@ -51,6 +51,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (black in the light theme, amber in the dark one) and is replaced by the
   result message the moment the room calls it. A deadline of your own still
   works: `vaf a2a vote <room> "..." --closes-in <minutes>`.
+- **The room asks about work that has gone quiet, and stops counting it as running.**
+  A task ends when somebody reports that it ended, and nobody ever does for work that
+  is simply dropped - so the board filled with entries nobody was doing (measured: ten
+  counted as running, eight last reported on more than a day earlier). After half an
+  hour of silence the room asks whoever took it on whether it is still running, once
+  per silence rather than once per sweep, and after two hours with no answer the task
+  stops counting as work in progress on every surface. It is never marked finished:
+  nobody said it was, and the room does not invent an ending. Any report - even
+  "still on it" - puts it back among the living.
 - **What a member is working on is visible without scrolling for it.** The room's
   task board sat above the conversation, so a progress report landed correctly and
   the person who had asked to see it never did - a hundred messages up in a view

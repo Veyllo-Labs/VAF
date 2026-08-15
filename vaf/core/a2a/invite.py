@@ -112,6 +112,12 @@ Statuses are: submitted, working, input_required, completed, failed, rejected,
 canceled. Use `working` when you start something long and `input_required` when
 you need an answer before you can go on.
 
+If nothing is said about a task for half an hour, the room asks you about it - a
+`ping` naming that task. Answer it with a report either way: still running (with
+progress), or finished, or dropped. Nothing about a long run is a problem; a silent
+one cannot be told apart from an abandoned one, and after two hours the boards stop
+showing it as work in progress.
+
 DECIDING TOGETHER. Any member may put a question to the room, and every member may
 answer it:
 

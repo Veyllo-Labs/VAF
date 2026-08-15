@@ -733,6 +733,81 @@ class Room:
                           labels=self.labels(),
                           members=list(self.members().keys()))
 
+    def task_nudges(self, *, now: Optional[float] = None
+                    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """Open work nothing has been said about, and who to ask about it.
+
+        Asked ONCE per silence, not once per task and not once per sweep: a nudge that
+        repeats every half hour is the nagging the check-in was built to avoid, and a
+        nudge that never repeats leaves a task that went quiet twice asked about once.
+        The rule that gives both is derived rather than remembered - the room asks
+        again only when the task has been reported on SINCE the last time it asked.
+        """
+        frames = self.store.frames()
+        board = fold_tasks(frames, labels=self.labels(), now=now)
+        moment = time.time() if now is None else float(now)
+        asked: Dict[str, float] = {}
+        for frame in frames:
+            task_id = str((frame.body or {}).get("task") or "")
+            if frame.kind == "ping" and task_id:
+                asked[task_id] = max(asked.get(task_id, 0.0), float(frame.ts or 0.0))
+        out: List[Tuple[str, Dict[str, Any]]] = []
+        for task in board:
+            if task["status"] in ("completed", "failed", "rejected", "canceled"):
+                continue
+            if not task["assignee"] or task["silent_for_s"] < TASK_NUDGE_AFTER_S:
+                continue
+            last = asked.get(task["id"], 0.0)
+            if last and last >= float(task["updated_ts"] or 0.0):
+                continue          # already asked, and nothing has happened since
+            out.append((task["assignee"], task))
+        return out
+
+    def task_nudge_body(self, task: Dict[str, Any], *,
+                        now: Optional[float] = None) -> Dict[str, Any]:
+        """What the room asks about a task that has gone quiet.
+
+        A question and not a reprimand: the room cannot tell a long run from an
+        abandoned one, which is the whole reason it has to ask. Both answers are
+        useful and both are cheap - a report saying "still on it" is one line, and so
+        is one saying it is dropped.
+        """
+        moment = time.time() if now is None else float(now)
+        silent = int(max(0.0, moment - float(task["updated_ts"] or 0.0)) // 60)
+        progress = task.get("progress") or {}
+        where = ""
+        if "done" in progress and "total" in progress:
+            where = f" Last count: {progress['done']} of {progress['total']}."
+        text = (
+            "Room check-in on one piece of work: nothing has been said about this for "
+            f"about {max(1, silent)} minutes.\n"
+            f'"{str(task["title"])[:200]}" [{task["status"]}]{where}\n'
+            "If it is still running, say where it is - a report on the same task "
+            f'(reply_to "{task["id"]}") with progress is enough. If it is finished or '
+            "dropped, report that instead, so the board stops showing work nobody is "
+            "doing. A long run is not a problem; a silent one cannot be told apart "
+            "from an abandoned one, which is why this asks."
+        )
+        return {
+            "text": text,
+            # What it is about, and what makes asking once derivable.
+            "task": task["id"],
+            "state": {"kind": "task_nudge", "task": task["id"],
+                      "title": str(task["title"])[:200], "status": task["status"],
+                      "silent_minutes": max(1, silent),
+                      "progress": task.get("progress")},
+        }
+
+    def nudge_task(self, identity: Identity, peer_id: str,
+                   task: Dict[str, Any]) -> Frame:
+        """Ask ONE member about ONE quiet task. HOST ONLY, like every check-in."""
+        if not self.is_host(identity):
+            raise NotPermitted("only the machine hosting a room asks about its work")
+        if not self.role_of(peer_id):
+            raise NotAMember(f"{peer_id!r} is not in room {self.room_id!r}")
+        return self.ingest({"kind": "ping", "to": {"peer": peer_id},
+                            "body": self.task_nudge_body(task)}, identity=identity)
+
     def vote_reminders(self, *, now: Optional[float] = None
                        ) -> List[Tuple[str, Dict[str, Any]]]:
         """Who still owes a ballot and has waited long enough to be reminded.
@@ -2125,7 +2200,30 @@ def fold_votes(frames: List[Frame], *, labels: Dict[str, str],
     return sorted(out, key=lambda e: (e["closed"], -e["ts"]))
 
 
-def fold_tasks(frames: List[Frame], *, labels: Dict[str, str]) -> List[Dict[str, Any]]:
+#: When a task with no final report stops counting as work in progress. The room can
+#: never know that something FINISHED - only a report says that - but it can say that
+#: nothing has been said about it for a long time, and a board that cannot is a board
+#: that fills up with work nobody is doing. Measured on the first long-lived room: ten
+#: entries counted as running, eight of them last reported on between 26 and 32 hours
+#: earlier.
+#:
+#: Two hours rather than ten minutes, because a long run is supposed to say where it is
+#: (`report.body.progress` exists for exactly that), and each such report moves this
+#: line. Silence for two hours IS the signal.
+TASK_QUIET_AFTER_S = 7200.0
+
+#: When the room ASKS about a task nothing has been said about. Earlier than the line
+#: above on purpose, so the two form an escalation rather than two verdicts: after half
+#: an hour the room asks whether the work is still running, and only after two hours
+#: with no answer does the board stop counting it. Thirty minutes because a coding run
+#: legitimately takes twenty - asking sooner would interrupt work rather than find
+#: abandoned work.
+TASK_NUDGE_AFTER_S = 1800.0
+
+
+def fold_tasks(frames: List[Frame], *, labels: Dict[str, str],
+               now: Optional[float] = None,
+               quiet_after_s: float = TASK_QUIET_AFTER_S) -> List[Dict[str, Any]]:
     """The task board, folded from frames alone.
 
     A task exists when somebody reports on something: the chain of `report` frames
@@ -2204,10 +2302,20 @@ def fold_tasks(frames: List[Frame], *, labels: Dict[str, str]) -> List[Dict[str,
             entry["updated_ts"] = frame.ts
             entry["updated_lamport"] = frame.lamport
 
+    moment = time.time() if now is None else float(now)
     for entry in tasks.values():
         if entry["assignee"]:
             entry["assignee_label"] = (labels.get(entry["assignee"])
                                        or entry["assignee"])
+        # QUIET, never "finished": nobody said it ended, so the board does not say so
+        # either. What it says is that nothing has been said about it for a while, and
+        # a surface can then stop counting it among the work in progress without
+        # anybody having to close it by hand.
+        entry["quiet"] = bool(entry["status"] not in ("completed", "failed",
+                                                      "rejected", "canceled")
+                              and quiet_after_s > 0
+                              and (moment - float(entry["updated_ts"] or 0.0)) > quiet_after_s)
+        entry["silent_for_s"] = max(0.0, moment - float(entry["updated_ts"] or 0.0))
     done = ("completed", "failed", "rejected", "canceled")
     return sorted(tasks.values(),
                   key=lambda e: (e["status"] in done, -e["updated_lamport"]))

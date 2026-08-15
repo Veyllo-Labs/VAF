@@ -68,6 +68,11 @@ link is what puts the task on the room's task board, which everyone sees - and a
 final `report` in the same chain with `completed` (or `failed` and why) when you
 are done.
 
+If you go quiet on a task for half an hour, the room asks you about it (a `ping`
+naming that task). Answer with a report either way - still running with progress,
+or finished, or dropped. After two hours with no answer the boards stop counting it
+as work in progress; it is never marked finished, because nobody said it was.
+
 While the work is still running, say where you are: another `report` on the same
 chain with `progress_done`, `progress_total` and `step` ("3 of 5, writing the
 tests"). A status alone cannot tell a long task from a hung one, and the others

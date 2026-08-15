@@ -185,7 +185,13 @@ type RoomView = {
     mission?: string;
     tasks?: Array<{ id: string; title: string; status: string; requester: string;
         progress?: { done?: number; total?: number; step?: string } | null;
-        assignee: string; reports: number; ts?: number }>;
+        assignee: string; reports: number; ts?: number;
+        /** Nothing reported about it for hours. NOT finished - nobody said that - but
+         *  not work in progress either. A board that counts these as running fills up
+         *  with entries nobody is doing. */
+        quiet?: boolean;
+        /** Seconds since the last report, so a surface can say how long. */
+        silentFor?: number }>;
     /** How far the viewer's agent may act on this room (observe/assist/autonomous).
      *  The user's standing decision; set from the member panel. */
     agentMode?: string;
@@ -1227,9 +1233,12 @@ function RoomWorkDock({ tasks, widthClass, onOpen }: {
      *  answers "who is in this room" is where a reader looks for it. */
     onOpen?: () => void;
 }) {
-    const active = tasks
-        .filter(t => ROOM_TASK_ACTIVE.includes(t.status))
-        .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+    // What is RUNNING: open, and heard from. A task nobody has reported on for hours
+    // is not finished - nobody said so - but it is not in progress either, and this
+    // strip exists to answer "what is happening right now".
+    const open = tasks.filter(t => ROOM_TASK_ACTIVE.includes(t.status));
+    const active = open.filter(t => !t.quiet).sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+    const quiet = open.length - active.length;
     if (!active.length) return null;
     const shown = active.slice(0, 3);
     return (
@@ -1243,6 +1252,7 @@ function RoomWorkDock({ tasks, widthClass, onOpen }: {
                 className="rounded-2xl border border-gray-200 dark:border-[#2f2f2f] bg-white/95 dark:bg-[#1f1f1f]/95 backdrop-blur-sm shadow-sm px-4 py-2.5 cursor-pointer transition-colors hover:border-gray-300 dark:hover:border-[#4a4a4a]">
                 <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1.5">
                     Läuft gerade{active.length > shown.length ? ` · +${active.length - shown.length} weitere` : ''}
+                    {quiet > 0 ? ` · ${quiet} ohne Meldung` : ''}
                 </div>
                 <div className="space-y-1.5">
                     {shown.map(task => {
@@ -1316,7 +1326,11 @@ function RoomWorkPanel({ tasks, members }: {
     return (
         <div className="px-6 py-4 space-y-4">
             {groups.map(([label, rows]) => {
-                const active = rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status));
+                const open = rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status));
+                // Running means open AND heard from. The rest is neither running nor
+                // finished, and calling it either would be the room inventing news.
+                const active = open.filter(r => !r.quiet);
+                const quiet = open.filter(r => r.quiet);
                 const done = rows.filter(r => !ROOM_TASK_ACTIVE.includes(r.status));
                 return (
                     <div key={label}>
@@ -1326,15 +1340,19 @@ function RoomWorkPanel({ tasks, members }: {
                                 {active.length > 0
                                     ? t('roomWorkRunning', { count: active.length })
                                     : t('roomWorkNothing')}
+                                {quiet.length > 0
+                                    ? ` · ${t('roomWorkQuiet', { count: quiet.length })}`
+                                    : ''}
                             </span>
                         </div>
                         <div className="space-y-1.5">
-                            {[...active, ...done].map(task => {
+                            {[...active, ...quiet, ...done].map(task => {
                                 const progress = task.progress || {};
                                 const counted = typeof progress.done === 'number'
                                     && typeof progress.total === 'number';
                                 const finished = !ROOM_TASK_ACTIVE.includes(task.status);
-                                const waiting = task.status === 'input_required';
+                                const asleep = !finished && !!task.quiet;
+                                const waiting = task.status === 'input_required' && !asleep;
                                 const dead = task.status === 'failed' || task.status === 'rejected'
                                     || task.status === 'canceled';
                                 return (
@@ -1342,11 +1360,12 @@ function RoomWorkPanel({ tasks, members }: {
                                         className={cn(
                                             "rounded-xl border px-3 py-2 flex items-start gap-2.5",
                                             "border-gray-200 bg-gray-50/70 dark:border-[#2f2f2f] dark:bg-[#202020]",
-                                            finished && "opacity-60")}>
+                                            (finished || asleep) && "opacity-60")}>
                                         <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5",
                                             dead ? "bg-red-500"
-                                                : waiting ? "bg-amber-400 animate-pulse"
-                                                    : finished ? "bg-gray-400" : "bg-emerald-500")}
+                                                : asleep ? "bg-gray-400"
+                                                    : waiting ? "bg-amber-400 animate-pulse"
+                                                        : finished ? "bg-gray-400" : "bg-emerald-500")}
                                             aria-hidden />
                                         <div className="min-w-0 flex-1">
                                             <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] break-words">
@@ -1357,6 +1376,9 @@ function RoomWorkPanel({ tasks, members }: {
                                                 {counted ? ` · ${progress.done}/${progress.total}` : ''}
                                                 {progress.step ? ` · ${progress.step}` : ''}
                                                 {task.requester ? ` · ${t('roomWorkFrom', { who: task.requester })}` : ''}
+                                                {asleep
+                                                    ? ` · ${t('roomWorkSilentFor', { hours: Math.max(1, Math.round((task.silentFor ?? 0) / 3600)) })}`
+                                                    : ''}
                                             </div>
                                         </div>
                                     </div>

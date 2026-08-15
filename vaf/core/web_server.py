@@ -357,6 +357,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                 {"id": t["id"], "title": t["title"], "status": t["status"],
                  "requester": t["requester_label"], "assignee": t["assignee_label"],
                  "reports": t["reports"], "ts": t["updated_ts"],
+                 # Nothing said about it for hours. Not "finished" - nobody said that -
+                 # but not work in progress either, and a surface that counts it as
+                 # such fills up with entries nobody is doing.
+                 "quiet": bool(t.get("quiet")),
+                 "silentFor": float(t.get("silent_for_s") or 0.0),
                  # Rebuilt field by field here, so every new one has to be named
                  # or it vanishes without a word - which has shipped twice. This
                  # one is how far the work has come, from the last report that

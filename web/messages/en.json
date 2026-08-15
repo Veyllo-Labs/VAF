@@ -170,6 +170,8 @@
     "roomTabWork": "Who is on what",
     "roomWorkRunning": "{count} running",
     "roomWorkNothing": "nothing open",
+    "roomWorkQuiet": "{count} without news",
+    "roomWorkSilentFor": "nothing said for {hours}h",
     "roomWorkNone": "no work recorded",
     "roomWorkFrom": "asked by {who}",
     "roomAgentModeTitle": "Your agent in this room",

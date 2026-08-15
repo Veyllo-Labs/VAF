@@ -394,3 +394,153 @@ def test_the_members_panel_says_who_belongs_to_whom():
         messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
         for key in ("roomKindHuman", "roomKindAgent", "roomPairedWith"):
             assert key in messages["main"], f"{key} missing in {locale}.json"
+
+
+def test_a_task_nobody_has_reported_on_stops_counting_as_running(rooms):
+    """MUTATION: keep every open task in the running count forever.
+
+    Measured on the first long-lived room: ten entries counted as work in progress and
+    eight of them had last been reported on between 26 and 32 hours earlier. Nothing
+    was wrong with the fold - a task ends when somebody reports that it ended, and
+    nobody had. What was missing is the other thing the room DOES know: that nothing
+    has been said about it for a long time.
+
+    Never "finished": the room does not invent an ending nobody reported. It says
+    quiet, and a surface can then stop counting it among the work in progress.
+    """
+    import time as _time
+
+    from vaf.core.a2a.room import Room as _Room
+    from vaf.core.a2a.room import derive_peer_id as _derive
+    from vaf.core.a2a.room import fold_tasks, participant_key as _pk
+
+    room = _Room.create(kind="round", owner_scope="scope-quiet", base=rooms,
+                        room_id="room-quiet")
+    host = room.join(display="Nobel", scope_id="scope-quiet",
+                     peer_id=_derive(_pk("agent", "scope-quiet"), "room-quiet"))
+    worker = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    asked = room.ask(host, "build the thing")
+    room.report(worker, "on it", status="working", reply_to=asked.id)
+
+    now = _time.time()
+    fresh = fold_tasks(room.store.frames(), labels=room.labels(), now=now)[0]
+    assert fresh["status"] == "working" and fresh["quiet"] is False
+
+    # Thirty hours later, with nothing said in between.
+    stale = fold_tasks(room.store.frames(), labels=room.labels(), now=now + 30 * 3600)[0]
+    assert stale["status"] == "working", "the room does not invent an ending"
+    assert stale["quiet"] is True, "and it does not pretend the work is in progress"
+    assert stale["silent_for_s"] > 29 * 3600
+
+    # A report - any report - moves the line it is measured from, which is what makes
+    # reporting progress on a long run worth doing at all.
+    room.report(worker, "still on it", status="working", reply_to=asked.id)
+    moved = fold_tasks(room.store.frames(), labels=room.labels(), now=now + 3600)[0]
+    assert moved["updated_ts"] >= stale["updated_ts"], "the clock did not move"
+    assert moved["quiet"] is False, "an hour after a report is not silence"
+
+
+def test_the_surfaces_count_only_what_has_been_heard_from():
+    """MUTATION: show every open task in the strip and the panel.
+
+    That is what the screen showed: a strip and a panel full of work nobody was doing,
+    which makes the one line that IS running impossible to find.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert '"quiet": bool(t.get("quiet"))' in server, "the browser cannot tell them apart"
+    assert '"silentFor": float(t.get("silent_for_s") or 0.0)' in server
+
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "open.filter(t => !t.quiet)" in page, "the strip still counts silent work"
+    assert "const quiet = open.filter(r => r.quiet)" in page, "the panel does too"
+    # Shown, not hidden: they are not finished, and a board that drops them would be
+    # the room forgetting work instead of reporting on it.
+    assert "[...active, ...quiet, ...done]" in page
+    assert "roomWorkSilentFor" in page, "a silent entry must say how long it has been"
+
+
+def test_the_room_asks_about_work_that_has_gone_quiet(rooms, monkeypatch):
+    """MUTATION: never ask, ask every sweep, or ask again with nothing changed.
+
+    The room cannot tell a long run from an abandoned one, which is exactly why it has
+    to ask instead of deciding. Asking every sweep is the nagging the check-in exists
+    to avoid - once per half hour, forever, into a room where nothing is happening.
+    Asking once and never again leaves a task that went quiet twice asked about once.
+
+    The rule that gives both is derived, not remembered: ask again only when the task
+    has been reported on SINCE the last time the room asked.
+    """
+    import time as _time
+
+    from vaf.core.a2a.room import Room as _Room
+    from vaf.core.a2a.room import derive_peer_id as _derive
+    from vaf.core.a2a.room import participant_key as _pk
+
+    room = _Room.create(kind="round", owner_scope="scope-nudge", base=rooms,
+                        room_id="room-nudge")
+    host = room.join(display="Nobel", scope_id="scope-nudge",
+                     peer_id=_derive(_pk("agent", "scope-nudge"), "room-nudge"))
+    worker = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    asked = room.ask(host, "build the thing")
+    room.report(worker, "on it", status="working", reply_to=asked.id)
+
+    start = _time.time()
+    assert room.task_nudges(now=start + 600) == [], "ten minutes is not silence"
+
+    due = room.task_nudges(now=start + 2400)
+    assert [peer for peer, _t in due] == ["p-codex"], "the one who took it on is asked"
+    body = room.task_nudge_body(due[0][1], now=start + 2400)
+    assert body["task"] == due[0][1]["id"]
+    assert "still running" in body["text"] and "reply_to" in body["text"]
+    assert "build the thing" in body["text"], "asked about WHICH work"
+
+    room.nudge_task(host, "p-codex", due[0][1])
+    assert room.task_nudges(now=start + 3000) == [], "asked once, and nothing happened"
+
+    # The worker answers, then goes quiet again: that is a second silence and earns a
+    # second question.
+    room.report(worker, "still on it", status="working", reply_to=asked.id)
+    later = _time.time() + 2400
+    assert [p for p, _t in room.task_nudges(now=later)] == ["p-codex"]
+
+    # And a finished task is never asked about.
+    room.report(worker, "done", status="completed", reply_to=asked.id)
+    assert room.task_nudges(now=later + 7200) == []
+
+
+def test_the_sweep_asks_agents_about_quiet_work_and_never_people(rooms, monkeypatch):
+    """MUTATION: nudge every assignee, including the person at the keyboard.
+
+    A person's lane wakes nothing and answers nothing - the same reason the hourly
+    check-in skips it, one feature later.
+    """
+    import time as _time
+
+    from vaf.core.a2a.room import Room as _Room
+    from vaf.core.a2a.room import derive_peer_id as _derive
+    from vaf.core.a2a.room import participant_key as _pk
+
+    room = _Room.create(kind="round", owner_scope="scope-sweepwork", base=rooms,
+                        room_id="room-sweepwork")
+    host = room.join(display="Nobel", scope_id="scope-sweepwork",
+                     peer_id=_derive(_pk("agent", "scope-sweepwork"), "room-sweepwork"))
+    person = room.join(display="Alice", scope_id="scope-sweepwork",
+                       peer_id=_derive(_pk("cli", "scope-sweepwork"), "room-sweepwork"))
+    worker = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    for who in (person, worker):
+        task = room.ask(host, f"work for {who.display}")
+        room.report(who, "on it", status="working", reply_to=task.id)
+
+    # Captured BEFORE patching: `_time` is the very module being patched, so a lambda
+    # that called it again would call itself.
+    later = _time.time() + 3600
+    monkeypatch.setattr(runner.time, "time", lambda: later)
+    monkeypatch.setattr("vaf.core.config.Config.get",
+                        lambda key, default=None: 0 if key == "a2a_room_ping_minutes" else default)
+    monkeypatch.setattr("vaf.core.config.get_local_admin_scope_id", lambda: "scope-sweepwork")
+    runner._room_ping_sweep()
+
+    asked = [f["to"].get("peer") for f in room.transcript()
+             if f["kind"] == "ping" and (f.get("body") or {}).get("task")]
+    assert asked == ["p-codex"], f"a person was asked about their work: {asked}"

@@ -124,7 +124,16 @@ count answers "how much was said" rather than "how long has it been". The conseq
 not hidden - two machines whose clocks differ by a minute disagree by a minute about when
 a vote ends, and the machine holding the room is the one that writes the result.
 
-**The reminder** is an ordinary `ping` addressed to the member that still owes a ballot,
+**Work that has gone quiet** is asked about the same way: an ordinary `ping` addressed
+to whoever took the task on, carrying `body.task` (the task's id) and, in `body.text`,
+what the work was and how long nothing has been said about it. The room cannot tell a
+long run from an abandoned one - that is why it asks rather than deciding - and it asks
+once per silence: again only when the task has been reported on SINCE the last time it
+asked. After half an hour it asks; after two hours with no answer the task stops
+counting as work in progress on every board, without anybody having to close it by
+hand. It is never marked finished, because nobody said it was.
+
+**The vote reminder** is an ordinary `ping` addressed to the member that still owes a ballot,
 carrying `body.vote` (the vote's id) and, in `body.text`, everything needed to answer it:
 the question, the options, both ways to cast a ballot, how long is left and what silence
 will mean. It is a `ping` rather than a kind of its own because the room already has a

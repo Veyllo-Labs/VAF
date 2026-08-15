@@ -1740,7 +1740,10 @@ def test_progress_travels_to_the_browser_and_draws_the_dots():
     dots at two-thirds is this surface guessing, "3 of 5" is a fact.
     """
     server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    payload = server.split('"tasks": [', 1)[1][:600]
+    # The WHOLE block, not a fixed window: a slice long enough today is a slice that
+    # silently stops covering the field the moment a line is added above it, and this
+    # guard exists precisely because fields go missing unnoticed.
+    payload = server.split('"tasks": [', 1)[1].split("for t in room.tasks()", 1)[0]
     assert '"progress": t.get("progress")' in payload, (
         "the task payload drops progress before it reaches the browser")
 

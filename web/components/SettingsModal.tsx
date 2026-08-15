@@ -139,7 +139,7 @@ export interface SettingsModalProps {
     /** Last error from the backend for a workflow operation */
     workflowBackendError?: string | null;
     /** Skills (Anthropic Agent Skills / SKILL.md) visible to this user */
-    skills?: Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; builtin?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>;
+    skills?: Array<{ id: string; name: string; title?: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; builtin?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>;
     /** Increments when a skill op (create/update/delete) succeeds — closes the editor. */
     skillSavedTick?: number;
     /** Create a new skill (admin only) */
@@ -5278,7 +5278,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             </span>
                                                         ))}
                                                     </div>
-                                                    <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${invalid ? '' : 'group-hover:text-emerald-600'}`}>{s.name}</h3>
+                                                    <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${invalid ? '' : 'group-hover:text-emerald-600'}`}>{s.title || s.name}</h3>
                                                     <div className="flex-1">
                                                         <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">{invalid ? (s.error || s.description) : s.description}</p>
                                                     </div>

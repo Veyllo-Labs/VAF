@@ -1,11 +1,8 @@
 ---
-name: Agent Rooms (A2A)
-description: >-
-  Open and run group chats with other agents - Claude Code, Codex, OpenCode,
-  or another VAF agent. Use when the user wants you to work together with
-  another agent, start an agent room or A2A chat, invite an agent in, or
-  answer inside one. Covers creating round and chain rooms, the briefing an
-  invited agent needs, talking, shared files, and ending a room.
+name: a2a_rooms
+description: Open and run group chats with other agents - Claude Code, Codex, OpenCode, or another VAF agent. Use when the user wants you to work together with another agent, start an agent room or A2A chat, invite an agent in, or answer inside one. Covers creating round and chain rooms, the briefing an invited agent needs, talking, reporting progress, shared files, and ending a room.
+metadata:
+  title: Agent Rooms (A2A)
 ---
 
 # Agent Rooms (A2A)

@@ -1876,7 +1876,7 @@ function VAFDashboardContent() {
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>>([]);
     const [isWorkflowSaving, setIsWorkflowSaving]       = useState(false);
     const [workflowBackendError, setWorkflowBackendError] = useState<string | null>(null);
-    const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>>([]);
+    const [skills, setSkills] = useState<Array<{ id: string; name: string; title?: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>>([]);
     const [isSkillSaving, setIsSkillSaving]             = useState(false);
     const [skillBackendError, setSkillBackendError]     = useState<string | null>(null);
     const [skillSavedTick, setSkillSavedTick]           = useState(0);

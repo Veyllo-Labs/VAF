@@ -218,3 +218,54 @@ def test_the_editor_reads_the_shipped_body_and_the_override_wins(tmp_path, monke
     (override / "SKILL.md").write_text("---\nname: Mine\ndescription: d\n---\n# mine\n",
                                        encoding="utf-8")
     assert "# mine" in (reg.get_skill_md_source("a2a_rooms") or "")
+
+
+def test_the_shipped_skill_follows_the_format_it_claims(body):
+    """MUTATION: put a human headline back in `name`, or fold the description.
+
+    This file is the EXAMPLE a stranger copies. The Agent Skills format makes
+    `name` the folder's identifier, so a title there teaches the wrong
+    convention and every editor that knows the format marks the file red. The
+    headline belongs in `metadata`, which the format allows for exactly this.
+    """
+    import yaml
+
+    fm = yaml.safe_load(body.split("---", 2)[1])
+    assert fm["name"] == "a2a_rooms", (
+        "the shipped skill's name must be its folder's name, or it is not the "
+        "format we say we implement")
+    assert "\n" not in str(fm["description"]), (
+        "a single line reads everywhere; a folded scalar is legal YAML that "
+        "strict readers of this format still refuse")
+    assert fm.get("metadata", {}).get("title") == "Agent Rooms (A2A)", (
+        "the human headline has to live somewhere the format allows")
+
+
+def test_a_foreign_skill_loads_with_its_own_keys_intact(tmp_path):
+    """MUTATION: drop unknown frontmatter keys at parse time.
+
+    Compatibility is not a claim, it is this: a skill written for another agent
+    loads here unchanged, folder as identity, and the keys this parser does not
+    interpret (allowed-tools, license, metadata) survive - so nothing is lost by
+    passing through VAF.
+    """
+    from vaf.skills.skill_md import parse_skill_md, parse_skill_meta
+
+    folder = tmp_path / "pdf-processing"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(
+        "---\nname: pdf-processing\n"
+        "description: Extracts text from PDF files. Use when the user has a PDF.\n"
+        "allowed-tools: Read, Bash\nlicense: MIT\n"
+        "metadata:\n  title: PDF Processing\n---\n# PDF\nDo the thing.\n",
+        encoding="utf-8")
+
+    parsed = parse_skill_md(folder / "SKILL.md")
+    assert parsed["valid"] and parsed["id"] == "pdf_processing"
+    for key in ("allowed-tools", "license", "metadata"):
+        assert key in parsed["frontmatter"], f"{key} was dropped on the way in"
+
+    meta = parse_skill_meta(folder / "SKILL.md")
+    assert meta["frontmatter"]["metadata"]["title"] == "PDF Processing", (
+        "the cheap parser hides the frontmatter, so a reader would have to "
+        "parse the file a second time to find a title")

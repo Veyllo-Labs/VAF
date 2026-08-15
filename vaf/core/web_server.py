@@ -6128,7 +6128,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         try:
                             import yaml as _yaml_sk
                             from vaf.core import skills_registry as _skr
-                            from vaf.skills.skill_md import parse_skill_md_text as _parse_text
+                            from vaf.skills.skill_md import (
+                                parse_skill_md_text as _parse_text,
+                                parse_skill_meta as _parse_meta,
+                            )
                             from vaf.skills.templates import reload_skills as _reload_sk
 
                             _is_update = (type == "update_skill")
@@ -6142,9 +6145,25 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _name = (cmd.get("name") or "").strip()
                                 _desc = (cmd.get("description") or "").strip()
                                 _body = cmd.get("body") or ""
+                                # MERGE, never replace: the format allows keys this
+                                # editor has no field for (metadata, license,
+                                # allowed-tools), and rebuilding the frontmatter from
+                                # two fields deleted every one of them - so editing an
+                                # imported skill once stripped what its author wrote.
+                                # Only the two fields the editor owns are overwritten.
+                                _keep: dict = {}
+                                try:
+                                    _existing_folder = _skr.resolve_skill_folder(_sk_id)
+                                    if _existing_folder is not None:
+                                        _prev = _parse_meta(_existing_folder / "SKILL.md")
+                                        if isinstance(_prev, dict):
+                                            _keep = dict(_prev.get("frontmatter") or {})
+                                except Exception:
+                                    _keep = {}
+                                _keep["name"] = _name
+                                _keep["description"] = _desc
                                 _fm = _yaml_sk.safe_dump(
-                                    {"name": _name, "description": _desc},
-                                    sort_keys=False, allow_unicode=True,
+                                    _keep, sort_keys=False, allow_unicode=True,
                                 ).strip()
                                 _content = f"---\n{_fm}\n---\n\n{_body}\n"
 

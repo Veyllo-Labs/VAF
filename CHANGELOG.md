@@ -11,7 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Editing a skill no longer throws away what the editor cannot show.** The
+  editor has a name and a description, and saving rebuilt the whole file
+  header from exactly those two - so a skill written elsewhere lost its own
+  fields (its licence, its tool list, its metadata) the first time anybody
+  pressed save. The header is merged now: your two fields win, everything else
+  stays as its author wrote it.
+
 ### Added
+- **Skills follow the shared Agent Skills format, ours included.** The one
+  that ships with VAF used its display title where the format wants the
+  folder's name, which made the file look wrong in every editor that knows the
+  format - and it is the example anyone copies. Its name now matches its
+  folder, the human title moved to the metadata the format provides for it,
+  and skill lists show that title instead of the identifier. Skills written
+  for other agents load here unchanged, keys and all.
 - **Agents say how far they have come, not just that they are busy.** A room
   showed "working" and nothing else, so ten minutes of real work looked
   exactly like a stuck agent. Any agent can now report progress with its

@@ -157,8 +157,12 @@ def parse_skill_meta(skill_md_path: Path | str) -> Optional[Dict[str, Any]]:
     name = str(fm.get("name", "")).strip()
     desc = str(fm.get("description", "")).strip()
     valid, verr = _validate_fields(name, desc, yaml_err)
+    # The whole frontmatter travels, not only the two fields this function used
+    # to answer with: the format allows keys this parser does not interpret
+    # (metadata, license, allowed-tools), and a reader that wants one of them
+    # would otherwise have to open and parse the file a second time.
     return {"id": skill_id, "name": name or skill_id, "description": desc,
-            "valid": valid, "error": verr}
+            "frontmatter": fm, "valid": valid, "error": verr}
 
 
 def parse_skill_md_text(text: str, skill_id: str = "") -> Dict[str, Any]:

@@ -19,6 +19,21 @@ from vaf.skills.skill_md import parse_skill_meta
 logger = logging.getLogger(__name__)
 
 
+def _title_of(parsed: Dict[str, Any]) -> str:
+    """A human headline for a skill, or "" when it has none.
+
+    `metadata.title` in the frontmatter, read defensively: it comes from a file
+    anybody may drop into the skills folder, so a title that is not a string, or
+    is a whole page long, is not a title. "" means "no headline given" and lets a
+    surface fall back to the name rather than printing an empty line.
+    """
+    meta = (parsed.get("frontmatter") or {}).get("metadata")
+    if not isinstance(meta, dict):
+        return ""
+    title = meta.get("title")
+    return title.strip()[:80] if isinstance(title, str) and title.strip() else ""
+
+
 def _skills_dir() -> Path:
     return Path.home() / ".vaf" / "skills"
 
@@ -164,6 +179,11 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
         out.append({
             "id": sid,
             "name": parsed.get("name") or sid,
+            # The Agent Skills format wants `name` to be the folder's name, so it
+            # is an identifier and not a headline. A human title belongs in
+            # `metadata`, which the format allows for exactly this - and a
+            # surface that has one shows it instead of the identifier.
+            "title": _title_of(parsed),
             "description": parsed.get("description", ""),
             "valid": parsed.get("valid", False),
             "error": parsed.get("error"),

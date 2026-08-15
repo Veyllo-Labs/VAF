@@ -2582,6 +2582,16 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
                 _scope = str(_user.get("user_scope_id") or "")
                 _is_admin = is_admin_identity(_user.get("role"), _scope)
                 _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first_seg)
+                if not _allowed:
+                    # The one path into another account's tree that is not another
+                    # account's business: the shared folder of a room this account was
+                    # admitted to. The agent's file tools got the same exception, and
+                    # without it here a member could write a file into the room and
+                    # then be refused when it clicked its own link.
+                    from vaf.tools.filesystem import _shared_room_roots
+                    _allowed = any(
+                        target == Path(_r).resolve() or target.is_relative_to(Path(_r).resolve())
+                        for _r in _shared_room_roots(_scope))
             except HTTPException:
                 raise
             except Exception:

@@ -78,6 +78,55 @@ def _visible_skill_roots(user_scope_id):
         return []
 
 
+#: Room folders per account, briefly. `joined_rooms` opens every room on the machine
+#: and decrypts each manifest, and this is asked on the PER TOOL CALL path - the same
+#: reason `room_owner_scope` keeps a cache. The window is short and stated rather than
+#: tuned: an account removed from a shared room keeps its folder for at most this long.
+_SHARED_ROOM_ROOTS_TTL_S = 10.0
+_shared_room_roots_cache: dict = {}
+
+
+def _shared_room_roots(user_scope_id):
+    """The room folders this account may enter that are NOT in its own tree.
+
+    Only rooms shared across accounts have any: a room belonging to one account lives
+    in that account's own project tree, where the ordinary jail already reaches it.
+    A shared room's folder stays where it is - under the account that opened it - and
+    the members it admitted are let in here, rather than the folder being moved
+    somewhere everybody can reach, which would widen far more than it closes.
+
+    Membership is the authority, taken from the room itself. Fail-closed to an empty
+    list: the caller keeps their own tree and loses the shared folder, rather than a
+    lookup failure widening anything.
+    """
+    scope = str(user_scope_id or "")
+    if not scope:
+        return []
+    import time as _t
+    cached = _shared_room_roots_cache.get(scope)
+    if cached and cached[0] > _t.monotonic():
+        return list(cached[1])
+    roots = []
+    try:
+        from vaf.core.a2a.room import joined_rooms, participant_key
+        seen = set()
+        for lane in ("agent", "cli"):
+            for room, _identity in joined_rooms(participant_key(lane, scope)):
+                if room.room_id in seen or not room.manifest.get("multi_scope"):
+                    continue
+                seen.add(room.room_id)
+                folder = room.workspace_dir(create=False)
+                if folder:
+                    roots.append(folder)
+    except Exception:
+        roots = []
+    _shared_room_roots_cache[scope] = (_t.monotonic() + _SHARED_ROOM_ROOTS_TTL_S,
+                                       list(roots))
+    if len(_shared_room_roots_cache) > 64:
+        _shared_room_roots_cache.clear()
+    return list(roots)
+
+
 def compute_user_jail(user_scope_id, user_role=None, *, mode="write"):
     """Jail info for set_librarian_scope, shared by every tool that confines file
     access to the caller (librarian, write_file, edit_file, read tools, send_mail
@@ -112,8 +161,13 @@ def compute_user_jail(user_scope_id, user_role=None, *, mode="write"):
         roots = [own_root] if own_root else []
         if mode == "read":
             roots = roots + _visible_skill_roots(scope)
+        # The shared folder of every room this account was admitted to across the
+        # account line. In BOTH modes, unlike the skill roots: a room's folder is
+        # where members put what the others should see, so a member that may read it
+        # and not write into it can receive files and never send one.
+        shared = _shared_room_roots(scope)
         return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
-                "allowed_roots": roots}
+                "allowed_roots": roots + shared, "shared_roots": shared}
     except Exception:
         return {"is_admin": False, "uid8": "", "allowed_roots": []}
 
@@ -204,7 +258,22 @@ def _librarian_jail_ok(abs_path) -> bool:
             rel = target.relative_to(projects_root)
             first = rel.parts[0] if rel.parts else ""
             if _re_j.fullmatch(r"[0-9a-f]{8}", first) and first != (info.get("uid8") or ""):
-                return False
+                # ONE exception, and it has to live INSIDE this invariant rather than
+                # in the allow-list below, because this returns before the list is
+                # ever consulted. A room shared across accounts keeps its folder in
+                # the tree of the account that opened it, so for every other member
+                # the path looks exactly like somebody else's - which it is, and they
+                # were admitted to it.
+                #
+                # It checks the FOLDER and not merely that the caller has one: the
+                # allow-list underneath would refuse a foreign path anyway, so the two
+                # agree today and no test can tell them apart. It is written the tight
+                # way regardless, because the day something else is added to
+                # `allowed_roots` is the day the loose form stops being equivalent.
+                if not any(target == Path(r).resolve()
+                           or target.is_relative_to(Path(r).resolve())
+                           for r in (info.get("shared_roots") or [])):
+                    return False
         # Positive allow-list: a remote (non-admin) user may only read inside their own allowed roots.
         for r in (info.get("allowed_roots") or []):
             try:

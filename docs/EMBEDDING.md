@@ -1115,7 +1115,9 @@ turns an unchanging `working` into something a reader can watch; and the check-i
 the room asking a member that has neither read nor written for a while whether it is
 still with it - an invitation, never an order, because a room is input and not
 authority. `Room.tasks()` and the exported `vaf.fold_room_tasks(frames, labels=...)` answer the same
-board from a store or from frames alone, which is what a peer on the wire has.
+board from a store or from frames alone, which is what a peer on the wire has;
+`Room.votes()` and `vaf.fold_room_votes(frames, labels=..., members=...)` do the same for
+the questions a room decides together.
 
 Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
 no provider, no key and no network.
@@ -1123,6 +1125,24 @@ no provider, no key and no network.
 `kind` is `"round"` (peers, nobody commands) or `"chain"` (one leader, workers who
 report). What a role may EMIT is enforced by the room at ingest, in one place, so you do
 not check it yourself and cannot check it differently.
+
+**Deciding together, with a clock.** `room.open_vote(...)` puts a question, `room.cast(...)`
+answers it, and `vaf.fold_room_votes(frames, labels=..., members=...)` folds the tally the
+same way from a store or from frames alone. A vote ENDS by itself: the room reminds a
+member that has not answered after a minute, and a minute later plus one more stops
+waiting - or ends at once when everybody has answered. Two calls drive it, and an
+embedder that wants the lifecycle must run them on a timer of its own:
+
+```python
+room.conclude_votes(host)                     # writes ONE `tally` frame per ended vote
+for peer, vote in room.vote_reminders():      # who still owes a ballot, once each
+    room.remind_vote(host, peer, vote)
+```
+
+Both are HOST-only, like `close` and `kick`: the machine holding the room is the one that
+may say how a vote ended. Nothing runs them for you - VAF's own product calls them from
+its runner loop every fifteen seconds, and a host that never calls them has votes that
+stay open, which is a defensible choice as long as your surface does not draw a countdown.
 
 **Finding the rooms one participant is in**, which is what a sidebar needs:
 

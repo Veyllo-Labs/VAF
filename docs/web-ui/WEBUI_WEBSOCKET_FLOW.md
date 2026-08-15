@@ -188,11 +188,18 @@ Key rules:
   exist so the view can leave the button off rather than offer one that is refused.
   `rename_room` changes the manifest topic and is host-only; it deliberately writes no
   frame, because a topic is a property of the room and not something anybody said.
+- `cast_room_vote` (`{ room_id, vote_id, choice }`): the person voting in an open
+  question, on the same CLI lane. The choice is RESOLVED against the vote's options by
+  the room at ingest, not here - a shortened answer lands on the option it means, and one
+  that matches nothing is refused with the options named. Answers with a fresh
+  `room_transcript`, so the card redraws from the store rather than from the click.
 
 ### Server → Client
 
 - `room_transcript`: answers `open_room`. Payload: `{ room, messages }`, where `room`
-  carries `{ id, roomId, title, roomKind, role, closed, members, me }` and each message
+  carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
+  members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, typing,
+  tasks, votes }` and each message
   is `{ id, peer, label, role, kind, text, ts, lamport, to }`. **Already in canonical
   order** - the server sorts by `(lamport, sender, seq)` so every surface shows the same
   sequence, and a frontend that re-sorted by `ts` would undo it, because the wall clocks
@@ -202,6 +209,17 @@ Key rules:
   how the view tells it apart from the strangers.
   `room.members_list` names everyone in the room (`peer`, `label`, `role`), sorted by
   label, so the header can list them rather than only counting them.
+  `room.tasks` and `room.votes` are DERIVED server-side from the same frames (the task
+  board and the vote fold), never stored: two surfaces cannot then disagree about what
+  "working" means or who abstained. A vote carries
+  `{ id, question, options, askedBy, tally, voted, waitingFor, closed, deadline,
+  everyoneVoted, mine, ballots }`. `deadline` is an epoch second and the browser runs
+  its countdown off it, rather than off a seconds-left recomputed each poll - a clock
+  that only moves when a poll lands stutters. A vote LEAVES this list when the room has
+  written its result (a `tally` frame, which arrives as an ordinary message), so the
+  card and the result change places instead of both being absent for a moment. Fields
+  added here must be forwarded explicitly by the frontend, which rebuilds these objects
+  field by field - an unforwarded field is silently dropped.
 
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content, data?, mimeType?, htmlContent? }>, sessionId?, error? }`. Each entry has `name` and `content` (extracted text for the LLM); `data` (base64) and `mimeType` for display. When Gotenberg is available, Office docs (.docx, .xlsx, .pptx, .odt, .ods, .odp) are converted to PDF on the backend and returned as `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for original layout. Without Gotenberg, the backend provides `htmlContent` or the frontend falls back to client-side mammoth.js for DOCX.
 - `editor_apply_edit`: sent when the agent calls `replace_editor_selection` or when `replace_editor_text` resolves an exact text match in the current editor document. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip when `selectionIndex >= 0`. For native DOCX sessions, this is applied to the native document model; for legacy editor sessions it is applied to HTML/text content.

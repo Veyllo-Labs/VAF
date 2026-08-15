@@ -64,6 +64,14 @@ KINDS = frozenset({
     # `choice` in the body - a second kind for them would be a second way to say
     # "this answers that", which the protocol already has.
     "vote",
+    # How a vote ENDED, written once by the host when every member has answered
+    # or the deadline passed: the counts, who chose what, and who let it run out.
+    # A frame rather than a projection, because the outcome is the one part of a
+    # vote that must survive being read by somebody who was not there - and
+    # because the write itself is what makes closing happen exactly once. It
+    # answers the vote (reply_to), so a peer that only knows `answer` still sees
+    # the result attached to the question.
+    "tally",
 })
 
 # A peer's standing in one room. Roles are derived from the log, never asserted

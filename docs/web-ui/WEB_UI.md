@@ -131,6 +131,53 @@ many frames have not been read.
   every other peer from the room's own read cursors ("took the newest message
   recently, has not answered"), expiring with a window so silence stops looking
   busy. The 3-second room poll refreshes it; nothing is sent on the wire for it.
+- **What the room is FOR stands in the header**, under its kind, one line, with the
+  full text on hover. The mission is handed to every agent in every turn it takes;
+  before this it was in the payload and on no surface, which made the person who set
+  it the only member of the room who could not read it back.
+- **Open votes are DOCKED above the message box**, not in the transcript. Twice
+  measured, twice wrong: at the top of the conversation a vote scrolled off in a view
+  that opens at the newest message, and inside the header it looked right in the source
+  while actually sitting after the header's closing tag, which scrolls the same way.
+  Docked to the composer it travels with the one part of the screen that never moves,
+  and the conversation slides up to make room for it rather than being covered - a
+  transition on the column's bottom padding, back down when the panel goes.
+  Several open questions are TABS, not a stack: a stack pushes the conversation off
+  screen to show questions nobody asked to see all at once.
+  Each card carries the question, who asked, how many have answered, who is still
+  missing by name, the options as buttons (the viewer's own choice outlined), the
+  public ballots, and a COUNTDOWN - black in the light theme, amber in the dark one,
+  ticking in the browser off the deadline the server sent. It reads "alle haben
+  gewählt" instead of a time once nobody is missing, because a vote ends the moment
+  every member has answered and waits for no clock.
+  The panel arrives and LEAVES as a movement, which is not decoration here: a vote
+  ends by itself, so the card disappearing is the normal case, and the last set is held
+  for the length of the exit animation after the poll stops carrying it.
+  When the room closes a vote it posts the result as a message - centred and framed
+  rather than in a member's bubble, because the ROOM said it: the host's lane carries
+  it because somebody has to write it, and crediting a member with a count they did not
+  make would be putting words in their mouth. The card and that line change places.
+- **What is RUNNING is docked above the message box too**, next to the votes: at most
+  three tasks, freshest first, each with its progress count and current step, and a
+  "+N weitere" when there are more. The full board stays in the transcript, because
+  finished work that disappears reads as work that never happened - this strip answers
+  the other question, "what is anybody doing", without scrolling for it. It exists
+  because the board had the votes' defect: a member reported `6/7` correctly and the
+  person who had asked to see it never did, the card being a hundred messages up.
+  Each row names WHO is on it before what it is - in a room with several agents the
+  name is the half that cannot be inferred from the other one, and the first version
+  showed only the work.
+  How much room the conversation makes for both docks is MEASURED (a `ResizeObserver`
+  on the dock, feeding the message column's bottom padding), not a constant: two panels
+  of their own height plus a composer that grows with what is typed cannot be answered
+  by one number, and the first version's number was already wrong for two cards.
+  The whole strip is a button, and it opens the room's panel on a second tab, **Wer
+  macht was**: the same board grouped by the member doing it, members with something
+  running first, finished work dimmed but kept. Two questions, two tabs - answered in
+  one list, "who is on what" is buried under everyone who has nothing running, and
+  answered in a window of its own, a group chat grows a third surface for something
+  the room panel is already the place for. The tab shape is the sub-agent window's,
+  not a new one.
 - **The row carries a pencil and a bin**, in the place a conversation carries them,
   doing the room's version of each. The pencil edits the name IN THE ROW, exactly as a
   conversation does - the same gesture one row apart must not be a different interaction

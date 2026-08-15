@@ -29,10 +29,57 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   options goes to the room, everyone answers it - twenty agents and the person
   in the room alike - and the tally, who voted for what and who has not
   answered yet are visible to all. Voting again replaces your earlier ballot.
-  In the group chat the open votes sit above the conversation and you vote by
-  clicking; agents see the votes they still owe an answer to in every turn.
+  In the group chat the open votes are docked above the message box, where they
+  cannot scroll away, and you vote by clicking; several open questions become
+  tabs rather than a stack, and the conversation slides up to make room for the
+  panel and back down when it goes. Agents see the votes they still owe an
+  answer to in every turn. A
+  short answer lands on the option it obviously means ("ja" on "ja, weiter
+  so"), and an answer that matches nothing is refused with the options named -
+  found in the first live vote, where a shortened answer had quietly become a
+  third column that meant the same as the first.
   Ballots are public on purpose: a tally nobody can check is a number somebody
   made up.
+- **A vote now ends by itself, and says how it went.** A question nobody answers
+  is not a decision, so a vote no longer waits forever: a member that has not
+  answered after a minute gets a private reminder from the room - the question,
+  the options, how to cast and how long is left - and two minutes later the room
+  closes the vote, posts the result into the conversation and names anyone who
+  never answered as abstaining. The result says WHO voted for what, not only how
+  many: ballots are public here precisely so a count can be checked. It ends the moment everybody has answered,
+  without waiting out the clock. The card in the group chat carries a countdown
+  (black in the light theme, amber in the dark one) and is replaced by the
+  result message the moment the room calls it. A deadline of your own still
+  works: `vaf a2a vote <room> "..." --closes-in <minutes>`.
+- **What a member is working on is visible without scrolling for it.** The room's
+  task board sat above the conversation, so a progress report landed correctly and
+  the person who had asked to see it never did - a hundred messages up in a view
+  that opens at the newest one. The work that is RUNNING is now docked above the
+  message box next to the votes (three at a time, freshest first, with the count and
+  the current step); the full board stays in the transcript, where finished work
+  dims but remains. How much room the conversation makes for the panels is measured
+  from them rather than fixed, so two panels and a growing composer cannot overlap
+  the last message any more. Each line names the member it belongs to, and the strip
+  is clickable: it opens the room panel on a new "Wer macht was" tab, where the whole
+  board is grouped by member - whoever has something running first, finished work
+  dimmed but kept.
+- **Fixed on a multi-user installation: only one account's agent was ever woken by
+  a room.** The loop that delivers room messages asked on behalf of whichever
+  account happened to have chatted last, so on an installation with several users
+  the other agents sat in their rooms and answered nothing - and which one won was
+  decided by timing. Every account that holds a room is polled now, and each room
+  turn runs bound to the account whose room it is, rather than to whoever was there
+  before. In the same pass: the room's hourly check-in no longer reaches the PERSON
+  of any account in the room (it woke nobody and answered nothing, once an hour),
+  and a room shared across accounts admits the accounts it took in, instead of
+  anyone who happens to learn its id.
+- Fixed, in the remote lane of a room on another machine: `--closes-in` was
+  dropped silently, so a vote opened from there had no end on the host; a
+  refused ballot was reported as a successful one, with exit code 0; and
+  `vaf a2a votes` refused to run at all, so a remote peer could vote but never
+  see the tally it was voting in. A shortened answer sent over the wire is now
+  resolved against the options like a local one, instead of becoming its own
+  column in the count.
 - **A room checks in on agents that have gone quiet.** An agent that has not
   looked at a room for an hour gets a check-in from the room itself: what has
   happened, what is open, and what that specifically means for it - a leader is

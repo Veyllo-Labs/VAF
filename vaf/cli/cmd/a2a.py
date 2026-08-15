@@ -239,6 +239,20 @@ def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
             ack = remote.submit(payload)
     except (TrustRefused, RemoteRefused) as e:
         _remote_fail(e)
+    _remote_ack(ack, room_id, kind)
+
+
+def _remote_ack(ack: dict, room_id: str, kind: str) -> None:
+    """What the room made of a submitted frame, said once for every remote verb.
+
+    One place rather than one per verb, because the two that existed disagreed:
+    the second read the frame id from `ack["id"]`, which the hub does not send
+    (it commits under `ack["frame"]`), and never looked at `status` at all - so a
+    REFUSED remote ballot printed `{"ok": true}` and exited 0. An agent reading
+    that believes it voted, and then gets reminded about a vote it thinks it
+    answered.
+    """
+    ack = ack or {}
     if ack.get("status") == "committed":
         _emit({"ok": True, "id": ack.get("frame"), "room": room_id, "kind": kind,
                "lamport": ack.get("lamport"), "seq": ack.get("seq"), "remote": True})
@@ -252,16 +266,16 @@ def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
           EXIT_REFUSED if ack.get("status") in ("refused", "not_writer") else EXIT_ERROR)
 
 
-def _remote_tasks(record: dict) -> list:
-    """The task board for a room on another machine.
+def _remote_frames(record: dict) -> list:
+    """Everything the seat may read in a room on another machine, as Frames.
 
-    Folded from the frames the seat may read, with the SAME function the host
-    uses - a second fold would be a second opinion about what "working" means,
-    and the two would drift on the first status somebody adds.
+    The backlog up to the sync marker, which is the whole room as far as a reader
+    is concerned. Shared by every remote board (tasks, votes) because a second
+    copy of this loop would be a second set of decisions about which wire
+    messages are frames.
     """
     from vaf.core.a2a.client import RemoteRefused, RemoteRoom
     from vaf.core.a2a.frame import Frame
-    from vaf.core.a2a.room import fold_tasks
     from vaf.core.a2a.trust import TrustRefused
 
     frames = []
@@ -281,7 +295,60 @@ def _remote_tasks(record: dict) -> list:
         pass
     except (TrustRefused, RemoteRefused) as e:
         _remote_fail(e)
-    return fold_tasks(frames, labels={})
+    return frames
+
+
+def _remote_labels(frames: list) -> dict:
+    """Who is who, from the log alone: the display name each peer joined under.
+
+    The host resolves labels against its member files and disambiguates two agents
+    called "Codex" with a tag; a reader on the wire has neither. It uses what the
+    join frames say and falls back to the peer id, rather than inventing a second
+    tagging scheme that would disagree with the host's on the first collision.
+    """
+    out: dict = {}
+    for frame in sorted(frames, key=lambda f: f.lamport):
+        if frame.kind == "join":
+            display = str((frame.body or {}).get("display") or "").strip()
+            if display:
+                out[frame.sender] = display
+    return out
+
+
+def _remote_members(frames: list) -> list:
+    """Who is still in the room, folded from join and leave the way roles are."""
+    present: dict = {}
+    for frame in sorted(frames, key=lambda f: f.lamport):
+        if frame.kind == "join":
+            present[frame.sender] = True
+        elif frame.kind == "leave":
+            present.pop(frame.sender, None)
+    return sorted(present)
+
+
+def _remote_tasks(record: dict) -> list:
+    """The task board for a room on another machine.
+
+    Folded from the frames the seat may read, with the SAME function the host
+    uses - a second fold would be a second opinion about what "working" means,
+    and the two would drift on the first status somebody adds.
+    """
+    from vaf.core.a2a.room import fold_tasks
+    return fold_tasks(_remote_frames(record), labels={})
+
+
+def _remote_votes(record: dict) -> list:
+    """Every vote in a room on another machine, with the same fold the host uses.
+
+    Until this existed a remote peer could open a vote and cast a ballot but never
+    read the tally, because the fold was a method on a store. With a deadline and
+    an abstention in it, that gap stops being an inconvenience: an agent would be
+    counted as abstaining from a question it had no way to look up.
+    """
+    from vaf.core.a2a.room import fold_votes
+    frames = _remote_frames(record)
+    return fold_votes(frames, labels=_remote_labels(frames),
+                      members=_remote_members(frames))
 
 
 def _remote_submit(record: dict, room_id: str, payload: dict) -> None:
@@ -289,7 +356,9 @@ def _remote_submit(record: dict, room_id: str, payload: dict) -> None:
 
     The verbs that already had a remote path go through _send; these two carry
     bodies that _send has no arguments for, and inventing two more arguments for
-    one caller each would grow that signature for nothing.
+    one caller each would grow that signature for nothing. The ANSWER is read by
+    the same `_remote_ack` either way - the two used to differ, and the weaker one
+    reported refusals as success.
     """
     from vaf.core.a2a.client import RemoteRefused, RemoteRoom
     from vaf.core.a2a.trust import TrustRefused
@@ -299,8 +368,7 @@ def _remote_submit(record: dict, room_id: str, payload: dict) -> None:
     except (TrustRefused, RemoteRefused) as e:
         _remote_fail(e)
         return
-    _emit({"ok": True, "room": room_id, "remote": True,
-           "id": (ack or {}).get("id"), "kind": payload.get("kind")})
+    _remote_ack(ack, room_id, str(payload.get("kind") or ""))
 
 
 def _remote_wait(record: dict, room_id: str, *, n: int, timeout: float,
@@ -771,6 +839,12 @@ def vote(room_id: str = typer.Argument(...),
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
         body = {"text": question, "options": [o for o in (option or []) if o.strip()] or ["yes", "no"]}
+        if closes_in:
+            # The deadline used to be dropped silently on this lane: a remote
+            # `--closes-in 3` opened a vote the host knew no end for. It is stamped
+            # on the OPENER's clock either way, which the protocol says out loud.
+            import time as _time
+            body["closes_at"] = _time.time() + closes_in * 60.0
         return _remote_submit(record, room_id, {"kind": "vote", "body": body})
     identity = _me(room, as_peer=as_peer)
     try:
@@ -807,14 +881,24 @@ def ballot(room_id: str = typer.Argument(...),
         frame = room.cast(identity, vote_id, choice, comment=comment)
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
-    _emit({"ok": True, "room": room_id, "vote": vote_id, "choice": choice,
-           "id": frame.id})
+    # The choice the ROOM recorded, not the one that was typed: a shortened answer
+    # is resolved against the options on the way in, and printing what was typed
+    # would tell a machine peer its shorthand had been taken literally.
+    _emit({"ok": True, "room": room_id, "vote": vote_id,
+           "choice": (frame.body or {}).get("choice") or choice, "id": frame.id})
 
 
 @app.command()
 def votes(room_id: str = typer.Argument(...)) -> None:
-    """Every vote in this room with its tally, and who has not answered yet."""
-    room = _room(room_id)
+    """Every vote in this room with its tally, its deadline, and who has not answered."""
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        for entry in _remote_votes(record):
+            _emit(entry)
+        return
     _me(room)
     for entry in room.votes():
         _emit(entry)

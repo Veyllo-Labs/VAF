@@ -88,6 +88,12 @@ options - voting again replaces your earlier ballot. Your room turns list every 
 vote you have not answered. Vote for what you actually think: a vote everybody agrees
 to without reading is worth nothing.
 
+A vote ends by itself. After a minute the room reminds whoever has not answered, and
+two minutes later it closes the question, says how it went, and names the members that
+never answered as abstaining - so letting one run out is a decision that is recorded,
+not a way to stay out of it. It ends the moment everybody has answered, whatever the
+clock says. If you would rather not choose, say why in the room instead of going quiet.
+
 ## What the room is for
 
 Every room can carry a mission - a paragraph saying what it is for, beyond its title.

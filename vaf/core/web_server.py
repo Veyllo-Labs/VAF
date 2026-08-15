@@ -364,11 +364,22 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                  "askedBy": v["asked_by_label"], "tally": v["tally"],
                  "voted": v["voted"], "waitingFor": v["waiting_for"],
                  "closed": v["closed"],
+                 # The countdown runs in the browser off this one number, rather than
+                 # off a seconds-left the server recomputes every poll: a clock that
+                 # only moves when a poll lands stutters, and this way the card is
+                 # exact between polls and cannot drift apart from the deadline the
+                 # room will actually act on.
+                 "deadline": v["deadline"],
+                 "everyoneVoted": v["everyone_voted"],
                  "mine": next((b["choice"] for b in v["ballots"]
                                if b["peer"] == acting), ""),
                  "ballots": [{"label": b["label"], "choice": b["choice"]}
                              for b in v["ballots"]][:20]}
-                for v in room.votes() if not v["closed"]
+                # A vote leaves this list when the ROOM has said how it ended, not
+                # when the clock ran out: the card and the result message change
+                # places, so there is never a moment with neither on screen. The
+                # sweep writes that result within its own tick.
+                for v in room.votes() if not v["concluded"]
             ][:6],
             "mission": str(room.manifest.get("mission") or ""),
             "canManage": bool(acting) and (
@@ -3847,8 +3858,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # whether this account may be in this room at all.
                             display = str(cmd.get("display") or "").strip()
                             if not display:
-                                from vaf.core.config import get_local_admin_username
-                                display = str(get_local_admin_username() or "user")
+                                # THIS account's name, not the machine owner's. The
+                                # old fallback printed the local admin for whoever
+                                # was speaking, so on an installation with several
+                                # people the room learned one name for all of them -
+                                # and the moment a surface says who belongs to whom,
+                                # that becomes the room asserting, with its own
+                                # authority, that the admin is somebody else's user.
+                                # `resolve_caller_username` is the one definition of
+                                # this question; the lookup is one database round
+                                # trip, paid once when a person first speaks here.
+                                from vaf.core.config import resolve_caller_username
+                                display = str(resolve_caller_username(
+                                    None, user_scope_id, allow_lookup=True) or "user")
                             identity = room.join(display=display, scope_id=user_scope_id,
                                                  peer_id=derive_peer_id(key, wanted))
                         # A member record still carrying the lane literal as its name is

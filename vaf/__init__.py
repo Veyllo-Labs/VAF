@@ -21,7 +21,7 @@ __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "RemoteRefused",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "VoiceTurnEngine",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
-           "fold_room_tasks",
+           "fold_room_tasks", "fold_room_votes",
            "joined_rooms", "markers",
            "participant_key", "room_invitation", "set_account_allowlist_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
@@ -100,8 +100,9 @@ def __getattr__(name):
         from .core.pdf_extract import extract_pdf_markdown
         return extract_pdf_markdown
     if name in ("Room", "RoomError", "StoreError", "UnsafeName", "derive_peer_id",
-                "describe_room_entry", "fold_room_tasks", "joined_rooms",
-                "participant_key", "room_invitation", "unread_counts"):
+                "describe_room_entry", "fold_room_tasks", "fold_room_votes",
+                "joined_rooms", "participant_key", "room_invitation",
+                "unread_counts"):
         # Rooms: several agents in one conversation, some of which may not be VAF and
         # may not be on this machine. Exported because SIX surfaces outside the room
         # package already reach into it for this same handful of names - the CLI, the
@@ -122,6 +123,13 @@ def __getattr__(name):
         # answer "what work is open". Without it an embedder would fold the chain a
         # second time and hold a second opinion about what "working" means.
         #
+        # `fold_room_votes` is here on the same measurement, taken twice: the remote
+        # lane could open a vote and cast a ballot but never read the tally, because
+        # the fold was a method on a store. A vote that also carries a deadline, a
+        # reminder and an abstention makes a second opinion worse than useless - two
+        # readers would disagree about who abstained, which is the one part of a
+        # vote nobody may recompute differently.
+        #
         # `describe_room_entry` and `room_invitation` are renamed on the way out. Inside
         # the package `describe` and `invitation` sit next to the things they describe
         # and invite into; on a facade shared with agents, tools and voice they would be
@@ -129,14 +137,15 @@ def __getattr__(name):
         #
         # Stdlib at import time, so the slim base is unaffected. See docs/EMBEDDING.md.
         from .core.a2a.room import (Room, RoomError, derive_peer_id, describe,
-                                    fold_tasks, joined_rooms, participant_key,
-                                    unread_counts)
+                                    fold_tasks, fold_votes, joined_rooms,
+                                    participant_key, unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
         from .core.a2a.invite import invitation
         return {"Room": Room, "RoomError": RoomError, "StoreError": StoreError,
                 "UnsafeName": UnsafeName,
                 "derive_peer_id": derive_peer_id,
                 "describe_room_entry": describe, "fold_room_tasks": fold_tasks,
+                "fold_room_votes": fold_votes,
                 "joined_rooms": joined_rooms,
                 "participant_key": participant_key, "room_invitation": invitation,
                 "unread_counts": unread_counts}[name]

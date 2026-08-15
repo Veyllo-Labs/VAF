@@ -495,6 +495,29 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   @keyframes roomMessageEnter { from { opacity: 0 } to { opacity: 1 } }
   .room-msg-enter { animation: roomMessageEnter .2s linear both }
 }
+/* The vote panel docking above the message box, and leaving the same way.
+   Both directions, because a vote here ENDS by itself - the last ballot lands or
+   the deadline passes - and a panel that pops out of existence while the
+   conversation snaps down behind it reads as a glitch rather than as a decision.
+   transform and opacity only: this sits over the transcript, and anything that
+   forces a repaint here repaints the messages behind it too. */
+@keyframes voteDockEnter {
+  from { opacity: 0; transform: translate3d(0, 1.25rem, 0) scale(.98) }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1) }
+}
+@keyframes voteDockLeave {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1) }
+  to   { opacity: 0; transform: translate3d(0, 1rem, 0) scale(.98) }
+}
+.vote-dock-enter { animation: voteDockEnter .32s cubic-bezier(.16,.84,.44,1) both }
+.vote-dock-leave { animation: voteDockLeave .3s cubic-bezier(.4,0,.7,.2) both }
+@media (prefers-reduced-motion: reduce) {
+  /* Still an arrival and a departure, just without the travel. */
+  @keyframes voteDockEnter { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes voteDockLeave { from { opacity: 1 } to { opacity: 0 } }
+  .vote-dock-enter { animation: voteDockEnter .18s linear both }
+  .vote-dock-leave { animation: voteDockLeave .18s linear both }
+}
 @keyframes agentAvatarTalk {
   0%,100% { transform:scale(1);   border-radius:50% }
   18%     { transform:scale(1.38); border-radius:62% 38% 55% 45%/45% 55% 38% 62% }

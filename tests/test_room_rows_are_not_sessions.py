@@ -314,7 +314,11 @@ def test_the_room_is_branched_inside_the_message_container():
     look like the chat rather than like something covering it.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    container = source.split('mx-auto space-y-2 pb-32")}>')[1][:1200]
+    # Anchored on the column's own width class rather than on its padding: the
+    # padding is a value now (the conversation makes room for the vote panel), and
+    # a guard that breaks when a number changes is a guard people learn to edit
+    # rather than to read.
+    container = source.split("cn(messagesAreaWidthClass,")[1][:1600]
 
     assert "{roomView ? (" in container, "the room is not branched inside the chat area"
     assert "<RoomConversation" in container

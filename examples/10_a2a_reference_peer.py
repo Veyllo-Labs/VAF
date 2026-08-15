@@ -50,6 +50,10 @@ KINDS = frozenset({
     # frames whose reply_to points at the vote and whose body carries a `choice`,
     # so a peer that only implements `answer` can still take part in one.
     "vote",
+    # How a vote ended: written once by the host when every member has answered
+    # or the deadline passed, answering the vote (reply_to) and carrying the
+    # counts plus whoever let it run out. A peer never sends one.
+    "tally",
 })
 
 REPORT_STATUSES = frozenset({

@@ -77,6 +77,19 @@ CAPABILITIES: Dict[str, frozenset] = {
 ROOM_MODES = ("observe", "assist", "autonomous")
 DEFAULT_MODE = "assist"
 
+# How long a vote waits for a member before the room reminds it, and how long
+# after that reminder it stops waiting and counts the member as abstaining. The
+# two together are the default life of a vote that named no deadline of its own:
+# a question nobody ever answers must still end, or a room fills up with open
+# questions that everybody has stopped reading.
+#
+# They live here rather than in the surface that runs the clock because the
+# ANSWER they produce - "this vote is over, and these members abstained" - is
+# part of the protocol: a second implementation must reach the same tally from
+# the same frames, and it cannot if the deadline is a setting of ours.
+VOTE_REMIND_AFTER_S = 60.0
+VOTE_ABSTAIN_AFTER_S = 120.0
+
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_CHILDREN = 8
 
@@ -262,6 +275,7 @@ class Room:
         max_depth: int = DEFAULT_MAX_DEPTH,
         max_children: int = DEFAULT_MAX_CHILDREN,
         multi_scope: bool = False,
+        tenants: Optional[Iterable[str]] = None,
     ) -> "Room":
         if kind not in ROOM_KINDS:
             raise RoomError(f"unknown room kind {kind!r}; expected one of {ROOM_KINDS}")
@@ -290,6 +304,9 @@ class Room:
             # Cross-tenant rooms are deliberately off. subagent_ipc records what a
             # shared record carrying model text across tenants costs here.
             "multi_scope": bool(multi_scope),
+            # And when they are on, they still admit only the accounts named here.
+            # The room id is not a secret; the guest list is the door.
+            "tenants": [t for t in (owner_tenant(x) for x in (tenants or [])) if t],
         })
         return cls(store)
 
@@ -371,15 +388,26 @@ class Room:
         A foreign agent carries no scope at all and is not a tenant, so it is not
         caught here; what bounds it is the ticket, which opens exactly one room.
         """
-        if self.manifest.get("multi_scope"):
-            return
         owner = owner_tenant(self.manifest.get("owner_scope"))
         scope_id = owner_tenant(scope_id)
-        if owner and scope_id and scope_id != owner:
+        if not (owner and scope_id) or scope_id == owner:
+            return
+        if self.manifest.get("multi_scope"):
+            # A cross-account room admits the accounts it ADMITTED, not everyone who
+            # can name it. Without this list, `multi_scope` would mean that an agent
+            # told a room id inside a room message could walk into a conversation
+            # belonging to five other people - the room id is not a secret and was
+            # never designed to be one.
+            if scope_id in self.tenants():
+                return
             raise NotAMember(
-                f"room {self.room_id!r} belongs to another account; cross-account "
-                f"rooms are off by default"
+                f"room {self.room_id!r} did not admit this account; a cross-account "
+                f"room lists the accounts it takes"
             )
+        raise NotAMember(
+            f"room {self.room_id!r} belongs to another account; cross-account "
+            f"rooms are off by default"
+        )
 
     def host_peers(self) -> frozenset:
         """The handles belonging to the account that owns this room.
@@ -400,6 +428,87 @@ class Room:
             derive_peer_id(participant_key(lane, owner), self.room_id)
             for lane in PARTICIPANT_LANES
         )
+
+    def tenants(self) -> List[str]:
+        """Every ACCOUNT this room admits, owner first.
+
+        A room belongs to one account unless it says otherwise, and "otherwise" is not
+        "anybody who learns the room id" - that would let an agent join a room whose id
+        it was told IN A ROOM MESSAGE. So a cross-account room carries the list of the
+        accounts it admitted, and that list is the door.
+
+        It lives in the manifest rather than in the member files for the reason every
+        other decision here follows: a member file is written by the member, so an
+        account that could write itself in would be admitting itself.
+        """
+        owner = owner_tenant(self.manifest.get("owner_scope"))
+        admitted = [owner_tenant(t) for t in (self.manifest.get("tenants") or [])]
+        return list(dict.fromkeys([t for t in [owner] + admitted if t]))
+
+    def household_peers(self, tenant: str) -> Dict[str, str]:
+        """The handles ONE account holds in this room, by lane.
+
+        The same derivation `host_peers` uses, kept apart from it because they answer
+        different questions: that one asks "may this peer be removed", this one asks
+        "which seats belong together".
+        """
+        tenant = owner_tenant(tenant)
+        if not tenant:
+            return {}
+        return {lane: derive_peer_id(participant_key(lane, tenant), self.room_id)
+                for lane in PARTICIPANT_LANES}
+
+    def pairs(self, *, tenants: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
+        """Which member is a person, which is an agent, and who belongs to whom.
+
+        DERIVED, never believed - and that is the whole point. A member file is
+        written by the member, so a `speaks_for` field in one would be a peer naming
+        its own partner; anyone could claim to be somebody's user. Here the room
+        RECOMPUTES each handle from an account it knows (`derive_peer_id` over lane
+        and tenant) and accepts the pair only when the handle comes out identical.
+        A stranger cannot produce that handle without the tenant's scope id, and the
+        scope id appears in no frame.
+
+        What it therefore CANNOT answer: a guest that redeemed a ticket carries no
+        tenant at all (`scope_id=None`, a randomly minted handle), so no derivation
+        reaches it. Those pairs come from the invitation instead - one ticket that
+        seats two - and are marked `proof: "invitation"` by that path, never by this
+        one.
+
+        `tenants` defaults to the accounts the ROOM admits (`Room.tenants()`), which
+        is the whole list for a single-tenant room and the guest list for one across
+        tenant lines. It comes from the manifest, which only the room writes - so
+        every member can be told about every pair without anything here reading a user
+        store, and without a member having any say in it.
+
+        The most common answer on a fresh room is "no partner": a person becomes a
+        member only when they first act in the room, so an agent sitting there alone
+        is the normal starting state and not a fault to report.
+        """
+        members = self.members()
+        labels = self.labels()
+        wanted = list(tenants) if tenants is not None else self.tenants()
+        out: Dict[str, Dict[str, Any]] = {
+            peer: {"peer": peer, "kind": "unknown", "partner": "",
+                   "partner_label": "", "proof": ""}
+            for peer in members
+        }
+        for tenant in dict.fromkeys(t for t in (owner_tenant(x) for x in wanted) if t):
+            handles = self.household_peers(tenant)
+            person = handles.get("cli") or ""
+            agent = handles.get("agent") or ""
+            # The lane says WHAT a seat is; the match against a known account is what
+            # makes saying it safe.
+            if person in out:
+                out[person].update(kind="human", proof="derived")
+            if agent in out:
+                out[agent].update(kind="agent", proof="derived")
+            if person in out and agent in out:
+                out[person].update(partner=agent,
+                                   partner_label=labels.get(agent) or agent)
+                out[agent].update(partner=person,
+                                  partner_label=labels.get(person) or person)
+        return out
 
     def is_host(self, identity: "Identity") -> bool:
         """Whether this participant is the account whose machine holds the room.
@@ -515,73 +624,242 @@ class Room:
         The LAST ballot a peer casts is the one that counts, the same rule the
         task board uses for status - changing your mind is a thing that happens,
         and a write-once log cannot take anything back anyway.
+
+        The choice is RESOLVED against the vote's options rather than stored as
+        typed. Measured in the first live vote: an agent offered "ja, weiter so"
+        and "erst schlafen" answered "ja", which is unmistakable to a human and
+        became its own third column in the tally. Matching is case-insensitive
+        and accepts an unambiguous prefix, because agents shorten; anything that
+        matches nothing is REFUSED with the options named, because a machine peer
+        reads that refusal and can retry, while a silently accepted invention
+        turns the count into noise nobody notices.
+
+        The resolution that COUNTS happens in `ingest`, which every ballot crosses
+        whatever lane it came from. It is called here as well, and only so this
+        method can word its own sentence with the option the room will record;
+        resolving an already-resolved choice returns it unchanged.
         """
+        options = self._vote_options(vote_id)
+        resolved = str(choice or "").strip()[:60]
+        if options:
+            resolved = self._resolve_choice(resolved, options)
         return self.ingest({
             "kind": "answer", "reply_to": vote_id,
-            "body": {"text": comment or f"votes: {choice}",
-                     "choice": str(choice).strip()[:60]},
+            "body": {"text": comment or f"votes: {resolved}", "choice": resolved},
         }, identity=identity)
+
+    def _vote_options(self, vote_id: str) -> List[str]:
+        """The options of the vote this ballot answers, or [] when the id names
+        something else - a ballot on a message that is not a vote is a mistake the
+        fold ignores anyway, and refusing it here would be a second place to say
+        so."""
+        for frame in self.store.frames():
+            if frame.id == vote_id and frame.kind == "vote":
+                return [str(o) for o in ((frame.body or {}).get("options") or [])]
+        return []
+
+    @staticmethod
+    def _resolve_choice(choice: str, options: List[str]) -> str:
+        """One of the options, or a refusal naming them."""
+        lowered = choice.casefold()
+        for option in options:
+            if option.casefold() == lowered:
+                return option
+        starts = [o for o in options if o.casefold().startswith(lowered)] if lowered else []
+        if len(starts) == 1:
+            return starts[0]
+        raise RoomError(
+            f"{choice!r} is not one of this vote's options ("
+            + ", ".join(repr(o) for o in options)
+            + "). Vote with one of them, or say what you think in a message."
+        )
 
     def votes(self) -> List[Dict[str, Any]]:
         """Every vote in this room, folded with its ballots.
 
-        Same shape of answer as the task board, for the same reason: derived from
-        the log, so no surface has to store anything and two readers cannot
-        disagree. Who voted is public - a room is a conversation, not a booth,
-        and a tally nobody can check is a number somebody made up.
+        The fold itself is a free function over frames (`fold_votes`), for the
+        same reason the task board is: a peer reading this room over the wire has
+        frames and no store, and two folds would be two opinions about who
+        abstained.
         """
-        frames = sorted(self.store.frames(), key=canonical_sort_key)
-        labels = self.labels()
-        members = self.members()
-        opened: Dict[str, Dict[str, Any]] = {}
-        for frame in frames:
-            if frame.kind != "vote":
+        return fold_votes(self.store.frames(),
+                          labels=self.labels(),
+                          members=list(self.members().keys()))
+
+    def vote_reminders(self, *, now: Optional[float] = None
+                       ) -> List[Tuple[str, Dict[str, Any]]]:
+        """Who still owes a ballot and has waited long enough to be reminded.
+
+        Once per member per vote, and that "once" is derived rather than
+        remembered: the reminder IS a frame in the host's lane naming the vote it
+        is about, so a host that restarts mid-vote does not start over, and two
+        surfaces asking the same question get the same answer.
+        """
+        frames = self.store.frames()
+        entries = fold_votes(frames, labels=self.labels(),
+                             members=list(self.members().keys()), now=now)
+        now = time.time() if now is None else float(now)
+        already = {((frame.to or {}).get("peer"), (frame.body or {}).get("vote"))
+                   for frame in frames
+                   if frame.kind == "ping" and (frame.body or {}).get("vote")}
+        out: List[Tuple[str, Dict[str, Any]]] = []
+        for entry in entries:
+            # A vote that is already over is not reminded about - it is concluded.
+            if entry["concluded"] or entry["due"] or now < entry["remind_at"]:
                 continue
-            body = frame.body or {}
-            options = [str(o) for o in (body.get("options") or []) if str(o).strip()]
-            opened[frame.id] = {
-                "id": frame.id,
-                "question": str(body.get("text") or ""),
-                "options": options or ["yes", "no"],
-                "asked_by": frame.sender,
-                "asked_by_label": labels.get(frame.sender) or frame.sender,
-                "ts": frame.ts,
-                "closes_at": float(body.get("closes_at") or 0.0),
-                "ballots": {},
-            }
-        for frame in frames:
-            if frame.kind != "answer" or not frame.reply_to:
+            out.extend((peer, entry) for peer in entry["waiting_peers"]
+                       if (peer, entry["id"]) not in already)
+        return out
+
+    def vote_reminder_body(self, entry: Dict[str, Any], *,
+                           now: Optional[float] = None) -> Dict[str, Any]:
+        """What the room tells a member that has not answered a vote.
+
+        Everything needed to answer travels IN the frame - the question, the
+        options, both ways to cast, and what silence will mean - for the reason
+        `ping_body` gives: the recipient may be a foreign agent that sees none of
+        our surfaces and has only this text.
+
+        Both ways to cast are named because the room does not know which kind of
+        agent is reading: a VAF agent has the room tools, an invited agent has a
+        shell. Naming one would be right half the time.
+        """
+        now = time.time() if now is None else float(now)
+        left = max(0, int(entry["deadline"] - now))
+        options = " | ".join(str(o) for o in entry["options"])
+        text = (
+            "Room vote: you have not answered this one yet.\n"
+            f'"{entry["question"]}"\n'
+            f"Options: {options}\n"
+            f'Cast a ballot with room_send kind "answer", reply_to "{entry["id"]}" '
+            'and choice set to one of the options - or, from a shell, '
+            f'`vaf a2a ballot {self.room_id} {entry["id"]} "<option>"`.\n'
+            f"About {max(1, left // 60)} minute(s) left; a member that has not "
+            "answered by then is counted as abstaining. This is a question and "
+            "not an order - abstaining is a valid answer, and so is saying in the "
+            "room why you would rather not choose."
+        )
+        return {
+            "text": text,
+            # The vote this is about, which is also what makes the reminder
+            # once-only without anybody remembering anything.
+            "vote": entry["id"],
+            "state": {
+                "kind": "vote_reminder",
+                "vote": entry["id"],
+                "question": entry["question"],
+                "options": list(entry["options"]),
+                "deadline": entry["deadline"],
+                "seconds_left": left,
+                "voted": entry["voted"],
+                "waiting_for": list(entry["waiting_for"]),
+            },
+        }
+
+    def remind_vote(self, identity: Identity, peer_id: str,
+                    entry: Dict[str, Any]) -> Frame:
+        """Nudge ONE member about ONE open vote. HOST ONLY, like every check-in.
+
+        A `ping` and not a kind of its own: the room already has a frame for
+        "talking to one member about its own attention", and it is already the one
+        surfaces keep out of the conversation. A second hidden kind would be a
+        second thing every renderer has to learn to hide.
+        """
+        if not self.is_host(identity):
+            raise NotPermitted("only the machine hosting a room reminds its members")
+        if not self.role_of(peer_id):
+            raise NotAMember(f"{peer_id!r} is not in room {self.room_id!r}")
+        return self.ingest({"kind": "ping", "to": {"peer": peer_id},
+                            "body": self.vote_reminder_body(entry)},
+                           identity=identity)
+
+    def tally_body(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """The outcome of a vote, as the room will say it.
+
+        Written as prose AND as data in the same body, the way `ping_body` is: the
+        prose is what a person and a foreign agent read in the transcript, the data
+        is what a surface counts without parsing a sentence.
+        """
+        counts = entry["tally"]
+        top = [c for c, n in counts.items() if n == max(counts.values())] if counts else []
+        winner = top[0] if len(top) == 1 else ""
+        # WHO voted for what, not only how many. The names are in the frame either
+        # way, and a count without them is the one thing a reader cannot check -
+        # which is the same reason ballots are public at all. Capped per option so a
+        # room of twenty does not turn one line into a roll call.
+        by_choice: Dict[str, List[str]] = {}
+        for ballot in entry["ballots"]:
+            by_choice.setdefault(ballot["choice"], []).append(ballot["label"])
+        parts = []
+        for choice, n in counts.items():
+            who = by_choice.get(choice) or []
+            named = ", ".join(who[:6]) + (f" +{len(who) - 6}" if len(who) > 6 else "")
+            parts.append(f"{choice} {n}" + (f" ({named})" if named else ""))
+        spread = ", ".join(parts)
+        abstained = list(entry["abstained"])
+        # The question is QUOTED here, not repeated: a vote may carry four hundred
+        # characters, and one live question had listed all eight of its own options
+        # in the text - the result read as a wall with the counts hiding at the end.
+        # The whole question is two lines up in the transcript for anyone who wants
+        # it; this line exists to say how it went.
+        question = entry["question"].strip().replace("\n", " ")
+        if len(question) > 120:
+            question = question[:117].rstrip() + "..."
+        if not counts:
+            text = f'Vote closed: "{question}" - nobody answered.'
+        else:
+            text = f'Vote closed: "{question}" - {spread}.'
+            if winner:
+                text += f" Result: {winner}."
+        if abstained:
+            text += (" Did not answer in time, counted as abstaining: "
+                     + ", ".join(abstained) + ".")
+        elif counts:
+            text += " Everybody voted."
+        return {
+            "text": text,
+            "vote": entry["id"],
+            "question": entry["question"],
+            "options": list(entry["options"]),
+            "tally": dict(counts),
+            "winner": winner,
+            "ballots": [{"peer": b["peer"], "label": b["label"], "choice": b["choice"]}
+                        for b in entry["ballots"]],
+            "abstained": abstained,
+            "everyone_voted": bool(entry["everyone_voted"]),
+        }
+
+    def conclude_votes(self, identity: Identity, *,
+                       now: Optional[float] = None) -> List[Frame]:
+        """End every vote that is over, by writing its result into the room. HOST ONLY.
+
+        A vote is over when every member has answered - nobody waits for a clock
+        everybody has already beaten - or when its deadline has passed, in which
+        case the members that never answered are named as abstaining.
+
+        Single-write intent, not exactly-once: the fold says whether a result frame
+        already exists, and the host's own lane is re-read immediately before the
+        write, which is cheap because one writer owns one lane. Two host processes
+        writing in the same instant would still produce two results; the fold takes
+        the last, so the tally stays right and the transcript carries a duplicate
+        line. That is the honest limit of a write-once log without a lock, and it
+        is the same one the rest of this store lives with.
+        """
+        if not self.is_host(identity):
+            raise NotPermitted("only the machine hosting a room closes its votes")
+        written: List[Frame] = []
+        entries = fold_votes(self.store.frames(), labels=self.labels(),
+                             members=list(self.members().keys()), now=now)
+        for entry in entries:
+            if not entry["due"]:
                 continue
-            entry = opened.get(frame.reply_to)
-            if entry is None:
+            mine = self.store.frames(peer_id=identity.peer_id)
+            if any(f.kind == "tally" and f.reply_to == entry["id"] for f in mine):
                 continue
-            choice = str((frame.body or {}).get("choice") or "").strip()
-            if not choice:
-                continue
-            entry["ballots"][frame.sender] = {
-                "choice": choice,
-                "label": labels.get(frame.sender) or frame.sender,
-                "ts": frame.ts,
-            }
-        now = time.time()
-        out = []
-        for entry in opened.values():
-            tally: Dict[str, int] = {}
-            for ballot in entry["ballots"].values():
-                tally[ballot["choice"]] = tally.get(ballot["choice"], 0) + 1
-            entry["tally"] = dict(sorted(tally.items(), key=lambda kv: -kv[1]))
-            entry["voted"] = len(entry["ballots"])
-            # Who has NOT answered yet, by name: in a room of twenty the useful
-            # question is never "how many", it is "who are we still waiting for".
-            entry["waiting_for"] = sorted(
-                labels.get(peer) or record["display"]
-                for peer, record in members.items()
-                if peer not in entry["ballots"] and peer != entry["asked_by"])
-            entry["closed"] = bool(entry["closes_at"] and now >= entry["closes_at"])
-            entry["ballots"] = [
-                {"peer": peer, **ballot} for peer, ballot in entry["ballots"].items()]
-            out.append(entry)
-        return sorted(out, key=lambda e: (e["closed"], -e["ts"]))
+            written.append(self.ingest(
+                {"kind": "tally", "reply_to": entry["id"], "to": {"room": True},
+                 "body": self.tally_body(entry)}, identity=identity))
+        return written
 
     def set_mission(self, identity: Identity, mission: str) -> str:
         """Say what this room is for, at length. Host or leader only.
@@ -909,9 +1187,30 @@ class Room:
         # rather than of a role in the conversation: a round has no leader, and the
         # timer that notices an idle peer runs on the host. A guest cannot ping -
         # is_host is keyed on the tenant, and a redeemed ticket has none.
-        host_acting = kind in ("close", "kick", "ping") and self.is_host(identity)
+        # What the ROOM itself may say, as opposed to what a member may. `tally`
+        # belongs here for the same reason `ping` does: a result a member could
+        # write is a result a member could invent.
+        host_acting = kind in ("close", "kick", "ping", "tally") and self.is_host(identity)
         if kind in KINDS and not host_acting and not self.may(role, kind):
             raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
+
+        body = data.get("body") or {}
+        if kind == "answer" and data.get("reply_to") and body.get("choice"):
+            # A BALLOT arriving from anywhere - our own tool, a shell on this
+            # machine, a peer over the wire, a third-party implementation. The
+            # choice is resolved HERE rather than in each of those lanes, because
+            # every lane that resolved it itself would be another place to forget:
+            # measured live, the remote lane did forget, and a shortened "ja"
+            # became its own column in the tally beside "ja, weiter so".
+            #
+            # Only when a `choice` is present, so an ordinary answer never pays for
+            # the lookup. Resolving an already-resolved choice returns it unchanged,
+            # so a lane that resolves first (to word its own text) costs nothing but
+            # the second lookup.
+            options = self._vote_options(str(data.get("reply_to") or ""))
+            if options:
+                body = dict(body)
+                body["choice"] = self._resolve_choice(str(body["choice"]), options)
 
         frame = Frame.new(
             room=self.room_id,
@@ -921,7 +1220,7 @@ class Room:
             seq=self.store.next_seq(identity.peer_id),
             lamport=self.store.next_lamport(),
             to=data.get("to") or {"room": True},
-            body=data.get("body") or {},
+            body=body,
             reply_to=data.get("reply_to"),
             must_understand=data.get("must_understand") or (),
             ext=data.get("ext") or {},
@@ -1447,6 +1746,18 @@ def describe(entry: Dict[str, Any]) -> str:
         state = body.get("state") or {}
         open_work = state.get("tasks_open")
         return ("checked in" + (f" - {open_work} open" if open_work else ""))
+    if kind == "vote":
+        # The question plus what may be answered to it. Every surface that renders
+        # this already says WHICH kind of frame it is, so the prefix would be the
+        # badge again; the options are the part a reader cannot get anywhere else,
+        # and without them `vaf a2a log` showed a question with no answers.
+        options = [str(o) for o in (body.get("options") or []) if str(o).strip()]
+        return f"{text} ({' | '.join(options)})" if options else text
+    if kind == "tally":
+        # The result is prose already, written once by the room when the vote
+        # ended - a renderer that summarised it again would be a second opinion
+        # about an outcome that is meant to read the same everywhere.
+        return text
     if kind == "ack":
         return f"ack: {body.get('status') or 'ok'}"
     if kind == "report" and body.get("status"):
@@ -1473,6 +1784,9 @@ AUDIT_EVENTS = {
     "report": "report sent",
     "directive": "instruction sent",
     "ack": "acknowledged",
+    "ping": "checked in on a member",
+    "vote": "vote opened",
+    "tally": "vote closed",
 }
 
 
@@ -1562,32 +1876,77 @@ def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, I
 BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
 
 
-def unread_frames(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity, List[Any], List[Any]]]:
+def local_room_tenants(*, base: Optional[Path] = None) -> List[str]:
+    """Every account that OWNS a room on this machine, plus the local admin.
+
+    Derived from the manifests that are on disk anyway, never from a user store: this
+    package stays thin on purpose, and the question it answers here is not "who has an
+    account" but "whose rooms is this machine holding" - which is exactly the set that
+    can have an agent waiting for a turn.
+
+    The local admin is included because a machine with no room yet still has one
+    account that can be given one.
+    """
+    found: List[str] = []
+    for room_id in list_rooms(base):
+        try:
+            manifest = Room.open(room_id, base=base).manifest
+        except Exception:
+            continue
+        owner = owner_tenant(manifest.get("owner_scope"))
+        if owner:
+            found.append(owner)
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        admin = owner_tenant(get_local_admin_scope_id())
+        if admin:
+            found.append(admin)
+    except Exception:
+        pass
+    return list(dict.fromkeys(found))
+
+
+def unread_frames(key, *, base: Optional[Path] = None) -> List[Tuple[Room, Identity, List[Any], List[Any]]]:
     """What has arrived for this participant: (room, identity, WAKING, CONTEXT).
 
     Its OWN frames are excluded: an agent must not be woken by its own voice, which
     is the loop that turns a two-agent room into a runaway conversation. Membership
     bookkeeping is excluded for the same kind of reason, one level quieter.
+
+    ``key`` may be one participant key or SEVERAL, and several is not a convenience:
+    one process serves every tenant on this machine, so asking on behalf of only the
+    account that happened to be bound last means every other tenant's agent is never
+    polled at all. The rooms are walked ONCE and every key is tried against each, so
+    asking for five accounts costs one directory scan, not five.
     """
-    pending: List[Tuple[Room, Identity, List[Any]]] = []
-    for room, identity in joined_rooms(key, base=base):
+    wanted = [key] if isinstance(key, str) else [str(k) for k in (key or []) if k]
+    pending: List[Tuple[Room, Identity, List[Any], List[Any]]] = []
+    for room_id in list_rooms(base):
+        try:
+            room = Room.open(room_id, base=base)
+        except Exception:
+            continue
         if room.closed:
             continue
-        cursor = room.store.cursor(identity.peer_id)
-        unread = [
-            frame for frame in room.store.read_since(cursor)
-            if frame.sender != identity.peer_id
-            and frame.kind not in BOOKKEEPING_KINDS
-        ]
-        # Two lists, and the difference between them is the whole addressing rule.
-        # WAKING: only what is aimed at this peer. A message for somebody else must not
-        # cost a turn, or "@Bob" would wake the entire room to read a note for Bob.
-        # CONTEXT: everything unread, so a peer that IS woken sees the conversation it
-        # is joining rather than one line out of it - a reply written blind to what the
-        # others were just told is worse than no reply.
-        waking = [f for f in unread if f.addresses(identity.peer_id, identity.role)]
-        if waking:
-            pending.append((room, identity, waking, unread))
+        for participant in wanted:
+            identity = room.identity_for(participant)
+            if identity is None:
+                continue
+            cursor = room.store.cursor(identity.peer_id)
+            unread = [
+                frame for frame in room.store.read_since(cursor)
+                if frame.sender != identity.peer_id
+                and frame.kind not in BOOKKEEPING_KINDS
+            ]
+            # Two lists, and the difference between them is the whole addressing rule.
+            # WAKING: only what is aimed at this peer. A message for somebody else must
+            # not cost a turn, or "@Bob" would wake the entire room to read a note for
+            # Bob. CONTEXT: everything unread, so a peer that IS woken sees the
+            # conversation it is joining rather than one line out of it - a reply
+            # written blind to what the others were just told is worse than no reply.
+            waking = [f for f in unread if f.addresses(identity.peer_id, identity.role)]
+            if waking:
+                pending.append((room, identity, waking, unread))
     return pending
 
 
@@ -1602,6 +1961,121 @@ def unread_counts(key: str, *, base: Optional[Path] = None) -> Dict[str, int]:
     return {room.room_id: len(waking) for room, _identity, waking, _context
             in unread_frames(key, base=base)}
 
+
+
+def fold_votes(frames: List[Frame], *, labels: Dict[str, str],
+               members: List[str], now: Optional[float] = None,
+               remind_after_s: float = VOTE_REMIND_AFTER_S,
+               abstain_after_s: float = VOTE_ABSTAIN_AFTER_S) -> List[Dict[str, Any]]:
+    """Every vote in a room, folded from frames alone: tally, deadline, outcome.
+
+    A free function over frames rather than a method, for the reason `fold_tasks`
+    gives: a peer reading a room over the WIRE has frames and no store, and two
+    folds are two opinions about who abstained.
+
+    WHAT A DEADLINE IS HERE. A vote that named no `closes_at` still ends, because
+    a question nobody answers is not a decision anybody can act on. The room waits
+    `remind_after_s` for a member, reminds it once, and waits `abstain_after_s`
+    more before counting it as abstaining - so the default life of a vote is the
+    two added together, and a vote that DID name a deadline keeps it, with the
+    reminder moved to `abstain_after_s` before the end.
+
+    The `ts` of the opening frame is the clock this runs on, and that is a
+    deliberate exception to "wall clocks are advisory here": a duration has to be
+    measured from something, and the alternative - a lamport count - answers "how
+    much was said" rather than "how long has it been". The consequence is stated
+    rather than hidden: two machines whose clocks differ by a minute disagree by a
+    minute about when a vote ends, and the one holding the room is the one that
+    writes the result.
+
+    The result IS a frame (`tally`, written once by the host), so `concluded` is
+    not a guess this fold makes: an ended vote looks the same to every reader,
+    including one that arrives afterwards and folds the same log.
+    """
+    frames = sorted(frames, key=canonical_sort_key)
+    now = time.time() if now is None else float(now)
+    opened: Dict[str, Dict[str, Any]] = {}
+    for frame in frames:
+        if frame.kind != "vote":
+            continue
+        body = frame.body or {}
+        options = [str(o) for o in (body.get("options") or []) if str(o).strip()]
+        ts = float(frame.ts or 0.0)
+        closes_at = float(body.get("closes_at") or 0.0)
+        deadline = closes_at or (ts + remind_after_s + abstain_after_s)
+        opened[frame.id] = {
+            "id": frame.id,
+            "question": str(body.get("text") or ""),
+            "options": options or ["yes", "no"],
+            "asked_by": frame.sender,
+            "asked_by_label": labels.get(frame.sender) or frame.sender,
+            "ts": ts,
+            "closes_at": closes_at,
+            "deadline": deadline,
+            # One reminder, `abstain_after_s` before the end - late enough that a
+            # busy agent is not nagged for thinking, early enough that being
+            # reminded is still worth something.
+            "remind_at": max(ts, deadline - abstain_after_s),
+            "ballots": {},
+            "result": None,
+        }
+    for frame in frames:
+        if not frame.reply_to:
+            continue
+        entry = opened.get(frame.reply_to)
+        if entry is None:
+            continue
+        if frame.kind == "tally":
+            # Written by the host, once. The last one wins for the same reason the
+            # last ballot does: a write-once log cannot take anything back.
+            entry["result"] = dict(frame.body or {})
+            continue
+        if frame.kind != "answer":
+            continue
+        choice = str((frame.body or {}).get("choice") or "").strip()
+        if not choice:
+            continue
+        entry["ballots"][frame.sender] = {
+            "choice": choice,
+            "label": labels.get(frame.sender) or frame.sender,
+            "ts": frame.ts,
+        }
+    out = []
+    for entry in opened.values():
+        tally: Dict[str, int] = {}
+        for ballot in entry["ballots"].values():
+            tally[ballot["choice"]] = tally.get(ballot["choice"], 0) + 1
+        entry["tally"] = dict(sorted(tally.items(), key=lambda kv: -kv[1]))
+        entry["voted"] = len(entry["ballots"])
+        # Who has NOT answered yet: in a room of twenty the useful question is
+        # never "how many", it is "who are we still waiting for". The peer that
+        # ASKED is not among them - it put the question, and a room where asking
+        # obliges you to answer your own question would have nobody left to ask.
+        entry["waiting_peers"] = sorted(
+            peer for peer in members
+            if peer not in entry["ballots"] and peer != entry["asked_by"])
+        entry["waiting_for"] = sorted(
+            labels.get(peer) or peer for peer in entry["waiting_peers"])
+        entry["everyone_voted"] = not entry["waiting_peers"]
+        entry["concluded"] = entry["result"] is not None
+        # Nobody has to wait for a clock that everybody has already beaten: a vote
+        # every member answered is over the moment the last ballot lands.
+        entry["due"] = (not entry["concluded"]
+                        and (entry["everyone_voted"] or now >= entry["deadline"]))
+        # Who let it run out. Only meaningful once it is over - before that these
+        # are simply the members the room is still waiting for.
+        if entry["concluded"]:
+            entry["abstained"] = [str(a) for a in (entry["result"].get("abstained") or [])]
+        elif now >= entry["deadline"]:
+            entry["abstained"] = list(entry["waiting_for"])
+        else:
+            entry["abstained"] = []
+        entry["closed"] = bool(entry["concluded"] or entry["everyone_voted"]
+                               or now >= entry["deadline"])
+        entry["ballots"] = [
+            {"peer": peer, **ballot} for peer, ballot in entry["ballots"].items()]
+        out.append(entry)
+    return sorted(out, key=lambda e: (e["closed"], -e["ts"]))
 
 
 def fold_tasks(frames: List[Frame], *, labels: Dict[str, str]) -> List[Dict[str, Any]]:

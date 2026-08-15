@@ -33,6 +33,7 @@ EXPORTED = [
     "describe_room_entry",
     "extract_pdf_markdown",
     "fold_room_tasks",
+    "fold_room_votes",
     "joined_rooms",
     "markers",
     "participant_key",

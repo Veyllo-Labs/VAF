@@ -587,3 +587,99 @@ def test_the_remote_lane_answers_the_same_questions_as_the_local_one(tmp_path, m
     assert skill.exit_code == 0, skill.stdout
     assert skill.stdout.startswith("---\n") and "name: vaf_a2a_rooms" in skill.stdout
     assert "/shared/room-far" in skill.stdout, "the shared folder has to travel"
+
+
+class _FakeRemoteRoom:
+    """A room on another machine, standing in for the socket."""
+
+    def __init__(self, ack, sent):
+        self._ack, self._sent = ack, sent
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def submit(self, payload):
+        self._sent.append(payload)
+        return self._ack
+
+
+def test_the_remote_vote_lane_carries_the_deadline_and_admits_a_refusal(monkeypatch):
+    """MUTATION: drop closes_at from the remote body, or report the ack as ok.
+
+    Both defects were measured in the shipped lane and neither had a test, which
+    is how they survived: `--closes-in` was silently dropped, so a remote vote had
+    no end on the host, and a REFUSED submission printed {"ok": true} with exit 0,
+    which tells an agent it voted when the room turned it away. With a deadline
+    that abstains for you, believing a false success is the expensive half.
+    """
+    import time
+
+    import vaf.core.a2a.client as client_mod
+
+    record = {"url": "wss://host:8443/ws/a2a/room-far", "seat": "s-far",
+              "peer": "p-far", "role": "peer", "cursor": 0, "welcome": {}}
+    monkeypatch.setattr(a2a_cmd, "_open_local", lambda room_id: None)
+    monkeypatch.setattr(a2a_cmd, "_remote_record", lambda room_id: record)
+
+    sent: list = []
+    committed = {"kind": "ack", "status": "committed", "frame": "f-remote-1",
+                 "lamport": 7, "seq": 2}
+    monkeypatch.setattr(client_mod, "RemoteRoom", type(
+        "_Conn", (), {"connect": staticmethod(
+            lambda url, seat, **kw: _FakeRemoteRoom(committed, sent))}))
+
+    opened = runner.invoke(a2a_cmd.app,
+                           ["vote", "room-far", "Pizza?", "-o", "ja", "-o", "nein",
+                            "--closes-in", "3"])
+    assert opened.exit_code == 0, opened.stdout
+    body = sent[-1]["body"]
+    assert body["options"] == ["ja", "nein"]
+    assert body["closes_at"] == pytest.approx(time.time() + 180.0, abs=5.0), (
+        "the deadline never reached the host")
+    assert _lines(opened)[-1]["id"] == "f-remote-1", (
+        "the frame id comes back under 'frame', and a ballot needs it")
+
+    refused = {"kind": "ack", "status": "refused",
+               "reason": "'vielleicht' is not one of this vote's options"}
+    monkeypatch.setattr(client_mod, "RemoteRoom", type(
+        "_Conn", (), {"connect": staticmethod(
+            lambda url, seat, **kw: _FakeRemoteRoom(refused, sent))}))
+    cast = runner.invoke(a2a_cmd.app,
+                         ["ballot", "room-far", "00000000-0000-4000-8000-000000000001",
+                          "vielleicht"])
+    assert cast.exit_code != 0, "a refused ballot must not look like a cast one"
+    assert '"ok": true' not in cast.stdout
+    assert "not one of this vote's options" in (cast.stdout + cast.stderr)
+
+
+def test_a_remote_peer_can_read_the_tally_it_voted_in(rooms, monkeypatch):
+    """MUTATION: leave `votes` local-only.
+
+    A remote peer could open a vote and cast a ballot but never see the count -
+    `_room()` refuses a room that is not on this disk. Harmless while a vote just
+    sat there; with a deadline that counts silence as abstention, an agent would be
+    abstained from a question it had no way to look up.
+    """
+    room = Room.create(kind="round", owner_scope="scope-terminal", base=rooms,
+                       room_id="room-far")
+    host = room.join(display="Nobel", scope_id="scope-terminal", peer_id="p-host")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    vote = room.open_vote(host, "Pizza?", options=["ja", "nein"])
+    room.cast(guest, vote.id, "ja")
+
+    monkeypatch.setattr(a2a_cmd, "_open_local", lambda room_id: None)
+    monkeypatch.setattr(a2a_cmd, "_remote_record",
+                        lambda room_id: {"url": "wss://host/ws/a2a/room-far",
+                                         "seat": "s-far", "peer": "p-codex"})
+    monkeypatch.setattr(a2a_cmd, "_remote_frames", lambda record: room.store.frames())
+
+    seen = runner.invoke(a2a_cmd.app, ["votes", "room-far"])
+    assert seen.exit_code == 0, seen.stdout
+    entry = _lines(seen)[-1]
+    assert entry["question"] == "Pizza?"
+    assert entry["tally"] == {"ja": 1}
+    assert entry["ballots"][0]["label"] == "Codex", "names come from the join frames"
+    assert entry["deadline"] > entry["ts"], "and it knows when it ends"

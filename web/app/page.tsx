@@ -174,7 +174,14 @@ type RoomView = {
      *  (Room.tasks). Open work first; refreshed by the 3s room poll. */
     votes?: Array<{ id: string; question: string; options: string[]; askedBy: string;
         tally: Record<string, number>; voted: number; waitingFor: string[];
-        closed: boolean; mine: string; ballots: Array<{ label: string; choice: string }> }>;
+        closed: boolean; mine: string; ballots: Array<{ label: string; choice: string }>;
+        /** When the room stops waiting, as an epoch second. The countdown runs off
+         *  this rather than off a seconds-left the server recomputes each poll, so
+         *  it ticks smoothly and cannot drift from the deadline the room acts on. */
+        deadline?: number;
+        /** Everybody the room was waiting for has answered - it ends now, without
+         *  waiting out a clock everybody has already beaten. */
+        everyoneVoted?: boolean }>;
     mission?: string;
     tasks?: Array<{ id: string; title: string; status: string; requester: string;
         progress?: { done?: number; total?: number; step?: string } | null;
@@ -1068,7 +1075,297 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, onVote }: {
+type RoomVote = NonNullable<RoomView['votes']>[number];
+
+/** How long is left, as mm:ss, ticking on its own.
+ *
+ *  Driven from the deadline the server sent rather than from a seconds-left it
+ *  recomputes each poll: a clock that only moves when a poll lands stutters, and
+ *  this one cannot drift away from the moment the room will actually act on.
+ */
+function VoteCountdown({ deadline, done }: { deadline: number; done: boolean }) {
+    const [now, setNow] = useState(() => Date.now() / 1000);
+    useEffect(() => {
+        if (done) return;
+        const id = setInterval(() => setNow(Date.now() / 1000), 1000);
+        return () => clearInterval(id);
+    }, [done]);
+    if (done) {
+        return <span className="text-[11px] tabular-nums text-emerald-600 dark:text-emerald-400">alle haben gewählt</span>;
+    }
+    const left = Math.max(0, Math.round(deadline - now));
+    const mm = String(Math.floor(left / 60)).padStart(2, '0');
+    const ss = String(left % 60).padStart(2, '0');
+    return (
+        <span className={cn(
+            // Black on light, amber on dark: the room's own accent, and the one
+            // colour in this palette that reads as "running out" without shouting.
+            "text-[11px] tabular-nums font-medium text-gray-900 dark:text-amber-400",
+            left <= 15 && "animate-pulse")}
+            title="Danach zählt eine ausbleibende Stimme als Enthaltung">
+            {left > 0 ? `${mm}:${ss}` : 'wird geschlossen…'}
+        </span>
+    );
+}
+
+/** The open votes, docked above the message box.
+ *
+ *  Above the composer rather than at the top of the transcript, because that is
+ *  where a person's eyes already are - measured live: the first vote rendered
+ *  above a hundred messages in a view that opens at the newest one, and the only
+ *  member it was waiting for never saw it.
+ *
+ *  Several votes are TABS and not a stack: a stack pushes the conversation off
+ *  screen to show questions nobody asked to see all at once.
+ */
+function RoomVoteDock({ votes, onVote, leaving, widthClass }: {
+    votes: RoomVote[];
+    onVote?: (voteId: string, choice: string) => void;
+    leaving?: boolean;
+    /** The composer's own width, so the panel sits exactly over the message box
+     *  rather than guessing at a width that a sub-agent window would change. */
+    widthClass: string;
+}) {
+    const [activeId, setActiveId] = useState<string>('');
+    const active = votes.find(v => v.id === activeId) || votes[0];
+    useEffect(() => {
+        // Follow the room rather than the click when the tab in hand disappears -
+        // a vote ends by itself here, and an empty panel would be the alternative.
+        if (votes.length && !votes.some(v => v.id === activeId)) setActiveId(votes[0].id);
+    }, [votes, activeId]);
+    if (!active) return null;
+    return (
+        <div className={cn(widthClass, "mx-auto mb-2",
+            leaving ? "vote-dock-leave" : "vote-dock-enter")}>
+            <div className="rounded-2xl border border-gray-200 dark:border-[#2f2f2f] bg-white/95 dark:bg-[#1f1f1f]/95 backdrop-blur-sm shadow-sm overflow-hidden">
+                {votes.length > 1 && (
+                    <div className="flex gap-1 px-2 pt-2 overflow-x-auto" role="tablist">
+                        {votes.map((v, i) => (
+                            <button key={v.id} type="button" role="tab"
+                                aria-selected={v.id === active.id}
+                                onClick={() => setActiveId(v.id)}
+                                title={v.question}
+                                className={cn(
+                                    "shrink-0 max-w-[42%] truncate px-3 py-1.5 rounded-t-lg text-[12px] transition-colors",
+                                    v.id === active.id
+                                        ? "bg-gray-100 dark:bg-[#2a2a2a] text-gray-900 dark:text-[#f0f0f0]"
+                                        : "text-gray-500 dark:text-[#8a8a8a] hover:text-gray-800 dark:hover:text-[#c8c8c8]")}>
+                                {i + 1}. {v.question}
+                            </button>
+                        ))}
+                    </div>
+                )}
+                <div className="px-4 py-3">
+                    <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                            <div className="text-sm font-semibold text-gray-800 dark:text-[#f0f0f0] truncate">
+                                {active.question}
+                            </div>
+                            <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                                {active.askedBy} · {active.voted} voted
+                                {active.waitingFor.length > 0
+                                    ? ` · waiting for ${active.waitingFor.join(', ')}` : ''}
+                            </div>
+                        </div>
+                        <VoteCountdown deadline={active.deadline ?? 0}
+                            done={!!active.everyoneVoted} />
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2.5">
+                        {active.options.map(opt => {
+                            const count = active.tally?.[opt] ?? 0;
+                            const mine = active.mine === opt;
+                            return (
+                                <button key={opt} type="button"
+                                    onClick={() => onVote?.(active.id, opt)}
+                                    className={cn(
+                                        "px-3 py-1.5 rounded-lg text-[12.5px] border transition-colors",
+                                        mine
+                                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                            : "border-gray-200 dark:border-[#3a3a3a] text-gray-700 dark:text-[#c8c8c8] hover:border-gray-400 dark:hover:border-[#6b6b6b]")}>
+                                    {opt}
+                                    {count > 0 ? <span className="ml-2 text-gray-400">{count}</span> : null}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {active.ballots.length > 0 && (
+                        <div className="text-[11px] text-gray-400 mt-2 truncate">
+                            {active.ballots.map(b => `${b.label}: ${b.choice}`).join(' · ')}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+type RoomTask = NonNullable<RoomView['tasks']>[number];
+
+const ROOM_TASK_ACTIVE = ['submitted', 'working', 'input_required'];
+
+/** What is being worked on RIGHT NOW, docked above the message box.
+ *
+ *  The full board stays in the transcript, where finished work dims but remains -
+ *  a board that forgets what was done reads as work that never happened. This is
+ *  the other job: answering "what is anybody doing" without scrolling. It was the
+ *  same defect the votes had, found the same way - a member reported progress, the
+ *  card rendered above a hundred messages, and the person it was for never saw it.
+ */
+function RoomWorkDock({ tasks, widthClass, onOpen }: {
+    tasks: RoomTask[];
+    widthClass: string;
+    /** Open the room panel on its work tab. The strip shows three; the question
+     *  "and what about the rest" needs somewhere to go, and the panel that already
+     *  answers "who is in this room" is where a reader looks for it. */
+    onOpen?: () => void;
+}) {
+    const active = tasks
+        .filter(t => ROOM_TASK_ACTIVE.includes(t.status))
+        .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+    if (!active.length) return null;
+    const shown = active.slice(0, 3);
+    return (
+        <div className={cn(widthClass, "mx-auto mb-2 vote-dock-enter")}>
+            {/* The whole strip is the button. Anything in it that a reader wants more
+                of - the rest of the list, who else is on something, what a step was
+                about - lives one click away in the room's own panel, and hunting for
+                a hit area inside a two-line summary is not that click. */}
+            <div role="button" tabIndex={0} onClick={onOpen}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen?.(); } }}
+                className="rounded-2xl border border-gray-200 dark:border-[#2f2f2f] bg-white/95 dark:bg-[#1f1f1f]/95 backdrop-blur-sm shadow-sm px-4 py-2.5 cursor-pointer transition-colors hover:border-gray-300 dark:hover:border-[#4a4a4a]">
+                <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1.5">
+                    Läuft gerade{active.length > shown.length ? ` · +${active.length - shown.length} weitere` : ''}
+                </div>
+                <div className="space-y-1.5">
+                    {shown.map(task => {
+                        const progress = task.progress || {};
+                        const counted = typeof progress.done === 'number'
+                            && typeof progress.total === 'number';
+                        const waiting = task.status === 'input_required';
+                        return (
+                            <div key={task.id} className="flex items-center gap-2 min-w-0">
+                                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0",
+                                    waiting ? "bg-amber-400 animate-pulse" : "bg-emerald-500")}
+                                    aria-hidden />
+                                {/* WHO, first and unabbreviated. The strip answers "who is
+                                    doing what" and the first version answered only the
+                                    second half - in a room with several agents that is the
+                                    half you cannot infer from the other one. */}
+                                {task.assignee && (
+                                    <span className="text-[12px] font-medium text-gray-900 dark:text-[#e6e6e6] shrink-0">
+                                        {task.assignee}
+                                    </span>
+                                )}
+                                <span className="text-[12px] text-gray-700 dark:text-[#c8c8c8] truncate flex-1"
+                                    title={task.title}>
+                                    {task.title}
+                                </span>
+                                {counted && (
+                                    <span className="text-[11px] tabular-nums text-gray-400 shrink-0">
+                                        {progress.done}/{progress.total}
+                                    </span>
+                                )}
+                                {progress.step && (
+                                    <span className="text-[11px] text-gray-400 truncate max-w-[38%] shrink-0"
+                                        title={progress.step}>
+                                        {progress.step}
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Who is working on what, in full, inside the room's own panel.
+ *
+ *  The strip above the composer answers this at a glance for three tasks; this is
+ *  the same board answered properly - grouped by the member doing it, so the
+ *  question "what is Nobel on" has a place to be asked. Same derivation, one level
+ *  of detail apart, the way the tally line and an agent's own summary are.
+ */
+function RoomWorkPanel({ tasks, members }: {
+    tasks: RoomTask[];
+    members: Array<{ peer: string; label: string; role: string }>;
+}) {
+    const t = useTranslations('main');
+    const byMember = new Map<string, RoomTask[]>();
+    for (const member of members) byMember.set(member.label, []);
+    for (const task of tasks) {
+        const key = task.assignee || task.requester || '?';
+        byMember.set(key, [...(byMember.get(key) || []), task]);
+    }
+    const groups = [...byMember.entries()]
+        // Whoever has something running comes first: a panel that lists idle members
+        // above working ones answers "who is here" again instead of "who is on what".
+        .sort((a, b) => {
+            const active = (rows: RoomTask[]) => rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status)).length;
+            return active(b[1]) - active(a[1]) || a[0].localeCompare(b[0]);
+        });
+    return (
+        <div className="px-6 py-4 space-y-4">
+            {groups.map(([label, rows]) => {
+                const active = rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status));
+                const done = rows.filter(r => !ROOM_TASK_ACTIVE.includes(r.status));
+                return (
+                    <div key={label}>
+                        <div className="flex items-baseline gap-2 mb-1.5">
+                            <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{label}</span>
+                            <span className="text-[11px] text-gray-400">
+                                {active.length > 0
+                                    ? t('roomWorkRunning', { count: active.length })
+                                    : t('roomWorkNothing')}
+                            </span>
+                        </div>
+                        <div className="space-y-1.5">
+                            {[...active, ...done].map(task => {
+                                const progress = task.progress || {};
+                                const counted = typeof progress.done === 'number'
+                                    && typeof progress.total === 'number';
+                                const finished = !ROOM_TASK_ACTIVE.includes(task.status);
+                                const waiting = task.status === 'input_required';
+                                const dead = task.status === 'failed' || task.status === 'rejected'
+                                    || task.status === 'canceled';
+                                return (
+                                    <div key={task.id}
+                                        className={cn(
+                                            "rounded-xl border px-3 py-2 flex items-start gap-2.5",
+                                            "border-gray-200 bg-gray-50/70 dark:border-[#2f2f2f] dark:bg-[#202020]",
+                                            finished && "opacity-60")}>
+                                        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5",
+                                            dead ? "bg-red-500"
+                                                : waiting ? "bg-amber-400 animate-pulse"
+                                                    : finished ? "bg-gray-400" : "bg-emerald-500")}
+                                            aria-hidden />
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] break-words">
+                                                {task.title}
+                                            </div>
+                                            <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                                                {task.status}
+                                                {counted ? ` · ${progress.done}/${progress.total}` : ''}
+                                                {progress.step ? ` · ${progress.step}` : ''}
+                                                {task.requester ? ` · ${t('roomWorkFrom', { who: task.requester })}` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {rows.length === 0 && (
+                                <div className="text-[12px] text-gray-400">{t('roomWorkNone')}</div>
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -1083,8 +1380,6 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     liveWorker?: { label?: string; status: string } | null;
     /** Whether the socket that keeps this view honest is up. */
     connected?: boolean;
-    /** Cast the viewer's ballot in an open vote. */
-    onVote?: (voteId: string, choice: string) => void;
 }) {
     // Presence is a claim about NOW, and the transcript is a snapshot from the
     // last poll: with the socket down, the last payload freezes and the room
@@ -1190,7 +1485,8 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 conversation of any length. Frosted rather than opaque so the messages
                 sliding under it stay visible - it belongs to the conversation, it is not
                 a bar sitting on top of one. */}
-            <div className="sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 flex items-center gap-3 py-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-[#181818]/60">
+            <div className="sticky top-0 z-20 -mx-6 px-6 max-md:-mx-3 max-md:px-3 mb-2 border-b border-gray-200 dark:border-[#2a2a2a] bg-white/80 dark:bg-[#181818]/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-[#181818]/60">
+                <div className="flex items-center gap-3 py-3">
                 <div className="w-8 h-8 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
                     <Users className="w-4 h-4 text-white dark:text-[#181818]" />
                 </div>
@@ -1214,6 +1510,18 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             {view.room.closed ? ' \u00b7 closed' : ''}
                         </>)}
                     </div>
+                    {/* What this room is FOR. The agents in it have been given the
+                        mission in every single turn since it was set, and the person
+                        who set it was the only member who could not see it anywhere -
+                        it was in the payload and on no surface. One line, because the
+                        full text belongs to whoever wants it (hover), and a paragraph
+                        in a header is a paragraph nobody reads twice. */}
+                    {!!view.room.mission && (
+                        <div className="text-[11px] text-gray-400 dark:text-[#7a7a7a] truncate mt-0.5"
+                            title={view.room.mission}>
+                            {view.room.mission}
+                        </div>
+                    )}
                 </div>
                 {/* Who is in it, by the name the ROOM resolved. Join names alone would
                     show two agents called "Codex" with no way to tell them apart,
@@ -1239,6 +1547,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                     className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242424] text-gray-400 shrink-0">
                     <Info size={16} />
                 </button>
+                </div>
             </div>
 
             {/* The task board: what was asked, who is on it, how it stands. Derived
@@ -1246,48 +1555,6 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 dots walking submitted -> working -> completed, red on a dead end,
                 amber pulse while an answer is needed. Done work dims but stays: a
                 board that forgets finished work reads as work that never happened. */}
-            {/* Open votes. Drawn where the work is, because a decision the room is
-                waiting on is not a message that scrolls away - and the person in
-                the room votes here rather than in a terminal. */}
-            {(view.room.votes?.length ?? 0) > 0 && (
-                <div className="space-y-2 py-3">
-                    {view.room.votes!.map(v => (
-                        <div key={v.id}
-                            className="rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#3a3a3a] dark:bg-[#202020] px-4 py-3">
-                            <div className="text-sm font-semibold text-gray-800 dark:text-[#f0f0f0]">
-                                {v.question}
-                            </div>
-                            <div className="text-[11px] text-gray-400 mt-0.5">
-                                {v.askedBy} · {v.voted} voted
-                                {v.waitingFor.length > 0 ? ` · waiting for ${v.waitingFor.join(', ')}` : ''}
-                            </div>
-                            <div className="flex flex-wrap gap-2 mt-2.5">
-                                {v.options.map(opt => {
-                                    const count = v.tally?.[opt] ?? 0;
-                                    const mine = v.mine === opt;
-                                    return (
-                                        <button key={opt} type="button"
-                                            onClick={() => onVote?.(v.id, opt)}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-lg text-[12.5px] border transition-colors",
-                                                mine
-                                                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                                                    : "border-gray-200 dark:border-[#3a3a3a] text-gray-700 dark:text-[#c8c8c8] hover:border-gray-400 dark:hover:border-[#6b6b6b]")}>
-                                            {opt}
-                                            {count > 0 ? <span className="ml-2 text-gray-400">{count}</span> : null}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            {v.ballots.length > 0 && (
-                                <div className="text-[11px] text-gray-400 mt-2 truncate">
-                                    {v.ballots.map(b => `${b.label}: ${b.choice}`).join(' · ')}
-                                </div>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
             {(view.room.tasks?.length ?? 0) > 0 && (
                 <div className="space-y-2 py-3">
                     {view.room.tasks!.map(task => {
@@ -1369,6 +1636,22 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                     && !isSameDay(prev.ts * 1000, m.ts * 1000)
                     ? <DaySeparator endDate={prev.ts * 1000} startDate={m.ts * 1000} />
                     : null;
+                if (m.kind === 'tally') {
+                    // How a vote ended. The ROOM said it - the host's lane carries it
+                    // because somebody has to write it, but drawing it as that
+                    // member's message would credit a person with a count they did
+                    // not make. Centred and framed, the way a decision reads.
+                    return (
+                        <Fragment key={m.id}>
+                        {daySeparator}
+                        <div className="flex justify-center py-2 room-msg-enter">
+                            <span className="max-w-[85%] text-center text-[12.5px] rounded-xl px-3.5 py-2 border border-gray-200 bg-gray-50 text-gray-600 dark:border-[#3a3a3a] dark:bg-[#202020] dark:text-[#c8c8c8]">
+                                {m.text}
+                            </span>
+                        </div>
+                        </Fragment>
+                    );
+                }
                 const bookkeeping = m.kind === 'join' || m.kind === 'leave'
                     || m.kind === 'role' || m.kind === 'ack';
                 if (bookkeeping) {
@@ -1737,6 +2020,43 @@ function VAFDashboardContent() {
         }, 5000);
         return () => clearInterval(t);
     }, [roomLiveWorker]);
+    // The open votes, held one beat longer than the room does.
+    //
+    // A vote ends BY ITSELF here - the last ballot lands, or the deadline passes,
+    // and the next poll simply no longer carries it. Rendering straight off the
+    // poll would make the panel vanish between two frames, with the conversation
+    // snapping down behind it; keeping the last set for the length of the exit
+    // animation is what lets it leave the way it arrived.
+    const roomVotes = roomView?.room?.votes ?? [];
+    const [voteDock, setVoteDock] = useState<{ votes: RoomVote[]; leaving: boolean }>(
+        { votes: [], leaving: false });
+    useEffect(() => {
+        if (roomVotes.length) {
+            setVoteDock({ votes: roomVotes, leaving: false });
+            return;
+        }
+        setVoteDock(prev => (prev.votes.length && !prev.leaving)
+            ? { votes: prev.votes, leaving: true } : prev);
+        const t = setTimeout(() => setVoteDock({ votes: [], leaving: false }), 320);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [JSON.stringify(roomVotes)]);
+    const voteDockOpen = voteDock.votes.length > 0;
+    // How much room the conversation has to make, MEASURED rather than guessed.
+    // Two docks of their own height (open votes, running work) plus a composer that
+    // grows with what is typed cannot be answered by a padding constant: the first
+    // version used one, and it was already wrong for two cards.
+    const dockRef = useRef<HTMLDivElement | null>(null);
+    const [dockHeight, setDockHeight] = useState(0);
+    useEffect(() => {
+        const el = dockRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') { setDockHeight(0); return; }
+        const measure = () => setDockHeight(el.offsetHeight);
+        const observer = new ResizeObserver(measure);
+        observer.observe(el);
+        measure();
+        return () => observer.disconnect();
+    }, [voteDockOpen, roomView?.room?.roomId]);
     // The room a user has asked to close, pending their confirmation. Closing is
     // irreversible - a room never reopens - so it never happens on one click.
     const [roomToClose, setRoomToClose] = useState<Session | null>(null);
@@ -1751,6 +2071,11 @@ function VAFDashboardContent() {
     const [roomToRename, setRoomToRename] = useState<Session | null>(null);
     const [roomTitleDraft, setRoomTitleDraft] = useState('');
     const [roomMembersOpen, setRoomMembersOpen] = useState(false);
+    // Which half of the room panel is showing. Opening it from the header asks
+    // "who is here"; opening it from the work strip asks "who is on what", so the
+    // caller says which - a panel that always opened on the same tab would make the
+    // strip's click a two-step.
+    const [roomPanelTab, setRoomPanelTab] = useState<'members' | 'work'>('members');
     // The member a user has asked to remove, pending confirmation. Removing somebody
     // from a room ends their access to a conversation they were invited into, and they
     // are not here to be asked, so it never happens on one click.
@@ -6725,7 +7050,14 @@ function VAFDashboardContent() {
                             );
                         })()}
                         <div className={cn("flex-1 overflow-y-auto p-6 max-md:p-3", voiceCallActive && "voice-call-hide-avatars")} ref={containerRef}>
-                            <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
+                            {/* The conversation slides up to make room for the vote panel and
+                                back down when it goes - a transition on the padding, so the
+                                messages move with the panel instead of being hidden behind it.
+                                Padding and not height: this column is what scrolls, and its
+                                bottom is the only thing the docked composer overlaps. */}
+                            <div className={cn(messagesAreaWidthClass,
+                                "mx-auto space-y-2 transition-[padding] duration-300 ease-out")}
+                                style={{ paddingBottom: `${128 + dockHeight}px` }}>
                                 {/* An agent room, rendered INSIDE the ordinary chat area. The chat's own
                                     frame stays exactly as it is - sidebar, header, composer - and only
                                     the placing of the content changes, because a room differs from a
@@ -6733,17 +7065,13 @@ function VAFDashboardContent() {
                                     attempts got this wrong by building a surface of their own, first a
                                     narrow dialog and then a full-screen layer that covered the sidebar. */}
                                 {roomView ? (
-                                    <RoomConversation view={roomView} onMembers={() => setRoomMembersOpen(true)}
+                                    <RoomConversation view={roomView} onMembers={() => { setRoomPanelTab('members'); setRoomMembersOpen(true); }}
                                         closedNote={tMain('roomClosedNote')}
                                         membersTitle={tMain('roomMembersTitle')}
                                         timeFormat={userTimeFormat}
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
                                         liveWorker={roomLiveWorker}
-                                        connected={isConnected}
-                                        onVote={(voteId, choice) => ws?.send(JSON.stringify({
-                                            type: 'cast_room_vote', room_id: roomView.room.roomId,
-                                            vote_id: voteId, choice,
-                                        }))} />
+                                        connected={isConnected} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -7498,6 +7826,27 @@ function VAFDashboardContent() {
                                         <p className="text-gray-400 mt-1 text-sm">{tMain('startConversationOrWorkflow')}</p>
                                     </div>
                                 )}
+                                {/* The open votes, docked here rather than in the transcript: this
+                                    is where a person's eyes already are, and the panel travels with
+                                    the composer instead of scrolling away from it. The conversation
+                                    above makes room for it (the padding below) rather than being
+                                    covered by it. */}
+                                <div ref={dockRef}>
+                                    {voteDockOpen && (
+                                        <RoomVoteDock votes={voteDock.votes} leaving={voteDock.leaving}
+                                            widthClass={chatWidthClass}
+                                            onVote={(voteId, choice) => ws?.send(JSON.stringify({
+                                                type: 'cast_room_vote',
+                                                room_id: roomViewRef.current?.room?.roomId ?? '',
+                                                vote_id: voteId, choice,
+                                            }))} />
+                                    )}
+                                    {roomView && (
+                                        <RoomWorkDock tasks={roomView.room?.tasks ?? []}
+                                            widthClass={chatWidthClass}
+                                            onOpen={() => { setRoomPanelTab('work'); setRoomMembersOpen(true); }} />
+                                    )}
+                                </div>
                                 {/* The suggestions popup moved INTO the input row (anchored above
                                     the box where the '/' or '@' is being typed) - it used to be
                                     fixed to the screen's center, which put it nowhere near the
@@ -9262,6 +9611,26 @@ function VAFDashboardContent() {
                             </button>
                         </div>
 
+                        {/* Two questions, two tabs. "Who is in this room" and "who is on
+                            what" are different questions, and answering the second one
+                            inside the member list would bury it under everybody who has
+                            nothing running. Same tab shape the sub-agent window uses. */}
+                        <div className="flex items-end gap-1 px-6 pt-2 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
+                            {([['members', tMain('roomTabMembers')],
+                               ['work', tMain('roomTabWork')]] as const).map(([key, label]) => (
+                                <button key={key} type="button" role="tab"
+                                    aria-selected={roomPanelTab === key}
+                                    onClick={() => setRoomPanelTab(key)}
+                                    className={cn(
+                                        "flex-none rounded-t-lg border border-b-0 px-3 py-1.5 text-[12px]",
+                                        roomPanelTab === key
+                                            ? "border-gray-200 dark:border-[#2f2f2f] bg-gray-50 dark:bg-[#202020] font-semibold text-gray-900 dark:text-[#e6e6e6]"
+                                            : "border-transparent text-gray-400 hover:text-gray-700 dark:hover:text-[#c8c8c8]")}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+
                         <div className="flex-1 overflow-y-auto min-h-0">
                             {/* What the room IS. A group chat's panel that answered only
                                 "who" left the reader without the two things they ask
@@ -9286,6 +9655,11 @@ function VAFDashboardContent() {
                                     {tMain('roomClosedNote')}
                                 </div>
                             )}
+                            {roomPanelTab === 'work' && (
+                                <RoomWorkPanel tasks={roomView.room.tasks ?? []}
+                                    members={roomView.room.members_list ?? []} />
+                            )}
+                            {roomPanelTab === 'members' && (<>
 
                             {/* How far YOUR agent may act on this room's messages. The
                                 mode is the user's standing decision (never a frame's),
@@ -9398,6 +9772,7 @@ function VAFDashboardContent() {
                                     </div>
                                 ))}
                             </div>
+                            </>)}
                         </div>
                     </div>
                 </div>

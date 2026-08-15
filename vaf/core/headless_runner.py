@@ -45,34 +45,35 @@ class _StopGenerationRequested(Exception):
 
 
 def _room_ping_sweep() -> None:
-    """Check in on members that have drifted off, in the rooms THIS machine holds.
+    """The clock the rooms THIS machine holds run on: check-ins and vote deadlines.
 
     Why it lives in the runner: the room store has no daemon of its own, this loop
-    already runs once a second for every tenant, and the check-in is a HOST act -
-    the machine holding the room is the only one that can see every member's
-    cursor. A guest cannot emit one at all (`is_host` is keyed on the tenant, and a
-    redeemed ticket has none), so there is nothing to coordinate between machines.
+    already runs for every tenant, and both acts are HOST acts - the machine
+    holding the room is the only one that can see every member's cursor, and the
+    only one allowed to say how a vote ended. A guest cannot emit either (`is_host`
+    is keyed on the tenant, and a redeemed ticket has none), so there is nothing to
+    coordinate between machines.
 
-    Cheap by construction, because it is asked at most once a minute and answers
-    from data the store already keeps: a peer is idle when it has neither read nor
-    written for the configured interval. The frame is addressed to that ONE peer,
-    so nineteen other members of a twenty-member room are not woken to hear that
-    somebody else was quiet.
+    Two clocks, deliberately not one setting: the idle check-in is an hourly
+    courtesy that a person may turn off (`a2a_room_ping_minutes`, 0 = never), while
+    a vote's deadline is part of the protocol - turning check-ins off must not
+    leave every vote open forever, waiting for a result nobody will write.
+
+    Cheap by construction: it answers from data the store already keeps, and every
+    frame it emits is addressed to ONE peer, so nineteen other members of a
+    twenty-member room are not woken to hear that somebody else was quiet.
 
     Never raises into the loop: a damaged room must not stop the drain that every
     other room depends on.
     """
+    from vaf.core.a2a.room import Room, list_rooms, owner_tenant, participant_key
     from vaf.core.config import Config
 
     try:
         minutes = float(Config.get("a2a_room_ping_minutes", 60) or 0)
     except Exception:
         minutes = 0.0
-    if minutes <= 0:
-        return
     quiet_for = minutes * 60.0
-
-    from vaf.core.a2a.room import Room, list_rooms, owner_tenant, participant_key
 
     now = time.time()
     for room_id in list_rooms():
@@ -89,9 +90,28 @@ def _room_ping_sweep() -> None:
             host = room.identity_for(participant_key("agent", owner))
             if host is None or not room.is_host(host):
                 continue
+            # A PERSON's lane is not an agent to wake: a check-in there reaches a
+            # human who is simply not at the keyboard, once an hour, forever.
+            # Measured in the first live sweep, which asked the owner's terminal
+            # handle whether it was still with the room.
+            #
+            # EVERY account represented here, not just the one that owns the room:
+            # in a room across tenant lines the other four people are ordinary idle
+            # peers to this loop, and it would ping each of them hourly into a lane
+            # where nothing wakes and nothing answers - the same regression, one
+            # tenant over. Derived exactly rather than guessed, the same key the
+            # browser and the CLI both act under.
+            human_peers = set()
+            for _tenant in room.tenants():
+                _handle = room.identity_for(participant_key("cli", _tenant))
+                if _handle is not None:
+                    human_peers.add(_handle.peer_id)
+            _sweep_votes(room, host, human_peers, now)
+            if quiet_for <= 0:
+                continue
             for peer in room.idle_peers(quiet_for_s=quiet_for, now=now):
-                if peer == host.peer_id:
-                    continue          # the host is here; it is doing the asking
+                if peer == host.peer_id or peer in human_peers:
+                    continue          # the host is asking; a person is not an agent
                 if _pinged_recently(room_id, peer, now, quiet_for):
                     continue
                 try:
@@ -99,6 +119,43 @@ def _room_ping_sweep() -> None:
                     _remember_ping(room_id, peer, now)
                 except Exception:
                     continue
+        except Exception:
+            continue
+
+
+def _sweep_votes(room, host, human_peers, now: float) -> None:
+    """End the votes that are over, and nudge the members still holding one up.
+
+    In that order, and the order matters: a vote whose deadline has passed is
+    concluded rather than reminded about, or the last thing an agent would hear
+    about a question is a reminder for one that had already ended.
+
+    Two members get no reminder, for two different reasons, and neither of them is
+    exempt from the deadline - a rule that only applied to some members would be a
+    different rule for whoever is best placed to ignore it.
+
+    The person's own lane, because a nudge there reaches a human who is looking at
+    the vote card in their browser, with its countdown, right now.
+
+    The host's own agent, because a frame it wrote cannot wake it: a peer's unread
+    set never contains its own writes, so a self-addressed reminder would be a
+    frame with no reader. It learns about the vote when the vote itself arrives -
+    a vote is addressed to the room, so it wakes every member including this one -
+    and again in any room turn while the question stays open.
+    """
+    try:
+        room.conclude_votes(host, now=now)
+    except Exception:
+        pass
+    try:
+        due = room.vote_reminders(now=now)
+    except Exception:
+        return
+    for peer, entry in due:
+        if peer == host.peer_id or peer in human_peers:
+            continue
+        try:
+            room.remind_vote(host, peer, entry)
         except Exception:
             continue
 
@@ -541,10 +598,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     # cannot starve a conversation.
     last_room_check = 0.0
     ROOM_POLL_SECONDS = 2.0
-    # The check-in timer is far slower than the drain and keyed on the ROOM, not on
-    # this loop: a member is asked at most once per interval, whatever else happens.
+    # WHICH accounts to poll for. One process serves every tenant on this machine, and
+    # the agent object's bound identity is whatever the last queued turn left behind -
+    # so polling "the current scope" means every other tenant's agent is never woken,
+    # and which one wins is decided by whoever happened to chat last.
+    #
+    # Refreshed slowly on purpose: the list comes from the room manifests on disk, and
+    # a tenant that gains its first room is not urgent to the SECOND. The identities
+    # are cached beside it because resolving one is an uncached database round trip -
+    # its own docstring says one per RUN is affordable, one per call is not.
+    room_scopes: list = []
+    last_room_scopes = 0.0
+    ROOM_SCOPES_TTL = 60.0
+    room_identities: dict = {}
+    # The room sweep is keyed on the ROOM, not on this loop: a member is asked at
+    # most once per check-in interval, whatever else happens here. The TICK is
+    # faster than that interval because the sweep also runs vote deadlines, and a
+    # reminder due one minute after a question was put is a minute late if it is
+    # only looked for every sixty seconds. Fifteen seconds is the resolution of
+    # every countdown a surface shows, and it costs one fold per held room.
     last_ping_sweep = 0.0
-    PING_SWEEP_SECONDS = 60.0
+    PING_SWEEP_SECONDS = 15.0
     last_subagent_ui_update = 0.0
     last_memory_check = 0.0
     last_queue_metrics = 0.0
@@ -2449,9 +2523,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                 if now - last_room_check >= ROOM_POLL_SECONDS:
                     last_room_check = now
+                    if now - last_room_scopes >= ROOM_SCOPES_TTL:
+                        last_room_scopes = now
+                        try:
+                            from vaf.core.a2a.room import local_room_tenants
+                            room_scopes = local_room_tenants()
+                        except Exception:
+                            room_scopes = []
                     _room_wake = None
                     try:
-                        _room_wake = agent.collect_room_wake()
+                        _room_wake = agent.collect_room_wake(scopes=room_scopes or None)
                     except Exception:
                         _room_wake = None
                     if _room_wake:
@@ -2471,6 +2552,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             set_current_room_id(str(_room_wake["room_id"]))
                         except Exception:
                             pass
+                        # The turn RUNS AS the account whose room it is. Without this
+                        # the prompt, the memory seed, the workspace and the tool set
+                        # are built for whoever was bound last - the cross-user leak the
+                        # binding contract exists to prevent. Restored on every exit
+                        # path, same discipline as the markers around it (Rule 4.5).
+                        _prev_identity = None
+                        try:
+                            from vaf.core.identity_binding import (Identity,
+                                                                   bind_identity,
+                                                                   resolve_scope_identity)
+                            _prev_identity = Identity(
+                                scope=getattr(agent, "_current_user_scope_id", None),
+                                username=getattr(agent, "_current_username", None),
+                                role=getattr(agent, "_current_user_role", None))
+                            _room_scope = _room_wake.get("scope")
+                            if _room_scope not in room_identities:
+                                room_identities[_room_scope] = resolve_scope_identity(_room_scope)
+                            bind_identity(agent, room_identities[_room_scope])
+                        except Exception as _bind_err:
+                            append_domain_log_always(
+                                "headless", f"[ROOM] identity bind failed: {_bind_err}")
                         try:
                             agent.chat_step(
                                 user_input=_room_wake["prompt"],
@@ -2483,6 +2585,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 "headless", f"[ROOM] delivery failed: {_room_err}"
                             )
                         finally:
+                            if _prev_identity is not None:
+                                try:
+                                    from vaf.core.identity_binding import bind_identity
+                                    bind_identity(agent, _prev_identity)
+                                except Exception:
+                                    pass
                             agent._synthetic_drain_turn = False
                             agent._room_turn = None
                             try:

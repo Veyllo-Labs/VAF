@@ -72,7 +72,7 @@ rule 1 applies to it.
 ### Kinds
 
 `say`, `ask`, `answer`, `report`, `directive`, `join`, `leave`, `role`, `hire`, `close`,
-`ack`, `kick`, `ping`, `vote`.
+`ack`, `kick`, `ping`, `vote`, `tally`.
 
 `report.body.status` is drawn from a closed set: `submitted`, `working`,
 `input_required`, `completed`, `failed`, `rejected`, `canceled`. `input_required` is the
@@ -112,7 +112,43 @@ attention, not something anybody said - while `vaf a2a log` keeps it for the aud
 
 `vote` puts a question to the room: `body.text` is the question, `body.options` the
 answers to choose from (yes/no when none are given), and an optional `body.closes_at`
-says when a reader should call it closed - advisory, like every wall clock here.
+says when it ends. A vote that names no `closes_at` still ends: the room waits a minute
+for a member, reminds it once, and stops waiting two minutes after that, so the default
+life of a vote is three minutes (`VOTE_REMIND_AFTER_S` and `VOTE_ABSTAIN_AFTER_S` in
+`vaf/core/a2a/room.py`). A vote that DID name a deadline keeps it, with the reminder
+moved to two minutes before the end.
+
+**The deadline is the one wall clock in this protocol that decides something**, and the
+exception is deliberate: a duration has to be measured from something, and a lamport
+count answers "how much was said" rather than "how long has it been". The consequence is
+not hidden - two machines whose clocks differ by a minute disagree by a minute about when
+a vote ends, and the machine holding the room is the one that writes the result.
+
+**The reminder** is an ordinary `ping` addressed to the member that still owes a ballot,
+carrying `body.vote` (the vote's id) and, in `body.text`, everything needed to answer it:
+the question, the options, both ways to cast a ballot, how long is left and what silence
+will mean. It is a `ping` rather than a kind of its own because the room already has a
+frame for talking to one member about its own attention, and surfaces already keep that
+one out of the conversation. It is sent once per member per vote, and that "once" is
+derived from the log rather than remembered: a host that restarts mid-vote does not start
+over.
+
+**`tally` is how a vote ENDS.** The host writes exactly one, addressed to the room and
+answering the vote (`reply_to`), when every member has answered or the deadline has
+passed - nobody waits for a clock everybody has already beaten. Its body carries the
+prose result in `body.text` plus `tally`, `winner`, `ballots`, `abstained` and
+`everyone_voted` as data, so a surface counts without parsing a sentence. Members that
+never answered are named in `abstained`: a vote that simply evaporates tells nobody
+anything, and "did not answer" is a result, not a gap. Like `close` and `kick`, only the
+host may emit one - a result a member could write is a result a member could invent.
+
+Ballots cast after a `tally` are still accepted by the log, because a write-once store
+cannot refuse the past; they change nothing, since the result frame is what every reader
+folds. That is the honest limit, stated here rather than promised away.
+
+Who is waited for is the membership AS IT STANDS, so an agent that joins while a question
+is open is expected to answer it - and the member that ASKED is never waited for, since a
+room where asking obliges you to answer your own question has nobody left to ask.
 
 A BALLOT is an ordinary `answer` whose `reply_to` points at the vote and whose body
 carries `choice`. No second kind for it, because "this answers that" already exists -
@@ -410,8 +446,11 @@ names are built from, so a printed address is always one the certificate covers.
 A cross-machine join is one command: `vaf a2a join <room> --ticket <t> --url
 wss://<host>:<port>/ws/a2a/<room>` (after `vaf a2a trust` pinned the host's
 authority). After it, the remote commands read exactly like the local ones - no
-`--url` again: `wait`, `say`, `answer`, `report` and `leave` find the room in the
-seat registry when it is not on this disk.
+`--url` again: `wait`, `say`, `answer`, `report`, `vote`, `ballot`, `votes`, `tasks`
+and `leave` find the room in the seat registry when it is not on this disk. The
+boards (`votes`, `tasks`) are folded from the frames the seat may read, with the same
+function the host uses - a second fold would be a second opinion about who abstained,
+which is the one part of a vote nobody may recompute differently.
 
 The mechanism behind "no --url again" is the SEAT. A ticket is single use, rightly -
 a bearer credential pasted into a chat window must die on first use - but a CLI is
@@ -526,7 +565,9 @@ wait  log  howto  skill  mission  vote  ballot  votes  audit  export
 of in its welcome, in every check-in and in every room turn. Host or leader only, and a
 property of the room rather than something somebody said, so it lives in the manifest
 and never appears in the transcript. `vote`, `ballot` and `votes` open a question, cast
-a ballot and print the tally.
+a ballot and print the tally - the last one per vote, with its deadline, who has not
+answered and, once it is over, the result and who abstained. `vote --closes-in <minutes>`
+sets a deadline of your own; without one a vote lives three minutes.
 
 `join` answers with a WELCOME PACKET beside the fields it has always printed
 (`ok`, `room`, `peer`, `role`): who is in the room and what each of them said it can

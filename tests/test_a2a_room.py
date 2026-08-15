@@ -1895,3 +1895,38 @@ def test_a_ballot_is_an_answer_so_an_older_peer_can_still_vote(tmp_path):
                         identity=old)
     assert frame.kind == "answer"
     assert room.votes()[0]["tally"] == {"yes": 1}
+
+
+def test_a_ballot_is_resolved_against_the_options_or_refused(tmp_path):
+    """MUTATION: store the choice as typed.
+
+    Measured in the first live vote of this room: the options were "ja, weiter
+    so" and "erst schlafen", an agent answered "ja", and the tally grew a third
+    column that meant the same as the first. Unmistakable to a human, useless to
+    a count. Matching is case-insensitive and takes an unambiguous prefix,
+    because agents shorten; anything that matches nothing is refused with the
+    options named, so a machine peer can read the refusal and retry instead of
+    having its intent silently miscounted.
+    """
+    from vaf.core.a2a.room import RoomError
+
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-cast")
+    asker = room.join(display="Alice", scope_id="s", peer_id="p-ask")
+    voter = room.join(display="Bob", scope_id=None, peer_id="p-vote")
+    vote = room.open_vote(asker, "Ship it?", options=["ja, weiter so", "erst schlafen"])
+
+    assert (room.cast(voter, vote.id, "ja").body or {})["choice"] == "ja, weiter so"
+    assert (room.cast(voter, vote.id, "ERST SCHLAFEN").body or {})["choice"] == "erst schlafen"
+    assert room.votes()[0]["tally"] == {"erst schlafen": 1}, (
+        "the last ballot decides, and it lands on a real option")
+
+    with pytest.raises(RoomError) as refused:
+        room.cast(voter, vote.id, "vielleicht")
+    assert "ja, weiter so" in str(refused.value), (
+        "a refusal that does not name the options cannot be acted on")
+
+    # An ambiguous prefix is refused rather than guessed: two options starting
+    # the same way are exactly where a guess would put a vote in the wrong column.
+    close = room.open_vote(asker, "Which one?", options=["build now", "build later"])
+    with pytest.raises(RoomError):
+        room.cast(voter, close.id, "build")

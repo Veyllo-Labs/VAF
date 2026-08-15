@@ -173,6 +173,8 @@
     "roomWorkQuiet": "{count} ohne Meldung",
     "roomWorkSilentFor": "seit {hours} Std. keine Meldung",
     "roomWorkNone": "keine Arbeit verzeichnet",
+    "roomWorkShowQuiet": "{count} ohne Meldung - anzeigen",
+    "roomWorkHideQuiet": "{count} ohne Meldung ausblenden",
     "roomWorkShowDone": "{count} erledigt - anzeigen",
     "roomWorkHideDone": "{count} erledigte ausblenden",
     "roomWorkFrom": "von {who}",

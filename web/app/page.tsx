@@ -1316,6 +1316,12 @@ function RoomWorkPanel({ tasks, members }: {
     // answer what is happening - the record of what was done is a click away and
     // whole in the transcript.
     const [openDone, setOpenDone] = useState<Record<string, boolean>>({});
+    // And the same for work that has gone quiet. Shown as a count first for the reason
+    // the panel exists at all: five grey cards weigh exactly as much on screen as five
+    // live ones, so leaving them unfolded answers "what is happening here" with a wall
+    // of what is not. Nothing is hidden - the count is the way in, and one click
+    // brings them back with how long each has been silent.
+    const [openQuiet, setOpenQuiet] = useState<Record<string, boolean>>({});
     const byMember = new Map<string, RoomTask[]>();
     for (const member of members) byMember.set(member.label, []);
     for (const task of tasks) {
@@ -1346,13 +1352,12 @@ function RoomWorkPanel({ tasks, members }: {
                                 {active.length > 0
                                     ? t('roomWorkRunning', { count: active.length })
                                     : t('roomWorkNothing')}
-                                {quiet.length > 0
-                                    ? ` · ${t('roomWorkQuiet', { count: quiet.length })}`
-                                    : ''}
+
                             </span>
                         </div>
                         <div className="space-y-1.5">
-                            {[...active, ...quiet,
+                            {[...active,
+                              ...(openQuiet[label] ? quiet : []),
                               ...(openDone[label] ? done : [])].map(task => {
                                 const progress = task.progress || {};
                                 const counted = typeof progress.done === 'number'
@@ -1391,6 +1396,15 @@ function RoomWorkPanel({ tasks, members }: {
                                     </div>
                                 );
                             })}
+                            {quiet.length > 0 && (
+                                <button type="button"
+                                    onClick={() => setOpenQuiet(prev => ({ ...prev, [label]: !prev[label] }))}
+                                    className="text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-[#c8c8c8] transition-colors block">
+                                    {openQuiet[label]
+                                        ? t('roomWorkHideQuiet', { count: quiet.length })
+                                        : t('roomWorkShowQuiet', { count: quiet.length })}
+                                </button>
+                            )}
                             {done.length > 0 && (
                                 <button type="button"
                                     onClick={() => setOpenDone(prev => ({ ...prev, [label]: !prev[label] }))}

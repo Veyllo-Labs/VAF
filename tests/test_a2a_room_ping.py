@@ -457,9 +457,16 @@ def test_the_surfaces_count_only_what_has_been_heard_from():
     # Shown, not hidden: they are not finished, and a board that drops them would be
     # the room forgetting work instead of reporting on it. Finished work is the one
     # thing folded away, and only because it is over.
-    assert "...active, ...quiet," in page, "silent work is no longer drawn at all"
+    # Silent work is FOLDED, not dropped: five grey cards weigh as much on screen as
+    # five live ones, so the count is the way in and one click brings them back.
+    assert "openQuiet[label] ? quiet : []" in page, (
+        "silent work is either stacked unfolded again or gone entirely")
+    assert "roomWorkShowQuiet" in page and "roomWorkHideQuiet" in page
     assert "openDone[label] ? done : []" in page, (
-        "the fold must cover the finished ones, never the silent ones")
+        "finished work must stay folded as well")
+    # Live work is never behind a fold - that is the one thing the panel is for.
+    body = page.split("function RoomWorkPanel", 1)[1].split("\nfunction ", 1)[0]
+    assert "{[...active,\n" in body, "running work must be drawn unconditionally"
     assert "roomWorkSilentFor" in page, "a silent entry must say how long it has been"
 
 

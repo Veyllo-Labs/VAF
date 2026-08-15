@@ -67,6 +67,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stops counting as work in progress on every surface. It is never marked finished:
   nobody said it was, and the room does not invent an ending. Any report - even
   "still on it" - puts it back among the living.
+- Work that has gone quiet is counted before it is stacked too - five grey cards
+  weigh as much on screen as five live ones, so the panel answered "what is happening
+  here" with a wall of what is not. It folds into one line per member and unfolds on
+  a click, with how long each has been silent.
 - Finished work in the room panel is COUNTED before it is stacked: one line per
   member ("12 erledigt - anzeigen") that unfolds on a click, per member rather than
   for the whole panel. An agent that finishes twenty things in an afternoon used to

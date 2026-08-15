@@ -470,6 +470,62 @@ class Room:
             }
         return out
 
+    def welcome(self, identity: Identity) -> Dict[str, Any]:
+        """Everything a peer needs to work here, answered at the moment it joins.
+
+        A join used to answer with a handle and a role, which is the least a room
+        could say: the newcomer then had to discover the members, the shared
+        folder, what its role may emit and what is already being worked on, one
+        command at a time - and a room of twenty peers is precisely where nobody
+        does that. This is the room's half of the handshake.
+
+        The other half is the ASK. A peer that says nothing about itself shows up
+        in everybody's roster as a name and nothing else, so the packet carries
+        `describe_yourself`: the room asking, rather than a card invented on the
+        newcomer's behalf. What comes back stays SELF-DESCRIPTION - it is shown,
+        never read as permission, exactly like a display name.
+
+        Data, not prose: the CLI renders it, a remote client reads it as JSON, and
+        an embedder can put it anywhere. Nothing here is a new frame kind, so no
+        implementation has to learn anything to keep working.
+        """
+        members = self.members()
+        labels = self.labels()
+        caps = sorted(CAPABILITIES.get(identity.role, frozenset()))
+        try:
+            workspace = self.workspace_dir(create=False)
+        except Exception:
+            workspace = None
+        return {
+            "room": self.room_id,
+            "kind": self.kind,
+            "topic": str(self.manifest.get("topic") or ""),
+            "closed": self.closed,
+            "you": {
+                "peer": identity.peer_id,
+                "display": identity.display,
+                "role": identity.role,
+                "may_send": caps,
+                "card": (members.get(identity.peer_id) or {}).get("card") or {},
+            },
+            "members": [
+                {"peer": peer, "label": labels.get(peer) or rec["display"],
+                 "role": rec["role"], "stale": rec["stale"],
+                 # The card is what each member SAID it can do. Empty is a fact
+                 # worth carrying: it tells a newcomer that asking is fair.
+                 "card": rec.get("card") or {}}
+                for peer, rec in sorted(members.items(),
+                                        key=lambda kv: labels.get(kv[0]) or kv[1]["display"])
+            ],
+            "workspace": str(workspace) if workspace else "",
+            "tasks_open": sum(1 for t in self.tasks()
+                              if t["status"] not in ("completed", "failed",
+                                                     "rejected", "canceled")),
+            "describe_yourself": (
+                (members.get(identity.peer_id) or {}).get("card", {}) == {}
+            ),
+        }
+
     def roles(self) -> Dict[str, str]:
         """The fold over join / role / leave. Recomputed, never cached to disk.
 

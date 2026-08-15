@@ -497,3 +497,61 @@ def test_howto_reprints_the_briefing_for_a_room_you_are_already_in(rooms):
     for command in ("vaf a2a wait", "vaf a2a say", "vaf a2a report"):
         assert command in text, f"the reference lost {command}"
     assert "--progress" in text, "the reminder must teach progress too"
+
+
+def test_joining_answers_with_the_welcome_and_asks_on_stderr(rooms):
+    """MUTATION: answer a join with the handle again, or put the nudge on stdout.
+
+    Two promises at once. The join is where a newcomer learns the room, so the
+    packet travels with it. And the ask is a SENTENCE: on stdout it would land
+    in the middle of this CLI's one-JSON-object-per-line contract and break the
+    machine peer that is parsing it, so it goes to stderr, where a human or an
+    agent reading its own tool output still sees it.
+    """
+    created = runner.invoke(a2a_cmd.app, ["create", "--kind", "round", "--topic", "planning"])
+    room_id = json.loads(created.stdout.strip().splitlines()[-1])["room"]
+    invited = runner.invoke(a2a_cmd.app, ["invite", room_id, "--display", "Codex"])
+    ticket = json.loads(invited.stdout.strip().splitlines()[-1])["ticket"]
+
+    joined = runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket])
+    assert joined.exit_code == 0, joined.stdout
+    line = json.loads(joined.stdout.strip().splitlines()[-1])
+    # The flat fields a guest has always read stay put; the packet is beside them.
+    assert line["peer"] and line["role"] and line["room"] == room_id
+    packet = line["welcome"]
+    assert packet["room"] == room_id and packet["you"]["peer"] == line["peer"]
+    assert "say" in packet["you"]["may_send"], "the packet must say what this role may send"
+    assert packet["members"], "arriving without a roster is arriving blind"
+    assert packet["describe_yourself"] is True
+    assert "topic" in packet and packet["kind"] == "round"
+
+    # Every line of stdout stays parseable: the ask is not among them.
+    for line in joined.stdout.strip().splitlines():
+        json.loads(line)
+
+
+def test_wait_asks_once_for_a_card_and_stays_quiet_with_one(rooms):
+    """MUTATION: ask only at join time.
+
+    The join happened in some earlier session, possibly days ago. `wait` is the
+    command an agent runs before every turn, so it is the one place an ask
+    cannot be missed - and it must stop the moment the peer has answered, or it
+    becomes noise that gets filtered out.
+    """
+    created = runner.invoke(a2a_cmd.app, ["create", "--kind", "round"])
+    room_id = json.loads(created.stdout.strip().splitlines()[-1])["room"]
+
+    silent = runner.invoke(a2a_cmd.app, ["wait", room_id, "--timeout", "1"])
+    assert "introduce" in silent.stderr, (
+        "a peer that never said what it can do is never asked again")
+    assert "introduce" not in silent.stdout, (
+        "the ask is a sentence: on stdout it breaks the machine peer parsing "
+        "this stream one JSON object per line")
+    for line in silent.stdout.strip().splitlines():
+        if line.strip():
+            json.loads(line)
+
+    runner.invoke(a2a_cmd.app, ["introduce", room_id, "--skills", "writes Rust"])
+    described = runner.invoke(a2a_cmd.app, ["wait", room_id, "--timeout", "1"])
+    assert "introduce" not in described.stderr, (
+        "the ask keeps running after it was answered")

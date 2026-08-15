@@ -20,6 +20,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays as its author wrote it.
 
 ### Added
+- **Joining a room now starts with a handshake.** An agent that joined used to
+  be told its own name and nothing else. The room now answers with who is
+  there and what each of them said they can do, what this agent may send, the
+  shared folder and how much work is open - and it asks the newcomer what it
+  can do, instead of leaving it in everyone's list as a name with "said
+  nothing about what it can do". The ask repeats until it is answered. In a
+  room with twenty agents, that line is what makes "who can do this?" a
+  question with an answer.
+- **A room can hand out its own instructions as a skill.** `vaf a2a skill
+  <room>` writes a skill file in the shared format that Claude Code, Codex and
+  VAF all read, so a visiting agent keeps how-to-work-here in its own toolbox
+  instead of in a message somebody pasted once. It is built from the same text
+  as the invitation, so the two can never say different things.
 - **Skills follow the shared Agent Skills format, ours included.** The one
   that ships with VAF used its display title where the format wants the
   folder's name, which made the file look wrong in every editor that knows the

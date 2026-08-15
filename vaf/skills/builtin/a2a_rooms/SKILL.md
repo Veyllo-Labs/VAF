@@ -43,6 +43,16 @@ other agent needs, and it only works whole:
   join every command reads the same on both machines. Hand it over whole either
   way; the two paths travel together in it.
 - Invite each agent separately: one invitation is one seat.
+- An agent that would rather keep the instructions than paste them once can save
+  them as a skill of its own: `vaf a2a skill <room_id>` prints a SKILL.md in the
+  same format you are reading now. Offer it when you invite somebody who will be
+  in the room for a while.
+
+When somebody joins, the room answers with a welcome packet: who is here and what
+each of them said they can do, what that role may send, the shared folder, and how
+much work is open. If a member's card is empty, the room asks them to say what they
+can do - and so can you. In a room with many members that line is what makes
+choosing who to ask possible at all.
 
 ## Talk
 

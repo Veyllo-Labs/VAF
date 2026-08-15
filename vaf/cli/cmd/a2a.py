@@ -108,6 +108,16 @@ def _self_card(skills: str = "") -> dict:
     return {"kind": "terminal", "skills": described[:400]} if described else {}
 
 
+def _hint(message: str) -> None:
+    """A nudge for whoever is reading the terminal, on STDERR.
+
+    Never stdout: this CLI promises one JSON object per line there, and a machine
+    peer parsing that stream would break on a sentence. stderr reaches a human or
+    an agent reading its own tool output, and is invisible to a pipe.
+    """
+    typer.echo(message, err=True)
+
+
 def _fail(message: str, code: int) -> None:
     typer.echo(message, err=True)
     raise typer.Exit(code)
@@ -522,8 +532,22 @@ def join(
         _fail(str(e), EXIT_REFUSED)
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
-    _emit({"ok": True, "room": room_id, "peer": identity.peer_id, "role": identity.role,
-           "mode": mode})
+    # The room's half of the handshake: who is here and what they said they can
+    # do, what this role may send, the shared folder, how much work is open -
+    # and, when this peer has said nothing about itself, the room asking. A join
+    # that answered with a handle alone left a newcomer to discover all of it one
+    # command at a time, which nobody does in a room of twenty.
+    # The four fields a join has always answered with stay exactly where they
+    # were: the briefing tells every foreign agent to read `peer` from this line,
+    # and a nested one would break every guest written against it. The packet
+    # travels BESIDE them - the protocol's own rule 1, applied to our own output.
+    _emit({"ok": True, "room": room_id, "peer": identity.peer_id,
+           "role": identity.role, "mode": mode, "welcome": room.welcome(identity)})
+    if not skills:
+        _hint(f"Say what you can do so the others know who to ask:\n"
+              f"  vaf a2a introduce {room_id} --skills \"what you are good at\"\n"
+              f"Keep the room's instructions as a skill of your own:\n"
+              f"  vaf a2a skill {room_id} > vaf_a2a_rooms/SKILL.md")
 
 
 @app.command()
@@ -624,6 +648,26 @@ def _parse_progress(progress: str, step: str) -> Optional[dict]:
     if str(step or "").strip():
         out["step"] = str(step).strip()
     return out or None
+
+
+@app.command()
+def skill(room_id: str = typer.Argument(...),
+          as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Print a SKILL.md for working in this room, to keep in your own skills folder.
+
+    A briefing is read once and dies with the session it was pasted into; a skill
+    file comes back every time it is relevant, which is what taking part in a room
+    actually needs. It is written in the shared Agent Skills format - the one
+    Claude Code, Codex and VAF all read - so the same file works wherever the peer
+    runs:
+
+        vaf a2a skill <room> > vaf_a2a_rooms/SKILL.md
+    """
+    from vaf.core.a2a.invite import client_skill
+    room = _room(room_id)
+    identity = _me(room, as_peer=as_peer)
+    typer.echo(client_skill(room_id=room_id, role=identity.role, room_kind=room.kind,
+                            workspace=room.workspace_dir(create=False)))
 
 
 @app.command()
@@ -865,6 +909,18 @@ def wait(
         return _remote_wait(record, room_id, n=n, timeout=timeout,
                             membership=membership)
     identity = _me(room, as_peer=as_peer)
+    # A peer that never said what it can do is a name in everybody's roster and
+    # nothing else - and in a room of twenty that is the difference between being
+    # given work and being skipped. Asked here rather than only at join time,
+    # because the join happened in some earlier session: this is the command an
+    # agent runs before every turn, so it is the one place the ask cannot be
+    # missed. On stderr, so the NDJSON promise on stdout is untouched.
+    try:
+        if not (room.members().get(identity.peer_id) or {}).get("card"):
+            _hint(f"You have not said what you can do in this room yet:\n"
+                  f"  vaf a2a introduce {room_id} --skills \"what you are good at\"")
+    except Exception:
+        pass
     started = time.monotonic()
     seen = 0
 

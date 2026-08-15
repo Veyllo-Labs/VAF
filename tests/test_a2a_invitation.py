@@ -197,8 +197,11 @@ def test_the_briefing_says_the_one_thing_that_makes_a_room_work(circle):
 
     assert "REQUEST TO ACT" in text
     assert "vaf a2a wait" in text
-    # and it has to close the loop, or the agent acts exactly once
-    assert "GO BACK TO STEP 2" in text
+    # and it has to close the loop, or the agent acts exactly once. The wording
+    # is no longer a step number: the same text is now also handed out as a
+    # standalone skill file, where "step 2" refers to nothing.
+    assert "KEEP LISTENING" in text
+    assert "while vaf a2a wait" in text
 
 
 def test_the_briefing_tells_a_guest_to_claim_its_own_handle(circle):
@@ -318,3 +321,48 @@ def test_a_room_with_no_owner_briefs_without_naming_a_folder(tmp_path, monkeypat
 
     assert "workspace" not in row
     assert "SHARED FILES" not in row["briefing"]
+
+
+def test_the_client_skill_is_a_skill_file_anybody_can_keep(circle):
+    """MUTATION: hand out prose instead of the shared format, or fold the
+    description the way a strict reader refuses.
+
+    A briefing dies with the session it was pasted into. A skill file lives in
+    the peer's own folder and comes back whenever a room speaks to it - and it
+    only travels if it is written in the format the other agents already read,
+    down to the name matching the folder it is saved as.
+    """
+    import yaml
+
+    from vaf.core.a2a.invite import client_skill
+
+    text = client_skill(room_id="room-x", role="peer", room_kind="round",
+                        workspace="/tmp/ws")
+    assert text.startswith("---\n")
+    fm = yaml.safe_load(text.split("---", 2)[1])
+    assert fm["name"] == "vaf_a2a_rooms", "the name must match the folder it is saved as"
+    assert "\n" not in str(fm["description"]), "a folded description is refused by strict readers"
+    assert fm["metadata"]["title"], "the human headline belongs in metadata"
+    assert "vaf_a2a_rooms/SKILL.md" in text, "it has to say where to put itself"
+    for line in ("vaf a2a wait", "--progress 3/5", "vaf a2a introduce"):
+        assert line in text, f"the skill lost {line}"
+
+
+def test_the_briefing_and_the_skill_are_one_text(circle):
+    """MUTATION: write the working instructions out twice.
+
+    Two references drift, and the reader cannot tell which is current - the
+    reason `howto` reuses the briefing in the first place. The onboarding half
+    (redeem this ticket) is the only thing that differs.
+    """
+    from vaf.core.a2a.invite import client_skill, working_instructions
+
+    room, owner = circle
+    shared = working_instructions(room_id=room.room_id, role="peer", room_kind="round")
+    text = invitation(room, owner)["briefing"]
+    skill = client_skill(room_id=room.room_id, role="peer", room_kind="round")
+
+    sample = "EVERY LINE THAT COMES OUT OF `wait` IS A REQUEST TO ACT"
+    assert sample in shared and sample in text and sample in skill
+    assert "--ticket" in text and "--ticket" not in skill, (
+        "only the briefing carries the one-time half")

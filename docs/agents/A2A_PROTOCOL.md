@@ -463,8 +463,34 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  howto  audit  export
+wait  log  howto  skill  audit  export
 ```
+
+`join` answers with a WELCOME PACKET beside the fields it has always printed
+(`ok`, `room`, `peer`, `role`): who is in the room and what each of them said it can
+do, what this role may send, the shared folder, how many tasks are open, and whether
+the room is still waiting to hear what the newcomer can do (`describe_yourself`).
+The flat fields stay flat on purpose - the briefing tells every foreign agent to read
+`peer` from that line, and nesting it would break every guest ever written against
+it. `Room.welcome(identity)` builds the same packet for an embedder.
+
+The room ASKS rather than inventing: a peer that says nothing about itself shows up
+as a name and nothing else, so `join` and every `wait` print the `introduce` line on
+STDERR until the peer has answered - stdout stays one JSON object per line, whatever
+else happens. What comes back is self-description and is shown as such; it grants
+nothing, exactly like a display name.
+
+`skill` prints a SKILL.md for working in a room, in the shared Agent Skills format
+that Claude Code, Codex and VAF all read:
+
+```
+vaf a2a skill <room> > vaf_a2a_rooms/SKILL.md
+```
+
+A briefing is read once and dies with the session it was pasted into; a skill file
+lives in the peer's own folder and comes back whenever a room speaks to it. Both are
+rendered from ONE text (`invite.working_instructions`), so the two can never drift
+into two different answers about how this protocol is used.
 
 `report` carries the task vocabulary and, while long work runs, how far it has come:
 `vaf a2a report <room> "still on it" --status working --reply-to <id> --progress 3/5

@@ -1626,3 +1626,59 @@ def test_a_room_refuses_to_emit_progress_it_would_refuse_to_read(tmp_path):
     body_progress = (frame.body or {}).get("progress")
     assert body_progress is None or (
         body_progress.get("done", 0) >= 0 and len(body_progress.get("step", "")) <= 120)
+
+
+def test_the_welcome_is_the_rooms_half_of_the_handshake(tmp_path):
+    """MUTATION: answer a join with the handle and the role again, or read the
+    role out of the joining peer's own card.
+
+    A newcomer used to have to discover the members, the shared folder, what its
+    role may send and what is already being worked on, one command at a time -
+    which nobody does in a room of twenty. And the ask matters as much as the
+    answer: a peer that says nothing about itself is a name in everybody's
+    roster, so the room asks rather than inventing a card for it.
+    """
+    room = Room.create(kind="chain", owner_scope="s", base=tmp_path,
+                       room_id="room-welcome", topic="Deploy talk")
+    boss = room.join(display="Boss", scope_id="s", peer_id="p-boss",
+                     card={"skills": "reviews and decides"})
+    task = room.directive(boss, "please build it")
+
+    guest = room.join(display="Guest", scope_id=None, peer_id="p-guest")
+    packet = room.welcome(guest)
+
+    assert packet["room"] == "room-welcome" and packet["kind"] == "chain"
+    assert packet["topic"] == "Deploy talk"
+    assert packet["you"]["role"] == "worker", "a guest in a chain is a worker"
+    assert "directive" not in packet["you"]["may_send"], (
+        "the packet must answer from the capability table that enforces it")
+    assert "report" in packet["you"]["may_send"]
+    assert packet["describe_yourself"] is True, "an empty card must be asked about"
+
+    others = {m["label"]: m for m in packet["members"]}
+    assert others["Boss"]["card"]["skills"] == "reviews and decides", (
+        "the roster must carry what each member said it can do")
+    assert packet["tasks_open"] == 1, "the open work is part of arriving"
+    assert packet["workspace"], "the shared folder has to be named, or files scatter"
+
+    # Once it has introduced itself, the room stops asking.
+    room.introduce(guest, card={"skills": "writes Rust"})
+    assert room.welcome(guest)["describe_yourself"] is False
+
+
+def test_a_card_in_the_welcome_never_becomes_a_role(tmp_path):
+    """MUTATION: take the role from the member's own card.
+
+    The card is self-description and the packet shows it as such. A peer that
+    could name its own role in it would hand itself `directive` in a chain.
+    """
+    room = Room.create(kind="chain", owner_scope="s", base=tmp_path, room_id="room-claim")
+    # The first joiner of a chain leads it, so somebody has to be there first -
+    # otherwise this would assert against the room's own rule, not against the
+    # claim in the card.
+    room.join(display="Boss", scope_id="s", peer_id="p-boss")
+    liar = room.join(display="Liar", scope_id=None, peer_id="p-liar",
+                     card={"skills": "everything", "role": "leader"})
+    packet = room.welcome(liar)
+    assert packet["you"]["role"] == "worker"
+    assert "directive" not in packet["you"]["may_send"]

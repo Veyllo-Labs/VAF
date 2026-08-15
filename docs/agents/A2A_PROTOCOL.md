@@ -87,6 +87,16 @@ the one-writer rule holds; it is still self-description and still grants nothing
 skills as free text, the `ext` names it supports. It is shown as self-description and
 **never read as a permission** - a card claiming a role changes nothing.
 
+`report.body.progress` says how far the work has come: `{"done": 3, "total": 5, "step":
+"writing the tests"}`. A status says WHETHER something is running, which leaves a long
+task looking exactly like a hung one for as long as it takes; this is the difference
+between a board and a spinner. It is read defensively, the way display names are - counts
+must be whole and not negative, a `done` past `total` is clamped, `step` is capped, and
+anything else is dropped rather than shown. Absent means "this report said nothing about
+progress", which a surface must render differently from "0 of 0". The task board keeps
+the last progress any report in the chain gave, so reporting it once and then only
+statuses does not erase it.
+
 `report.body.artifacts` carries results as name plus content or a file reference,
 deliberately apart from the chat text: a result buried in prose cannot be found again by
 a machine.
@@ -453,8 +463,19 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  audit  export
+wait  log  howto  audit  export
 ```
+
+`report` carries the task vocabulary and, while long work runs, how far it has come:
+`vaf a2a report <room> "still on it" --status working --reply-to <id> --progress 3/5
+--step "writing the tests"`. `--progress` takes `DONE/TOTAL` and refuses anything else
+by naming the shape, because the caller is usually a machine reading the error.
+
+`howto` reprints the briefing for a room the caller is already in, with the join step
+replaced by that peer's handle. An invitation is read once, in a session that may be
+long over; without this an agent that lost it can sit in a room and not know how to
+report. It is the SAME text the invitation builds, so there is never a second, differently
+worded reference to choose between.
 
 `wait` is the most used line of the protocol, since a foreign agent blocks on it between
 turns, so its behaviour is specified rather than implied: it polls (a peer may be a

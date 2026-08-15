@@ -199,13 +199,16 @@ def _remote_fail(e) -> None:
 
 
 def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
-                 to_peer: str = "", reply_to: str = "", status: str = "") -> None:
+                 to_peer: str = "", reply_to: str = "", status: str = "",
+                 progress: dict = None) -> None:
     from vaf.core.a2a.client import RemoteRefused, RemoteRoom
     from vaf.core.a2a.trust import TrustRefused
 
     body = {"text": text}
     if status:
         body["status"] = status
+    if progress:
+        body["progress"] = progress
     payload = {"kind": kind, "body": body}
     if to_peer:
         payload["to"] = {"peer": to_peer}
@@ -333,7 +336,8 @@ def _emit(row: dict) -> None:
 
 
 def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
-          reply_to: str = "", status: str = "", as_peer: str = "") -> None:
+          reply_to: str = "", status: str = "", as_peer: str = "",
+          progress: dict = None) -> None:
     from vaf.core.a2a.room import RoomError
     room = _open_local(room_id)
     if room is None:
@@ -341,11 +345,13 @@ def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
         return _remote_send(record, room_id, kind, text, to_peer=to_peer,
-                            reply_to=reply_to, status=status)
+                            reply_to=reply_to, status=status, progress=progress)
     identity = _me(room, as_peer=as_peer)
     body = {"text": text}
     if status:
         body["status"] = status
+    if progress:
+        body["progress"] = progress
     payload = {"kind": kind, "body": body}
     if to_peer:
         payload["to"] = {"peer": to_peer}
@@ -587,9 +593,61 @@ def report(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
                                         help="Id of the message that asked for this work. "
                                              "Linking it is what puts the task on the "
                                              "room's task board."),
+           progress: str = typer.Option("", "--progress",
+                                        help="How far you have come, as DONE/TOTAL "
+                                             "(for example 3/5). A status alone cannot "
+                                             "tell a long run from a hung one."),
+           step: str = typer.Option("", "--step",
+                                    help="What you are doing right now, in a few words."),
            as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Report how a task stands."""
-    _send(room_id, "report", text, status=status, reply_to=reply_to, as_peer=as_peer)
+    payload = _parse_progress(progress, step)
+    _send(room_id, "report", text, status=status, reply_to=reply_to,
+          as_peer=as_peer, progress=payload)
+
+
+def _parse_progress(progress: str, step: str) -> Optional[dict]:
+    """`--progress 3/5 --step "writing tests"` as the body's progress object.
+
+    A refusal names the shape, because a machine peer reads the error and has to
+    fix its own call: silently dropping "3 von 5" would leave the board looking
+    like the sender never reported anything.
+    """
+    raw = str(progress or "").strip()
+    out: dict = {}
+    if raw:
+        parts = raw.replace(" ", "").split("/")
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            _fail("--progress takes DONE/TOTAL, both whole numbers - for example 3/5.",
+                  EXIT_REFUSED)
+        out["done"], out["total"] = int(parts[0]), int(parts[1])
+    if str(step or "").strip():
+        out["step"] = str(step).strip()
+    return out or None
+
+
+@app.command()
+def howto(room_id: str = typer.Argument(...),
+          as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Print how to work in this room again - the same text the invitation gave.
+
+    An invitation is read once, in a session that may be long over, and an agent
+    that lost it had no way back to the commands: it could sit in a room it is a
+    member of and not know how to report. The text is the SAME one the invitation
+    builds, with the join step replaced by this peer's handle - a second, differently
+    worded reference would leave a reader deciding which of the two is current.
+    """
+    from vaf.core.a2a.invite import briefing, lan_endpoint
+    room = _room(room_id)
+    identity = _me(room, as_peer=as_peer)
+    # Plain text, like `log`: this command exists to be READ, and a briefing
+    # escaped inside a JSON string is a briefing nobody follows.
+    typer.echo(briefing(
+        room_id=room_id, ticket="", role=identity.role, display=identity.display,
+        room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
+        endpoint=lan_endpoint(room_id), workspace=room.workspace_dir(create=False),
+        already_in=identity.peer_id,
+    ))
 
 
 @app.command()

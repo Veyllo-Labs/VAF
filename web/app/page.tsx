@@ -173,6 +173,7 @@ type RoomView = {
     /** The task board, derived server-side from directives and report chains
      *  (Room.tasks). Open work first; refreshed by the 3s room poll. */
     tasks?: Array<{ id: string; title: string; status: string; requester: string;
+        progress?: { done?: number; total?: number; step?: string } | null;
         assignee: string; reports: number; ts?: number }>;
     /** How far the viewer's agent may act on this room (observe/assist/autonomous).
      *  The user's standing decision; set from the member panel. */
@@ -1245,7 +1246,17 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                         const dead = task.status === 'failed' || task.status === 'rejected' || task.status === 'canceled';
                         const done = task.status === 'completed';
                         const waiting = task.status === 'input_required';
-                        const filled = done || dead ? 3 : task.status === 'working' || waiting ? 2 : 1;
+                        // A reported count beats the coarse status ladder: the
+                        // dots are the same shape either way, but "3 of 5" is a
+                        // fact the worker sent, and 2-of-3-because-working is a
+                        // guess this surface makes when nobody said anything.
+                        const p = task.progress;
+                        const counted = typeof p?.done === 'number' && typeof p?.total === 'number'
+                            && p.total > 0;
+                        const dots = counted ? Math.min(p!.total!, 10) : 3;
+                        const filled = counted
+                            ? (done || dead ? dots : Math.min(p!.done!, dots))
+                            : (done || dead ? 3 : task.status === 'working' || waiting ? 2 : 1);
                         const dotColor = dead ? 'bg-red-400' : done ? 'bg-emerald-500'
                             : waiting ? 'bg-amber-400' : 'bg-blue-400';
                         return (
@@ -1262,10 +1273,12 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                         {task.requester}{task.assignee ? ` → ${task.assignee}` : ''}
                                         {task.reports > 0 ? ` · ${task.reports}` : ''}
                                         {` · ${task.status}`}
+                                        {counted ? ` · ${p!.done}/${p!.total}` : ''}
+                                        {p?.step ? ` · ${p.step}` : ''}
                                     </div>
                                 </div>
                                 <span className="flex items-center gap-1 shrink-0" aria-hidden>
-                                    {[0, 1, 2].map(i => (
+                                    {Array.from({ length: dots }, (_, i) => (
                                         <span key={i} className={cn(
                                             "w-1.5 h-1.5 rounded-full",
                                             i < filled ? dotColor : "bg-gray-200 dark:bg-[#3a3a3a]",

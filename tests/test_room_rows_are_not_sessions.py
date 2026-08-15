@@ -1724,3 +1724,27 @@ def test_the_in_process_lane_falls_back_to_the_task_room_after_the_turn(monkeypa
     wi._push_session_update("sess-plain", data2)
     assert "roomId" not in data2
     assert "broadcast_to_session" in scheduled[-1]
+
+
+def test_progress_travels_to_the_browser_and_draws_the_dots():
+    """MUTATION: leave progress out of the transcript's task payload, or keep
+    drawing three status dots when a count was reported.
+
+    The payload is rebuilt field by field, which is exactly how `diffs` and
+    `activity` were lost twice before - a new field has to be named or it
+    vanishes without a word. And the card must draw what the worker SAID: three
+    dots at two-thirds is this surface guessing, "3 of 5" is a fact.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    payload = server.split('"tasks": [', 1)[1][:600]
+    assert '"progress": t.get("progress")' in payload, (
+        "the task payload drops progress before it reaches the browser")
+
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "progress?: { done?: number; total?: number; step?: string }" in page, (
+        "the room view has no type for progress, so it cannot render it")
+    card = page.split("view.room.tasks!.map", 1)[1][:3400]
+    assert "const counted =" in card and "p!.total!" in card, (
+        "the dots ignore a reported count")
+    assert "p.step ?" in card or "p?.step" in card, (
+        "the card never shows what the worker is doing right now")

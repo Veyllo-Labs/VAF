@@ -208,6 +208,21 @@ class RoomSendTool(BaseTool):
                          "completed", "failed", "rejected", "canceled"],
                 "description": "For kind=report: how the task stands.",
             },
+            "progress_done": {
+                "type": "integer",
+                "description": ("For kind=report: how many steps of the work are "
+                                "done. Send it again as the number grows - the "
+                                "others read where you are without asking."),
+            },
+            "progress_total": {
+                "type": "integer",
+                "description": "For kind=report: how many steps there are in total.",
+            },
+            "step": {
+                "type": "string",
+                "description": ("For kind=report: what you are doing right now, in "
+                                "a few words."),
+            },
         },
         "required": ["room_id", "text"],
     }
@@ -240,6 +255,17 @@ class RoomSendTool(BaseTool):
         body: Dict[str, Any] = {"text": text}
         if kind == "report":
             body["status"] = str(kwargs.get("status") or "completed")
+            # Normalised by the reader that consumes it, so this tool cannot put
+            # a shape on the wire that the room would refuse from a stranger.
+            from vaf.core.a2a.frame import read_progress
+            raw = {k: v for k, v in (
+                ("done", kwargs.get("progress_done")),
+                ("total", kwargs.get("progress_total")),
+                ("step", kwargs.get("step")),
+            ) if v is not None}
+            progress = read_progress({"progress": raw}) if raw else None
+            if progress:
+                body["progress"] = progress
         payload: Dict[str, Any] = {"kind": kind, "body": body}
         if kwargs.get("to_peer"):
             payload["to"] = {"peer": str(kwargs["to_peer"])}

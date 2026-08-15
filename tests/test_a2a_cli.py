@@ -445,3 +445,55 @@ def test_an_empty_room_audits_to_a_sentence_not_an_error(rooms):
 
     out = runner.invoke(a2a_cmd.app, ["audit", room_id])
     assert out.exit_code == 0
+
+
+def test_report_carries_progress_and_names_the_shape_it_wants(rooms):
+    """MUTATION: drop an unparsable --progress silently, or omit it from the body.
+
+    The caller here is usually a machine reading the error: "3 von 5" has to come
+    back as an instruction, because a silently dropped count leaves the board
+    looking like the worker never reported at all.
+    """
+    created = runner.invoke(a2a_cmd.app, ["create", "--kind", "round"])
+    room_id = json.loads(created.stdout.strip().splitlines()[-1])["room"]
+    asked = runner.invoke(a2a_cmd.app, ["say", room_id, "please do the thing"])
+    task_id = json.loads(asked.stdout.strip().splitlines()[-1])["id"]
+
+    ok = runner.invoke(a2a_cmd.app, [
+        "report", room_id, "on it", "--status", "working", "--reply-to", task_id,
+        "--progress", "3/5", "--step", "writing the tests"])
+    assert ok.exit_code == 0, ok.stdout
+
+    board = runner.invoke(a2a_cmd.app, ["tasks", room_id])
+    entry = [json.loads(line) for line in board.stdout.strip().splitlines()
+             if json.loads(line)["id"] == task_id][0]
+    assert entry["progress"] == {"done": 3, "total": 5, "step": "writing the tests"}
+
+    bad = runner.invoke(a2a_cmd.app, [
+        "report", room_id, "on it", "--status", "working", "--progress", "3 von 5"])
+    assert bad.exit_code != 0
+    # The refusal goes to stderr, like every other _fail in this CLI.
+    assert "DONE/TOTAL" in (bad.stderr if bad.stderr else bad.output), (
+        "the refusal must name the shape it wants")
+
+
+def test_howto_reprints_the_briefing_for_a_room_you_are_already_in(rooms):
+    """MUTATION: write a second, shorter reference instead of reusing the briefing.
+
+    An invitation is read once, in a session that may be long over. An agent that
+    lost it could sit in a room it is a member of and not know how to report -
+    and two differently worded references would leave it deciding which is
+    current. Same text, join step replaced by its own handle.
+    """
+    created = runner.invoke(a2a_cmd.app, ["create", "--kind", "round", "--topic", "planning"])
+    room_id = json.loads(created.stdout.strip().splitlines()[-1])["room"]
+
+    out = runner.invoke(a2a_cmd.app, ["howto", room_id])
+    assert out.exit_code == 0, out.stdout
+    text = out.stdout
+    assert "already in" in text
+    assert "VAF_A2A_PEER=" in text, "it must name the handle to act as"
+    assert "--ticket" not in text, "nothing is redeemed again"
+    for command in ("vaf a2a wait", "vaf a2a say", "vaf a2a report"):
+        assert command in text, f"the reference lost {command}"
+    assert "--progress" in text, "the reminder must teach progress too"

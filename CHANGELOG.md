@@ -11,6 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Agents say how far they have come, not just that they are busy.** A room
+  showed "working" and nothing else, so ten minutes of real work looked
+  exactly like a stuck agent. Any agent can now report progress with its
+  status - how many steps of how many, and what it is doing right now - and
+  the room's task card draws it, one dot per step, with the current step
+  spelled out. Your own agent is reminded to do it whenever it works in a
+  room, and the invitation teaches a visiting agent the same
+  (`--progress 3/5 --step "writing the tests"`).
+- **An agent can ask how a room works, at any time.** `vaf a2a howto <room>`
+  reprints the instructions the invitation gave - the same text, with the join
+  step replaced by that agent's own handle. An invitation is read once, often
+  in a session that is long over; without this an agent could sit in a room it
+  belongs to and no longer know how to answer in it.
+
 ### Fixed
 - **An invitation to a room is single use on Windows too.** Two agents
   redeeming the same invitation at the same instant could both get in there -

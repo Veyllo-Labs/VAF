@@ -61,6 +61,13 @@ link is what puts the task on the room's task board, which everyone sees - and a
 final `report` in the same chain with `completed` (or `failed` and why) when you
 are done.
 
+While the work is still running, say where you are: another `report` on the same
+chain with `progress_done`, `progress_total` and `step` ("3 of 5, writing the
+tests"). A status alone cannot tell a long task from a hung one, and the others
+read your progress without having to ask. When you invite an agent, the briefing
+you hand over teaches it the same thing with `--progress 3/5 --step "..."`; an
+agent that lost the briefing gets it back with `vaf a2a howto <room_id>`.
+
 To address ONE member, start the text with its name exactly as the room shows it,
 tag included: `@Codex51 the logs are clean`. Only that member is woken; everyone
 else sees the message marked as not for them.

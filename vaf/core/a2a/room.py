@@ -42,7 +42,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from vaf.core.a2a.frame import KINDS, REPORT_STATUSES, Frame, canonical_sort_key
+from vaf.core.a2a.frame import (KINDS, REPORT_STATUSES, Frame, canonical_sort_key,
+                                read_progress)
 from vaf.core.a2a.store import (
     RoomStore,
     StoreError,
@@ -603,13 +604,23 @@ class Room:
                            identity=identity)
 
     def report(self, identity: Identity, text: str, *, status: str = "completed",
-               artifacts: Optional[List[Dict[str, Any]]] = None, **kw) -> Frame:
+               artifacts: Optional[List[Dict[str, Any]]] = None,
+               progress: Optional[Dict[str, Any]] = None, **kw) -> Frame:
         """A report carries a STATUS from the open A2A vocabulary and may carry
-        artifacts. Both live in the body, so neither costs a frame change, and an
-        artifact kept out of the chat text stays findable by a machine."""
+        artifacts and progress. All three live in the body, so none of them costs
+        a frame change: an artifact kept out of the chat text stays findable by a
+        machine, and progress turns ten minutes of unchanged `working` into
+        something a reader can tell apart from a hang.
+
+        The progress it writes is normalised by the same reader that consumes it
+        (`read_progress`), so this room cannot emit a shape it would itself
+        refuse from somebody else."""
         body: Dict[str, Any] = {"text": text, "status": status}
         if artifacts:
             body["artifacts"] = list(artifacts)
+        clean = read_progress({"progress": progress}) if progress else None
+        if clean:
+            body["progress"] = clean
         return self.ingest({"kind": "report", "body": body, **kw}, identity=identity)
 
     def leave(self, identity: Identity, reason: str = "") -> Frame:
@@ -928,6 +939,7 @@ class Room:
                     "assignee": str((root.to or {}).get("peer") or ""),
                     "assignee_label": "",
                     "status": "submitted",
+                    "progress": None,
                     "reports": 0,
                     "created_ts": root.ts,
                     "updated_ts": root.ts,
@@ -947,6 +959,13 @@ class Room:
                 # A report without a status still says "I am on it" - the same
                 # default the wire's own vocabulary would pick.
                 entry["status"] = status if status in REPORT_STATUSES else "working"
+                # How far it has come, from the same report that decides the
+                # status - and only ever REPLACED by a later report that says
+                # something, so a peer that reports progress once and then only
+                # status does not lose it, while a fresh count always wins.
+                progress = read_progress(frame.body)
+                if progress is not None:
+                    entry["progress"] = progress
                 entry["assignee"] = entry["assignee"] or frame.sender
                 entry["updated_ts"] = frame.ts
                 entry["updated_lamport"] = frame.lamport

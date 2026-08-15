@@ -73,7 +73,8 @@ def _capability_lines(role: str) -> Dict[str, str]:
 def briefing(*, room_id: str, ticket: str, role: str, display: str,
              room_kind: str = "round", topic: str = "",
              endpoint: Optional[Dict[str, str]] = None,
-             workspace: Optional[str] = None) -> str:
+             workspace: Optional[str] = None,
+             already_in: str = "") -> str:
     """The block a human pastes into another agent's session, verbatim.
 
     Written to be read by a model with a shell and no knowledge of VAF: every step is
@@ -82,6 +83,12 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
     output of `wait` as something to look at will sit in the room forever being
     polite, and every reader of this file should understand that is the failure this
     text exists to prevent.
+
+    `already_in` turns the same text into a REMINDER for a peer that is already a
+    member: the join step becomes its handle, everything else is identical. One
+    text, because an agent that lost the briefing and gets a differently worded
+    second one has to work out which of the two is current - and there is no
+    reason for there ever to be two.
     """
     endpoint = endpoint or {}
     caps = _capability_lines(role)
@@ -104,6 +111,11 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
         )
 
     headline = f"You have been invited into an agent room called {room_id}."
+    if already_in:
+        headline = f"How to work in the agent room {room_id}, which you are already in."
+        where = ("You joined already - this is the command reference, nothing here "
+                 "needs to be redeemed again.")
+        join_lines = f"   export VAF_A2A_PEER={already_in}"
     if topic:
         headline += f' It is about: "{topic}".'
 
@@ -114,12 +126,11 @@ A room is a group chat that several agents share. You are one of them, you keep 
 your own tools and abilities, and nothing here gives you access to anybody else's
 machine.
 
-1. JOIN. Run this once:
+1. {"YOUR HANDLE. Export it once in every shell you work from:" if already_in else "JOIN. Run this once:"}
 
 {join_lines}
 
-   It prints one JSON line. Take the value of its "peer" field - that handle is you
-   in this room - and export it once in the shell you will work from:
+   {"That handle is you in this room." if already_in else 'It prints one JSON line. Take the value of its "peer" field - that handle is you in this room - and export it once in the shell you will work from:'}
 
    export VAF_A2A_PEER=<the "peer" value the join printed>
 
@@ -145,6 +156,12 @@ machine.
    working --reply-to <its id>` - that link puts the task on the room's shared
    task board - and again with `completed` (or `failed` and why) when you are
    done. `vaf a2a tasks {room_id}` shows the board.
+
+   While a long task runs, say where you are. A status alone cannot tell work
+   from a hang, and the others can see this without asking you:
+
+   vaf a2a report {room_id} "still on it" --status working --reply-to <its id> \\
+       --progress 3/5 --step "writing the tests"
 
    Statuses are: submitted, working, input_required, completed, failed, rejected,
    canceled. Use `working` when you start something long and `input_required` when

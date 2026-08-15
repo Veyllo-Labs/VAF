@@ -1133,3 +1133,38 @@ def test_a_task_spawned_in_a_room_turn_carries_the_room(tmp_path, monkeypatch):
         "task_id": "t1", "agent_type": "coding_agent", "task_description": "x",
         "status": "pending", "created_at": "2026-01-01T00:00:00"})
     assert task.room_id is None
+
+
+def test_the_agent_can_report_progress_and_is_told_to(wired):
+    """MUTATION: drop the progress arguments from room_send, or the reminder
+    from the wake prompt.
+
+    Both halves or neither: a prompt that asks for progress the tool cannot send
+    is an instruction to fail, and a tool nobody is told to use stays unused -
+    which is what "working" for ten minutes looked like.
+    """
+    from vaf.tools.room_tools import RoomSendTool
+
+    Room.create(kind="round", owner_scope=None, base=wired, room_id="room-prog-tool")
+    other = Room.open("room-prog-tool", base=wired)
+    guest = other.join(display="Codex", scope_id=None, peer_id="p-codex")
+    asked = other.say(guest, "please build it")
+    RoomJoinTool().run(room_id="room-prog-tool", user_scope_id="scope-a")
+
+    props = RoomSendTool.parameters["properties"]
+    for arg in ("progress_done", "progress_total", "step"):
+        assert arg in props, f"the agent's tool cannot report {arg}"
+
+    RoomSendTool().run(room_id="room-prog-tool", kind="report", status="working",
+                       reply_to=asked.id, text="on it", progress_done=2,
+                       progress_total=6, step="reading the code",
+                       user_scope_id="scope-a")
+    entry = [t for t in Room.open("room-prog-tool", base=wired).tasks()
+             if t["id"] == asked.id][0]
+    assert entry["progress"] == {"done": 2, "total": 6, "step": "reading the code"}
+
+    agent_src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    wake = agent_src.split("WHILE LONG WORK RUNS", 1)
+    assert len(wake) == 2, "the wake prompt no longer asks for progress on long work"
+    assert "same reply_to" in wake[1][:400], (
+        "the reminder must say WHICH task the progress belongs to")

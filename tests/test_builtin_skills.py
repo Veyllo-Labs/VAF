@@ -180,13 +180,25 @@ def test_every_cli_command_the_skill_names_exists(body):
 
 
 def test_every_send_kind_the_skill_names_is_one_the_room_accepts(body):
-    from vaf.core.a2a.frame import KINDS
+    """Every backticked word in the talking section must be something that
+    EXISTS: a frame kind, a report status, or an argument of the tool the skill
+    tells the agent to call.
+
+    Derived from those three registries rather than an allow-list kept by hand -
+    an allow-list is a second copy of the tool's parameters and drifts the first
+    time one is added (it did: `progress_done` and its siblings were real
+    arguments and read here as invented message kinds)."""
+    from vaf.core.a2a.frame import KINDS, REPORT_STATUSES
+    from vaf.tools.room_tools import RoomSendTool
 
     section = body.split("## Talk")[1].split("##")[0]
-    named = set(re.findall(r"`([a-z_]+)`", section)) - {"room_send", "reply_to", "status"}
-    unknown = {k for k in named if k not in KINDS
-               and k not in ("working", "input_required", "completed", "failed")}
-    assert not unknown, f"the skill teaches kinds the room refuses: {sorted(unknown)}"
+    tool_words = set(RoomSendTool.parameters["properties"]) | {"room_send"}
+    known = KINDS | REPORT_STATUSES | tool_words
+    named = set(re.findall(r"`([a-z_]+)`", section))
+    unknown = {k for k in named if k not in known}
+    assert not unknown, (
+        f"the skill names things the room does not have: {sorted(unknown)} - "
+        "a kind, a status or a tool argument, nothing else")
 
 
 def test_the_editor_reads_the_shipped_body_and_the_override_wins(tmp_path, monkeypatch):

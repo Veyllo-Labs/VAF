@@ -1576,3 +1576,53 @@ def test_a_reply_to_that_is_prose_is_refused_at_the_tool_and_survives_in_the_fol
                  "body": {"status": "working"}}, identity=b)
     board = room.tasks()
     assert len(board) == 1 and board[0]["status"] == "working"
+
+
+def test_the_board_keeps_the_last_progress_anybody_reported(tmp_path):
+    """MUTATION: overwrite progress with every report, or ignore it entirely.
+
+    A status says WHETHER work runs; ten minutes of unchanged `working` is
+    indistinguishable from a hang. Progress is what a reader can watch - and a
+    worker that reports a count once and then only statuses must not lose it,
+    while a fresh count always wins.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-prog")
+    asker = room.join(display="Asker", scope_id="s", peer_id="p-ask")
+    worker = room.join(display="Worker", scope_id=None, peer_id="p-work")
+    task = room.say(asker, "please build the thing")
+
+    room.report(worker, "on it", status="working", reply_to=task.id,
+                progress={"done": 1, "total": 4, "step": "reading"})
+    entry = [t for t in room.tasks() if t["id"] == task.id][0]
+    assert entry["progress"] == {"done": 1, "total": 4, "step": "reading"}
+
+    # A later report that says nothing about progress keeps the last picture.
+    room.report(worker, "still going", status="working", reply_to=task.id)
+    entry = [t for t in room.tasks() if t["id"] == task.id][0]
+    assert entry["progress"] == {"done": 1, "total": 4, "step": "reading"}
+
+    # A fresh count replaces it.
+    room.report(worker, "further", status="working", reply_to=task.id,
+                progress={"done": 3, "total": 4, "step": "writing tests"})
+    entry = [t for t in room.tasks() if t["id"] == task.id][0]
+    assert entry["progress"]["done"] == 3 and entry["progress"]["step"] == "writing tests"
+
+    # A task nobody reported progress on says so, rather than pretending zero.
+    other = room.say(asker, "and this one too")
+    room.report(worker, "took it", status="working", reply_to=other.id)
+    assert [t for t in room.tasks() if t["id"] == other.id][0]["progress"] is None
+
+
+def test_a_room_refuses_to_emit_progress_it_would_refuse_to_read(tmp_path):
+    """MUTATION: write the caller's progress dict into the body unchecked.
+
+    The room is a sender as well as a reader here, and a shape it would drop
+    from a stranger must not be a shape it puts on the wire itself.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-prog2")
+    worker = room.join(display="Worker", scope_id="s", peer_id="p-w2")
+    frame = room.report(worker, "going", status="working",
+                        progress={"done": -3, "total": "lots", "step": "y" * 400})
+    body_progress = (frame.body or {}).get("progress")
+    assert body_progress is None or (
+        body_progress.get("done", 0) >= 0 and len(body_progress.get("step", "")) <= 120)

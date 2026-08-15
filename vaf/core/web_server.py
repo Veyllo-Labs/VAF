@@ -349,7 +349,12 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             "tasks": [
                 {"id": t["id"], "title": t["title"], "status": t["status"],
                  "requester": t["requester_label"], "assignee": t["assignee_label"],
-                 "reports": t["reports"], "ts": t["updated_ts"]}
+                 "reports": t["reports"], "ts": t["updated_ts"],
+                 # Rebuilt field by field here, so every new one has to be named
+                 # or it vanishes without a word - which has shipped twice. This
+                 # one is how far the work has come, from the last report that
+                 # said anything about it.
+                 "progress": t.get("progress")}
                 for t in room.tasks()
             ][:12],
             "canManage": bool(acting) and (

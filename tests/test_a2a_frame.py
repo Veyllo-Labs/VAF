@@ -296,3 +296,28 @@ def test_an_unknown_report_status_is_carried_like_any_unknown_value():
     frame = Frame.from_dict(_wire(kind="report", body={"status": "reviewing"}))
     assert frame.body["status"] == "reviewing"
     assert frame.body["status"] not in REPORT_STATUSES
+
+
+def test_progress_is_read_the_way_a_display_name_is(monkeypatch):
+    """MUTATION: pass body["progress"] through as it arrives.
+
+    It comes from a foreign agent, so it gets the same treatment every other
+    piece of self-description gets: usable or dropped, never trusted as sent. A
+    surface that renders "-1 of many" or a screenful of step text is a surface a
+    stranger controls.
+    """
+    from vaf.core.a2a.frame import read_progress
+
+    assert read_progress({"progress": {"done": 3, "total": 5, "step": " tests "}}) == {
+        "done": 3, "total": 5, "step": "tests"}
+    # Counts past the total are the sender's arithmetic error, not a reason to
+    # draw six of five dots.
+    assert read_progress({"progress": {"done": 9, "total": 5}}) == {"done": 5, "total": 5}
+    # Anything unusable is dropped rather than shown.
+    assert read_progress({"progress": {"done": -1, "total": "many"}}) is None
+    assert read_progress({"progress": {"done": True, "total": 5}}) == {"total": 5}
+    assert read_progress({"progress": "almost done"}) is None
+    assert read_progress({}) is None, "silence must not read as zero"
+    assert read_progress(None) is None
+    long_step = read_progress({"progress": {"step": "x" * 500}})
+    assert long_step and len(long_step["step"]) == 120

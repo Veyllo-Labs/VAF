@@ -67,6 +67,47 @@ REPORT_STATUSES = frozenset({
     "completed", "failed", "rejected", "canceled",
 })
 
+
+def read_progress(body: Any) -> Optional[Dict[str, Any]]:
+    """`report.body.progress` as something a surface can draw, or None.
+
+    A status says WHETHER work is running; this says how far it has come, which
+    is the difference between a task board and a spinner: `working` sits
+    unchanged for ten minutes and looks identical to a hang.
+
+    It lives in the body, so the wire form is untouched and a peer that knows
+    nothing of it keeps working (rule 1: unknown content is preserved, not
+    interpreted). Reading it is DEFENSIVE for the same reason display names
+    are never trusted - it arrives from a foreign agent, so anything unusable
+    is dropped rather than passed on: counts must be whole and not negative,
+    a total that is smaller than the count is the sender's error and not a
+    reason to lie, and the step text is capped. None means "this report says
+    nothing about progress", which a renderer must show differently from
+    "0 of 0".
+    """
+    if not isinstance(body, dict):
+        return None
+    raw = body.get("progress")
+    if not isinstance(raw, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for key in ("done", "total"):
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
+            continue
+        number = int(value)
+        if number < 0:
+            continue
+        out[key] = number
+    if "done" in out and "total" in out and out["done"] > out["total"]:
+        out["done"] = out["total"]
+    step = raw.get("step")
+    if isinstance(step, str) and step.strip():
+        out["step"] = step.strip()[:120]
+    return out or None
+
 # Every key this version defines. Anything else in a frame is an unknown field and
 # falls under rule 1. Used by the must_understand check as the baseline of what a
 # conforming peer of this version necessarily comprehends.

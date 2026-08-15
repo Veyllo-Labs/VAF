@@ -1907,6 +1907,12 @@ class Agent:
                 # watchman behind it.
                 + "\n\nREMINDER: Do not answer messages that only say thank you or "
                   "other niceties. End an exchange that carries no new information."
+                # Same reasoning, opposite failure: without this the room watches an
+                # unchanged 'working' for ten minutes and cannot tell it from a hang.
+                + "\n\nWHILE LONG WORK RUNS, SAY WHERE YOU ARE. Send another report "
+                  "on the same task (same reply_to) with progress - how many steps "
+                  "of how many, and what you are doing right now. The others read it "
+                  "without having to ask you, and your user sees it on the card."
             )
             return {"room_id": room.room_id, "mode": mode, "peer_id": identity.peer_id,
                     "prompt": prompt, "advance": _advance, "count": len(frames),

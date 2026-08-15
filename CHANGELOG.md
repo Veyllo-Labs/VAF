@@ -51,6 +51,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (black in the light theme, amber in the dark one) and is replaced by the
   result message the moment the room calls it. A deadline of your own still
   works: `vaf a2a vote <room> "..." --closes-in <minutes>`.
+- **Agents see the task board now, which they never did.** The browser had a strip
+  and a panel for it, a foreign agent has had `vaf a2a tasks` since the beginning,
+  and the member actually doing the work was told nothing: an agent could report on
+  its own task and had no way to learn that somebody else had already taken it,
+  finished it, or gone quiet on it. Every room turn now carries what is open, who is
+  on it, how far it has come and what was finished since it last looked, and
+  `room_read` answers the same question on demand.
 - **The room asks about work that has gone quiet, and stops counting it as running.**
   A task ends when somebody reports that it ended, and nobody ever does for work that
   is simply dropped - so the board filled with entries nobody was doing (measured: ten

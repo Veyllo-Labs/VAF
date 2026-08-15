@@ -366,14 +366,54 @@ class RoomReadTool(BaseTool):
         since = 0 if kwargs.get("all_messages") else room.store.cursor(identity.peer_id)
         rows = room.transcript(since_lamport=since)
         rows = [r for r in rows if r["peer"] != identity.peer_id]
+        # WHAT THE ROOM IS WORKING ON, beside what was said. Reading a room and not
+        # being told that somebody else already took the thing you were about to take
+        # is how two agents do one job twice - and a foreign agent has had this all
+        # along (`vaf a2a tasks`) while the agent whose room it is had no way to ask
+        # at all. Appended to the reader rather than given a sixth tool: it is the
+        # same question ("what is going on here"), one line further.
+        board = _board_summary(room, identity)
         if not rows:
-            return f"Nothing new in '{room_id}'."
+            return (f"Nothing new in '{room_id}'." + (f"\n\n{board}" if board else ""))
         shown = rows[-limit:]
         # The cursor moves only after the text exists, so an interruption between the
         # two costs a repeat rather than a lost message.
-        rendered = _render(shown)
+        rendered = _render(shown) + (f"\n\n{board}" if board else "")
         room.store.set_cursor(identity.peer_id, shown[-1]["lamport"])
         return rendered
+
+
+def _board_summary(room, identity) -> str:
+    """The room's open work, in a few lines, for whoever is reading it.
+
+    Capped hard: a room with thirty tasks would otherwise turn a read into a wall and
+    push out the messages it was asked for. Silent work is COUNTED rather than listed -
+    the room cannot tell a long run from an abandoned one, and a reader mostly needs to
+    know that some exists.
+    """
+    try:
+        board = room.tasks()
+    except Exception:
+        return ""
+    done = ("completed", "failed", "rejected", "canceled")
+    open_work = [t for t in board if t["status"] not in done]
+    live = [t for t in open_work if not t.get("quiet")]
+    quiet = len(open_work) - len(live)
+    if not open_work:
+        return ""
+    lines = ["OPEN WORK IN THIS ROOM:"]
+    for task in live[:6]:
+        progress = task.get("progress") or {}
+        counted = ("done" in progress and "total" in progress)
+        where = f" {progress['done']}/{progress['total']}" if counted else ""
+        mine = " (YOURS)" if task.get("assignee") == identity.peer_id else ""
+        lines.append(f"- [{task['status']}{where}] {str(task['title'])[:90]}"
+                     f" - {task.get('assignee_label') or 'nobody yet'}{mine}")
+    if len(live) > 6:
+        lines.append(f"- ...and {len(live) - 6} more")
+    if quiet:
+        lines.append(f"({quiet} with nothing said about them for hours.)")
+    return "\n".join(lines)
 
 
 def _render(rows: List[Dict[str, Any]]) -> str:

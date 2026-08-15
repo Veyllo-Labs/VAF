@@ -1832,6 +1832,51 @@ class Agent:
                 pair_of = room.pairs()
             except Exception:
                 pair_of = {}
+            # WHAT THE ROOM IS WORKING ON. The browser grew a strip and a panel for
+            # this and the member doing the work was told nothing: an agent could
+            # report on its own task and had no way to learn that somebody else had
+            # already taken it, finished it, or gone quiet on it. Derived here, like
+            # everything else in this prompt, and capped - a room with thirty tasks
+            # must not push the conversation out of the turn it belongs to.
+            try:
+                board = room.tasks()
+                since = room.store.cursor(identity.peer_id)
+            except Exception:
+                board, since = [], 0
+            _open = [t for t in board
+                     if t["status"] not in ("completed", "failed", "rejected", "canceled")]
+            _live = [t for t in _open if not t.get("quiet")]
+            _quiet = [t for t in _open if t.get("quiet")]
+            _just_done = [t for t in board
+                          if t["status"] in ("completed", "failed", "rejected", "canceled")
+                          and int(t.get("updated_lamport") or 0) > int(since or 0)]
+
+            def _work_line(task):
+                progress = task.get("progress") or {}
+                counted = ("done" in progress and "total" in progress)
+                where = f" {progress['done']}/{progress['total']}" if counted else ""
+                step = f" - {progress['step']}" if progress.get("step") else ""
+                who = task.get("assignee_label") or "nobody yet"
+                mine = " (YOURS)" if task.get("assignee") == identity.peer_id else ""
+                return (f"- [{task['status']}{where}] {str(task['title'])[:90]}"
+                        f" - {who}{mine}{step}")
+
+            work = []
+            if _live:
+                work.append("WHAT THIS ROOM IS WORKING ON:")
+                work.extend(_work_line(t) for t in _live[:8])
+                if len(_live) > 8:
+                    work.append(f"- ...and {len(_live) - 8} more open")
+            if _quiet:
+                # Named as a fact and not as an accusation: the room cannot tell a long
+                # run from an abandoned one, which is why it asks rather than deciding.
+                work.append(f"({len(_quiet)} more with nothing said about them for "
+                            "hours - if one of them is yours, say where it stands.)")
+            if _just_done:
+                work.append("FINISHED SINCE YOU LAST LOOKED:")
+                work.extend(f"- [{t['status']}] {str(t['title'])[:90]}"
+                            f" - {t.get('assignee_label') or 'somebody'}"
+                            for t in _just_done[:5])
             roster = []
             for peer, rec in sorted(members.items(),
                                     key=lambda kv: labels.get(kv[0]) or kv[1]["display"]):
@@ -1979,6 +2024,7 @@ class Agent:
                 + (f"LEADS THIS ROOM: {', '.join(leader_names)}\n"
                    if leader_names else "")
                 + "\nYOUR TEAM IN THIS ROOM:\n" + "\n".join(roster)
+                + (("\n\n" + "\n".join(work)) if work else "")
                 + (f"\n\nShared files for this room live in: {workspace}\n"
                    "Save anything the others should see THERE, not in your own chat "
                    "workspace - a file saved anywhere else is a file the room cannot "

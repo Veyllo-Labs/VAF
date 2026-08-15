@@ -347,3 +347,59 @@ def test_only_the_host_or_a_leader_lets_another_account_in(rooms):
     assert "tenant-c" not in room.tenants()
 
     assert "tenant-c" in room.admit(host, "tenant-c")
+
+
+def test_an_agent_is_told_what_the_room_is_working_on(rooms):
+    """MUTATION: leave the board out of the room turn, or out of room_read.
+
+    The browser grew a strip and a panel for this, the terminal has had `vaf a2a
+    tasks` since the beginning, and the member that actually does the work was told
+    nothing: an agent could report on its own task and had no way to learn that
+    somebody else had already taken it, finished it, or gone quiet on it. Two agents
+    doing one job twice is the cheapest possible failure to prevent, and this is the
+    mission's own rule - a capability the product has and the framework does not is a
+    failed test of the framework.
+    """
+    from vaf.tools.room_tools import RoomReadTool
+
+    room = Room.create(kind="round", owner_scope="tenant-a", base=rooms, room_id="room-work")
+    seats = _household(room, "tenant-a", human="Alice", agent="Nobel")
+    guest = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+
+    asked = room.ask(seats["cli"], "write the release notes")
+    room.report(guest, "on it", status="working", reply_to=asked.id,
+                progress={"done": 2, "total": 5, "step": "collecting the commits"})
+    finished = room.ask(seats["cli"], "check the links")
+    room.report(guest, "done", status="completed", reply_to=finished.id)
+    room.say(guest, "anything else?")
+
+    class _Waker:
+        from vaf.core.agent import Agent as _Real
+        collect_room_wake = _Real.collect_room_wake
+        _room_unattended_report = _Real._room_unattended_report
+
+        def __init__(self):
+            self._current_user_scope_id = "tenant-a"
+            self._current_username = "Alice"
+            self._room_reply_streak = {}
+
+    prompt = _Waker().collect_room_wake(scopes=["tenant-a"])["prompt"]
+    assert "WHAT THIS ROOM IS WORKING ON:" in prompt
+    assert "write the release notes" in prompt, "the open work is not named"
+    assert "2/5" in prompt and "collecting the commits" in prompt, (
+        "how far it has come is the difference between a board and a spinner")
+    # The WORK LINE itself, not merely somewhere further down the prompt: the
+    # messages below mention every name in the room anyway, so a looser check would
+    # pass for a board that named nobody.
+    work_line = next(line for line in prompt.splitlines()
+                     if line.startswith("- [working") and "release notes" in line)
+    assert "Codex" in work_line, (
+        "who is on it is the half that prevents two agents doing one job twice")
+    assert "FINISHED SINCE YOU LAST LOOKED:" in prompt and "check the links" in prompt
+
+    # And the agent can ASK, rather than only being told when something wakes it.
+    read = RoomReadTool().run(room_id="room-work", user_scope_id="tenant-a")
+    assert "OPEN WORK IN THIS ROOM:" in read
+    assert "write the release notes" in read and "Codex" in read
+    # Finished work is not repeated there - the reader answers "what is going on".
+    assert "check the links" not in read.split("OPEN WORK IN THIS ROOM:", 1)[1]

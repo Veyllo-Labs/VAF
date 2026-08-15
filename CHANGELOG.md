@@ -88,6 +88,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   room turn: which member is their own person, whose the others are, or that nobody
   here is theirs. It changes nothing about who may be answered - only whose word
   carries their user's authority.
+- Letting an account into a shared room is written into the security log for
+  administrators (`room_account_admitted`, with the room and who admitted). While
+  fixing that: the log's flood throttle keyed on kind, address, user and channel but
+  not on WHAT the event was about, so two rooms admitted seconds apart collapsed into
+  one line - an audit that silently drops entries is worse than none, because it reads
+  as complete.
 - **A room turn now reports to the account running it**, not to the account that
   owns the room. The two are the same while a room holds one household; in a room
   shared between accounts, routing by ownership would have put one person's agent

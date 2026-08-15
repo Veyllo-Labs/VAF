@@ -106,9 +106,13 @@ Contract rules:
   IPs are fine; the reader endpoints are admin-only.
 - **Never raises**: logging must not be able to break the request path.
 - **Per-source flood throttle**: repeated identical `(kind, ip, username,
-  channel)` events within 5 seconds are dropped, so an attacker hammering an
-  endpoint cannot grow the log unboundedly, while distinct senders never
-  swallow each other's events. The throttle map is bounded.
+  channel, path)` events within 5 seconds are dropped, so an attacker hammering
+  an endpoint cannot grow the log unboundedly, while distinct senders never
+  swallow each other's events. `path` is part of the key because two events of
+  one kind from one person are not the same event when they are about different
+  things - two rooms admitted seconds apart collapsed into one line before it
+  was, and an audit that silently drops the second is worse than none. The
+  throttle map is bounded.
 - **Always on**: independent of `debug_logs_enabled`. Rejected access attempts
   are audit signal, not debug noise.
 
@@ -136,6 +140,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `skill_scan_alert` | Periodic re-scan found a worsened risk level (below high) | `vaf/skills/rescan.py` |
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
+| `room_account_admitted` | An account was let into a room shared across accounts; every member of such a room reads everything said in it. `path` carries the room id, `username` who admitted | `vaf/cli/cmd/a2a.py` (`share`) - emitted by the CALLER, so an embedder using `Room.admit` does not write into this log |
 | `cli_password_gate_failed` | Three wrong admin passwords at the interactive terminal | `vaf/cli/gate.py` |
 | `default_db_password` | The memory database is still using the shipped default password; the event text carries the fix (`vaf secure rotate-db`, via the agent or a terminal) | `service_stack.py` start |
 

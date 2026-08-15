@@ -747,3 +747,35 @@ def test_members_says_who_belongs_to_whom(rooms, monkeypatch):
     # And a guest that named no account is left unanswered rather than guessed at.
     assert rows["Codex"]["kind"] == "unknown" and rows["Codex"]["partner"] == ""
     assert guest.peer_id in rows["Codex"]["peer"]
+
+
+def test_letting_an_account_in_is_written_down_for_the_administrator(rooms, monkeypatch):
+    """MUTATION: admit an account and log nothing, or key the throttle without the room.
+
+    Admission decides who reads a conversation from then on, which is exactly the kind
+    of act an administrator has to be able to reconstruct afterwards. And two rooms
+    opened seconds apart are two events: the throttle used to key on kind, ip, user and
+    channel alone, so the second one silently vanished - an audit that drops entries is
+    worse than none, because it reads as complete.
+    """
+    from vaf.core.a2a.room import participant_key
+
+    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+    events = []
+    import vaf.core.security_events as sec
+    monkeypatch.setattr(sec, "log_security_event",
+                        lambda kind, **fields: events.append((kind, fields)))
+
+    for room_id in ("room-audit-1", "room-audit-2"):
+        runner.invoke(a2a_cmd.app, ["create", "--shared", "--id", room_id])
+        assert runner.invoke(a2a_cmd.app, ["share", room_id, "other-account"]).exit_code == 0
+
+    assert [k for k, _f in events] == ["room_account_admitted"] * 2, (
+        "an admission went unrecorded")
+    assert [f["path"] for _k, f in events] == ["room-audit-1", "room-audit-2"], (
+        "the room has to be in the record, and in the throttle key with it")
+    assert all("other-account" in f["detail"] for _k, f in events)
+
+    # And the throttle really keys on it, or the second line above never survives.
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "security_events.py").read_text(encoding="utf-8")
+    assert 'key = f"{kind}|{ip}|{username}|{channel}|{path}"' in src

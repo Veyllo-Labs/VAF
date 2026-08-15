@@ -594,6 +594,8 @@ The `/api/security/*` surface (overview, events, skill actions) is admin-only (`
 | Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
 | Thinking workspace | Per-user `workspaces/<scope_key>/` with boundary-checked file access and handoff approvals | Application |
 | Config (global vs user) | Backend/network/API keys: admin-only write; non-admins can change only user-scoped settings | Application |
+| Agent rooms (A2A) | One account per room by default (`_check_tenant`); a room appears in the sidebar only for accounts that are members (`joined_rooms`); each room turn runs bound to the account whose room it is, and its live events route to that account rather than to the room's owner | Application |
+| Rooms across accounts (`multi_scope`) | Opt-in per room, and it takes only the accounts it ADMITTED (`Room.admit`, host or leader only, logged as `room_account_admitted`) - knowing the id admits nobody. Inside such a room isolation is deliberately relaxed and the relaxation is the point: every member reads every frame, and members reach the room's shared folder through one clause inside the file jail's cross-account invariant. A newcomer starts reading at its own join, so it never receives the history of people it has never met | Application |
 
 ## Developer Guidelines: Building New Features
 

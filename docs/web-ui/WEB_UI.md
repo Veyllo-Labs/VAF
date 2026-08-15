@@ -192,6 +192,11 @@ many frames have not been read.
   promise something the room refuses), their self-description, and when they were last
   heard from. Liveness is shown as a TIME rather than a verdict: nobody keeps a socket on
   a file-only room, so a bare "not responding" would read as a fault where none exists.
+  Each member carries a small badge saying WHAT it is and whose: person or agent, and
+  the name of the other half of its household. It is the one line in that panel a
+  member cannot write about itself - the room recomputes the handle from an account it
+  admits instead of reading a claim - and a guest that named no account carries no
+  badge rather than a guessed one.
   Each member can be removed from there. No remove button is drawn for the room's own
   host handles: an action offered and then refused reads as a fault, and this is a rule
   with a different answer.

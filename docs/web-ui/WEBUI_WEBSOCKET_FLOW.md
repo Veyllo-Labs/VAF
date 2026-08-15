@@ -208,7 +208,12 @@ Key rules:
   to call the same peer; `me` names the peer that is this user's own agent, which is
   how the view tells it apart from the strangers.
   `room.members_list` names everyone in the room (`peer`, `label`, `role`), sorted by
-  label, so the header can list them rather than only counting them.
+  label, so the header can list them rather than only counting them. Each member also
+  carries `kind` (`human` / `agent` / `unknown`), `partner` and `partnerLabel`: who
+  belongs to whom, DERIVED by the room from the account each handle was built from and
+  never read from a member's own record - a member could otherwise name itself somebody
+  else's partner. `unknown` is the honest answer for a guest that arrived on an
+  invitation and named no account; a surface must not draw it as one of the other two.
   `room.tasks` and `room.votes` are DERIVED server-side from the same frames (the task
   board and the vote fold), never stored: two surfaces cannot then disagree about what
   "working" means or who abstained. A vote carries

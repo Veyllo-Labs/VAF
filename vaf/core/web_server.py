@@ -220,6 +220,13 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
     entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
     members, labels, hosts = room.members(), room.labels(), room.host_peers()
+    # Who belongs to whom, once for the whole payload rather than per member: it is a
+    # derivation over the same accounts every time, and asking it per row would walk
+    # the room's own member list once per member.
+    try:
+        pairs = room.pairs()
+    except Exception:
+        pairs = {}
     # The handle the browser ACTS as, which is the CLI lane - not whichever lane the
     # sidebar row happened to resolve first. Asking about the wrong one is how the
     # remove buttons stayed hidden for the host of their own room: the row answered for
@@ -406,6 +413,15 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                     # action offered and then denied reads as a fault, and this is a
                     # deliberate rule with a different answer (close the room).
                     "protected": peer in hosts,
+                    # WHO this member is, and whose. Derived by the room from the
+                    # account each handle was built from, never claimed by the member -
+                    # a `speaks_for` in a member's own file would be a peer naming its
+                    # own partner, and in a room of strangers that is the one claim
+                    # nobody may make. A guest that arrived on an invitation named no
+                    # account and stays "unknown" rather than being guessed at.
+                    "kind": (pairs.get(peer) or {}).get("kind") or "unknown",
+                    "partner": (pairs.get(peer) or {}).get("partner") or "",
+                    "partnerLabel": (pairs.get(peer) or {}).get("partner_label") or "",
                 }
                 for peer, record in sorted(
                     members.items(), key=lambda kv: labels.get(kv[0]) or kv[1]["display"])

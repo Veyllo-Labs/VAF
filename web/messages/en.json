@@ -163,6 +163,9 @@
     "roomClosedNote": "This room is closed. Nothing more can be written here.",
     "roomWritePlaceholder": "Write to the room...",
     "roomMembersTitle": "Who is in this room",
+    "roomKindHuman": "person",
+    "roomKindAgent": "agent",
+    "roomPairedWith": "with {who}",
     "roomTabMembers": "Members",
     "roomTabWork": "Who is on what",
     "roomWorkRunning": "{count} running",
@@ -492,6 +495,7 @@
     "ovEventsTitle": "Blocked today",
     "ovDescEvents": "Every attempt VAF turned away today: rejected access, refused senders, blocked mail and stopped skill installs. An admin override means someone deliberately stepped past a refusal.",
     "ovEvFactTotal": "Events today",
+    "ovEvRoomAccountAdmitted": "Account let into a shared room",
     "ovEvCliGateFailed": "Failed terminal password attempts",
     "ovEvDefaultDbPassword": "Database still uses the default password. Ask your agent to run vaf secure rotate-db, or type it in a terminal yourself"
   },

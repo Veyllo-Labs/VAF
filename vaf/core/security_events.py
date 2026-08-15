@@ -69,6 +69,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "skill_scan_alert": "Periodic re-scan found a worsened risk level (below high)",
     "skill_quarantined": "Skill quarantined (auto on worsened-to-high, or manual isolate)",
     "skill_removed": "Quarantined skill deleted from the dashboard",
+    # rooms shared across accounts
+    "room_account_admitted": "An account was let into a room shared across accounts; "
+                             "every member of such a room reads everything said in it. "
+                             "`path` carries the room id, `username` who admitted",
     # data at rest
     "cli_password_gate_failed": "Three wrong admin passwords at the interactive terminal",
     "default_db_password": "The memory database is still using the shipped default password; "
@@ -87,7 +91,11 @@ def log_security_event(kind: str, *, ip: str = "", username: str = "",
         now = time.time()
         # Per-source throttle: distinct senders/users must not swallow each
         # other's events (e.g. two different rejected phone numbers).
-        key = f"{kind}|{ip}|{username}|{channel}"
+        # `path` is part of the key because two events of the same kind from the
+        # same person are not the same event when they are about different things -
+        # two rooms admitted seconds apart used to collapse into one line, and an
+        # audit that silently drops the second is worse than no audit.
+        key = f"{kind}|{ip}|{username}|{channel}|{path}"
         with _lock:
             if now - _last_emit.get(key, 0.0) < _THROTTLE_S:
                 return

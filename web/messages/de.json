@@ -163,6 +163,9 @@
     "roomClosedNote": "Dieser Raum ist geschlossen. Hier kann nichts mehr geschrieben werden.",
     "roomWritePlaceholder": "In den Raum schreiben...",
     "roomMembersTitle": "Wer in diesem Raum ist",
+    "roomKindHuman": "Mensch",
+    "roomKindAgent": "Agent",
+    "roomPairedWith": "gehört zu {who}",
     "roomTabMembers": "Mitglieder",
     "roomTabWork": "Wer macht was",
     "roomWorkRunning": "{count} laufend",
@@ -492,6 +495,7 @@
     "ovEventsTitle": "Heute blockiert",
     "ovDescEvents": "Alles, was VAF heute abgewiesen hat: abgelehnte Zugriffe, abgewiesene Absender, blockierte Mails und gestoppte Skill-Installationen. Eine Admin-Freigabe heisst, dass jemand eine Sperre bewusst uebergangen hat.",
     "ovEvFactTotal": "Ereignisse heute",
+    "ovEvRoomAccountAdmitted": "Konto in geteilten Raum aufgenommen",
     "ovEvCliGateFailed": "Fehlgeschlagene Passwortversuche im Terminal",
     "ovEvDefaultDbPassword": "Datenbank nutzt noch das Standardpasswort. Bitte deinen Agenten, vaf secure rotate-db auszufuehren, oder tippe es selbst in ein Terminal"
   },

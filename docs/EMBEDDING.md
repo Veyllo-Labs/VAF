@@ -1144,6 +1144,31 @@ may say how a vote ended. Nothing runs them for you - VAF's own product calls th
 its runner loop every fifteen seconds, and a host that never calls them has votes that
 stay open, which is a defensible choice as long as your surface does not draw a countdown.
 
+**Who belongs to whom.** A person and their agent are two members of a room by design
+(the `cli` and `agent` lanes of one account), and with several accounts in one room the
+useful question becomes which two of them are one household. `room.pairs()` answers it by
+RECOMPUTING each handle from an account the room admits and accepting the pair only when
+it comes out identical:
+
+```python
+for peer, entry in room.pairs().items():
+    print(peer, entry["kind"], entry["partner"])   # human | agent | unknown
+```
+
+Nothing is read from a member's own file, and that is the whole point: a member writes
+its own record, so a `speaks_for` field in one would be a peer naming its own partner.
+Where no derivation reaches - a guest that redeemed a ticket carries no account at all -
+the answer is `unknown` rather than a guess. A person becomes a member only when they
+first act in a room, so `partner: ""` on your own agent is the ordinary starting state.
+
+**A room across accounts** is off by default and takes only the accounts it was told to
+take: `Room.create(..., multi_scope=True)` opens one and `room.admit(identity, account)`
+lets one in (host or leader only). Knowing a room's id admits nobody - ids travel in
+invitations, in prompts and in log lines. Two consequences to plan for: every member
+reads everything said in such a room (`Frame.addresses` is a routing hint, not a
+boundary), and a new member starts reading at its own join rather than receiving the
+history of people it has never met.
+
 **Finding the rooms one participant is in**, which is what a sidebar needs:
 
 ```python

@@ -211,6 +211,14 @@ type RoomView = {
         card?: { kind?: string; skills?: string; model?: string };
         /** Lease lapsed. Stale, never gone: a sleeping laptop is not a departure. */
         stale?: boolean;
+        /** "human", "agent", or "unknown". DERIVED by the room from the account each
+         *  handle was built from - never a claim the member wrote about itself. A guest
+         *  that arrived on an invitation named no account and stays unknown rather than
+         *  being guessed at. */
+        kind?: string;
+        /** The other half of this household, when the room can prove one. */
+        partner?: string;
+        partnerLabel?: string;
     }>;
 };
 
@@ -9728,6 +9736,19 @@ function VAFDashboardContent() {
                                                 )}
                                                 {m.peer === roomView.room.me && (
                                                     <span className="text-[10px] text-gray-400">{tMain('roomInfoYouBadge')}</span>
+                                                )}
+                                                {/* WHO this member is, and whose. The room derives
+                                                    it by recomputing the handle from an account it
+                                                    admits, so it is the one thing here a member
+                                                    cannot write about itself. A guest that named no
+                                                    account carries no badge rather than a guess. */}
+                                                {(m.kind === 'human' || m.kind === 'agent') && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-[#242424] dark:text-[#c8c8c8]">
+                                                        {m.kind === 'human' ? tMain('roomKindHuman') : tMain('roomKindAgent')}
+                                                        {m.partnerLabel
+                                                            ? ` · ${tMain('roomPairedWith', { who: m.partnerLabel })}`
+                                                            : ''}
+                                                    </span>
                                                 )}
                                             </div>
                                             {/* What this agent says it is good for. A room is

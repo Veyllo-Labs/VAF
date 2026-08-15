@@ -362,3 +362,35 @@ def test_the_work_strip_opens_the_rooms_own_panel_on_a_work_tab():
         for key in ("roomTabMembers", "roomTabWork", "roomWorkRunning",
                     "roomWorkNothing", "roomWorkFrom"):
             assert key in messages["main"], f"{key} missing in {locale}.json"
+
+
+def test_the_members_panel_says_who_belongs_to_whom():
+    """MUTATION: send the pairing and render it nowhere, or claim it from the card.
+
+    The panel answers "who is in this room". With several households in one, the
+    second half of that answer is which of them belong together - and it is the one
+    line here that a member cannot write about itself, because the room recomputes the
+    handle instead of reading a claim. A card saying "I speak for Ana" must never
+    become this badge.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert '"kind": (pairs.get(peer) or {}).get("kind") or "unknown"' in server, (
+        "the pairing never reaches the browser")
+    assert '"partnerLabel": (pairs.get(peer) or {}).get("partner_label")' in server
+    assert "pairs = room.pairs()" in server, "the answer must come from the room"
+
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "m.kind === 'human'" in page and "m.partnerLabel" in page, (
+        "the panel shows a name and not who it speaks for")
+    # A guest that named no account gets no badge rather than a guess.
+    assert "(m.kind === 'human' || m.kind === 'agent')" in page, (
+        "an unknown member would be drawn as one of the two")
+    # And the badge must not be fed from the self-description next to it.
+    badge = page.split("(m.kind === 'human' || m.kind === 'agent')", 1)[1][:600]
+    assert "card" not in badge, "the pairing is derived, never taken from a member's card"
+
+    import json
+    for locale in ("de", "en"):
+        messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
+        for key in ("roomKindHuman", "roomKindAgent", "roomPairedWith"):
+            assert key in messages["main"], f"{key} missing in {locale}.json"

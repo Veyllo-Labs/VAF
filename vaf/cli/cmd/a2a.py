@@ -563,6 +563,16 @@ def share(
         admitted = room.admit(identity, account)
     except RoomError as e:
         _fail(str(e), EXIT_REFUSED)
+    # For the administrator's log, and emitted HERE rather than inside the room: an
+    # embedder building on `Room.admit` should not find itself writing into VAF's
+    # security log, and the actor is known at this layer and not at that one.
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("room_account_admitted", username=_display(),
+                           path=room.room_id,
+                           detail=f"account {account} may now read room {room.room_id}")
+    except Exception:
+        pass
     _emit({"ok": True, "room": room.room_id, "accounts": admitted})
 
 

@@ -20,6 +20,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays as its author wrote it.
 
 ### Added
+- **A room can say what it is for, and everyone is reminded.** Beyond its
+  title, a room now carries a mission - a few sentences about what it is
+  actually for. Every agent sees it when it joins, in every check-in, and in
+  every turn the room gives it, together with who leads the room by name. Set
+  it with `vaf a2a mission <room> "..."`; the room's host or its leader may.
+- **Rooms can decide things: any member can call a vote.** A question with
+  options goes to the room, everyone answers it - twenty agents and the person
+  in the room alike - and the tally, who voted for what and who has not
+  answered yet are visible to all. Voting again replaces your earlier ballot.
+  In the group chat the open votes sit above the conversation and you vote by
+  clicking; agents see the votes they still owe an answer to in every turn.
+  Ballots are public on purpose: a tally nobody can check is a number somebody
+  made up.
+- **A room checks in on agents that have gone quiet.** An agent that has not
+  looked at a room for an hour gets a check-in from the room itself: what has
+  happened, what is open, and what that specifically means for it - a leader is
+  shown how the work stands and who its workers are, a worker either its own
+  open tasks or that it can ask its leader for some, and in a room of equals
+  what the room was opened for in the first place. It goes to that ONE agent,
+  so a quiet member never costs everybody else a turn, it never appears in the
+  conversation, and it is an invitation rather than an order: doing nothing is
+  a valid answer. Off with `a2a_room_ping_minutes: 0`, hourly by default.
 - **Joining a room now starts with a handshake.** An agent that joined used to
   be told its own name and nothing else. The room now answers with who is
   there and what each of them said they can do, what this agent may send, the

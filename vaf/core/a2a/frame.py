@@ -53,6 +53,17 @@ VERSION = 1
 KINDS = frozenset({
     "say", "ask", "answer", "report", "directive",
     "join", "leave", "role", "hire", "close", "ack", "kick",
+    # The room asking one peer whether it is still with it. Emitted by the host
+    # only, addressed to a single peer, and carrying that peer's own situation -
+    # see Room.ping. A kind rather than a body flag on `say`, so an
+    # implementation that has never heard of it shows it and does not act on it
+    # (rule 2) instead of mistaking a status probe for something somebody said.
+    "ping",
+    # A question the room decides together: the frame that OPENS a vote. The
+    # ballots are ordinary `answer` frames with reply_to pointing at it and a
+    # `choice` in the body - a second kind for them would be a second way to say
+    # "this answers that", which the protocol already has.
+    "vote",
 })
 
 # A peer's standing in one room. Roles are derived from the log, never asserted

@@ -196,7 +196,7 @@ class RoomSendTool(BaseTool):
             "text": {"type": "string", "description": "What to say."},
             "kind": {
                 "type": "string",
-                "enum": ["say", "ask", "answer", "report", "directive"],
+                "enum": ["say", "ask", "answer", "report", "directive", "vote"],
                 "description": "What sort of message this is. Defaults to 'say'.",
             },
             "to_peer": {"type": "string",
@@ -223,6 +223,18 @@ class RoomSendTool(BaseTool):
                 "description": ("For kind=report: what you are doing right now, in "
                                 "a few words."),
             },
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": ("For kind=vote: the answers to choose from. "
+                                "Defaults to yes/no."),
+            },
+            "choice": {
+                "type": "string",
+                "description": ("Casting a ballot: use kind=answer with reply_to "
+                                "set to the vote's id, and put your choice here. "
+                                "Voting again replaces your earlier ballot."),
+            },
         },
         "required": ["room_id", "text"],
     }
@@ -239,7 +251,8 @@ class RoomSendTool(BaseTool):
         if not room_id or not text:
             return "Error: room_id and text are required."
         if kind not in KINDS:
-            return f"Error: '{kind}' is not a kind of message. Use say, ask, answer, report or directive."
+            return (f"Error: '{kind}' is not a kind of message. Use say, ask, answer, "
+                "report, directive or vote.")
 
         try:
             room = _open(room_id)
@@ -253,6 +266,14 @@ class RoomSendTool(BaseTool):
             return f"Room '{room_id}' is closed; nothing more can be written to it."
 
         body: Dict[str, Any] = {"text": text}
+        if kind == "vote":
+            given = [str(o).strip()[:60] for o in (kwargs.get("options") or [])
+                     if str(o).strip()]
+            body["options"] = given or ["yes", "no"]
+        if kind == "answer" and str(kwargs.get("choice") or "").strip():
+            # A ballot is an answer that names its choice - the protocol already
+            # has "this answers that", so a vote needed no second way to say it.
+            body["choice"] = str(kwargs["choice"]).strip()[:60]
         if kind == "report":
             body["status"] = str(kwargs.get("status") or "completed")
             # Normalised by the reader that consumes it, so this tool cannot put

@@ -21,6 +21,7 @@ __all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "RemoteRefused",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "VoiceTurnEngine",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
+           "fold_room_tasks",
            "joined_rooms", "markers",
            "participant_key", "room_invitation", "set_account_allowlist_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
@@ -99,8 +100,8 @@ def __getattr__(name):
         from .core.pdf_extract import extract_pdf_markdown
         return extract_pdf_markdown
     if name in ("Room", "RoomError", "StoreError", "UnsafeName", "derive_peer_id",
-                "describe_room_entry", "joined_rooms", "participant_key",
-                "room_invitation", "unread_counts"):
+                "describe_room_entry", "fold_room_tasks", "joined_rooms",
+                "participant_key", "room_invitation", "unread_counts"):
         # Rooms: several agents in one conversation, some of which may not be VAF and
         # may not be on this machine. Exported because SIX surfaces outside the room
         # package already reach into it for this same handful of names - the CLI, the
@@ -114,6 +115,13 @@ def __getattr__(name):
         # that finds a participant's rooms, so two exported names would have been
         # useless without a third that was not exported - a gap, not a preference.
         #
+        # `fold_room_tasks` is the task board computed from FRAMES rather than from a
+        # store, and it is exported for the same measured reason: `RemoteRoom` is on
+        # this facade, a peer reading a room over the wire has frames and no store, and
+        # our own CLI needed exactly this function the moment the remote lane had to
+        # answer "what work is open". Without it an embedder would fold the chain a
+        # second time and hold a second opinion about what "working" means.
+        #
         # `describe_room_entry` and `room_invitation` are renamed on the way out. Inside
         # the package `describe` and `invitation` sit next to the things they describe
         # and invite into; on a facade shared with agents, tools and voice they would be
@@ -121,13 +129,15 @@ def __getattr__(name):
         #
         # Stdlib at import time, so the slim base is unaffected. See docs/EMBEDDING.md.
         from .core.a2a.room import (Room, RoomError, derive_peer_id, describe,
-                                    joined_rooms, participant_key, unread_counts)
+                                    fold_tasks, joined_rooms, participant_key,
+                                    unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
         from .core.a2a.invite import invitation
         return {"Room": Room, "RoomError": RoomError, "StoreError": StoreError,
                 "UnsafeName": UnsafeName,
                 "derive_peer_id": derive_peer_id,
-                "describe_room_entry": describe, "joined_rooms": joined_rooms,
+                "describe_room_entry": describe, "fold_room_tasks": fold_tasks,
+                "joined_rooms": joined_rooms,
                 "participant_key": participant_key, "room_invitation": invitation,
                 "unread_counts": unread_counts}[name]
     if name in ("RemoteRoom", "RemoteRefused"):

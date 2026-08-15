@@ -95,10 +95,16 @@ def parse_welcome(message: Dict[str, Any]) -> Dict[str, Any]:
         raise RemoteRefused(
             f"the server speaks {message.get('protocol')!r} v{message.get('v')!r}, "
             "not vaf-a2a v1 - leave rather than guess")
+    # `packet` is the room's handshake - roster, capabilities, shared folder,
+    # open work. Optional by construction: a host running an older VAF sends the
+    # four fields and nothing else, and a client that demanded more would refuse
+    # a room it can work in perfectly well.
+    packet = message.get("welcome")
     return {"room": str(message.get("room") or ""),
             "peer": str(message.get("peer") or ""),
             "role": str(message.get("role") or ""),
-            "seat": str(message.get("seat") or "") or None}
+            "seat": str(message.get("seat") or "") or None,
+            "packet": packet if isinstance(packet, dict) else None}
 
 
 class RemoteRoom:
@@ -115,6 +121,8 @@ class RemoteRoom:
         self.peer_id = welcome["peer"]
         self.role = welcome["role"]
         self.seat = welcome.get("seat")
+        # The room's handshake, or None from a host that does not send one yet.
+        self.packet = welcome.get("packet")
 
     @classmethod
     def connect(cls, url: str, credential: str, *,

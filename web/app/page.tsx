@@ -172,6 +172,10 @@ type RoomView = {
     agentPeer?: string;
     /** The task board, derived server-side from directives and report chains
      *  (Room.tasks). Open work first; refreshed by the 3s room poll. */
+    votes?: Array<{ id: string; question: string; options: string[]; askedBy: string;
+        tally: Record<string, number>; voted: number; waitingFor: string[];
+        closed: boolean; mine: string; ballots: Array<{ label: string; choice: string }> }>;
+    mission?: string;
     tasks?: Array<{ id: string; title: string; status: string; requester: string;
         progress?: { done?: number; total?: number; step?: string } | null;
         assignee: string; reports: number; ts?: number }>;
@@ -1064,7 +1068,7 @@ const ChatLoadingLine = () => {
  * a name and an avatar per line, because "who said this" stops being obvious the
  * moment there are more than two of them.
  */
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, onVote }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -1079,6 +1083,8 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     liveWorker?: { label?: string; status: string } | null;
     /** Whether the socket that keeps this view honest is up. */
     connected?: boolean;
+    /** Cast the viewer's ballot in an open vote. */
+    onVote?: (voteId: string, choice: string) => void;
 }) {
     // Presence is a claim about NOW, and the transcript is a snapshot from the
     // last poll: with the socket down, the last payload freezes and the room
@@ -1240,6 +1246,48 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 dots walking submitted -> working -> completed, red on a dead end,
                 amber pulse while an answer is needed. Done work dims but stays: a
                 board that forgets finished work reads as work that never happened. */}
+            {/* Open votes. Drawn where the work is, because a decision the room is
+                waiting on is not a message that scrolls away - and the person in
+                the room votes here rather than in a terminal. */}
+            {(view.room.votes?.length ?? 0) > 0 && (
+                <div className="space-y-2 py-3">
+                    {view.room.votes!.map(v => (
+                        <div key={v.id}
+                            className="rounded-xl border border-gray-200 bg-gray-50/60 dark:border-[#3a3a3a] dark:bg-[#202020] px-4 py-3">
+                            <div className="text-sm font-semibold text-gray-800 dark:text-[#f0f0f0]">
+                                {v.question}
+                            </div>
+                            <div className="text-[11px] text-gray-400 mt-0.5">
+                                {v.askedBy} · {v.voted} voted
+                                {v.waitingFor.length > 0 ? ` · waiting for ${v.waitingFor.join(', ')}` : ''}
+                            </div>
+                            <div className="flex flex-wrap gap-2 mt-2.5">
+                                {v.options.map(opt => {
+                                    const count = v.tally?.[opt] ?? 0;
+                                    const mine = v.mine === opt;
+                                    return (
+                                        <button key={opt} type="button"
+                                            onClick={() => onVote?.(v.id, opt)}
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-lg text-[12.5px] border transition-colors",
+                                                mine
+                                                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                                    : "border-gray-200 dark:border-[#3a3a3a] text-gray-700 dark:text-[#c8c8c8] hover:border-gray-400 dark:hover:border-[#6b6b6b]")}>
+                                            {opt}
+                                            {count > 0 ? <span className="ml-2 text-gray-400">{count}</span> : null}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {v.ballots.length > 0 && (
+                                <div className="text-[11px] text-gray-400 mt-2 truncate">
+                                    {v.ballots.map(b => `${b.label}: ${b.choice}`).join(' · ')}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
             {(view.room.tasks?.length ?? 0) > 0 && (
                 <div className="space-y-2 py-3">
                     {view.room.tasks!.map(task => {
@@ -6691,7 +6739,11 @@ function VAFDashboardContent() {
                                         timeFormat={userTimeFormat}
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
                                         liveWorker={roomLiveWorker}
-                                        connected={isConnected} />
+                                        connected={isConnected}
+                                        onVote={(voteId, choice) => ws?.send(JSON.stringify({
+                                            type: 'cast_room_vote', room_id: roomView.room.roomId,
+                                            vote_id: voteId, choice,
+                                        }))} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (

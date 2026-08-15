@@ -555,3 +555,35 @@ def test_wait_asks_once_for_a_card_and_stays_quiet_with_one(rooms):
     described = runner.invoke(a2a_cmd.app, ["wait", room_id, "--timeout", "1"])
     assert "introduce" not in described.stderr, (
         "the ask keeps running after it was answered")
+
+
+def test_the_remote_lane_answers_the_same_questions_as_the_local_one(tmp_path, monkeypatch):
+    """MUTATION: leave howto, skill or tasks local-only.
+
+    A remote peer has no room on disk, so `_room()` refuses it - which meant the
+    side that needs the instructions most got "there is no room here" instead.
+    They read from the handshake kept at join time, so they cost no round trip;
+    only the board needs the wire, and it folds the frames with the host's own
+    function rather than a second opinion.
+    """
+    record = {
+        "url": "wss://host:8443/ws/a2a/room-far", "peer": "p-far", "role": "worker",
+        "seat": "s-far", "cursor": 0,
+        "welcome": {"room": "room-far", "kind": "chain", "topic": "Deploy",
+                    "workspace": "/shared/room-far",
+                    "you": {"peer": "p-far", "display": "Codex", "role": "worker",
+                            "may_send": ["say", "report"], "card": {}},
+                    "members": [], "tasks_open": 2, "describe_yourself": True},
+    }
+    monkeypatch.setattr(a2a_cmd, "_open_local", lambda room_id: None)
+    monkeypatch.setattr(a2a_cmd, "_remote_record", lambda room_id: record)
+
+    howto = runner.invoke(a2a_cmd.app, ["howto", "room-far"])
+    assert howto.exit_code == 0, howto.stdout
+    assert "VAF_A2A_PEER=p-far" in howto.stdout
+    assert "vaf a2a report" in howto.stdout and "--progress 3/5" in howto.stdout
+
+    skill = runner.invoke(a2a_cmd.app, ["skill", "room-far"])
+    assert skill.exit_code == 0, skill.stdout
+    assert skill.stdout.startswith("---\n") and "name: vaf_a2a_rooms" in skill.stdout
+    assert "/shared/room-far" in skill.stdout, "the shared folder has to travel"

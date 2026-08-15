@@ -63,10 +63,12 @@ ROOM_KINDS = ("chain", "round")
 # peer become unable to say it is leaving.
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
-                         "role", "hire", "close", "leave", "ack", "join", "kick"}),
+                         "role", "hire", "close", "leave", "ack", "join", "kick",
+                         "vote"}),
     "worker": frozenset({"say", "ask", "answer", "report",
-                         "hire", "leave", "ack", "join"}),
-    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join"}),
+                         "hire", "leave", "ack", "join", "vote"}),
+    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join",
+                       "vote"}),
 }
 
 # How much of a room's traffic the LOCAL user has authorised their agent to act on.
@@ -250,6 +252,7 @@ class Room:
         kind: str = "round",
         owner_scope: Optional[str] = None,
         topic: str = "",
+        mission: str = "",
         base: Optional[Path] = None,
         room_id: Optional[str] = None,
         backlog: str = "",
@@ -266,6 +269,15 @@ class Room:
         store.create({
             "kind": kind,
             "topic": str(topic or ""),
+            # What the room is FOR, at more length than a title. A topic fits in a
+            # sidebar row; this is the paragraph an agent is reminded of when it
+            # comes back after an hour and has to decide what is worth saying. It
+            # lives in the manifest for the same reason the topic does - it is a
+            # property of the room, not something somebody said - which means it
+            # reaches a remote peer with the welcome or the next check-in rather
+            # than the instant it changes. Named boundary, not an oversight: a
+            # frame for it would put mutable state into a write-once transcript.
+            "mission": str(mission or "")[:2000],
             "owner_scope": str(owner_scope) if owner_scope else None,
             # A late joiner in a round sees only what happened after it arrived, the
             # same rule voice_context.recent(since=...) already applies to a guest.
@@ -470,6 +482,131 @@ class Room:
             }
         return out
 
+    def open_vote(self, identity: Identity, question: str, *,
+                  options: Optional[List[str]] = None,
+                  closes_in_s: Optional[float] = None, **kw) -> Frame:
+        """Put a question to the room. Any member may, in any role.
+
+        A vote is a QUESTION and never an instruction, which is why it is not a
+        leader's privilege: twenty agents that may only be asked cannot decide
+        anything together, and a room of equals has nobody to ask permission
+        from. What a role governs is what a peer may EMIT - and asking is
+        something every role already does.
+
+        Options are free text and default to yes/no. A ballot is an ordinary
+        `answer` with `reply_to` pointing here, so nothing new had to be invented
+        for "this answers that", and an implementation that has never heard of
+        `vote` still shows the question and the answers to it (rule 2).
+        """
+        choices = [str(o).strip()[:60] for o in (options or []) if str(o).strip()]
+        body = {"text": str(question or "").strip()[:400],
+                "options": choices or ["yes", "no"]}
+        if closes_in_s and closes_in_s > 0:
+            # Advisory, like every wall clock in this protocol: a reader marks a
+            # vote closed by comparing it, and nothing is ever refused because of
+            # it - clocks differ between the machines in a room.
+            body["closes_at"] = time.time() + float(closes_in_s)
+        return self.ingest({"kind": "vote", "body": body, **kw}, identity=identity)
+
+    def cast(self, identity: Identity, vote_id: str, choice: str,
+             *, comment: str = "") -> Frame:
+        """Cast a ballot: an answer to the vote, carrying the choice.
+
+        The LAST ballot a peer casts is the one that counts, the same rule the
+        task board uses for status - changing your mind is a thing that happens,
+        and a write-once log cannot take anything back anyway.
+        """
+        return self.ingest({
+            "kind": "answer", "reply_to": vote_id,
+            "body": {"text": comment or f"votes: {choice}",
+                     "choice": str(choice).strip()[:60]},
+        }, identity=identity)
+
+    def votes(self) -> List[Dict[str, Any]]:
+        """Every vote in this room, folded with its ballots.
+
+        Same shape of answer as the task board, for the same reason: derived from
+        the log, so no surface has to store anything and two readers cannot
+        disagree. Who voted is public - a room is a conversation, not a booth,
+        and a tally nobody can check is a number somebody made up.
+        """
+        frames = sorted(self.store.frames(), key=canonical_sort_key)
+        labels = self.labels()
+        members = self.members()
+        opened: Dict[str, Dict[str, Any]] = {}
+        for frame in frames:
+            if frame.kind != "vote":
+                continue
+            body = frame.body or {}
+            options = [str(o) for o in (body.get("options") or []) if str(o).strip()]
+            opened[frame.id] = {
+                "id": frame.id,
+                "question": str(body.get("text") or ""),
+                "options": options or ["yes", "no"],
+                "asked_by": frame.sender,
+                "asked_by_label": labels.get(frame.sender) or frame.sender,
+                "ts": frame.ts,
+                "closes_at": float(body.get("closes_at") or 0.0),
+                "ballots": {},
+            }
+        for frame in frames:
+            if frame.kind != "answer" or not frame.reply_to:
+                continue
+            entry = opened.get(frame.reply_to)
+            if entry is None:
+                continue
+            choice = str((frame.body or {}).get("choice") or "").strip()
+            if not choice:
+                continue
+            entry["ballots"][frame.sender] = {
+                "choice": choice,
+                "label": labels.get(frame.sender) or frame.sender,
+                "ts": frame.ts,
+            }
+        now = time.time()
+        out = []
+        for entry in opened.values():
+            tally: Dict[str, int] = {}
+            for ballot in entry["ballots"].values():
+                tally[ballot["choice"]] = tally.get(ballot["choice"], 0) + 1
+            entry["tally"] = dict(sorted(tally.items(), key=lambda kv: -kv[1]))
+            entry["voted"] = len(entry["ballots"])
+            # Who has NOT answered yet, by name: in a room of twenty the useful
+            # question is never "how many", it is "who are we still waiting for".
+            entry["waiting_for"] = sorted(
+                labels.get(peer) or record["display"]
+                for peer, record in members.items()
+                if peer not in entry["ballots"] and peer != entry["asked_by"])
+            entry["closed"] = bool(entry["closes_at"] and now >= entry["closes_at"])
+            entry["ballots"] = [
+                {"peer": peer, **ballot} for peer, ballot in entry["ballots"].items()]
+            out.append(entry)
+        return sorted(out, key=lambda e: (e["closed"], -e["ts"]))
+
+    def set_mission(self, identity: Identity, mission: str) -> str:
+        """Say what this room is for, at length. Host or leader only.
+
+        Not a frame, by the same rule the topic follows: it describes the room
+        rather than reporting what happened in it, and a renamed purpose must not
+        appear in the transcript as something a member said. The peers learn it
+        from the welcome they get on joining and from every check-in after that.
+
+        Host OR leader, because in a chain the leader is the one who knows what
+        the work is for, while a round has no leader at all and its host is the
+        only one who can answer.
+        """
+        if not (self.is_host(identity) or self.role_of(identity.peer_id) == "leader"):
+            raise NotPermitted(
+                "only the room's host or its leader says what the room is for")
+        text = str(mission or "").strip()[:2000]
+        self.store.update_manifest(mission=text)
+        self.manifest["mission"] = text
+        return text
+
+    def leaders(self) -> List[str]:
+        """Peers that lead this room, if any. A round has none by design."""
+        return [peer for peer, role in self.roles().items() if role == "leader"]
+
     def welcome(self, identity: Identity) -> Dict[str, Any]:
         """Everything a peer needs to work here, answered at the moment it joins.
 
@@ -500,6 +637,11 @@ class Room:
             "room": self.room_id,
             "kind": self.kind,
             "topic": str(self.manifest.get("topic") or ""),
+            # What the room is for, and who leads it - the two questions a newcomer
+            # in a room of twenty asks first, and the two nobody used to answer.
+            "mission": str(self.manifest.get("mission") or ""),
+            "leaders": [labels.get(p) or (members.get(p) or {}).get("display") or p
+                        for p in self.leaders()],
             "closed": self.closed,
             "you": {
                 "peer": identity.peer_id,
@@ -525,6 +667,145 @@ class Room:
                 (members.get(identity.peer_id) or {}).get("card", {}) == {}
             ),
         }
+
+    def idle_peers(self, *, quiet_for_s: float, now: Optional[float] = None) -> List[str]:
+        """Members that have neither read nor written here for that long.
+
+        Derived from the cursors and the log, which already record both - reading
+        advances a cursor only AFTER the frame is in hand, so "read_at" is a fact
+        about attention and not about a socket being open. A lease says a process
+        is alive; this says a PARTICIPANT has drifted off, which is the thing worth
+        a nudge.
+
+        Per peer, deliberately. A room-wide "nobody said anything lately" would
+        wake twenty agents to tell nineteen of them what they already know; the
+        one that drifted is the one to ask, and the protocol addresses a single
+        peer without waking the rest.
+        """
+        moment = time.time() if now is None else now
+        facts = self.activity()
+        out = []
+        for peer in self.members():
+            fact = facts.get(peer) or {}
+            # Joining is itself a frame the peer WROTE, so a fresh member carries
+            # its own arrival time here and is never idle in its first hour. That
+            # is why there is no separate join timestamp to keep: the log already
+            # answers "when was this peer last present in any way".
+            last_seen = max(float(fact.get("read_at") or 0.0),
+                            float(fact.get("last_wrote_ts") or 0.0))
+            if last_seen and (moment - last_seen) >= quiet_for_s:
+                out.append(peer)
+        return out
+
+    def ping_body(self, peer_id: str) -> Dict[str, Any]:
+        """What the room tells ONE peer when it checks in on it.
+
+        Role-shaped, because "you have drifted off" means something different to
+        each of them: a leader has people waiting on decisions, a worker either
+        has work or should ask for some, and a peer in a round is there for a
+        purpose the room was opened for. The text is built HERE rather than in the
+        surface that renders it, because the peer receiving it may be a foreign
+        agent that never sees any of our surfaces - it gets the frame and nothing
+        else.
+
+        It is an invitation and never an order. A room is input, not authority:
+        that line holds for a message from another agent and it holds for the
+        room's own probe, or a host would have a remote control for everybody
+        else's agent. Silence stays a valid answer, and the text says so.
+        """
+        role = self.role_of(peer_id) or "peer"
+        board = self.tasks()
+        mine = [t for t in board
+                if t["assignee"] == peer_id
+                and t["status"] not in ("completed", "failed", "rejected", "canceled")]
+        members = self.members()
+        labels = self.labels()
+        topic = str(self.manifest.get("topic") or "").strip()
+        mission = str(self.manifest.get("mission") or "").strip()
+
+        def _line(task: Dict[str, Any]) -> str:
+            progress = task.get("progress") or {}
+            counted = ("done" in progress and "total" in progress)
+            where = f" ({progress['done']}/{progress['total']})" if counted else ""
+            step = f" - {progress['step']}" if progress.get("step") else ""
+            return f"{task['title'][:70]} [{task['status']}{where}]{step}"
+
+        if role == "leader":
+            workers = [labels.get(p) or rec["display"] for p, rec in members.items()
+                       if rec["role"] == "worker"]
+            open_all = [t for t in board
+                        if t["status"] not in ("completed", "failed", "rejected", "canceled")]
+            text = (
+                "Room check-in. You lead here. Look at how the work stands, and "
+                "decide for yourself whether anything is needed: a worker waiting "
+                "on an answer, a task worth handing out, or a report worth asking "
+                "for. Nothing here is an instruction: if the room is fine, say "
+                "nothing."
+            )
+            if workers:
+                text += f"\nYour workers: {', '.join(workers[:12])}."
+            text += (f"\nOpen work: {len(open_all)}."
+                     + ("\n  " + "\n  ".join(_line(t) for t in open_all[:6])
+                        if open_all else ""))
+        elif role == "worker":
+            if mine:
+                text = ("Room check-in. You have work open here. Say where it "
+                        "stands - a report on the same task with progress is "
+                        "enough - or finish it. If it is blocked, say what you "
+                        "need.\n  " + "\n  ".join(_line(t) for t in mine[:6]))
+            else:
+                leaders = [labels.get(p) or rec["display"] for p, rec in members.items()
+                           if rec["role"] == "leader"]
+                text = ("Room check-in. Nothing is assigned to you right now. If "
+                        "you want work, ask "
+                        + (f"{leaders[0]}" if leaders else "whoever leads here")
+                        + " for some; if you are busy elsewhere, ignore this.")
+        else:
+            text = ("Room check-in. This room was opened for a reason"
+                    + (f': "{topic}"' if topic else "")
+                    + ". Read what has happened since you last looked, and if you "
+                      "see something worth adding - a question, a proposal, work "
+                      "you could take on - say it. If the room needs nothing from "
+                      "you, say nothing.")
+            if mine:
+                text += ("\nYou have open work here:\n  "
+                         + "\n  ".join(_line(t) for t in mine[:6]))
+
+        # The purpose travels with every check-in, because forgetting what the room
+        # is for is exactly what an hour of idleness does to an agent.
+        if mission:
+            text += f"\n\nWhat this room is for: {mission}"
+        return {
+            "text": text,
+            "state": {
+                "role": role,
+                "mission": mission,
+                "members": len(members),
+                "tasks_open": sum(
+                    1 for t in board
+                    if t["status"] not in ("completed", "failed", "rejected", "canceled")),
+                "your_tasks": [
+                    {"id": t["id"], "title": t["title"][:120], "status": t["status"],
+                     "progress": t.get("progress")}
+                    for t in mine[:6]
+                ],
+                "workspace": str(self.workspace_dir(create=False) or ""),
+            },
+        }
+
+    def ping(self, identity: Identity, peer_id: str) -> Frame:
+        """Ask ONE peer whether it is still with this room. HOST ONLY.
+
+        Addressed rather than broadcast, which is what keeps a check-in from
+        costing every member a turn: the wake path only wakes a peer a frame is
+        aimed at.
+        """
+        if not self.is_host(identity):
+            raise NotPermitted("only the machine hosting a room checks in on its members")
+        if not self.role_of(peer_id):
+            raise NotAMember(f"{peer_id!r} is not in room {self.room_id!r}")
+        return self.ingest({"kind": "ping", "to": {"peer": peer_id},
+                            "body": self.ping_body(peer_id)}, identity=identity)
 
     def roles(self) -> Dict[str, str]:
         """The fold over join / role / leave. Recomputed, never cached to disk.
@@ -624,7 +905,11 @@ class Room:
             if not self.role_of(target):
                 raise NotAMember(f"{target!r} is not in room {self.room_id!r}")
 
-        host_acting = kind in ("close", "kick") and self.is_host(identity)
+        # `ping` joins close and kick as an act of the machine that HOLDS the room
+        # rather than of a role in the conversation: a round has no leader, and the
+        # timer that notices an idle peer runs on the host. A guest cannot ping -
+        # is_host is keyed on the tenant, and a redeemed ticket has none.
+        host_acting = kind in ("close", "kick", "ping") and self.is_host(identity)
         if kind in KINDS and not host_acting and not self.may(role, kind):
             raise NotPermitted(f"a {role} may not emit {kind!r} in this room")
 
@@ -934,9 +1219,15 @@ class Room:
         """
         cursors = self.store.cursors()
         last_wrote: Dict[str, int] = {}
+        wrote_at: Dict[str, float] = {}
         for frame in self.store.frames():
             if frame.lamport > last_wrote.get(frame.sender, 0):
                 last_wrote[frame.sender] = frame.lamport
+                # The wall clock of that frame, carried alongside the lamport it
+                # orders by. Ordering never reads it (clocks differ between the
+                # machines in a room); "how long since this peer did anything" is
+                # a question about duration, and lamports do not measure time.
+                wrote_at[frame.sender] = float(frame.ts or 0.0)
         out: Dict[str, Dict[str, Any]] = {}
         for peer in set(cursors) | set(last_wrote):
             record = cursors.get(peer) or {}
@@ -944,95 +1235,20 @@ class Room:
                 "read_to": int(record.get("lamport") or 0),
                 "read_at": float(record.get("updated_at") or 0.0),
                 "last_wrote": int(last_wrote.get(peer, 0)),
+                "last_wrote_ts": float(wrote_at.get(peer, 0.0)),
             }
         return out
 
     def tasks(self) -> List[Dict[str, Any]]:
         """The work in flight, DERIVED - there is deliberately no task frame kind.
 
-        A task exists when somebody reports on something: the chain of `report`
-        frames hanging off a root (via reply_to) IS the task, its status the last
-        report's status. A `directive` is a task from the moment it is given, even
-        unreported - in a chain, giving work is the point. An `ask` or `say`
-        becomes a task exactly when its assignee first reports on it, which keeps
-        "bist du da?" out of the board without anybody classifying anything.
-
-        Same reasoning as activity(): a persisted task entity would put mutable
-        state into a write-once transcript and demand every foreign implementation
-        understand it. A fold asks nothing of anybody - a peer that only ever
-        sends `report --reply-to <id> --status working` shows up on every surface
-        that renders this, without knowing the board exists.
+        The fold itself is `fold_tasks` at module level, because a peer reading a
+        room over the WIRE has frames and no store, and a second fold there would
+        be a second opinion about what "working" means. See that function for why
+        a task is a chain of reports rather than a stored entity.
         """
-        frames = sorted(self.store.frames(), key=canonical_sort_key)
-        by_id: Dict[str, Frame] = {f.id: f for f in frames}
-        labels = self.labels()
-
-        def _root_of(frame: Frame) -> Frame:
-            seen = set()
-            current = frame
-            while current.reply_to and current.reply_to in by_id \
-                    and current.id not in seen:
-                seen.add(current.id)
-                parent = by_id[current.reply_to]
-                if parent.kind != "report" and not parent.reply_to:
-                    return parent
-                if parent.kind != "report":
-                    return parent
-                current = parent
-            return current
-
-        tasks: Dict[str, Dict[str, Any]] = {}
-
-        def _ensure(root: Frame) -> Dict[str, Any]:
-            entry = tasks.get(root.id)
-            if entry is None:
-                entry = {
-                    "id": root.id,
-                    "title": str((root.body or {}).get("text") or "")[:160]
-                             or f"({root.kind})",
-                    "requester": root.sender,
-                    "requester_label": labels.get(root.sender) or root.sender,
-                    "assignee": str((root.to or {}).get("peer") or ""),
-                    "assignee_label": "",
-                    "status": "submitted",
-                    "progress": None,
-                    "reports": 0,
-                    "created_ts": root.ts,
-                    "updated_ts": root.ts,
-                    "updated_lamport": root.lamport,
-                }
-                tasks[root.id] = entry
-            return entry
-
-        for frame in frames:
-            if frame.kind == "directive":
-                _ensure(frame)
-            elif frame.kind == "report":
-                root = _root_of(frame)
-                entry = _ensure(root)
-                entry["reports"] += 1
-                status = str((frame.body or {}).get("status") or "").strip()
-                # A report without a status still says "I am on it" - the same
-                # default the wire's own vocabulary would pick.
-                entry["status"] = status if status in REPORT_STATUSES else "working"
-                # How far it has come, from the same report that decides the
-                # status - and only ever REPLACED by a later report that says
-                # something, so a peer that reports progress once and then only
-                # status does not lose it, while a fresh count always wins.
-                progress = read_progress(frame.body)
-                if progress is not None:
-                    entry["progress"] = progress
-                entry["assignee"] = entry["assignee"] or frame.sender
-                entry["updated_ts"] = frame.ts
-                entry["updated_lamport"] = frame.lamport
-
-        for entry in tasks.values():
-            if entry["assignee"]:
-                entry["assignee_label"] = (labels.get(entry["assignee"])
-                                           or entry["assignee"])
-        done = ("completed", "failed", "rejected", "canceled")
-        return sorted(tasks.values(),
-                      key=lambda e: (e["status"] in done, -e["updated_lamport"]))
+        return fold_tasks(sorted(self.store.frames(), key=canonical_sort_key),
+                          labels=self.labels())
 
     def mode_of(self, peer_id: str) -> str:
         """The LOCAL user's standing decision about how far their agent may go here.
@@ -1224,6 +1440,13 @@ def describe(entry: Dict[str, Any]) -> str:
         return f"removed {body.get('peer')} from the room" + (f" - {reason}" if reason else "")
     if kind == "role":
         return f"made {body.get('peer')} a {body.get('role')}"
+    if kind == "ping":
+        # One line in a log, whatever the frame carries for the agent that reads
+        # it: the body is a briefing meant for ONE peer, and a transcript reader
+        # wants to know that a check-in happened, not to read somebody else's.
+        state = body.get("state") or {}
+        open_work = state.get("tasks_open")
+        return ("checked in" + (f" - {open_work} open" if open_work else ""))
     if kind == "ack":
         return f"ack: {body.get('status') or 'ok'}"
     if kind == "report" and body.get("status"):
@@ -1379,3 +1602,91 @@ def unread_counts(key: str, *, base: Optional[Path] = None) -> Dict[str, int]:
     return {room.room_id: len(waking) for room, _identity, waking, _context
             in unread_frames(key, base=base)}
 
+
+
+def fold_tasks(frames: List[Frame], *, labels: Dict[str, str]) -> List[Dict[str, Any]]:
+    """The task board, folded from frames alone.
+
+    A task exists when somebody reports on something: the chain of `report` frames
+    hanging off a root (via reply_to) IS the task, its status the last report's
+    status and its progress the last progress anybody gave. A `directive` is a task
+    from the moment it is given, even unreported - in a chain, giving work is the
+    point. An `ask` or `say` becomes a task exactly when its assignee first reports
+    on it, which keeps "are you there?" off the board without anybody classifying
+    anything.
+
+    A fold rather than a stored entity: mutable state in a write-once transcript
+    would have to be understood by every foreign implementation. This asks nothing
+    of anybody - a peer that only ever sends `report --reply-to <id> --status
+    working` shows up on every surface that renders it.
+
+    A free function rather than a method, because a peer reading a room over the
+    WIRE has frames and no store. Two folds would be two opinions about what
+    "working" means, and they would drift on the first status anybody adds.
+    """
+    frames = sorted(frames, key=canonical_sort_key)
+    by_id: Dict[str, Frame] = {f.id: f for f in frames}
+
+    def _root_of(frame: Frame) -> Frame:
+        seen = set()
+        current = frame
+        while current.reply_to and current.reply_to in by_id \
+                and current.id not in seen:
+            seen.add(current.id)
+            parent = by_id[current.reply_to]
+            if parent.kind != "report":
+                return parent
+            current = parent
+        return current
+
+    tasks: Dict[str, Dict[str, Any]] = {}
+
+    def _ensure(root: Frame) -> Dict[str, Any]:
+        entry = tasks.get(root.id)
+        if entry is None:
+            entry = {
+                "id": root.id,
+                "title": str((root.body or {}).get("text") or "")[:160]
+                         or f"({root.kind})",
+                "requester": root.sender,
+                "requester_label": labels.get(root.sender) or root.sender,
+                "assignee": str((root.to or {}).get("peer") or ""),
+                "assignee_label": "",
+                "status": "submitted",
+                "progress": None,
+                "reports": 0,
+                "created_ts": root.ts,
+                "updated_ts": root.ts,
+                "updated_lamport": root.lamport,
+            }
+            tasks[root.id] = entry
+        return entry
+
+    for frame in frames:
+        if frame.kind == "directive":
+            _ensure(frame)
+        elif frame.kind == "report":
+            root = _root_of(frame)
+            entry = _ensure(root)
+            entry["reports"] += 1
+            status = str((frame.body or {}).get("status") or "").strip()
+            # A report without a status still says "I am on it" - the same default
+            # the wire's own vocabulary would pick.
+            entry["status"] = status if status in REPORT_STATUSES else "working"
+            # How far it has come, from the same report that decides the status -
+            # replaced only by a later report that says something, so a peer that
+            # reports progress once and then only status does not lose it.
+            progress = read_progress(frame.body)
+            if progress is not None:
+                entry["progress"] = progress
+            entry["assignee"] = entry["assignee"] or frame.sender
+            entry["updated_ts"] = frame.ts
+            entry["updated_lamport"] = frame.lamport
+
+    for entry in tasks.values():
+        if entry["assignee"]:
+            entry["assignee_label"] = (labels.get(entry["assignee"])
+                                       or entry["assignee"])
+    done = ("completed", "failed", "rejected", "canceled")
+    return sorted(tasks.values(),
+                  key=lambda e: (e["status"] in done, -e["updated_lamport"]))

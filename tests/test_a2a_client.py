@@ -137,7 +137,8 @@ def test_the_welcome_is_checked_and_never_guessed():
     good = parse_welcome({"kind": "welcome", "room": "room-x", "peer": "p-1",
                           "role": "peer", "protocol": "vaf-a2a", "v": 1,
                           "seat": "s-p-1-aa"})
-    assert good == {"room": "room-x", "peer": "p-1", "role": "peer", "seat": "s-p-1-aa"}
+    assert good == {"room": "room-x", "peer": "p-1", "role": "peer",
+                    "seat": "s-p-1-aa", "packet": None}
 
     no_seat = parse_welcome({"kind": "welcome", "room": "room-x", "peer": "p-1",
                              "role": "peer", "protocol": "vaf-a2a", "v": 1})
@@ -254,7 +255,8 @@ def test_say_finds_the_remote_room_with_no_url_flag(far):
     assert _FakeRemote.script["submitted"][-1]["body"]["text"] == "hello over there"
     assert _FakeRemote.script["connects"][-1] == (
         "wss://h:8443/ws/a2a/room-far", "s-p-far-aa"), "the seat was not presented"
-    assert json.loads(result.output.strip().splitlines()[-1])["remote"] is True
+    # stdout only: the ask for a card is a sentence and lives on stderr.
+    assert json.loads(result.stdout.strip().splitlines()[-1])["remote"] is True
 
 
 def test_remote_wait_prints_before_it_advances(far):
@@ -275,7 +277,7 @@ def test_remote_wait_prints_before_it_advances(far):
     result = runner.invoke(app, ["wait", "room-far", "--n", "1"])
     assert result.exit_code == 0, result.output
 
-    lines = [json.loads(l) for l in result.output.strip().splitlines()]
+    lines = [json.loads(l) for l in result.stdout.strip().splitlines()]
     assert [l["text"] for l in lines] == ["first"]
     saved = json.loads((far / "remote" / "room-far.json").read_text(encoding="utf-8"))
     assert saved["cursor"] == 3, "the cursor moved past a line that was never printed"
@@ -292,8 +294,11 @@ def test_remote_wait_skips_own_echo_and_ends_on_close(far):
     ]
     result = runner.invoke(app, ["wait", "room-far", "--n", "5"])
     assert result.exit_code == EXIT_CLOSED, result.output
-    kinds = [json.loads(l)["kind"] for l in result.output.strip().splitlines()]
+    kinds = [json.loads(l)["kind"] for l in result.stdout.strip().splitlines()]
     assert kinds == ["close"], "an own echo was printed, or the close was not"
+    # And the ask for a card, which this seat has not answered, stayed off the
+    # stream a machine peer parses.
+    assert "introduce" in result.stderr and "introduce" not in result.stdout
 
 
 def test_a_room_that_is_neither_local_nor_seated_keeps_its_exit_code(far):
@@ -301,3 +306,50 @@ def test_a_room_that_is_neither_local_nor_seated_keeps_its_exit_code(far):
 
     result = runner.invoke(app, ["say", "room-nowhere", "hello"])
     assert result.exit_code == EXIT_NO_ROOM
+
+
+def test_the_wire_welcome_carries_the_handshake_and_survives_without_it():
+    """MUTATION: require the packet, or drop it from what the client keeps.
+
+    A remote peer is the side with no room on disk, so it needs the handshake
+    MORE than a local one - and a host running an older VAF sends the four
+    fields alone, which is a room this client can work in perfectly well. Rule 1
+    both ways: an added key is free, and a missing one is not a refusal.
+    """
+    from vaf.core.a2a.client import parse_welcome
+
+    packet = {"room": "room-x", "kind": "round", "members": [],
+              "you": {"peer": "p-1", "role": "peer", "may_send": ["say"]},
+              "describe_yourself": True}
+    rich = parse_welcome({"kind": "welcome", "protocol": "vaf-a2a", "v": 1,
+                          "room": "room-x", "peer": "p-1", "role": "peer",
+                          "seat": "s-1", "welcome": packet})
+    assert rich["packet"]["describe_yourself"] is True
+    assert rich["peer"] == "p-1" and rich["seat"] == "s-1"
+
+    plain = parse_welcome({"kind": "welcome", "protocol": "vaf-a2a", "v": 1,
+                           "room": "room-x", "peer": "p-1", "role": "peer"})
+    assert plain["packet"] is None, "an older host must not be refused"
+    assert plain["room"] == "room-x"
+
+    # Something that is not a packet is not shown as one.
+    junk = parse_welcome({"kind": "welcome", "protocol": "vaf-a2a", "v": 1,
+                          "room": "room-x", "peer": "p-1", "role": "peer",
+                          "welcome": "trust me"})
+    assert junk["packet"] is None
+
+
+def test_the_server_answers_a_wire_join_with_the_same_packet():
+    """MUTATION: send the four fields on the wire and the packet only locally.
+
+    Then the remote lane would be the poorer implementation of our own protocol -
+    the drift this repo keeps paying for. Read as source: the route sits inside
+    an async WebSocket handler with auth and a hub around it, and the decision
+    that matters is one line.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core"
+           / "web_server.py").read_text(encoding="utf-8")
+    block = src.split('"kind": "welcome"', 1)[1][:900]
+    assert 'welcome["welcome"] = room.welcome(identity)' in block, (
+        "a peer joining over the wire is told less than one joining locally")

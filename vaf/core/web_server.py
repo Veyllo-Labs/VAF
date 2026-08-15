@@ -357,6 +357,20 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                  "progress": t.get("progress")}
                 for t in room.tasks()
             ][:12],
+            # Open votes, folded like the board is. Capped for the same reason:
+            # a glance, not an archive.
+            "votes": [
+                {"id": v["id"], "question": v["question"], "options": v["options"],
+                 "askedBy": v["asked_by_label"], "tally": v["tally"],
+                 "voted": v["voted"], "waitingFor": v["waiting_for"],
+                 "closed": v["closed"],
+                 "mine": next((b["choice"] for b in v["ballots"]
+                               if b["peer"] == acting), ""),
+                 "ballots": [{"label": b["label"], "choice": b["choice"]}
+                             for b in v["ballots"]][:20]}
+                for v in room.votes() if not v["closed"]
+            ][:6],
+            "mission": str(room.manifest.get("mission") or ""),
             "canManage": bool(acting) and (
                 acting in hosts or room.role_of(acting) == "leader"),
             # Built from members(), which already resolves the role, the card and the
@@ -392,6 +406,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
              "text": describe(e), "ts": e["ts"],
              "lamport": e["lamport"], "to": e.get("to") or {}}
             for e in entries
+            # A check-in is the room talking to ONE agent about its own attention,
+            # not something anybody said, and drawing it as a message would put
+            # words in a member's mouth that no member wrote. It stays in the log
+            # (and in `vaf a2a log`) where an audit can find it.
+            if e["kind"] != "ping"
         ],
     })
 
@@ -3796,7 +3815,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
 
                 elif type in ("room_say", "close_room", "delete_room", "kick_peer",
-                              "rename_room", "set_room_agent_mode"):
+                              "rename_room", "set_room_agent_mode",
+                              "cast_room_vote"):
                     # The person at the browser acting in a room themselves, rather
                     # than their agent doing it for them. They act on the CLI lane and
                     # not on a lane of their own, deliberately: the lanes separate the
@@ -3875,6 +3895,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     "message": "Your agent is not in this room"})
                                 continue
                             room.set_mode(agent_identity, wanted_mode)
+                        elif type == "cast_room_vote":
+                            # The person votes as themselves - the cli lane, the same
+                            # handle their messages carry - and voting again replaces
+                            # their earlier ballot, exactly as it does on the CLI.
+                            vote_id = str(cmd.get("vote_id") or "").strip()
+                            choice = str(cmd.get("choice") or "").strip()
+                            if not vote_id or not choice:
+                                continue
+                            try:
+                                room.cast(identity, vote_id, choice)
+                            except Exception as _vote_err:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Could not cast that vote: {_vote_err}"})
+                                continue
+
                         elif type == "rename_room":
                             title = str(cmd.get("title") or "").strip()
                             if not title:
@@ -7922,6 +7958,15 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
         "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,
         "role": identity.role, "protocol": "vaf-a2a", "v": 1,
     }
+    # The room's half of the handshake, for a peer that arrived over the wire -
+    # the same packet a local join answers with. An ADDED key, which rule 1 makes
+    # free: an older client keeps reading the four fields it knows and ignores
+    # this one. Without it the remote lane would be the poorer implementation of
+    # our own protocol, which is the drift this file has paid for elsewhere.
+    try:
+        welcome["welcome"] = room.welcome(identity)
+    except Exception:
+        pass
     if seat:
         # Handed over exactly once, on the connection that redeemed the ticket. It
         # never appears again: the server keeps only the hash, so a client that

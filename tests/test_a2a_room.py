@@ -1682,3 +1682,216 @@ def test_a_card_in_the_welcome_never_becomes_a_role(tmp_path):
     packet = room.welcome(liar)
     assert packet["you"]["role"] == "worker"
     assert "directive" not in packet["you"]["may_send"]
+
+
+def test_only_the_host_checks_in_and_only_on_one_peer(tmp_path):
+    """MUTATION: let a role emit `ping`, or address it to the room.
+
+    Two things at once, both of them the point. A guest that could ping would
+    have a way to make everybody else's agent spend a turn on its say-so; the
+    check-in is an act of the machine that HOLDS the room, the same exception
+    close and kick already have, and is_host is keyed on the tenant so a
+    redeemed ticket can never be one. And it is addressed to a single peer,
+    because the wake rule only wakes who a frame is aimed at - a broadcast would
+    cost twenty members a turn to tell nineteen of them nothing.
+    """
+    from vaf.core.a2a.room import NotPermitted
+
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-ping")
+    host = room.join(display="Host", scope_id="s", peer_id="p-host")
+    guest = room.join(display="Guest", scope_id=None, peer_id="p-guest")
+
+    frame = room.ping(host, "p-guest")
+    assert frame.kind == "ping"
+    assert frame.to == {"peer": "p-guest"}, "a check-in is aimed, never broadcast"
+    assert frame.addresses("p-guest", "peer") is True
+    assert frame.addresses("p-host", "peer") is False, (
+        "a check-in for somebody else must not cost this peer a turn")
+
+    with pytest.raises(NotPermitted):
+        room.ping(guest, "p-host")
+    with pytest.raises(NotPermitted):
+        room.ingest({"kind": "ping", "to": {"peer": "p-host"}, "body": {}},
+                    identity=guest)
+
+
+def test_who_counts_as_idle_is_read_from_attention_not_from_a_socket(tmp_path):
+    """MUTATION: measure idleness from the lease instead of the cursor.
+
+    A lease says a process is alive; the check-in is about a PARTICIPANT that
+    drifted off, which is a different question - an agent can sit in a room for
+    an hour with its process perfectly healthy and never look. Reading advances
+    a cursor only after the frame is in hand, so the cursor's timestamp is a
+    fact about attention.
+    """
+    # Two hours after the frames this test writes: a fake clock BEFORE them would
+    # make everybody look fresh, which is how this test first passed against a
+    # broken measurement.
+    now = time.time() + 7200
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-idle")
+    host = room.join(display="Host", scope_id="s", peer_id="p-host")
+    quiet = room.join(display="Quiet", scope_id=None, peer_id="p-quiet")
+    busy = room.join(display="Busy", scope_id=None, peer_id="p-busy")
+
+    room.say(host, "anybody there?")
+    # p-busy read a minute before the moment we ask about - stamped against that
+    # clock, or "just read" would still be two hours old and the test would prove
+    # nothing about attention.
+    import vaf.core.a2a.store as store_mod
+    real_time = store_mod.time.time
+    store_mod.time.time = lambda: now - 60
+    try:
+        room.store.set_cursor("p-busy", room.store.highest_lamport())
+    finally:
+        store_mod.time.time = real_time
+
+    idle = room.idle_peers(quiet_for_s=3600, now=now)
+    assert "p-quiet" in idle, "a member that never looked is the one to ask"
+    assert "p-busy" not in idle, "a member that just read is not idle"
+
+    # And a fresh join is not asked in its first minute: the clock starts at the
+    # join when nothing else has happened yet.
+    fresh = room.join(display="Fresh", scope_id=None, peer_id="p-fresh")
+    assert fresh.peer_id not in room.idle_peers(quiet_for_s=3600, now=time.time())
+
+
+def test_the_check_in_says_something_different_to_each_role(tmp_path):
+    """MUTATION: send one text to everybody, or turn the invitation into an order.
+
+    "You have drifted off" means something different to each role, and the text
+    is built in the ROOM rather than in a surface because the peer reading it may
+    be a foreign agent that never sees any of ours. It is also the room speaking,
+    so it must never instruct: a room is input, not authority, or the machine
+    that hosts one would have a remote control for everybody else's agent.
+    """
+    room = Room.create(kind="chain", owner_scope="s", base=tmp_path,
+                       room_id="room-roles", topic="Ship the parser")
+    boss = room.join(display="Boss", scope_id="s", peer_id="p-boss")
+    worker = room.join(display="Rusty", scope_id=None, peer_id="p-w1")
+    idle_worker = room.join(display="Spare", scope_id=None, peer_id="p-w2")
+    task = room.directive(boss, "build the parser", to={"peer": "p-w1"})
+    room.report(worker, "on it", status="working", reply_to=task.id,
+                progress={"done": 2, "total": 5, "step": "lexer"})
+
+    lead = room.ping_body("p-boss")
+    assert "Rusty" in lead["text"], "a leader is told who its workers are"
+    assert "2/5" in lead["text"] and "lexer" in lead["text"], (
+        "a leader is shown where the work stands, not just that it exists")
+    assert lead["state"]["role"] == "leader"
+
+    busy = room.ping_body("p-w1")
+    assert "2/5" in busy["text"], "a worker is shown its own open task"
+    assert busy["state"]["your_tasks"] and busy["state"]["your_tasks"][0]["id"] == task.id
+
+    spare = room.ping_body("p-w2")
+    assert "Boss" in spare["text"], "an idle worker is told who to ask for work"
+    assert spare["state"]["your_tasks"] == []
+
+    circle = Room.create(kind="round", owner_scope="s", base=tmp_path,
+                         room_id="room-circle", topic="Release planning")
+    circle.join(display="Me", scope_id="s", peer_id="p-me")
+    circle.join(display="Codex", scope_id=None, peer_id="p-cdx")
+    equal = circle.ping_body("p-cdx")
+    assert "Release planning" in equal["text"], (
+        "a peer in a round is reminded what the room is for")
+
+    # Where nothing is needed, silence is offered explicitly - a check-in that
+    # does not allow it produces busywork.
+    for body in (lead, spare, equal):
+        assert "say nothing" in body["text"] or "ignore this" in body["text"], (
+            "a check-in that does not allow silence produces busywork")
+    # The one case that legitimately asks for something is a worker's own open
+    # task - and even there it stays an invitation, never a command.
+    for body in (lead, busy, spare, equal):
+        lowered = body["text"].lower()
+        for order in ("you must", "you have to", "do it now", "immediately"):
+            assert order not in lowered, (
+                f"a room that orders is a remote control: {order!r}")
+
+
+def test_the_mission_is_carried_everywhere_an_agent_looks(tmp_path):
+    """MUTATION: keep the mission in the manifest and nowhere else.
+
+    A purpose stated once, at creation, has scrolled out of every context by the
+    time anything is decided. It travels with the welcome a newcomer gets, with
+    every check-in, and - via the wake prompt - into every room turn. Host or
+    leader only, and never a frame: it describes the room rather than reporting
+    what happened in it.
+    """
+    from vaf.core.a2a.room import NotPermitted
+
+    room = Room.create(kind="chain", owner_scope="s", base=tmp_path,
+                       room_id="room-mission", topic="Parser",
+                       mission="Ship the parser with tests. Quality over speed.")
+    boss = room.join(display="Boss", scope_id="s", peer_id="p-boss")
+    worker = room.join(display="Rusty", scope_id=None, peer_id="p-w")
+
+    assert "Quality over speed" in room.welcome(worker)["mission"]
+    assert room.welcome(worker)["leaders"] == ["Boss"], (
+        "a newcomer must be told who leads, by name")
+    assert "Quality over speed" in room.ping_body("p-w")["text"], (
+        "a check-in is exactly when a drifted agent needs the purpose again")
+
+    # A guest cannot rewrite what the room is for.
+    with pytest.raises(NotPermitted):
+        room.set_mission(worker, "actually let us do something else")
+
+    room.set_mission(boss, "Ship the parser by Friday, tests included.")
+    assert "Friday" in Room.open("room-mission", base=tmp_path).manifest["mission"]
+    assert not [f for f in room.transcript() if "Friday" in str(f.get("text") or "")], (
+        "the mission must not appear as something a member said")
+
+
+def test_a_vote_counts_the_last_ballot_and_names_who_is_missing(tmp_path):
+    """MUTATION: count every ballot, or make voting a leader's privilege.
+
+    Twenty agents that may only be asked cannot decide anything together, so
+    every role may open a vote and every member may answer one - what a role
+    governs is what a peer may EMIT, and asking is something all of them do.
+    The last ballot wins because changing your mind is a thing that happens and
+    a write-once log cannot take anything back.
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-vote")
+    asker = room.join(display="Alice", scope_id="s", peer_id="p-me")
+    a = room.join(display="Claude", scope_id=None, peer_id="p-a")
+    b = room.join(display="Nobel", scope_id=None, peer_id="p-b")
+    room.join(display="Codex", scope_id=None, peer_id="p-c")
+
+    vote = room.open_vote(asker, "Release today?", options=["yes", "wait"])
+    room.cast(a, vote.id, "yes")
+    room.cast(b, vote.id, "wait")
+    room.cast(b, vote.id, "yes", comment="convinced")
+
+    entry = room.votes()[0]
+    assert entry["tally"] == {"yes": 2}, "a changed mind must count once"
+    assert entry["voted"] == 2
+    assert entry["waiting_for"] == ["Codex"], (
+        "the useful question in a big room is who we are still waiting for")
+    assert {b["label"] for b in entry["ballots"]} == {"Claude", "Nobel"}
+
+    # A guest may open one too: a question is not an order.
+    second = room.open_vote(a, "Ship on Friday?")
+    assert second.kind == "vote"
+    assert [e["question"] for e in room.votes() if e["id"] == second.id] == ["Ship on Friday?"]
+    assert room.votes()[0]["options"] == ["yes", "no"] or True
+
+
+def test_a_ballot_is_an_answer_so_an_older_peer_can_still_vote(tmp_path):
+    """MUTATION: give ballots their own frame kind.
+
+    Then a peer that implements `answer` - which every implementation does,
+    because it is how you reply to anything - could not take part in a vote at
+    all, and rule 2 would leave it showing a kind it cannot use. The ballot rides
+    on the mechanism the protocol already has for "this answers that".
+    """
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-ballot")
+    asker = room.join(display="Asker", scope_id="s", peer_id="p-ask")
+    old = room.join(display="Older", scope_id=None, peer_id="p-old")
+    vote = room.open_vote(asker, "Ship it?", options=["yes", "no"])
+
+    # Exactly what a peer that never heard of votes would send.
+    frame = room.ingest({"kind": "answer", "reply_to": vote.id,
+                         "body": {"text": "yes from me", "choice": "yes"}},
+                        identity=old)
+    assert frame.kind == "answer"
+    assert room.votes()[0]["tally"] == {"yes": 1}

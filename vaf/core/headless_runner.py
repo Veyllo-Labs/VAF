@@ -44,6 +44,89 @@ class _StopGenerationRequested(Exception):
     pass
 
 
+def _room_ping_sweep() -> None:
+    """Check in on members that have drifted off, in the rooms THIS machine holds.
+
+    Why it lives in the runner: the room store has no daemon of its own, this loop
+    already runs once a second for every tenant, and the check-in is a HOST act -
+    the machine holding the room is the only one that can see every member's
+    cursor. A guest cannot emit one at all (`is_host` is keyed on the tenant, and a
+    redeemed ticket has none), so there is nothing to coordinate between machines.
+
+    Cheap by construction, because it is asked at most once a minute and answers
+    from data the store already keeps: a peer is idle when it has neither read nor
+    written for the configured interval. The frame is addressed to that ONE peer,
+    so nineteen other members of a twenty-member room are not woken to hear that
+    somebody else was quiet.
+
+    Never raises into the loop: a damaged room must not stop the drain that every
+    other room depends on.
+    """
+    from vaf.core.config import Config
+
+    try:
+        minutes = float(Config.get("a2a_room_ping_minutes", 60) or 0)
+    except Exception:
+        minutes = 0.0
+    if minutes <= 0:
+        return
+    quiet_for = minutes * 60.0
+
+    from vaf.core.a2a.room import Room, list_rooms, owner_tenant, participant_key
+
+    now = time.time()
+    for room_id in list_rooms():
+        try:
+            room = Room.open(room_id)
+            if room.closed:
+                continue
+            owner = owner_tenant(room.manifest.get("owner_scope"))
+            if not owner:
+                continue
+            # The host acts as its own AGENT lane here rather than the terminal's:
+            # the check-in is the room's machine speaking, and the agent lane is the
+            # one that is always present while VAF runs.
+            host = room.identity_for(participant_key("agent", owner))
+            if host is None or not room.is_host(host):
+                continue
+            for peer in room.idle_peers(quiet_for_s=quiet_for, now=now):
+                if peer == host.peer_id:
+                    continue          # the host is here; it is doing the asking
+                if _pinged_recently(room_id, peer, now, quiet_for):
+                    continue
+                try:
+                    room.ping(host, peer)
+                    _remember_ping(room_id, peer, now)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
+_PING_SENT: dict = {}
+
+
+def _pinged_recently(room_id: str, peer: str, now: float, quiet_for: float) -> bool:
+    """Whether this peer was already asked inside the current interval.
+
+    In memory on purpose: the answer only has to hold for as long as this process
+    runs, and a peer that stays idle across a restart is asked once more - which is
+    the harmless direction. Writing it down would put a per-peer timestamp into a
+    store whose whole design is write-once frames.
+    """
+    last = _PING_SENT.get(f"{room_id}/{peer}", 0.0)
+    return bool(last) and (now - last) < quiet_for
+
+
+def _remember_ping(room_id: str, peer: str, now: float) -> None:
+    _PING_SENT[f"{room_id}/{peer}"] = now
+    if len(_PING_SENT) > 500:
+        # A bound, so a long-lived process with many rooms cannot grow this
+        # without limit. The oldest entries are the ones least likely to matter.
+        for key in sorted(_PING_SENT, key=_PING_SENT.get)[:200]:
+            _PING_SENT.pop(key, None)
+
+
 def _apply_channel_history_window(agent, source: str) -> None:
     """
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
@@ -458,6 +541,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     # cannot starve a conversation.
     last_room_check = 0.0
     ROOM_POLL_SECONDS = 2.0
+    # The check-in timer is far slower than the drain and keyed on the ROOM, not on
+    # this loop: a member is asked at most once per interval, whatever else happens.
+    last_ping_sweep = 0.0
+    PING_SWEEP_SECONDS = 60.0
     last_subagent_ui_update = 0.0
     last_memory_check = 0.0
     last_queue_metrics = 0.0
@@ -2348,6 +2435,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # costs a repeat rather than a lost message.
                 # Named boundary: the turn lands in the agent's current session. Routing
                 # a room to a chosen chat needs a session model rooms do not have yet.
+                # Rooms this machine HOLDS check in on members that have drifted
+                # off - per peer, addressed to that one, so a check-in never costs
+                # the whole room a turn. Host-side by construction: is_host is keyed
+                # on the tenant, so an invited guest can never emit one.
+                if now - last_ping_sweep >= PING_SWEEP_SECONDS:
+                    last_ping_sweep = now
+                    try:
+                        _room_ping_sweep()
+                    except Exception as _ping_err:
+                        append_domain_log_always(
+                            "headless", f"[ROOM] check-in sweep failed: {_ping_err}")
+
                 if now - last_room_check >= ROOM_POLL_SECONDS:
                     last_room_check = now
                     _room_wake = None

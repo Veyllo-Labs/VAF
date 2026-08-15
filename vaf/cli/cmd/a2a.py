@@ -29,7 +29,7 @@ import os
 import signal
 import sys
 import time
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
@@ -252,12 +252,69 @@ def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
           EXIT_REFUSED if ack.get("status") in ("refused", "not_writer") else EXIT_ERROR)
 
 
+def _remote_tasks(record: dict) -> list:
+    """The task board for a room on another machine.
+
+    Folded from the frames the seat may read, with the SAME function the host
+    uses - a second fold would be a second opinion about what "working" means,
+    and the two would drift on the first status somebody adds.
+    """
+    from vaf.core.a2a.client import RemoteRefused, RemoteRoom
+    from vaf.core.a2a.frame import Frame
+    from vaf.core.a2a.room import fold_tasks
+    from vaf.core.a2a.trust import TrustRefused
+
+    frames = []
+    try:
+        with RemoteRoom.connect(record["url"], record["seat"]) as remote:
+            for message in remote.frames(timeout=2.0):
+                kind = str(message.get("kind") or "")
+                if kind in ("sync", "ack", "welcome") or "lamport" not in message:
+                    if kind == "sync":
+                        break
+                    continue
+                try:
+                    frames.append(Frame.from_dict(message))
+                except Exception:
+                    continue
+    except TimeoutError:
+        pass
+    except (TrustRefused, RemoteRefused) as e:
+        _remote_fail(e)
+    return fold_tasks(frames, labels={})
+
+
+def _remote_submit(record: dict, room_id: str, payload: dict) -> None:
+    """Submit one frame over the wire and print what the room made of it.
+
+    The verbs that already had a remote path go through _send; these two carry
+    bodies that _send has no arguments for, and inventing two more arguments for
+    one caller each would grow that signature for nothing.
+    """
+    from vaf.core.a2a.client import RemoteRefused, RemoteRoom
+    from vaf.core.a2a.trust import TrustRefused
+    try:
+        with RemoteRoom.connect(record["url"], record["seat"]) as remote:
+            ack = remote.submit(payload)
+    except (TrustRefused, RemoteRefused) as e:
+        _remote_fail(e)
+        return
+    _emit({"ok": True, "room": room_id, "remote": True,
+           "id": (ack or {}).get("id"), "kind": payload.get("kind")})
+
+
 def _remote_wait(record: dict, room_id: str, *, n: int, timeout: float,
                  membership: bool) -> None:
     from vaf.core.a2a.client import RemoteRefused, RemoteRoom
     from vaf.core.a2a.room import BOOKKEEPING_KINDS
     from vaf.core.a2a.trust import TrustRefused
 
+    # The ask travels with the lane, not with the machine: a remote peer that
+    # never said what it can do is exactly as invisible in the roster as a local
+    # one. Read from the handshake kept at join time, so it costs no round trip.
+    if not ((record.get("welcome") or {}).get("you") or {}).get("card"):
+        _hint(f"You have not said what you can do in this room yet:\n"
+              f"  vaf a2a introduce {room_id} --skills \"what you are good at\"")
     started = time.monotonic()
     cursor = int(record.get("cursor") or 0)
     seen = 0
@@ -392,7 +449,8 @@ def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
 @app.command()
 def create(
     kind: str = typer.Option("round", help="round (nobody commands) or chain (leader and workers)"),
-    topic: str = typer.Option("", help="What the room is for."),
+    topic: str = typer.Option("", help="What the room is for, in a few words."),
+    mission: str = typer.Option("", help="What the room is for at LENGTH: the thing every member is reminded of when it comes back after an hour."),
     display: str = typer.Option("", help="Your name in the room."),
     skills: str = typer.Option("", help="One line about what you can do. Everyone in the room sees it."),
     room_id: str = typer.Option("", "--id", help="Use this id instead of a generated one."),
@@ -405,7 +463,7 @@ def create(
         # difference is invisible until something derives from it: a room whose owner
         # was recorded as "cli:<scope>" has host handles nobody holds, so it has no
         # host at all - its own opener cannot close it and cannot remove anybody.
-        room = Room.create(kind=kind, owner_scope=_scope(), topic=topic,
+        room = Room.create(kind=kind, owner_scope=_scope(), topic=topic, mission=mission,
                            room_id=room_id or None)
         me = room.join(display=display or _display(),
                        peer_id=derive_peer_id(_key(), room.room_id), scope_id=_scope(),
@@ -498,12 +556,26 @@ def join(
                           "this single connection would ever work. The host is "
                           "running an older VAF - update it, or work on its machine.",
                           EXIT_ERROR)
+                # The handshake is KEPT, not just printed: every later command
+                # runs in a new process with no socket open, so howto, skill and
+                # tasks would otherwise have to reconnect to answer what the room
+                # already told us once.
                 _remote_save(room_id, {
                     "url": url, "peer": remote.peer_id, "role": remote.role,
                     "seat": remote.seat, "cursor": 0,
+                    "welcome": getattr(remote, "packet", None) or {},
                 })
                 _emit({"ok": True, "room": room_id, "peer": remote.peer_id,
-                       "role": remote.role, "remote": True})
+                       "role": remote.role, "remote": True,
+                       "welcome": getattr(remote, "packet", None) or {}})
+                # getattr, not attribute access: this lane talks to whatever
+                # implements the client contract, and a host or client one
+                # version older simply has no packet to give.
+                if (getattr(remote, "packet", None) or {}).get("describe_yourself"):
+                    _hint(f"Say what you can do so the others know who to ask:\n"
+                          f"  vaf a2a introduce {room_id} --skills \"what you are good at\"\n"
+                          f"Keep the room's instructions as a skill of your own:\n"
+                          f"  vaf a2a skill {room_id} > vaf_a2a_rooms/SKILL.md")
         except (TrustRefused, RemoteRefused) as e:
             _remote_fail(e)
         return
@@ -664,10 +736,115 @@ def skill(room_id: str = typer.Argument(...),
         vaf a2a skill <room> > vaf_a2a_rooms/SKILL.md
     """
     from vaf.core.a2a.invite import client_skill
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        packet = record.get("welcome") or {}
+        typer.echo(client_skill(
+            room_id=room_id, role=str(record.get("role") or "peer"),
+            room_kind=str(packet.get("kind") or "round"),
+            workspace=str(packet.get("workspace") or "") or None))
+        return
     identity = _me(room, as_peer=as_peer)
     typer.echo(client_skill(room_id=room_id, role=identity.role, room_kind=room.kind,
                             workspace=room.workspace_dir(create=False)))
+
+
+@app.command()
+def vote(room_id: str = typer.Argument(...),
+         question: str = typer.Argument(...),
+         option: List[str] = typer.Option(None, "--option", "-o",
+                                          help="An answer to choose from. Repeat it. Defaults to yes/no."),
+         closes_in: int = typer.Option(0, "--closes-in",
+                                       help="Minutes until the vote counts as closed (0 = stays open)."),
+         as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Put a question to the room. Any member may, in any role.
+
+    Prints the vote's id: that is what a ballot answers.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        body = {"text": question, "options": [o for o in (option or []) if o.strip()] or ["yes", "no"]}
+        return _remote_submit(record, room_id, {"kind": "vote", "body": body})
+    identity = _me(room, as_peer=as_peer)
+    try:
+        frame = room.open_vote(identity, question, options=list(option or []),
+                               closes_in_s=(closes_in * 60.0) if closes_in else None)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "vote": frame.id,
+           "options": (frame.body or {}).get("options") or []})
+
+
+@app.command()
+def ballot(room_id: str = typer.Argument(...),
+           vote_id: str = typer.Argument(..., help="The id `vaf a2a vote` printed."),
+           choice: str = typer.Argument(..., help="One of the vote's options."),
+           comment: str = typer.Option("", help="Why, in one line. Everyone sees it."),
+           as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Cast your ballot. Voting again replaces your earlier one."""
+    from vaf.core.a2a.frame import plausible_frame_id
+    from vaf.core.a2a.room import RoomError
+    if not plausible_frame_id(vote_id):
+        _fail("the second argument is the vote's ID, the one `vaf a2a vote` printed.",
+              EXIT_REFUSED)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        return _remote_submit(record, room_id, {
+            "kind": "answer", "reply_to": vote_id,
+            "body": {"text": comment or f"votes: {choice}", "choice": choice}})
+    identity = _me(room, as_peer=as_peer)
+    try:
+        frame = room.cast(identity, vote_id, choice, comment=comment)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "vote": vote_id, "choice": choice,
+           "id": frame.id})
+
+
+@app.command()
+def votes(room_id: str = typer.Argument(...)) -> None:
+    """Every vote in this room with its tally, and who has not answered yet."""
+    room = _room(room_id)
+    _me(room)
+    for entry in room.votes():
+        _emit(entry)
+
+
+@app.command()
+def mission(room_id: str = typer.Argument(...),
+            text: str = typer.Argument("", help="Leave empty to print the current one."),
+            as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
+    """Say what this room is for, at length - or print what it says today.
+
+    Everyone is reminded of it: it travels in the welcome a newcomer gets, in
+    every check-in, and in the room turn of every VAF agent in the room. Host or
+    leader only, and it is a property of the room rather than something somebody
+    said, so it never appears in the transcript as a message.
+    """
+    from vaf.core.a2a.room import RoomError
+    room = _room(room_id)
+    if not str(text or "").strip():
+        _emit({"ok": True, "room": room_id,
+               "mission": str(room.manifest.get("mission") or ""),
+               "topic": str(room.manifest.get("topic") or ""),
+               "leaders": [labels for labels in room.leaders()]})
+        return
+    identity = _me(room, as_peer=as_peer)
+    try:
+        written = room.set_mission(identity, text)
+    except RoomError as e:
+        _fail(str(e), EXIT_REFUSED)
+    _emit({"ok": True, "room": room_id, "mission": written})
 
 
 @app.command()
@@ -682,7 +859,24 @@ def howto(room_id: str = typer.Argument(...),
     worded reference would leave a reader deciding which of the two is current.
     """
     from vaf.core.a2a.invite import briefing, lan_endpoint
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        # A remote peer needs this text MORE than a local one, not less: it is
+        # the side that has no room on disk to look at. The handshake kept at
+        # join time answers what the briefing needs to know.
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        packet = record.get("welcome") or {}
+        typer.echo(briefing(
+            room_id=room_id, ticket="", role=str(record.get("role") or "peer"),
+            display=str((packet.get("you") or {}).get("display") or "guest"),
+            room_kind=str(packet.get("kind") or "round"),
+            topic=str(packet.get("topic") or ""),
+            workspace=str(packet.get("workspace") or "") or None,
+            already_in=str(record.get("peer") or ""),
+        ))
+        return
     identity = _me(room, as_peer=as_peer)
     # Plain text, like `log`: this command exists to be READ, and a briefing
     # escaped inside a JSON string is a briefing nobody follows.
@@ -826,7 +1020,17 @@ def tasks(room_id: str = typer.Argument(...)) -> None:
     working --reply-to <id>` - and its status is whatever the LAST report said.
     Open work first.
     """
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        # The board is a FOLD over frames, so a remote peer can compute the same
+        # one from the frames it is allowed to read - the fold is shared code,
+        # not a second implementation with its own opinion about status.
+        for task in _remote_tasks(record):
+            _emit(task)
+        return
     _me(room)
     for task in room.tasks():
         _emit(task)

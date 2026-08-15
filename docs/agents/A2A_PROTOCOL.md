@@ -72,7 +72,7 @@ rule 1 applies to it.
 ### Kinds
 
 `say`, `ask`, `answer`, `report`, `directive`, `join`, `leave`, `role`, `hire`, `close`,
-`ack`, `kick`.
+`ack`, `kick`, `ping`, `vote`.
 
 `report.body.status` is drawn from a closed set: `submitted`, `working`,
 `input_required`, `completed`, `failed`, `rejected`, `canceled`. `input_required` is the
@@ -86,6 +86,48 @@ the one-writer rule holds; it is still self-description and still grants nothing
 `join.body.card` is self-description: a display name, what kind of agent it is, its
 skills as free text, the `ext` names it supports. It is shown as self-description and
 **never read as a permission** - a card claiming a role changes nothing.
+
+`ping` is the room checking in on ONE member that has gone quiet - neither read nor
+written for a configured interval (`a2a_room_ping_minutes`, 60 by default, 0 to turn it
+off). Three things make it what it is:
+
+- **Addressed, never broadcast.** The wake rule already says a frame aimed at somebody
+  else costs nobody else a turn, so a room of twenty asks the one member that drifted
+  and leaves the other nineteen alone. A room-wide "has anybody said anything lately"
+  would wake all of them to tell nineteen what they already know.
+- **Shaped by the recipient's role**, in the body, because the peer receiving it may be
+  a foreign agent that never sees any of our surfaces: a leader is told how the work
+  stands and who its workers are, a worker either what it has open or that it may ask
+  its leader for some, and a peer in a round what the room was opened for. `body.state`
+  carries the same as data (`role`, `members`, `tasks_open`, `your_tasks`, `workspace`).
+- **An invitation, never an order.** A room is input and not authority - that line holds
+  for the room's own probe as much as for another agent's message, or the machine that
+  hosts a room would have a remote control for everybody else's agent. Silence is a
+  valid answer and the text says so.
+
+HOST ONLY, like `close` and `kick`: the timer runs on the machine holding the room, and
+`is_host` is keyed on the tenant, so a guest that redeemed a ticket can never emit one.
+Surfaces do not draw it as a message - it is the room talking to one agent about its own
+attention, not something anybody said - while `vaf a2a log` keeps it for the audit trail.
+
+`vote` puts a question to the room: `body.text` is the question, `body.options` the
+answers to choose from (yes/no when none are given), and an optional `body.closes_at`
+says when a reader should call it closed - advisory, like every wall clock here.
+
+A BALLOT is an ordinary `answer` whose `reply_to` points at the vote and whose body
+carries `choice`. No second kind for it, because "this answers that" already exists -
+and a peer that implements only `answer` can take part in a vote without knowing the
+word. The LAST ballot a peer casts is the one that counts, the same rule the task board
+uses for status: changing your mind is a thing that happens, and a write-once log cannot
+take anything back anyway.
+
+Every role may open one and every member may vote, which is not an oversight: a vote is
+a QUESTION, and what a role governs is what a peer may emit. Twenty agents that may only
+be asked cannot decide anything together, and a round has nobody to ask permission from.
+`Room.votes()` folds the tally, who voted for what, and who has not answered yet - by
+name, because in a room of twenty the useful question is never "how many" but "who are
+we still waiting for". Ballots are public: a room is a conversation, not a booth, and a
+tally nobody can check is a number somebody made up.
 
 `report.body.progress` says how far the work has come: `{"done": 3, "total": 5, "step":
 "writing the tests"}`. A status says WHETHER something is running, which leaves a long
@@ -121,9 +163,12 @@ has a test.
 
 | Role | May emit | May not |
 |---|---|---|
-| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` | - |
-| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` | `directive` `role` `close` `kick` |
-| `peer` | `say` `ask` `answer` `report` `leave` `ack` `join` | `directive` `role` `hire` `close` `kick` |
+| `leader` | `say` `ask` `answer` `report` `directive` `role` `hire` `close` `leave` `ack` `join` `kick` `vote` | - |
+| `worker` | `say` `ask` `answer` `report` `hire` `leave` `ack` `join` `vote` | `directive` `role` `close` `kick` |
+| `peer` | `say` `ask` `answer` `report` `leave` `ack` `join` `vote` | `directive` `role` `hire` `close` `kick` |
+
+`ping` is not in the table on purpose: it is an act of the machine that HOLDS the room,
+the same exception `close` and `kick` already have, and no role grants it.
 
 Room kinds: `chain` (one leader, N workers, where a directive means something) and
 `round` (peers, nobody commands). A two-member chain covers the direct case, so there is
@@ -322,8 +367,19 @@ On accept the server sends:
 
 ```json
 {"kind": "welcome", "room": "<room_id>", "peer": "<peer_id>", "role": "<role>",
- "protocol": "vaf-a2a", "v": 1}
+ "protocol": "vaf-a2a", "v": 1,
+ "welcome": {"room": "...", "kind": "round", "topic": "...", "you": {...},
+             "members": [...], "workspace": "...", "tasks_open": 2,
+             "describe_yourself": true}}
 ```
+
+The four flat fields are the contract and never move: a client reads `peer` from them,
+and nesting it would break every guest ever written against it. `welcome` is the room's
+HANDSHAKE beside them - who is here and what each of them said it can do, what this role
+may send, the shared folder, how much work is open, and whether the room is still waiting
+to hear what the newcomer can do. It is OPTIONAL in both directions by rule 1: a host one
+version older sends the four fields and a client that demanded more would refuse a room it
+can work in perfectly well.
 
 Then each submitted frame is answered with an `ack`. `from` and `role` on a submitted
 frame are overwritten with the connection's resolved peer; they are never honoured as
@@ -463,8 +519,14 @@ NDJSON on stdout.
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
-wait  log  howto  skill  audit  export
+wait  log  howto  skill  mission  vote  ballot  votes  audit  export
 ```
+
+`mission` says what the room is FOR at length - the paragraph every member is reminded
+of in its welcome, in every check-in and in every room turn. Host or leader only, and a
+property of the room rather than something somebody said, so it lives in the manifest
+and never appears in the transcript. `vote`, `ballot` and `votes` open a question, cast
+a ballot and print the tally.
 
 `join` answers with a WELCOME PACKET beside the fields it has always printed
 (`ok`, `room`, `peer`, `role`): who is in the room and what each of them said it can

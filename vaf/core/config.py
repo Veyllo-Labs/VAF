@@ -301,6 +301,7 @@ class Config:
                 # automation is not one.
                 "room_unattended_report_enabled": True,        # global kill-switch
                 "room_unattended_report_every_turns": 20,      # room-driven turns for ONE room without a human between messages to the owner (20, 40, 60, ...); work continues either way
+                "a2a_room_ping_minutes": 60,                   # a room checks in on a member that has neither read nor written for this long (0 = never). Per PEER, addressed to that one, so a check-in never costs the whole room a turn. Host-side: the timer runs on the machine that holds the room.
                 "chat_step_wall_clock_seconds": 3600,          # MAIN-loop wall-clock BACKSTOP (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count/provider speed. Deliberately generous — the no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true infinite/zombie loop without ever aborting legitimate long work. Configurable.
                 "max_tool_turns_per_step": 75,                 # Hard stop: tool turns ONE user turn may use before the loop protection ends it. The soft goal-reminder keeps its distance below it (min(50, cap-3)). Admin-only: a tenant must not raise their own budget.
                 "tool_loop_unlimited": False,                  # Switch: disable the hard stop AND the wall-clock backstop entirely (spend budget still applies). Read by the agent loop since the loop-protection round but never registered; registered here so it is documented, admin-only and visible to Settings.
@@ -892,6 +893,10 @@ class Config:
         # subject can silence is not a notice, and the thing it reports on is the
         # instance's tokens and, from the cross-machine step on, a second machine.
         "room_unattended_report_enabled", "room_unattended_report_every_turns",
+        # The check-in spends the instance's tokens on somebody else's idleness, and
+        # it is emitted by this machine to peers that may not be on it - the same
+        # kind of decision, one layer out.
+        "a2a_room_ping_minutes",
         # Loop-protection budgets: a limit its own subject can raise is not a limit.
         "max_tool_turns_per_step", "tool_loop_unlimited",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).

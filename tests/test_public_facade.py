@@ -51,7 +51,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "VoiceTurnEngine",
         "__version__",
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
-        "joined_rooms", "markers",
+        "fold_room_tasks", "joined_rooms", "markers",
         "participant_key", "room_invitation", "set_account_allowlist_resolver",
         "set_confirmation_bypass_resolver",
         "unread_counts", "user_jail",

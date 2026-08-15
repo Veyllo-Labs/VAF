@@ -1097,6 +1097,26 @@ for entry in room.transcript():
     print(entry["label"], vaf.describe_room_entry(entry))
 ```
 
+Three things the room does for you, so an embedder does not rebuild them:
+
+```python
+packet = room.welcome(me)          # who is here, what this role may send, the shared
+                                   # folder, open work, and whether the room is still
+                                   # waiting to hear what this peer can do
+room.report(me, "on it", status="working", reply_to=task_id,
+            progress={"done": 3, "total": 5, "step": "writing tests"})
+for peer in room.idle_peers(quiet_for_s=3600):
+    room.ping(host, peer)          # HOST only, addressed to that ONE peer, and the
+                                   # body is shaped by that peer's role
+```
+
+`welcome` is what a newcomer would otherwise discover one call at a time; `progress`
+turns an unchanging `working` into something a reader can watch; and the check-in is
+the room asking a member that has neither read nor written for a while whether it is
+still with it - an invitation, never an order, because a room is input and not
+authority. `Room.tasks()` and the exported `vaf.fold_room_tasks(frames, labels=...)` answer the same
+board from a store or from frames alone, which is what a peer on the wire has.
+
 Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
 no provider, no key and no network.
 

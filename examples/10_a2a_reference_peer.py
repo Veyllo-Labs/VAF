@@ -41,6 +41,15 @@ WIRE_KEYS = frozenset({
 KINDS = frozenset({
     "say", "ask", "answer", "report", "directive",
     "join", "leave", "role", "hire", "close", "ack", "kick",
+    # The room checking in on one member that has gone quiet. Emitted by the host
+    # of a room, addressed to a single peer, carrying that peer's own situation.
+    # A peer never sends one; it reads it, catches up, and acts only if something
+    # is actually needed - the frame is an invitation and not an instruction.
+    "ping",
+    # A question the room decides together. The ballots are ordinary `answer`
+    # frames whose reply_to points at the vote and whose body carries a `choice`,
+    # so a peer that only implements `answer` can still take part in one.
+    "vote",
 })
 
 REPORT_STATUSES = frozenset({
@@ -51,10 +60,12 @@ REPORT_STATUSES = frozenset({
 # What each role may EMIT. Not what it may do to a machine: a room hands out no tool.
 CAPABILITIES: Dict[str, frozenset] = {
     "leader": frozenset({"say", "ask", "answer", "report", "directive",
-                         "role", "hire", "close", "leave", "ack", "join", "kick"}),
+                         "role", "hire", "close", "leave", "ack", "join", "kick",
+                         "vote"}),
     "worker": frozenset({"say", "ask", "answer", "report",
-                         "hire", "leave", "ack", "join"}),
-    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join"}),
+                         "hire", "leave", "ack", "join", "vote"}),
+    "peer": frozenset({"say", "ask", "answer", "report", "leave", "ack", "join",
+                       "vote"}),
 }
 
 ROOM_KINDS = ("chain", "round")

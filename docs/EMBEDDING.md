@@ -509,7 +509,13 @@ What an embedded agent can and cannot do on the host - the short version of
   The memory/RAG stack
   (PostgreSQL, Redis) is **not** started by the library - it is a Docker
   compose stack the desktop/server product manages; without it, memory tools
-  fail soft with an error string. One exception to know:
+  fail soft with an error string. Managing it is supported rather than left to
+  you: `vaf.core.service_stack` (`SERVICES`, `ensure_service_stack`,
+  `stop_service_stack`) starts and stops the stack, and
+  `vaf.core.service_health` (`collect_service_status`, `repair_service_stack`)
+  answers what state each container is in and repairs a broken one, with every
+  probe injectable so an embedder can test against it without Docker. One
+  exception to know:
   `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
   `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of
   that call.

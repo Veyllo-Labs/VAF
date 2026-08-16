@@ -38,15 +38,74 @@ import os
 import platform
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 COMPOSE_FILENAME = "docker-compose.memory.yml"
 COMPOSE_ENV_FILENAME = "compose.env"
-CORE_SERVICES = ("postgres", "redis", "sandbox", "stt", "gotenberg")
-OPTIONAL_SERVICES = ("tts", "vaf-browser")
+
+
+@dataclass(frozen=True)
+class ServiceSpec:
+    """One service of the stack, described once for everyone who needs it.
+
+    The list used to exist three times over: the two service tuples here, the
+    container-name tuple in the security dashboard's API, and the compose file
+    itself. Only the compose file is authoritative for what actually runs, so
+    tests/test_compose_service_registry_sync.py compares this registry against
+    it and fails when they drift.
+
+    `config_url_key` / `env_url_var` name where the HOST port VAF expects is
+    configured. A container can be up and still unreachable because the two
+    disagree (a published port changed, a config key was edited), which reads
+    as "the database is gone" everywhere else - so the port belongs in the
+    registry, next to the container it describes.
+    """
+
+    service_key: str          # compose service name ("postgres")
+    container_name: str       # compose container_name ("vaf-memory-db")
+    required: bool            # core registry image vs optional local build
+    config_url_key: str = ""  # config key carrying the expected host port
+    env_url_var: str = ""     # environment override (browser: VAF_BROWSER_CDP_URL)
+    default_port: int = 0     # compose default host port; 0 = publishes none
+    probe: str = ""           # "" | "tcp" | "postgres" | "http:<path>"
+
+
+# Kept in the compose file's own order. Ports are the compose defaults
+# ("127.0.0.1:${VAR:-<default>}:<container port>").
+SERVICES: Tuple[ServiceSpec, ...] = (
+    ServiceSpec("postgres", "vaf-memory-db", True,
+                config_url_key="memory_db_url", default_port=5432, probe="postgres"),
+    ServiceSpec("redis", "vaf-redis", True,
+                config_url_key="redis_url", default_port=6379, probe="tcp"),
+    ServiceSpec("sandbox", "vaf-sandbox", True),
+    # STT gets a TCP probe, not its HTTP health path: the compose healthcheck
+    # ends in `|| exit 0`, so the service answers "healthy" while still loading
+    # its model and an HTTP probe would report a failure that is not one.
+    ServiceSpec("stt", "vaf-stt", True,
+                config_url_key="speech_stt_docker_url", default_port=5003, probe="tcp"),
+    ServiceSpec("gotenberg", "vaf-gotenberg", True,
+                config_url_key="document_conversion_docker_url", default_port=5005, probe="tcp"),
+    ServiceSpec("tts", "vaf-tts", False,
+                config_url_key="speech_tts_docker_url", default_port=5002, probe="http:/health"),
+    ServiceSpec("vaf-browser", "vaf-browser", False,
+                env_url_var="VAF_BROWSER_CDP_URL", default_port=9222, probe="http:/json/version"),
+)
+
+CORE_SERVICES = tuple(s.service_key for s in SERVICES if s.required)
+OPTIONAL_SERVICES = tuple(s.service_key for s in SERVICES if not s.required)
+
+
+def service_by_container(name: str) -> Optional[ServiceSpec]:
+    """The spec whose container carries this name, or None for a stranger."""
+    wanted = (name or "").lstrip("/")
+    for spec in SERVICES:
+        if spec.container_name == wanted:
+            return spec
+    return None
 
 
 def _say(log: Optional[Callable[[str], None]], message: str) -> None:
@@ -108,6 +167,39 @@ def is_docker_daemon_running() -> bool:
         return True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+def diagnose_docker_daemon() -> dict:
+    """Why is docker unreachable? Returns {ok, reason, detail}.
+
+    `is_docker_daemon_running` answers yes/no and is the hot path; this is the
+    slow variant that keeps stderr, because the three failure modes need three
+    different remedies and a repair run that cannot tell them apart offers the
+    wrong one. Reasons: ok, no_cli (no docker executable at all),
+    permission_denied (the socket exists but this user may not read it - the
+    Linux docker-group case), not_running (daemon down), timeout.
+    """
+    docker = resolve_docker_exe()
+    kwargs = {"capture_output": True, "text": True}
+    if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        result = subprocess.run([docker, "info"], timeout=10, **kwargs)
+    except FileNotFoundError:
+        return {"ok": False, "reason": "no_cli",
+                "detail": "No docker executable found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "timeout",
+                "detail": "docker info did not answer within 10 seconds."}
+    except Exception as e:  # a broken PATH entry, a killed subprocess
+        return {"ok": False, "reason": "not_running", "detail": str(e)[:300]}
+    if result.returncode == 0:
+        return {"ok": True, "reason": "ok", "detail": ""}
+    err = ((result.stderr or "") + " " + (result.stdout or "")).strip()
+    low = err.lower()
+    if "permission denied" in low or "got permission denied" in low:
+        return {"ok": False, "reason": "permission_denied", "detail": err[:300]}
+    return {"ok": False, "reason": "not_running", "detail": err[:300]}
 
 
 def _is_container_runtime_running() -> bool:

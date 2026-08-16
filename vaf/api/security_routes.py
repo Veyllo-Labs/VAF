@@ -32,6 +32,8 @@ from starlette.concurrency import run_in_threadpool
 
 from vaf.api.user_routes import require_admin
 from vaf.core.security_events import read_security_events
+from vaf.core.service_health import inspect_containers
+from vaf.core.service_stack import SERVICES, is_docker_daemon_running
 
 router = APIRouter(prefix="/api/security", tags=["security"])
 
@@ -42,12 +44,8 @@ SANDBOX_CONTAINER = "vaf-sandbox"
 
 
 def _docker_available() -> bool:
-    """True when the docker daemon answers. Mirrors python_sandbox._ensure_docker_available."""
-    try:
-        result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
-        return result.returncode == 0
-    except Exception:
-        return False
+    """True when the docker daemon answers."""
+    return is_docker_daemon_running()
 
 
 def _inspect_sandbox() -> Optional[Dict[str, Any]]:
@@ -210,27 +208,8 @@ def security_events(
 
 # ── Docker network isolation (the "inner firewall") ──────────────────────────
 
-# All VAF containers (docker-compose.memory.yml container_name entries).
-_VAF_CONTAINERS = (
-    "vaf-memory-db", "vaf-redis", "vaf-sandbox", "vaf-tts",
-    "vaf-gotenberg", "vaf-stt", "vaf-browser",
-)
 _INTERNAL_NETWORK = "vaf-network"
 _LOOPBACK_IPS = ("127.0.0.1", "::1")
-
-
-def _inspect_containers() -> List[Dict[str, Any]]:
-    """Raw docker inspect for all VAF containers. Missing containers are simply
-    absent from the result (docker inspect still prints the found ones)."""
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", *_VAF_CONTAINERS],
-            capture_output=True, text=True, timeout=10,
-        )
-        parsed = json.loads(result.stdout or "[]")
-        return parsed if isinstance(parsed, list) else []
-    except Exception:
-        return []
 
 
 def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -277,10 +256,17 @@ def derive_docker_isolation(inspects: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def collect_docker_isolation() -> Optional[Dict[str, Any]]:
-    """Probe + derive; None when docker is unavailable (no phantom green)."""
+    """Probe + derive; None when docker is unavailable (no phantom green).
+
+    The container list comes from the framework's service registry
+    (vaf/core/service_stack.py SERVICES), which a CI guard keeps in step with
+    the compose file - this module used to carry its own copy of the names.
+    """
     if not _docker_available():
         return None
-    return derive_docker_isolation(_inspect_containers())
+    return derive_docker_isolation(
+        inspect_containers([s.container_name for s in SERVICES])
+    )
 
 
 # ── Channel perimeter (messenger ingress) ────────────────────────────────────

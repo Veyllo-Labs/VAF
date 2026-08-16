@@ -1227,7 +1227,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         def _log_rag(msg: str) -> None:
                             append_domain_log("rag", msg)
                         if Config.get("memory_enabled", True):
-                            from vaf.memory.rag import run_memory_search_sync
+                            from vaf.memory.rag import turn_memory_context
                             from uuid import UUID
                             user_scope_id = None
                             raw = task.metadata.get("user_scope_id") if getattr(task, "metadata", None) else None
@@ -1244,11 +1244,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         f.write(f"{_dt.now().isoformat()} RAG_START session_id={task.session_id} query_len={len(task.input_text or '')}\n")
                             except Exception:
                                 _rag_t0 = time.time()
-                            k = int(Config.get("memory_rag_k", 5))
-                            k = max(1, min(20, k))
-                            memory_context = run_memory_search_sync(
-                                task.input_text, k=k, user_scope_id=user_scope_id, caller="headless"
-                            )
+                            memory_context = turn_memory_context(
+                                task.input_text, user_scope_id=user_scope_id,
+                                caller="headless")
                             try:
                                 _rag_dur = time.time() - _rag_t0
                                 if is_debug_logging_enabled():
@@ -2622,17 +2620,45 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except Exception as _bind_err:
                             append_domain_log_always(
                                 "headless", f"[ROOM] identity bind failed: {_bind_err}")
+                        # A room turn is a turn, so it gets what a turn gets. This was
+                        # the half that was missing: the chat lane fills `memory_context`
+                        # a thousand lines up and the room lane filled nothing, so the
+                        # agent answered its own room knowing none of what it had ever
+                        # been told. Same primitive, same account, and the query is what
+                        # was just SAID rather than the instructions wrapped around it.
+                        _room_memory = ""
+                        try:
+                            from uuid import UUID as _UUID
+                            from vaf.memory.rag import turn_memory_context
+                            _rs = _room_wake.get("scope")
+                            _room_memory = turn_memory_context(
+                                _room_wake.get("query") or "",
+                                user_scope_id=(_UUID(str(_rs)) if _rs else None),
+                                caller="room")
+                        except Exception:
+                            _room_memory = ""
                         try:
                             agent.chat_step(
                                 user_input=_room_wake["prompt"],
                                 skip_input=False,
                                 disable_workflows=True,
                                 disable_tools=False,
+                                memory_context=_room_memory or None,
                             )
                         except Exception as _room_err:
                             append_domain_log_always(
                                 "headless", f"[ROOM] delivery failed: {_room_err}"
                             )
+                        else:
+                            # AFTER the turn and only when it ran: learning from a turn
+                            # that failed would store half a conversation as fact. Its
+                            # own interval decides whether anything happens, exactly as
+                            # on the chat lane - this is a nudge, not a schedule.
+                            try:
+                                _room_wake["learn"]()
+                            except Exception as _learn_err:
+                                append_domain_log_always(
+                                    "headless", f"[ROOM] learning skipped: {_learn_err}")
                         finally:
                             if _prev_actor is None:
                                 os.environ.pop(ROOM_ACTOR_ENV, None)

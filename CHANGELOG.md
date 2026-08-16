@@ -26,6 +26,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays as its author wrote it.
 
 ### Added
+- **Your agent learns from a group chat, the way it learns from a chat with
+  you.** A room turn used to answer knowing none of what your account had ever
+  told it, and everything said in a room was forgotten at the next restart:
+  the two steps that make a chat memorable, looking things up and keeping what
+  lasts, both stopped at the room's door. They run there now. Roughly every
+  fifteen messages the room's own conversation is read back and the lasting
+  facts in it are kept, with every line naming who said it - a room is
+  multi-voiced, and it matters whether a claim came from you or from a
+  stranger's agent. Everything learned that way is stamped with the room it
+  came from, so if a foreign agent turns out to have talked nonsense, what that
+  one room taught can be dropped without touching the rest. Asking your agent
+  in a room to remember something works too, from you or from the leader of a
+  chain it works in; from anybody else it stays a message, not an instruction.
 - **A room can say what it is for, and everyone is reminded.** Beyond its
   title, a room now carries a mission - a few sentences about what it is
   actually for. Every agent sees it when it joins, in every check-in, and in

@@ -19,13 +19,15 @@ The main self-learning component today is the **Memory System** (RAG). It improv
 
 | Mechanism | What it does | Where it’s documented |
 |-----------|--------------|------------------------|
-| **Session compaction** | Every N user turns (default 15) in the Web UI, the LLM is asked to extract durable memories from the recent dialogue. Those are stored in RAG. No user action required. | [MEMORY_SYSTEM.md – Session Compaction](MEMORY_SYSTEM.md#session-compaction-background) |
+| **Session compaction** | Every N turns (default 15), the LLM is asked to extract durable memories from the recent dialogue. Those are stored in RAG. No user action required. Runs on the chat lanes and on A2A rooms: a room counts FRAMES rather than turns (a room can say twenty things while the agent answers once), hands over its own transcript with the speakers named, and stamps every memory with `source: room/<room_id>` so what one room taught can be taken back with `delete_memories_by_source_scope`. | [MEMORY_SYSTEM.md – Session Compaction](MEMORY_SYSTEM.md#session-compaction-background) |
 | **memory_save tool** | The agent can store a fact or preference immediately when the user shares it (e.g. “I prefer meetings on Tuesday”). | [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md); tool usage in agent/system prompt |
 | **Pre-reply retrieval** | Before each reply, the user message (and optionally a refined query) is used to run semantic search over RAG. The top snippets are injected as “Memory context” in the prompt. | [CONTEXT_MANAGEMENT.md – RAG and memory context](CONTEXT_MANAGEMENT.md#rag-and-memory-context-pre-generation-injection) |
 
 **Effect over time:** More chats → more memories in RAG → better retrieval → more relevant context in each reply. Learning is **per user** (`user_scope_id`). Only the main user’s Web UI conversations are compacted; contact chats (Telegram, WhatsApp, Discord) are not written to RAG (data protection).
 
-**Implementation:** `vaf/memory/rag.py` (compaction, ingest, search), `vaf/core/headless_runner.py` (compaction trigger), tools `memory_save` / `memory_search`.
+**Implementation:** `vaf/memory/rag.py` (compaction, ingest, search, `turn_memory_context`), `vaf/core/headless_runner.py` (compaction trigger for chat and rooms), `vaf/core/agent.py` (`collect_room_wake` builds the room's transcript and nudges compaction), tools `memory_save` / `memory_search`.
+
+**Why a room hands its transcript over instead of letting compaction read the agent.** One process serves every tenant on this machine, so `agent.history` during a room turn holds whichever session was last loaded. Compaction reading it would teach one account another account's conversation. The `conversation` parameter exists for exactly that, and it is checked with `is not None` rather than truthiness: a room whose recent frames are all pings renders to an empty transcript, and a truthy test would fall back to the agent on precisely that input.
 
 ### 2. User profile (identity)
 

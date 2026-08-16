@@ -1580,25 +1580,19 @@ vaf automation delete <id>   # Delete task
                     if callback:
                         callback(text)
 
-                # RAG: fetch memory context for this turn (pre-injection, before LLM)
+                # What this account already knows, before the model answers.
                 memory_context = ""
                 try:
-                    from vaf.core.config import Config
-                    if Config.get("memory_enabled", True):
-                        from vaf.memory.rag import run_memory_search_sync
-                        from uuid import UUID as _UUID
-                        k = int(Config.get("memory_rag_k", 5))
-                        k = max(1, min(20, k))
-                        # Use task's user_scope_id for scoped RAG search
-                        task_scope = None
-                        if task.user_scope_id:
-                            try:
-                                task_scope = _UUID(str(task.user_scope_id))
-                            except (ValueError, TypeError):
-                                pass
-                        memory_context = run_memory_search_sync(
-                            query=prompt, k=k, user_scope_id=task_scope, caller="automation"
-                        )
+                    from uuid import UUID as _UUID
+                    from vaf.memory.rag import turn_memory_context
+                    task_scope = None
+                    if task.user_scope_id:
+                        try:
+                            task_scope = _UUID(str(task.user_scope_id))
+                        except (ValueError, TypeError):
+                            task_scope = None
+                    memory_context = turn_memory_context(
+                        prompt, user_scope_id=task_scope, caller="automation")
                 except Exception:
                     memory_context = ""
 

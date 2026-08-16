@@ -38,10 +38,30 @@ class _Agent:
 
     _DELEGATION_TOOLS = _Real._DELEGATION_TOOLS
     _ROOM_TALK_TOOLS = _Real._ROOM_TALK_TOOLS
+    _ROOM_AUTHORITY_TOOLS = _Real._ROOM_AUTHORITY_TOOLS
     _room_mode_gate_decision = _Real._room_mode_gate_decision
 
     def __init__(self, room_turn=None):
         self._room_turn = room_turn
+
+
+def test_the_stand_in_carries_every_constant_the_gate_reads():
+    """MUTATION: add a constant to the gate and not to the stand-in above.
+
+    The class above lifts one method off the real Agent and hand-copies the constants it
+    reads. The gate FAILS CLOSED, so a missing constant does not crash: it turns into
+    "permission could not be established" and every row that expects a refusal still
+    passes. Only the handful of rows expecting a pass would go red, which is a confusing
+    way to learn that a list drifted. This says it in one line instead.
+    """
+    import re
+    from pathlib import Path as _P
+    src = _P(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py"
+    body = src.read_text(encoding="utf-8").split(
+        "def _room_mode_gate_decision", 1)[1].split("\n    def ", 1)[0]
+    for const in sorted(set(re.findall(r"self\.(_[A-Z][A-Z_]+)", body))):
+        assert hasattr(_Agent, const), (
+            f"the gate reads {const} and the stand-in above does not carry it")
 
 
 # ── the mode gate ───────────────────────────────────────────────────────────

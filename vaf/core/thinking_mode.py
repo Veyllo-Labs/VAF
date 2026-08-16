@@ -2596,9 +2596,8 @@ def _run_thinking_for_user(
             memory_context = ""
             try:
                 if Config.get("memory_enabled", True):
-                    from vaf.memory.rag import run_memory_search_sync
+                    from vaf.memory.rag import turn_memory_context
                     from uuid import UUID as _UUID
-                    k = max(1, min(20, int(Config.get("memory_rag_k", 5))))
                     task_scope = None
                     if user_scope_id:
                         try:
@@ -2631,9 +2630,8 @@ def _run_thinking_for_user(
                     except Exception:
                         pass
                     rag_query = (" ".join(rag_query_parts).strip() or "user profile preferences tasks projects")[:300]
-                    memory_context = run_memory_search_sync(
-                        query=rag_query, k=k, user_scope_id=task_scope, caller="thinking_mode"
-                    ) or ""
+                    memory_context = turn_memory_context(
+                        rag_query, user_scope_id=task_scope, caller="thinking_mode")
             except Exception:
                 memory_context = ""
 

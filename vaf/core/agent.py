@@ -1969,6 +1969,51 @@ class Agent:
             def _advance() -> None:
                 room.store.set_cursor(identity.peer_id, highest)
 
+            def _learn() -> None:
+                """Let the room teach this account, on the same terms as a chat.
+
+                A room was the one conversation the agent could not learn from: the
+                compaction that runs every N turns of a chat has two callers and both
+                sit on the chat queue, so everything said here was forgotten the moment
+                the process restarted. Nothing else about it is special, which is why
+                this calls the SAME function a chat does rather than growing a second
+                kind of learning.
+
+                Two things it must not inherit from the chat lane. The transcript is
+                handed over rather than read off the agent, because one process serves
+                every tenant and `agent.history` here holds whichever session was last
+                loaded - learning from that would teach one account another's
+                conversation. And the memories are stamped with this room as their
+                source, because a room is MULTI-VOICED: a fact can come from a foreign
+                agent nobody here controls, and `delete_memories_by_source_scope` can
+                take back exactly what one room taught once it turns out to be wrong.
+
+                Counted in FRAMES, not in turns. A room can say twenty things while
+                this agent answers once, and "every fifteen messages" is what the
+                interval means everywhere else.
+
+                Never raises: a learning step that killed the room turn would trade a
+                conversation for a note about it.
+                """
+                try:
+                    from uuid import UUID as _UUID
+                    from vaf.core.a2a.room import transcript
+                    from vaf.memory.rag import run_session_compaction_sync
+                    try:
+                        _scope = _UUID(str(room_scope)) if room_scope else None
+                    except (ValueError, TypeError):
+                        _scope = None
+                    if _scope is None:
+                        return
+                    _all = room.store.frames()
+                    run_session_compaction_sync(
+                        self, _scope, room.room_id, len(_all),
+                        conversation=transcript(_all, labels=labels),
+                        source=f"room/{room.room_id}",
+                    )
+                except Exception:
+                    pass
+
             topic = str(room.manifest.get("topic") or "").strip()
             mission = str(room.manifest.get("mission") or "").strip()
             leader_names = [labels.get(p) or (members.get(p) or {}).get("display") or p
@@ -2073,11 +2118,23 @@ class Agent:
                   "of how many, and what you are doing right now. The others read it "
                   "without having to ask you, and your user sees it on the card."
             )
+            # What was just SAID, which is what to look up - the prompt around it is
+            # instructions, and a retrieval query built from instructions retrieves
+            # instructions.
+            query = " ".join(str((f.body or {}).get("text") or "").strip()
+                             for f in frames)[:300].strip()
+            # Whether this wake carries authority. Same conservative shape as
+            # `from_user_only`: a wake that MIXES a stranger's words with a leader's
+            # must not let the stranger ride on the leader's standing.
+            _authority = {user_peer} | set(room.leaders())
+            from_authority = bool(frames) and all(f.sender in _authority for f in frames)
             return {"room_id": room.room_id, "mode": mode, "peer_id": identity.peer_id,
                     "scope": room_scope,
-                    "prompt": prompt, "advance": _advance, "count": len(frames),
+                    "prompt": prompt, "advance": _advance, "learn": _learn,
+                    "query": query, "count": len(frames),
                     "context_count": len(context),
-                    "from_user": from_user, "from_user_only": from_user_only}
+                    "from_user": from_user, "from_user_only": from_user_only,
+                    "from_authority": from_authority}
         except Exception:
             return None
 
@@ -2155,6 +2212,15 @@ class Agent:
     # broken one.
     _ROOM_TALK_TOOLS = frozenset({"room_send", "room_read", "room_join"})
 
+    # Remembering is a WRITE, so the gate below stops it like any other - and a room is
+    # exactly where that matters, since a foreign agent could otherwise plant a durable
+    # "fact" nobody can trace. It is allowed on one condition: the wake carries
+    # authority, meaning everything in it was said by this agent's own user or by the
+    # room's leader (the two people a worker takes instructions from). Everything else
+    # said in the room is still learned - by the compaction that runs on the room's
+    # frames afterwards, which reads the whole conversation and stamps its source.
+    _ROOM_AUTHORITY_TOOLS = frozenset({"memory_save"})
+
     def _room_mode_gate_decision(self, name, tool_instance):
         """Gate (d): a message that arrived from a room is a MESSAGE, not a warrant.
 
@@ -2200,6 +2266,11 @@ class Agent:
             # chose a read-only agent for this room, and a mode change is one
             # click where that choice lives.
             if mode == "assist" and room_turn.get("from_user_only"):
+                return None
+            # Not "observe": a read-only agent stays read-only, and the memory it would
+            # write is the one thing a later turn reads back as fact.
+            if (mode != "observe" and name in self._ROOM_AUTHORITY_TOOLS
+                    and room_turn.get("from_authority")):
                 return None
             _perm = getattr(tool_instance, "permission_level", "read")
             if _perm not in ("write", "dangerous") and name not in self._DELEGATION_TOOLS:

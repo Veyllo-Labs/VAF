@@ -165,6 +165,44 @@ def resolve_room_actor(room_id: str, environ: Optional[dict] = None) -> str:
     return key.strip() if where.strip() == room and key.strip() else ""
 
 
+def transcript(frames: List[Frame], *, labels: Dict[str, str],
+               max_chars: int = 12000) -> str:
+    """The room's conversation as plain lines, newest kept, for something to LEARN from.
+
+    A second rendering of the same frames, deliberately not the one a room turn shows an
+    agent. That one carries frame ids, addressing hints and "read along, do not answer"
+    markers, because it is routing information for the turn it belongs to. None of that
+    is a fact about the world, and a memory that swallowed it would remember the
+    plumbing instead of the conversation.
+
+    Every line names its SPEAKER. A two-party chat can get away with "User:" and
+    "Assistant:" because the roles are the whole cast; in a room the same fact means
+    something different depending on who said it, and half the speakers are agents
+    nobody here controls.
+
+    Bookkeeping and pings are left out - a join, an ack or a "still on this?" is the
+    room talking about itself, not about the world. Oldest lines are dropped first when
+    the budget runs out, so the tail that survives is the part still being talked about.
+    """
+    skip = set(BOOKKEEPING_KINDS) | {"ping"}
+    lines: List[str] = []
+    total = 0
+    for frame in reversed(list(frames or [])):
+        if frame.kind in skip:
+            continue
+        text = str((frame.body or {}).get("text") or "").strip()
+        if not text:
+            continue
+        who = labels.get(frame.sender) or frame.sender
+        line = f"{who}: {text}".replace("\n", " ").strip()
+        if total + len(line) + 2 > max_chars:
+            break
+        lines.append(line)
+        total += len(line) + 2
+    lines.reverse()
+    return "\n\n".join(lines)
+
+
 def owner_tenant(value: Optional[str]) -> str:
     """A room's owning TENANT, healing a participant key that was stored as one.
 

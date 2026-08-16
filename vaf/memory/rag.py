@@ -1363,12 +1363,28 @@ def run_session_compaction_sync(
     user_scope_id: Optional[UUID],
     session_id: str,
     current_turn_count: int,
+    *,
+    conversation: Optional[str] = None,
+    source: Optional[str] = None,
 ) -> None:
     """
     Run session compaction if interval reached: inject prompt, parse MEMORY:/NO_REPLY, ingest to RAG.
     Does not append compaction reply to chat history or UI.
-    Runs for main user sessions (Web, Telegram, WhatsApp, Discord).
+    Runs for main user sessions (Web, Telegram, WhatsApp, Discord) and for A2A rooms.
     GDPR: Contact chats are filtered upstream in headless_runner (from_contact metadata).
+
+    ``conversation`` supplies the transcript instead of reading it off the agent. A room
+    turn MUST pass it: one process serves every tenant, so `agent.history` at that moment
+    holds whatever session was last loaded, and learning from it would teach one account
+    another account's conversation. A caller that has its own transcript is also the only
+    caller that can label the speakers, which a group chat needs and a two-party chat
+    does not.
+
+    ``source`` overrides the value written into each memory's `meta["source"]`. It is the
+    provenance handle: `delete_memories_by_source_scope` already deletes by exactly this
+    field, so a caller that names its own source can also take back everything it taught
+    if the conversation it learned from turns out to be wrong. Foreign agents speak in a
+    room, and a fact learned from one of them has to stay findable.
     """
     if not Config.get("memory_enabled", True) or not Config.get("memory_compaction_enabled", True):
         return
@@ -1418,7 +1434,8 @@ def run_session_compaction_sync(
             pass
 
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
-        conversation = _build_compaction_conversation_excerpt(agent)
+        conversation = conversation if conversation is not None else \
+            _build_compaction_conversation_excerpt(agent)
         if conversation:
             prompt = _build_compaction_prompt(conversation, date_str)
         else:
@@ -1485,7 +1502,7 @@ def run_session_compaction_sync(
                     except Exception:
                         pass  # dedup is best-effort, never blocks ingestion
                     meta: Dict[str, Any] = {
-                        "source": f"memory/{date_str}",
+                        "source": source or f"memory/{date_str}",
                         "type": "conversation",  # From 15-message compaction; orange in graph
                     }
                     if tags:
@@ -1773,6 +1790,37 @@ def refine_rag_request(query: str) -> Tuple[str, Optional[Dict[str, Any]]]:
 def _rag_timing_log(line: str) -> None:
     """Append one timestamped line to rag.log."""
     append_domain_log("rag", line)
+
+
+def turn_memory_context(query: str, *, user_scope_id: Optional[UUID] = None,
+                        caller: str = "") -> str:
+    """What this account already knows, as the block a turn is given before it answers.
+
+    One home for the three lines every lane repeats around `run_memory_search_sync`:
+    the `memory_enabled` switch, the `k` clamp, and the promise that retrieval never
+    raises into a turn. Three lanes clamped `k` by hand - the chat queue, automations
+    and thinking runs - and a fourth was about to, which is the point at which a copy
+    becomes a primitive. A lane that forgot the clamp would hand an unbounded `k`
+    straight to the vector search.
+
+    Not what to ASK: the query is the caller's, because a chat turn asks with the user's
+    message, a thinking run with the last few, and a room with what was just said in it.
+    Only the plumbing is shared.
+
+    Returns "" when memory is off, when the store is unreachable, or when nothing
+    matched. Those three are one answer on purpose: a turn has nothing to add to its
+    prompt in every one of them, and a caller that told them apart would only be able
+    to act on the difference by lying about what it knows.
+    """
+    try:
+        if not Config.get("memory_enabled", True):
+            return ""
+        k = int(Config.get("memory_rag_k", 5))
+        k = max(1, min(20, k))
+        return run_memory_search_sync(query, k=k, user_scope_id=user_scope_id,
+                                      caller=caller or None) or ""
+    except Exception:
+        return ""
 
 
 def run_memory_search_sync(

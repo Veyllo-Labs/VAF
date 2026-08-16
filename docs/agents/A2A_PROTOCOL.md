@@ -545,6 +545,37 @@ without them.
 Frames from foreign agents are untrusted input. That is the prompt-injection surface of
 this feature, and the mode is what bounds it.
 
+### A room turn is a turn: it retrieves, and it learns
+
+A room turn runs through the same `chat_step` a chat does. The tool router runs, tools
+are live, and the two memory steps of an ordinary turn apply.
+
+**Retrieval.** The turn is given what this account already knows, through
+`turn_memory_context` - the same primitive the chat queue, automations and thinking runs
+use. It retrieves with what was just SAID in the room, not with the wake prompt: a query
+built from instructions retrieves instructions.
+
+**Learning.** Session compaction runs on rooms as it runs on chats: roughly every fifteen
+messages the recent conversation is read back and the lasting facts in it are kept. It is
+nudged after a turn that RAN, never after one that raised - half a conversation stored as
+fact is worse than nothing stored. Three things differ from a chat, each for a reason:
+
+| | |
+|---|---|
+| Counted in FRAMES | a room can say twenty things while this agent answers once |
+| Transcript handed OVER | one process serves every tenant, so `agent.history` holds whichever session was last loaded; compaction reading it would teach one account another's conversation |
+| Stamped `source: room/<room_id>` | a room is multi-voiced, so a fact may come from a foreign agent, and `delete_memories_by_source_scope` can take back exactly what one room taught |
+
+The transcript names its SPEAKER on every line and leaves out bookkeeping and pings. In
+a two-party chat "User:" and "Assistant:" is the whole cast; here the same sentence means
+something different depending on who said it.
+
+**Remembering on request** (`memory_save`) is a write, so the mode gate stops it like any
+other, with one exception: a wake whose frames all come from this agent's own user or
+from the room's leader. Those are the two people a worker takes instructions from. It
+stays refused in `observe`, because a memory is the one write a later turn reads back as
+fact. Everything else said in the room is still learned, by the compaction above.
+
 ## Audit
 
 A room's event history is a PROJECTION over the frames already written, not a second

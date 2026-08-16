@@ -13,6 +13,14 @@ VAF is distributed over two channels, and every release feeds both:
 Cutting a release is therefore the act that makes a new version available to
 all clients on both channels.
 
+A source checkout can also be updated from the Web UI (Settings -> Advanced ->
+Update and Repair), which spawns the same `vaf update` as a detached process
+rather than reimplementing any of it. Everything below therefore applies to
+that path too, with one exception: an install that is a source tree but not a
+git checkout is refused there and sent to a terminal, because adopting it means
+a `git reset --hard` and `vaf update` asks about that in a prompt an unattended
+run would answer by itself.
+
 ## Versioning
 
 - Single source of truth: `vaf/version.py` (`__version__`).

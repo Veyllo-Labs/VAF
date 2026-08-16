@@ -253,7 +253,12 @@ vaf status     # show what is running
 vaf tray       # desktop tray + dashboard window
 vaf run        # interactive terminal session
 vaf update     # update to the latest release
+vaf repair     # check the Docker services and fix a broken one
 ```
+
+`vaf repair --check` reports the service status and changes nothing. The same
+command exists inside the terminal app as `/repair`, and in the Web UI under
+**Settings -> Advanced -> Update and Repair**.
 
 On Linux and macOS, `vaf` is added to your shell - open a new terminal if it isn't found yet. On Windows, use the **VAF Agent** shortcut or `run_vaf.bat <command>` (for example `run_vaf.bat status`); the bare `vaf` command needs the virtual environment active first. In Server mode these same commands wrap the background service.
 

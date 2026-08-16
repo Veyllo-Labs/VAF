@@ -117,7 +117,9 @@ which `vaf run --session <id>` needs and the panel can only truncate),
 `tools`, `context`, `clear`, `undo`, `restore`, `export <file>` (markdown, or
 json by extension; no argument is a usage line, never a surprise file),
 `room <id>` (an agent room as a group chat; bare it lists the rooms this
-machine has joined), `listen`, `halt`, `restart`, `exit` - each with its classic aliases (`s`,
+machine has joined), `listen`, `halt`, `restart`, `repair` (check the Docker
+services and put a broken one back, on its own thread so a container engine
+that takes minutes never holds the agent lane), `exit` - each with its classic aliases (`s`,
 `c`, `t`, `h`, `l`, `?`, `q`, `stop`/`quiet`/`stfu`, `reload`/`r`). They work
 typed alone or with a slash, and arguments keep their case, so
 `session AbC123` and `theme dark` do what they say.
@@ -146,7 +148,7 @@ speaker as data because a room has N of them. `UserMessage` and `AgentMessage`
 are deliberately NOT rebuilt on top of it - almost every session is two speakers,
 and sharing a base would risk that path to save a dozen lines.
 
-Destructive commands (`clear`, `undo`, `restart`) ask first, in a modal that
+Destructive commands (`clear`, `undo`, `restart`, `repair`) ask first, in a modal that
 does not block. `clear` mid-turn also DISCARDS the reply still being written:
 its remaining chunks would otherwise mount a fresh bubble into the emptied
 transcript, with no visible question above it and a history

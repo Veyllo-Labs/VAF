@@ -2190,7 +2190,22 @@ Created: {current_session.created_at}
                     except Exception as e:
                         tui.error(f"Restart failed: {e}")
                         continue
-                
+
+                elif cmd == "repair":
+                    from vaf.cli.cmd.repair import print_step, print_status
+                    from vaf.core.service_health import repair_service_stack
+                    tui.event("System", "Repairing the Docker services...")
+                    try:
+                        result = repair_service_stack(progress=print_step)
+                        print_status(result.get("status_after") or {})
+                        if result.get("ok"):
+                            tui.success("The service stack is healthy.")
+                        else:
+                            tui.warning("Some services still need attention.")
+                    except Exception as e:
+                        tui.error(f"Repair failed: {e}")
+                    continue
+
                 else:
                     tui.warning(f"Unknown command: /{cmd}")
                     continue

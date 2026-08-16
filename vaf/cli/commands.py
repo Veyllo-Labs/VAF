@@ -80,6 +80,12 @@ COMMANDS: Tuple[Command, ...] = (
             lane="now"),
     Command("restart", "Restart VAF in place", aliases=("reload", "r"),
             confirm="Restart VAF? The current session is saved first."),
+    # "ui" lane on purpose: the handler returns at once and the repair runs on
+    # its own thread. A repair can take minutes (starting a container engine),
+    # and the agent lane would hold every chat turn behind it.
+    Command("repair", "Check and repair the Docker services",
+            confirm="Repair the Docker services? Stopped containers are started "
+                    "and unhealthy ones restarted. No data is removed."),
     Command("exit", "Quit", aliases=("quit", "q", "bye")),
 )
 

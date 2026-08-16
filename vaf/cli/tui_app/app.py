@@ -859,6 +859,7 @@ class VafApp(App):
             "listen": lambda a: self.action_voice(),
             "halt": lambda a: self._bridge.stop_speech(),
             "restart": lambda a: self._request_restart(),
+            "repair": lambda a: self._bridge.repair_stack(),
             "exit": lambda a: self.exit(),
         }
 

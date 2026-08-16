@@ -307,7 +307,69 @@ Start Docker, then apply the latest stack manually:
 docker compose -f docker-compose.memory.yml up -d
 ```
 
+---
 
+## Status and Repair
+
+```bash
+vaf repair --check     # report the status, change nothing
+vaf repair             # start what is stopped, restart what does not answer
+vaf repair --json      # the same result as machine-readable JSON
+```
+
+The same run is available as `/repair` inside the terminal app and under
+**Settings -> Advanced -> Update and Repair** in the Web UI.
+
+`vaf/core/service_health.py` answers the two questions that come after starting the
+stack: what state is each service in, and what can be done about a broken one. It is
+the single implementation behind every surface that asks (the terminal, the TUI, and
+the admin dialog in the web UI), and it needs no Docker to be tested because every
+probe is injectable.
+
+**What a status snapshot reports** (`collect_service_status()`), per service from
+the registry (`SERVICES` in `vaf/core/service_stack.py`, one entry per compose
+service):
+
+| Field | Meaning |
+|---|---|
+| `exists` / `running` | from a single `docker inspect` over all containers |
+| `health` | the container's own compose health check (`healthy`, `unhealthy`, `starting`, `none`) |
+| `host_ports` | what the container actually publishes |
+| `configured_port` / `port_mismatch` | the port VAF is configured to reach it on, and whether the two disagree |
+| `probe_ok` | whether the service ANSWERED (TCP connect, HTTP GET, or `SELECT 1` for the database) |
+| `state` | `ok`, `warn`, `error`, `absent`, or `unknown` when the daemon is down |
+| `reason` | one sentence, the same text the dialog and the terminal print |
+
+A running container is not a reachable one: the probe is what catches a firewall
+dropping loopback traffic, a service still loading, and a port published somewhere
+other than where VAF looks. When the Docker daemon is unreachable, nothing else is
+attempted - no inspect, no probes - so a status call costs one `docker info` instead
+of seven timeouts.
+
+**What a repair run does** (`repair_service_stack()`), in order, reporting every step
+as it finishes:
+
+1. **Daemon.** Reachable? If not, why: no docker CLI at all, a socket this user may
+   not read (the Linux `docker` group case), or a daemon that is simply down. Only
+   the last one is started automatically (macOS Docker Desktop or Colima, Windows
+   Rancher or Docker Desktop, never restarting a runtime that is already running);
+   it then waits up to 120 seconds for readiness.
+2. **Compose file.** None found means a pip install, which manages no stack. That is
+   reported honestly, not as a failure to fix.
+3. **Missing or stopped containers.** One idempotent `compose up` for the whole
+   stack, not one command per container.
+4. **Running but unreachable, or unhealthy.** `docker restart -t 5 <container>`.
+5. **Port mismatch.** Reported with both numbers and the config key that carries the
+   expectation. Never corrected: which port VAF talks to is a configuration decision,
+   and a restart cannot make two different numbers agree anyway.
+6. **Still unreachable afterwards.** The OS firewall hint for this platform (the
+   `DOCKER-USER` chain on Linux, Defender on Windows, the application firewall on
+   macOS). Detection only.
+
+**What repair never does:** no `compose down`, no volume or image removal, no config
+writes, no restart of a container runtime that is already running, and no privilege
+escalation - a daemon needing `sudo systemctl start docker` gets a named instruction
+instead of a sudo attempt.
 
 ## Configuration
 

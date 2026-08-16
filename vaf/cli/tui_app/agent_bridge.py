@@ -197,6 +197,9 @@ class AgentBridge:
         self._tools_ran = False
         self._streaming = False
         self._ended_in_success = False
+        # Single-flight for `repair`: a second run would fight the first one for
+        # the same containers, and compose is only idempotent one caller at a time.
+        self._repair_running = False
         # Set while the app is tearing down, so no further queue work is claimed.
         # See begin_stopping(): the lane is FIFO, so a drain closure queued just
         # before the app exited still runs during teardown.
@@ -1059,6 +1062,46 @@ class AgentBridge:
                 self.events.system_note("speech stopped")
 
         threading.Thread(target=_run, daemon=True, name="vaf-tui-halt").start()
+
+    def repair_stack(self) -> None:
+        """`repair`: check the Docker services and put a broken one back.
+
+        Its own thread, not the lane: starting a container engine can take
+        minutes, and the lane is what every chat turn waits on. Each step is
+        narrated as it finishes, because a run this long with a single line at
+        the end is indistinguishable from a hang.
+        """
+        if self._repair_running:
+            self.events.event_note("Repair", "a repair is already running", "warning")
+            return
+        self._repair_running = True
+
+        def _run():
+            try:
+                from vaf.cli.cmd.repair import format_status, format_step
+                from vaf.core.service_health import repair_service_stack
+
+                self.events.system_note("checking the Docker services...")
+                result = repair_service_stack(
+                    progress=lambda step: self.events.system_note(format_step(step)))
+                for line in format_status(result.get("status_after") or {}):
+                    self.events.system_note(line)
+                degraded = result.get("degraded") or []
+                if result.get("ok") and not degraded:
+                    self.events.event_note("Repair", "the service stack is healthy", "success")
+                elif result.get("ok"):
+                    self.events.event_note(
+                        "Repair", "the core stack is up, still to look at: "
+                        + ", ".join(degraded), "warning")
+                else:
+                    self.events.event_note(
+                        "Repair", "some services still need attention", "warning")
+            except Exception as exc:
+                self.events.event_note("Repair", f"failed: {exc}", "error")
+            finally:
+                self._repair_running = False
+
+        threading.Thread(target=_run, daemon=True, name="vaf-tui-repair").start()
 
     # ── chrome data ─────────────────────────────────────────────────────────────────
     def _refresh_context(self) -> None:

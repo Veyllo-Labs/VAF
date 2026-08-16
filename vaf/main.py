@@ -318,7 +318,7 @@ def _a2a_credential_verifier(credential: str):
 _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -413,6 +413,7 @@ app.add_typer(workflow.app, name="workflow", help="Run workflows in separate ter
 app.command(name="info")(info.info)
 app.command(name="install-gpu")(info.install_gpu)
 app.command(name="doctor")(security.doctor)
+app.command(name="repair", help="Check and repair the Docker services")(repair.cmd_repair)
 
 app.command(name="start",   help="Start VAF as a background service")(service.cmd_start)
 app.command(name="stop",    help="Stop the VAF background service")(service.cmd_stop)

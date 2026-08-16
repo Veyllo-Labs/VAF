@@ -45,8 +45,14 @@ def test_speech_stop_runs_off_the_lane():
 
 
 def test_destructive_commands_ask_first():
-    for word in ("clear", "undo", "restart"):
+    for word in ("clear", "undo", "restart", "repair"):
         assert lookup(word).confirm, f"/{word} runs without asking"
+
+
+def test_repair_does_not_run_on_the_agent_lane():
+    """It can take minutes (starting a container engine). On the agent lane
+    every chat turn would wait behind it."""
+    assert lookup("repair").lane == "ui"
 
 
 # ── parsing ─────────────────────────────────────────────────────────────────────────

@@ -37,7 +37,10 @@ matching terms, or one term that is rare across the chats actually scanned.
 
 Candidates come from `SessionManager.iter_owned_sessions`, whose ownership rule is
 strict equality on a non-empty scope; an unowned session belongs to nobody here
-and an admin is not widened. Deletion is an unlink, so a deleted chat is not
+and an admin is not widened. The user's agent rooms are candidates too, through
+`joined_rooms` on the caller's own participant keys - a group chat is one of this
+user's conversations, and a room where only somebody else's lanes sit never comes
+back from that lookup. Deletion is an unlink, so a deleted chat is not
 excluded by a rule, it is unreadable by construction - which is why this lane
 keeps no index of its own.
 
@@ -128,6 +131,10 @@ class CrossChatHint:
     score: float
     terms: Tuple[str, ...]
     text: str
+    # "chat" or "room". A hint is worded differently depending on which: a room is a
+    # GROUP conversation, so "you said" would be wrong - somebody there said it, and
+    # the excerpt names who. The id is a room id, which no session tool can load.
+    kind: str = "chat"
 
 
 def tokenize(text: str) -> List[str]:
@@ -190,6 +197,105 @@ def _scannable_messages(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(content, str) or not content.strip():
             continue
         out.append(msg)
+    return out
+
+
+def _match_contents(terms: Sequence[str], contents: Sequence[str]) -> Tuple[Set[str], List[Tuple[Set[str], str]]]:
+    """One conversation's relevance: the term union over ALL its lines, plus the
+    excerpt candidates. Shared by the session scan and the room scan, because two
+    copies of the union-versus-excerpt decision would drift back into the bug the
+    session scan already had (picking the excerpt while judging relevance).
+    """
+    union: Set[str] = set()
+    candidates: List[Tuple[Set[str], str]] = []
+    for content in contents:
+        hits = _match_text(terms, content)
+        if not hits:
+            continue
+        union |= hits
+        candidates.append((hits, content[:_CANDIDATE_CHARS]))
+        if len(candidates) > _MAX_CANDIDATES_PER_CHAT:
+            candidates.sort(key=lambda c: len(c[0]), reverse=True)
+            del candidates[_MAX_CANDIDATES_PER_CHAT:]
+    return union, candidates
+
+
+def _room_corpus(user_scope_id: Optional[str], *,
+                 exclude_room_id: Optional[str] = None,
+                 max_age_days: Optional[int] = None) -> List[Tuple[Dict[str, Any], List[str], float]]:
+    """The user's agent rooms, shaped like session candidates: (data, lines, mtime).
+
+    A room is one of this user's conversations, so the hint corpus includes it on the
+    session lane's own terms - same age window, same matching, same scoring. "The
+    user's rooms" follows the sidebar's rule (`_room_rows`): both local lanes, because
+    the rooms my agent joined and the ones I joined from a terminal are one list to a
+    person. Unlike the sidebar this INCLUDES closed rooms: the sidebar is a live list
+    and closing is how a person clears it, while a hint answers "where did we discuss
+    that", which a closed transcript answers as well as an open one.
+
+    Every line carries its SPEAKER label. A room is multi-voiced, so an excerpt that
+    dropped the name would read as this user's own words when a foreign agent said
+    them - and the label also lets a question ABOUT a member ("what did Nobel say")
+    match on the name itself.
+
+    Never raises, and a damaged room drops out alone rather than taking the corpus
+    with it.
+    """
+    out: List[Tuple[Dict[str, Any], List[str], float]] = []
+    if not user_scope_id:
+        return out
+    try:
+        from vaf.core.a2a.room import (BOOKKEEPING_KINDS, joined_rooms,
+                                       participant_key)
+    except Exception:
+        return out
+    import time as _time
+    from datetime import datetime as _dt
+    cutoff = (_time.time() - max_age_days * 86400.0) if max_age_days else None
+    skip_kinds = set(BOOKKEEPING_KINDS) | {"ping"}
+    seen: Set[str] = set()
+    for lane in ("agent", "cli"):
+        try:
+            key = participant_key(lane, user_scope_id)
+            for room, _identity in joined_rooms(key):
+                if room.room_id in seen or room.room_id == (exclude_room_id or ""):
+                    continue
+                seen.add(room.room_id)
+                try:
+                    frames = room.store.frames()
+                    members = room.store.members()
+                    if isinstance(members, dict):
+                        labels = {pid: (rec or {}).get("display") or pid
+                                  for pid, rec in members.items()}
+                    else:
+                        labels = {m["peer_id"]: m.get("display") or m["peer_id"]
+                                  for m in members}
+                    lines: List[str] = []
+                    last_ts = 0.0
+                    for frame in frames:
+                        if frame.kind in skip_kinds:
+                            continue
+                        text = str((frame.body or {}).get("text") or "").strip()
+                        if not text:
+                            continue
+                        last_ts = max(last_ts, float(getattr(frame, "ts", 0.0) or 0.0))
+                        who = labels.get(frame.sender) or frame.sender
+                        lines.append(f"{who}: {text}")
+                    if not lines:
+                        continue
+                    if cutoff is not None and last_ts and last_ts < cutoff:
+                        continue
+                    topic = str(room.manifest.get("topic") or "").strip() or room.room_id
+                    out.append((
+                        {"id": room.room_id, "name": topic, "kind": "room",
+                         "updated_at": (_dt.fromtimestamp(last_ts).isoformat()
+                                        if last_ts else "")},
+                        lines, last_ts,
+                    ))
+                except Exception:
+                    continue
+        except Exception:
+            continue
     return out
 
 
@@ -290,6 +396,7 @@ def find_hints(
     *,
     user_scope_id: Optional[str],
     current_session_id: Optional[str] = None,
+    current_room_id: Optional[str] = None,
     username: Optional[str] = None,
     k: int = 2,
     min_terms: int = 2,
@@ -322,27 +429,30 @@ def find_hints(
                 continue
             scanned += 1
             # The chat's relevance is the union over ALL its messages; the excerpt is a
-            # separate decision, made later. Deciding both at once by "the message with
-            # the most hits" measurably picked the wrong message: in the chat that held
-            # an HTML game, one message hit three filler words and the message actually
-            # saying "HTML" and "game" was never looked at.
-            union: Set[str] = set()
-            candidates: List[Tuple[Set[str], str]] = []
-            for msg in _scannable_messages(data):
-                content = _clean_for_scan(str(msg.get("content") or ""))
-                hits = _match_text(terms, content)
-                if not hits:
-                    continue
-                union |= hits
-                candidates.append((hits, content[:_CANDIDATE_CHARS]))
-                if len(candidates) > _MAX_CANDIDATES_PER_CHAT:
-                    candidates.sort(key=lambda c: len(c[0]), reverse=True)
-                    del candidates[_MAX_CANDIDATES_PER_CHAT:]
+            # separate decision, made later (see _match_contents, which keeps the two
+            # apart for exactly the measured reason recorded on it).
+            union, candidates = _match_contents(
+                terms,
+                [_clean_for_scan(str(msg.get("content") or ""))
+                 for msg in _scannable_messages(data)])
             if union:
                 try:
                     mtime = path.stat().st_mtime
                 except OSError:
                     mtime = 0.0
+                matched.append((data, union, candidates, mtime))
+        # The user's agent rooms, in the SAME corpus rather than a second list: the
+        # informative-term filter and the rarity weights are statistics over "this
+        # user's conversations", and a room is one of those. Two corpora would give
+        # the same word two different rarities, one of them wrong.
+        for data, lines, mtime in _room_corpus(
+            user_scope_id,
+            exclude_room_id=current_room_id,
+            max_age_days=max_age_days,
+        ):
+            scanned += 1
+            union, candidates = _match_contents(terms, lines)
+            if union:
                 matched.append((data, union, candidates, mtime))
     except Exception:
         return []
@@ -401,11 +511,13 @@ def find_hints(
             continue
         hint = CrossChatHint(
             session_id=str(data.get("id") or ""),
-            session_name=_display_name(data),
+            session_name=(str(data.get("name") or "") if data.get("kind") == "room"
+                          else _display_name(data)),
             updated_at=str(data.get("updated_at") or ""),
             score=round(score, 4),
             terms=tuple(sorted(hits)),
             text=_excerpt(best[1], sorted(hits)),
+            kind=str(data.get("kind") or "chat"),
         )
         if hint.text:
             ranked.append((float(len(hits)), mtime, hint))
@@ -455,7 +567,8 @@ def format_hints(hints: Sequence[CrossChatHint]) -> str:
         "",
     ]
     for index, hint in enumerate(hints, start=1):
-        lines.append(f'[Hint {index}] chat "{hint.session_name}" ({relative_age(hint.updated_at)}): {hint.text}')
+        where = "group chat" if hint.kind == "room" else "chat"
+        lines.append(f'[Hint {index}] {where} "{hint.session_name}" ({relative_age(hint.updated_at)}): {hint.text}')
     return "\n".join(lines)
 
 
@@ -470,7 +583,8 @@ def format_matches(hints: Sequence[CrossChatHint]) -> str:
         return ""
     lines = ["Found in your other chats (keyword match, newest first):", ""]
     for hint in hints:
-        lines.append(f'- chat "{hint.session_name}" ({relative_age(hint.updated_at)}): {hint.text}')
+        where = "group chat" if hint.kind == "room" else "chat"
+        lines.append(f'- {where} "{hint.session_name}" ({relative_age(hint.updated_at)}): {hint.text}')
     return "\n".join(lines)
 
 
@@ -527,6 +641,7 @@ def hints_for_turn(
     *,
     user_scope_id: Optional[str],
     current_session_id: Optional[str] = None,
+    current_room_id: Optional[str] = None,
     username: Optional[str] = None,
 ) -> List[CrossChatHint]:
     """`find_hints` with the shipped configuration. The one entry point callers use."""
@@ -543,6 +658,7 @@ def hints_for_turn(
         query,
         user_scope_id=user_scope_id,
         current_session_id=current_session_id,
+        current_room_id=current_room_id,
         username=username,
         k=k,
         min_terms=max(1, int(Config.get("cross_chat_hint_min_terms", 2) or 1)),

@@ -406,3 +406,130 @@ def test_query_terms_drops_stopwords_but_keeps_short_meaningful_ones():
 
     assert "pdf" in terms
     assert "haben" not in terms and "einer" not in terms and "letztens" not in terms
+
+
+# ── the user's agent rooms are conversations too ───────────────────────────────
+
+@pytest.fixture
+def rooms(tmp_path, monkeypatch):
+    """An isolated room store next to the session store."""
+    import vaf.core.a2a.store as a2a_store
+    root = tmp_path / "a2a"
+    monkeypatch.setattr(a2a_store, "rooms_root",
+                        lambda base=None: Path(base) if base else root)
+    return root
+
+
+def _room_with(rooms, room_id, *, scope=OWNER, topic="", says=()):
+    """A room this scope's person is in, with a few things said in it."""
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    room = Room.create(kind="round", owner_scope=scope, base=rooms, room_id=room_id,
+                       topic=topic)
+    me = room.join(display="Me", scope_id=scope,
+                   peer_id=derive_peer_id(participant_key("cli", scope), room_id))
+    other = room.join(display="Nobel", scope_id=scope,
+                      peer_id=derive_peer_id(participant_key("agent", scope), room_id))
+    cast = {"Me": me, "Nobel": other}
+    for who, text in says:
+        room.say(cast[who], text)
+    return room
+
+
+def test_a_room_the_user_is_in_is_a_hint_source(store, manager, rooms):
+    """MUTATION: drop the room corpus from find_hints.
+
+    The question this lane answers is "which conversation did we do that in", and a
+    group chat is one of this user's conversations. Before the corpus knew rooms, the
+    answer to a topic discussed ONLY in a room was silence - measurably wrong the
+    week the owner ran a three-member room and asked about its topic in a normal chat.
+    """
+    _room_with(rooms, "room-hints", topic="Matrix theme build",
+               says=[("Nobel", "Der Matrix-Regen rendert jetzt mit drei Farbmodi"),
+                     ("Me", "gut, commit das in team.html")])
+    hints = _hints(manager, "Wie war das mit dem Matrix Regen?")
+    assert len(hints) == 1
+    hint = hints[0]
+    assert hint.kind == "room", "a room hint must say what it is"
+    assert hint.session_id == "room-hints"
+    assert hint.session_name == "Matrix theme build", "the topic is the room's name"
+    assert "Nobel:" in hint.text, (
+        "a room is multi-voiced: an excerpt without its speaker reads as the user's own words")
+    assert 'group chat "Matrix theme build"' in format_hints(hints), (
+        "the prompt block must not call a room an ordinary chat - the model would try "
+        "to load it as a session")
+
+
+def test_a_room_of_another_user_is_never_a_source(store, manager, rooms):
+    """MUTATION: derive membership from anything but the caller's own scope.
+
+    Same isolation rule as sessions, arriving through a different store: the corpus
+    walks joined_rooms(participant_key(lane, CALLER)), so a room where only somebody
+    else's lanes sit simply never comes back from the lookup.
+    """
+    _room_with(rooms, "room-foreign", scope=STRANGER, topic="Steuer",
+               says=[("Nobel", "Die Steuererklaerung ist fertig")])
+    assert _hints(manager, "Steuererklaerung fertig?") == []
+
+
+def test_the_current_room_is_never_its_own_hint_source(store, manager, rooms):
+    """MUTATION: ignore current_room_id.
+
+    The session lane has the same rule for the same reason: a conversation hinting
+    into itself tells the reader where they already are.
+    """
+    _room_with(rooms, "room-self", topic="Deploy",
+               says=[("Me", "Der Deploy ist auf Freitag verschoben")])
+    assert _hints(manager, "Wann ist der Deploy?", current_room_id="room-self") == []
+    assert len(_hints(manager, "Wann ist der Deploy?")) == 1
+
+
+def test_a_question_about_a_member_matches_on_the_name(store, manager, rooms):
+    """The speaker label is scannable text, on purpose: "what did Nobel say about the
+    tests" should find the room where Nobel spoke, and the name is half that query.
+    """
+    _room_with(rooms, "room-who", topic="Tests",
+               says=[("Nobel", "Alle Tests laufen gruen durch")])
+    hints = _hints(manager, "Was hat Nobel zu den Tests gesagt?")
+    assert len(hints) == 1 and hints[0].session_id == "room-who"
+
+
+def test_room_bookkeeping_and_pings_are_not_content(store, manager, rooms):
+    """MUTATION: scan every frame kind.
+
+    A join, an ack or a "still on this?" is the room talking about itself. The same
+    line the learning transcript draws, drawn here for the same reason: plumbing that
+    matched a query would produce a hint pointing at nothing anybody said.
+    """
+    from vaf.core.a2a.room import Room
+
+    room = _room_with(rooms, "room-noise", topic="Quiet",
+                      says=[("Me", "nur ein wort")])
+    # A ping naming a distinctive topic: were it scanned, the query below would hit.
+    ping = room.store.frames()[-1].__class__  # Frame
+    room.store.append(ping(
+        v=1, id="ping-1", room="room-noise", seq=99, lamport=99, ts=time.time(),
+        sender=room.store.frames()[-1].sender, role="peer", to={"room": True},
+        kind="ping", reply_to="", body={"text": "Zwischenbilanz Quartalsreport faellig"},
+        must_understand=[], ext={}))
+    assert _hints(manager, "Zwischenbilanz Quartalsreport?") == []
+
+
+def test_a_room_older_than_the_cutoff_is_not_scanned(store, manager, rooms, monkeypatch):
+    """MUTATION: drop the age check from the room corpus.
+
+    Sessions get this from iter_owned_sessions; rooms have to enforce it themselves,
+    and a corpus where one source honours the window and the other does not would
+    resurface year-old rooms while month-old chats are already gone.
+
+    Aged by moving the clock forward rather than the frames back: the store is
+    write-once, so a frame's timestamp cannot be edited after the fact - which is
+    itself the property under test working as designed.
+    """
+    _room_with(rooms, "room-old", topic="Archiv",
+               says=[("Me", "Das Lastenheft liegt im Archivordner")])
+    assert len(_hints(manager, "Wo liegt das Lastenheft?", max_age_days=30)) == 1
+    import time as _t
+    now = _t.time()
+    monkeypatch.setattr(_t, "time", lambda: now + 45 * 86400)
+    assert _hints(manager, "Wo liegt das Lastenheft?", max_age_days=30) == []

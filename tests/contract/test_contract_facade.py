@@ -16,6 +16,7 @@ import vaf
 
 EXPORTED = [
     "Agent",
+    "BOOKKEEPING_KINDS",
     "BaseTool",
     "CoreAgent",
     "RemoteRefused",

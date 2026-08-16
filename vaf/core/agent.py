@@ -7961,12 +7961,27 @@ class Agent:
                 return
         if not scope:
             return
+        # A room turn asks with what was SAID in the room, not with the wake prompt
+        # around it: the prompt is instructions, and a query built from instructions
+        # matches instruction words in every chat - the filler-word failure this
+        # module's threshold section describes, rebuilt at the call site. The room
+        # itself is excluded the way the current session is: a conversation must not
+        # hint into itself. The stale session id is NOT excluded here - during a room
+        # turn it is whatever chat was loaded last, which is a legitimate other chat.
+        _room_turn = getattr(self, "_room_turn", None)
+        _in_room = isinstance(_room_turn, dict) and bool(_room_turn.get("room_id"))
+        if _in_room:
+            query = str(_room_turn.get("query") or "")
+            if not query.strip():
+                return
         try:
             from vaf.core.cross_chat import format_hints, hints_for_turn
             hints = hints_for_turn(
                 str(query),
                 user_scope_id=scope,
-                current_session_id=getattr(self, "current_session_id", None) or getattr(self, "_session_id", None),
+                current_session_id=None if _in_room else (
+                    getattr(self, "current_session_id", None) or getattr(self, "_session_id", None)),
+                current_room_id=str(_room_turn.get("room_id")) if _in_room else None,
                 username=getattr(self, "_current_username", None),
             )
             self._cross_chat_hints = hints
@@ -7976,7 +7991,8 @@ class Agent:
             # round produced two plausible-looking hints whose real cause (filler words
             # matching every chat) was invisible here and had to be re-measured.
             from vaf.core.cross_chat import query_terms
-            _session = getattr(self, "current_session_id", None) or getattr(self, "_session_id", None)
+            _session = (f"room:{_room_turn.get('room_id')}" if _in_room else
+                        getattr(self, "current_session_id", None) or getattr(self, "_session_id", None))
             if hints:
                 append_domain_log(
                     "rag",
@@ -7995,22 +8011,27 @@ class Agent:
             # another user's panel through a global broadcast.
             # Pushed on every turn the lane runs, empty list included: the panel has to
             # stop showing the previous turn's hints.
+            # Not during a room turn: this push replaces the hint panel in every
+            # window this user has open (empty list included, so panels clear), and
+            # a background turn nobody typed must not wipe or repaint what the user
+            # is currently looking at. The room turn's hints live in its prompt.
             try:
-                from vaf.core.cross_chat import relative_age
-                from vaf.core.web_interface import get_web_interface
-                get_web_interface().push_update_to_user(scope, {
-                    "type": "cross_chat_hints",
-                    "hints": [
-                        {
-                            "session_id": h.session_id,
-                            "session_name": h.session_name,
-                            "age": relative_age(h.updated_at),
-                            "score": h.score,
-                            "text": h.text,
-                        }
-                        for h in hints
-                    ],
-                })
+                if not _in_room:
+                    from vaf.core.cross_chat import relative_age
+                    from vaf.core.web_interface import get_web_interface
+                    get_web_interface().push_update_to_user(scope, {
+                        "type": "cross_chat_hints",
+                        "hints": [
+                            {
+                                "session_id": h.session_id,
+                                "session_name": h.session_name,
+                                "age": relative_age(h.updated_at),
+                                "score": h.score,
+                                "text": h.text,
+                            }
+                            for h in hints
+                        ],
+                    })
             except Exception:
                 pass
         except Exception as e:

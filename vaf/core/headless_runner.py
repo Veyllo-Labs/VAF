@@ -2561,10 +2561,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         _room_wake = None
                     if _room_wake:
+                        # EVERY key a downstream reader consumes must be copied here:
+                        # the gate and the hint lane read agent._room_turn, not the
+                        # wake, and a key computed in the wake but not copied fails
+                        # CLOSED - measured with from_authority, which the gate read
+                        # for a day while no runner ever handed it over.
                         agent._room_turn = {"room_id": _room_wake["room_id"],
                                             "mode": _room_wake["mode"],
+                                            "query": _room_wake.get("query", ""),
                                             "from_user": _room_wake.get("from_user", False),
-                                            "from_user_only": _room_wake.get("from_user_only", False)}
+                                            "from_user_only": _room_wake.get("from_user_only", False),
+                                            "from_authority": _room_wake.get("from_authority", False)}
                         agent._synthetic_drain_turn = True
                         # Workers spawned during this turn inherit the room in their
                         # IPC record (create_task reads this context), so the result

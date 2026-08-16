@@ -225,3 +225,80 @@ def test_all_generation_paths_build_the_block_through_the_one_builder():
     assert AGENT_SRC.count("self._memory_system_block(memory_context)") == 3
     # And the literal exists exactly once, in that builder.
     assert AGENT_SRC.count('"## Memory context (relevant to this query)\\n\\n"') == 2  # populated + empty branch
+
+
+# ── a room turn is a turn here too ─────────────────────────────────────────────
+
+def test_a_room_turn_asks_with_what_was_said_and_excludes_its_own_room(spy):
+    """MUTATION: let the room turn ask with the wake prompt, or forget the exclusion.
+
+    The wake prompt is instructions - roster, board, reminders - and a query built
+    from instructions matches instruction words in every chat: the filler-word
+    failure the retrieval module documents, rebuilt at the call site. What was SAID
+    travels in _room_turn["query"], and the room itself is excluded exactly as the
+    current session is: a conversation must not hint into itself.
+    """
+    agent = _Agent(_room_turn={"room_id": "room-w", "mode": "assist",
+                               "query": "der Matrix Regen in team.html"})
+    _refresh(agent, "WAKE PROMPT full of roster and board instructions")
+    assert len(spy) == 1
+    query, kwargs = spy[0]
+    assert query == "der Matrix Regen in team.html", "it asked with the prompt, not the words"
+    assert kwargs.get("current_room_id") == "room-w", "the room would hint into itself"
+    assert kwargs.get("current_session_id") is None, (
+        "the stale session is a legitimate OTHER chat during a room turn - excluding "
+        "it hides a real conversation for no reason")
+    assert agent._cross_chat_block, "the block never reached the room turn's prompt"
+
+
+def test_a_room_wake_of_pure_pings_asks_nothing(spy):
+    """A wake whose frames carried no words has no question to ask - scanning every
+    chat with an empty query would be pure cost with a guaranteed empty answer."""
+    agent = _Agent(_room_turn={"room_id": "room-w", "mode": "assist", "query": "  "})
+    _refresh(agent, "WAKE PROMPT")
+    assert spy == []
+
+
+def test_a_room_turn_never_repaints_the_browser_panel(spy, _no_emit):
+    """MUTATION: push during room turns too.
+
+    The push replaces the hint panel in EVERY window this user has open - empty list
+    included, so panels clear. A background turn nobody typed must not wipe what the
+    user is looking at. The room turn's hints live in its prompt and nowhere else.
+    """
+    agent = _Agent(_room_turn={"room_id": "room-w", "mode": "assist",
+                               "query": "der Matrix Regen"})
+    _refresh(agent, "WAKE")
+    assert spy, "the lookup itself must still run"
+    assert _no_emit == [], "a room turn painted the user's panel"
+    # And the ordinary turn still pushes - the guard must not widen.
+    agent2 = _Agent()
+    _refresh(agent2)
+    assert len(_no_emit) == 1
+
+
+def test_the_runner_hands_over_every_key_a_reader_consumes():
+    """MUTATION: read a new key off _room_turn without copying it in the runner.
+
+    Measured failure, one day old: the mode gate read room_turn.get("from_authority")
+    while the runner copied four other keys and not that one. The gate fails CLOSED,
+    so nothing crashed - the feature simply never fired, and the source-scanning
+    tests were green because the wake computed the value and the gate read the name.
+    The hand-off between them was the untested step. This asserts the runner's dict
+    literal carries EVERY key any agent.py reader consumes, so the next reader added
+    without its copy fails here by name.
+    """
+    runner_src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    literal = runner_src.split("agent._room_turn = {", 1)[1].split("}", 1)[0]
+    handed = set(re.findall(r'"([a-z_]+)":', literal))
+
+    consumed = set(re.findall(r'room_turn\.get\("([a-z_]+)"\)', AGENT_SRC))
+    consumed |= set(re.findall(r'room_turn\["([a-z_]+)"\]', AGENT_SRC))
+    consumed.discard("room_id")  # present, just also indexed via variables elsewhere
+    missing = consumed - handed - {"mode"}
+    assert not missing, (
+        f"agent.py reads {sorted(missing)} off _room_turn and the runner never "
+        f"hands it over - the gate fails closed, so this is invisible at runtime")
+    for key in ("room_id", "mode", "query", "from_user", "from_user_only",
+                "from_authority"):
+        assert key in handed, f"the runner stopped copying {key}"

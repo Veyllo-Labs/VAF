@@ -553,7 +553,11 @@ are live, and the two memory steps of an ordinary turn apply.
 **Retrieval.** The turn is given what this account already knows, through
 `turn_memory_context` - the same primitive the chat queue, automations and thinking runs
 use. It retrieves with what was just SAID in the room, not with the wake prompt: a query
-built from instructions retrieves instructions.
+built from instructions retrieves instructions. Cross-chat hints follow the same rule:
+the turn is told which OTHER conversations of this user touched the topic - rooms
+included - asked with the same said-words query, with the room itself excluded the way a
+chat excludes itself. And the mirror holds: in an ordinary chat, a room the user is in
+is a hint source like any other conversation, labelled as a group chat.
 
 **Learning.** Session compaction runs on rooms as it runs on chats: roughly every fifteen
 messages the recent conversation is read back and the lasting facts in it are kept. It is

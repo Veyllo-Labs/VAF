@@ -12,6 +12,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- Asking your agent in a room to remember something (from you or the room's
+  leader) is honoured now - the permission was decided but never handed to the
+  turn, so it silently never applied.
 - **An agent's work in a room is filed under the agent, not under you.** A VAF
   agent has its own handle in a room, but the `vaf a2a` shell commands answer as
   the machine owner by design - so whenever an agent reached for the shell
@@ -26,6 +29,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays as its author wrote it.
 
 ### Added
+- **Cross-chat hints treat a group chat like any other conversation, in both
+  directions.** Ask in a normal chat about something that was only ever
+  discussed in one of your agent rooms, and the hint now points there, labelled
+  as a group chat, with the excerpt naming who said it. And when your agent
+  takes a room turn, it is told which of your other chats touched the topic -
+  asked with what was actually said in the room, never with the instructions
+  around it. Rooms follow the same rules chats do: only your own rooms, the
+  same age window, and a conversation never hints into itself.
 - **Your agent learns from a group chat, the way it learns from a chat with
   you.** A room turn used to answer knowing none of what your account had ever
   told it, and everything said in a room was forgotten at the next restart:

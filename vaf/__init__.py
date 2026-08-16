@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from .tools.base import BaseTool
     from .tools.filesystem import user_jail
 
-__all__ = ["__version__", "Agent", "BaseTool", "CoreAgent", "RemoteRefused",
+__all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+           "RemoteRefused",
            "RemoteRoom", "Room", "RoomError",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "VoiceTurnEngine",
@@ -99,7 +100,8 @@ def __getattr__(name):
         # See docs/EMBEDDING.md.
         from .core.pdf_extract import extract_pdf_markdown
         return extract_pdf_markdown
-    if name in ("Room", "RoomError", "StoreError", "UnsafeName", "derive_peer_id",
+    if name in ("BOOKKEEPING_KINDS", "Room", "RoomError", "StoreError", "UnsafeName",
+                "derive_peer_id",
                 "describe_room_entry", "fold_room_tasks", "fold_room_votes",
                 "joined_rooms", "participant_key", "room_invitation",
                 "unread_counts"):
@@ -136,12 +138,20 @@ def __getattr__(name):
         # two of the vaguest names available.
         #
         # Stdlib at import time, so the slim base is unaffected. See docs/EMBEDDING.md.
-        from .core.a2a.room import (Room, RoomError, derive_peer_id, describe,
+        # `BOOKKEEPING_KINDS` crossed the same threshold as everything else here:
+        # three surfaces outside the room package import it (the CLI's log view, the
+        # session sidebar's unread count, the cross-chat hint corpus), each to answer
+        # "which frames are the room talking about itself". An embedder rendering or
+        # scanning a transcript has that exact question, and a hand-written copy of
+        # the set would silently miss the next bookkeeping kind.
+        from .core.a2a.room import (BOOKKEEPING_KINDS, Room, RoomError,
+                                    derive_peer_id, describe,
                                     fold_tasks, fold_votes, joined_rooms,
                                     participant_key, unread_counts)
         from .core.a2a.store import StoreError, UnsafeName
         from .core.a2a.invite import invitation
-        return {"Room": Room, "RoomError": RoomError, "StoreError": StoreError,
+        return {"BOOKKEEPING_KINDS": BOOKKEEPING_KINDS,
+                "Room": Room, "RoomError": RoomError, "StoreError": StoreError,
                 "UnsafeName": UnsafeName,
                 "derive_peer_id": derive_peer_id,
                 "describe_room_entry": describe, "fold_room_tasks": fold_tasks,

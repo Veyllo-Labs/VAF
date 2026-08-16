@@ -871,10 +871,9 @@ def _composer_knowledge(user: Dict[str, Any], instruction: str, subject: str = "
     try:
         from uuid import UUID
 
-        from vaf.memory.rag import run_memory_search_sync
-        k = max(1, min(20, int(Config.get("memory_rag_k", 5) or 5)))
-        return run_memory_search_sync(query=query, k=k, user_scope_id=UUID(str(scope)),
-                                      caller="mail_composer") or ""
+        from vaf.memory.rag import turn_memory_context
+        return turn_memory_context(query, user_scope_id=UUID(str(scope)),
+                                   caller="mail_composer")
     except Exception as e:  # pragma: no cover - memory is optional infrastructure
         logger.info("mail composer: memory lookup unavailable: %s", e)
         return ""

@@ -388,7 +388,8 @@ def test_memory_is_retrieved_even_without_an_instruction(monkeypatch):
 
     import vaf.memory.rag as rag
     monkeypatch.setattr(rag, "run_memory_search_sync",
-                        lambda **kw: seen.update(kw) or "Day rate is 900 EUR.")
+                        lambda query=None, **kw: seen.update(kw, query=query)
+                        or "Day rate is 900 EUR.")
     svc = _Svc([_row(1, subject="Re: the March quote")])
     _out, prompt = _run({"mode": "draft", "thread_id": 7, "anchor_pk": 1}, svc,
                         monkeypatch, user=_UUID_USER)
@@ -402,7 +403,8 @@ def test_memory_uses_the_main_agent_k_not_a_local_number(monkeypatch):
     second number here would make the two disagree with no way to tell why."""
     seen = {}
     import vaf.memory.rag as rag
-    monkeypatch.setattr(rag, "run_memory_search_sync", lambda **kw: seen.update(kw) or "")
+    monkeypatch.setattr(rag, "run_memory_search_sync",
+                        lambda query=None, **kw: seen.update(kw, query=query) or "")
     monkeypatch.setitem(Config.DEFAULTS, "memory_rag_k", 7)
     monkeypatch.setattr(Config, "get", classmethod(
         lambda cls, k, d=None: 7 if k == "memory_rag_k" else Config.DEFAULTS.get(k, d)))

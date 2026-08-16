@@ -1117,7 +1117,10 @@ still with it - an invitation, never an order, because a room is input and not
 authority. `Room.tasks()` and the exported `vaf.fold_room_tasks(frames, labels=...)` answer the same
 board from a store or from frames alone, which is what a peer on the wire has;
 `Room.votes()` and `vaf.fold_room_votes(frames, labels=..., members=...)` do the same for
-the questions a room decides together.
+the questions a room decides together. When you render or scan a transcript yourself,
+`vaf.BOOKKEEPING_KINDS` names the frames that are the room talking about itself (joins,
+acks, role changes) - filter on it rather than hand-writing the set, or the next
+bookkeeping kind silently lands in your output as if somebody had said it.
 
 Runnable end to end in [examples/11_a2a_room.py](../examples/11_a2a_room.py), which needs
 no provider, no key and no network.

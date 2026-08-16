@@ -94,8 +94,9 @@ nothing, and appends its own Cross Chat Hint block underneath when the caller's
 scope has matching other chats (`cross_chat_hint_enabled`). The result is spliced
 into a copy of the first system message, never into `agent.history`.
 
-Nine production sites in this repo hand-roll "retrieve snippets and hand them to a
-prompt", five of them repeating the same `memory_rag_k` clamp, and the headless
+Several production sites in this repo hand-roll "retrieve snippets and hand them to a
+prompt" (the `memory_rag_k` clamp itself now exists once, in `turn_memory_context` -
+four lanes used to repeat it), and the headless
 runner splices seven further ad-hoc context blocks inline. That is the measured
 case for a general context-contributor seam on the public surface. It has not been
 built: no feature so far has needed a second labelled sub-block, and until one

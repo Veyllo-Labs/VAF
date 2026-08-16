@@ -175,9 +175,23 @@ async def list_timeline_dates(_: Dict[str, Any] = Depends(require_admin)):
 async def get_timeline_events(
     date: Optional[str] = Query(default=None, description="YYYY-MM-DD; omit for today"),
     merge: bool = Query(default=True, description="Merge tool_start+tool_end pairs"),
+    user: Optional[str] = Query(default=None, description="Username; omit for everyone"),
     _: Dict[str, Any] = Depends(require_admin),
 ):
-    """Return timeline events for a given date with hash-chain verification."""
+    """Return timeline events for a given date with hash-chain verification.
+
+    `user` is a USERNAME, never a scope id: the users endpoint deliberately does
+    not hand scope UUIDs to the client, so the name is resolved against the auth
+    DB here. An unknown name yields an empty list rather than everything - the
+    honest answer to "show me this person" is never "here is everybody".
+
+    Filtering happens AFTER verification and merging, on purpose. The chain
+    covers the whole file, so `chain_ok` and `total_raw` keep describing the
+    file rather than the selection; and a merged tool row inherits its start's
+    scope, which is where the identity actually sits. `unattributed` reports how
+    many of the shown-able rows carry no scope at all, so a short list cannot be
+    mistaken for a quiet day.
+    """
     from datetime import datetime as _dt
     if date is None:
         date = _dt.now().strftime("%Y-%m-%d")
@@ -203,9 +217,36 @@ async def get_timeline_events(
                         pass
         chain_ok = _verify_chain(raw_events)
         events = _merge_timeline(raw_events) if merge else raw_events
-        return {"date": date, "events": events, "chain_ok": chain_ok, "total_raw": len(raw_events)}
+        unattributed = sum(1 for ev in events if not str(ev.get("scope") or ""))
+        if user:
+            scope = await _scope_for_username(user)
+            events = [ev for ev in events if scope and str(ev.get("scope") or "") == scope]
+        return {"date": date, "events": events, "chain_ok": chain_ok,
+                "total_raw": len(raw_events), "unattributed": unattributed}
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read timeline: {exc}")
+
+
+async def _scope_for_username(username: str) -> str:
+    """The scope belonging to a username, or "" when there is no such user.
+
+    Reuses the map three other admin views already read
+    (vaf/api/security_routes.py), so there is one place that knows how a name
+    and a scope belong together.
+    """
+    name = str(username or "").strip()
+    if not name:
+        return ""
+    try:
+        from vaf.api.security_routes import _scope_username_map
+        for scope, uname in (await _scope_username_map()).items():
+            if str(uname) == name:
+                return str(scope)
+    except Exception:
+        return ""
+    return ""
 
 
 # ── Log context endpoint ──────────────────────────────────────────────────────

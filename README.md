@@ -337,7 +337,9 @@ container.
 By default VAF makes exactly **one** outbound request of its own: a version check against
 the public GitHub releases API at startup, so it can print a one-line "update available"
 hint. It sends no data about you or your usage - GitHub sees the request the way it sees
-any anonymous API call. Turn it off with `update_check_on_start: false`.
+any anonymous API call. Turn it off with `update_check_on_start: false`. The same check
+runs when you press "Check for updates" yourself (`vaf update check`, or Settings ->
+Advanced -> Update and Repair); nothing else, and nothing on a timer, asks GitHub.
 
 Everything else that leaves your machine is something **you** configured, and it goes to
 that provider, not to us:

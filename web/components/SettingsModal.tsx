@@ -28,6 +28,7 @@ import type { McpServerInfo } from './settings/McpServerEditor';
 import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
+import UpdateRepairModal from './settings/UpdateRepairModal';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
@@ -923,7 +924,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             ? [tVoice('provider'), tVoice('stt'), tVoice('tts')]
             : [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
-        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system')]);
+        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
@@ -984,6 +985,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         initialData?: { name?: string; description?: string; source?: string; shared_with?: string[] };
     } | null>(null);
     const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
+    const [showUpdateRepairModal, setShowUpdateRepairModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showMemoryModal, setShowMemoryModal] = useState(false);
     const [showUserIdentityModal, setShowUserIdentityModal] = useState(false);
@@ -1643,6 +1645,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showUpdateRepairModal) {
+                    setShowUpdateRepairModal(false);
+                    e.stopPropagation();
+                    return;
+                }
                 if (showCloudDashboard) {
                     setShowCloudDashboard(false);
                     e.stopPropagation();
@@ -1670,7 +1677,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowCreator, skillsEditor, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showMcpModal, showWorkflowsModal, showSkillsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
+    }, [isOpen, codeModal, workflowCreator, skillsEditor, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showMcpModal, showWorkflowsModal, showSkillsModal, showTrustedSourcesModal, showUpdateRepairModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
 
     // When automation calendar is opened from Settings, request notes/todos so they are loaded
     useEffect(() => {
@@ -4139,6 +4146,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
+                                    <div className="h-4" />
+                                    <button
+                                        id={slugifySection(tAdvanced('updateRepair'))}
+                                        onClick={() => setShowUpdateRepairModal(true)}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('updateRepair')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('updateRepairDesc')}</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
                                 </Section>
                             </div>
                         )}
@@ -5513,6 +5532,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Update and Repair: version, update, and the service node map */}
+            {showUpdateRepairModal && (
+                <UpdateRepairModal
+                    currentUser={currentUser}
+                    onClose={() => setShowUpdateRepairModal(false)}
+                />
             )}
 
             {/* Workflow Visualizer Modal */}

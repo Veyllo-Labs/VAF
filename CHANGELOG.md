@@ -1185,6 +1185,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file produced during a longer agent turn no longer disappears from view, and a
   coding agent that finishes minutes later still finds the right message.
 
+### Added
+- **Update and Repair, at the bottom of Settings -> Advanced.** One dialog for
+  the two things that used to need a terminal. On the right, your containers as
+  a map: green means the service answers, not merely that it runs, so a
+  container that is up while VAF cannot reach it stops looking healthy. Amber
+  covers the case that used to be the hardest to see, a container publishing a
+  different port than the configuration expects. Everything that is not green is
+  listed with a Repair button that starts what is stopped, restarts what does
+  not answer, and says in plain words what it cannot fix by itself. On the left,
+  the installed version and when updates were last checked, a button to check
+  now, and, when there is something newer, the new version with an Update now
+  button. The update runs by itself: VAF stops, updates, and starts again, and
+  the page waits for it and reloads when it is back. It refuses instead of
+  half-updating when it cannot finish the job, and says why.
+- **`vaf repair` in the terminal, `/repair` in the terminal app.** The same
+  check and repair run, with `vaf repair --check` reporting the status without
+  changing anything. Nothing is ever removed and no configuration is rewritten:
+  a port that disagrees with the configuration is reported with both numbers,
+  never silently corrected.
+
 ### Changed
 - **The Debug Logs switch is gone from Settings.** Debug logging is on by
   default and stays on; turning it off is a deliberate opt-out via

@@ -841,6 +841,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Security routes: {e}")
 
+# Mount System routes (admin-only service status/repair + update)
+try:
+    from vaf.api.system_routes import router as system_router
+    app.include_router(system_router)
+    log("WebServer", "System routes mounted at /api/system")
+except Exception as e:
+    log("WebServer", f"Failed to mount System routes: {e}")
+
 # Mount Background-agent status routes (admin-only, Logs > Overview panel)
 try:
     from vaf.api.thinking_routes import router as thinking_router

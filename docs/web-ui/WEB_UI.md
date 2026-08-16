@@ -178,20 +178,21 @@ many frames have not been read.
   answered in a window of its own, a group chat grows a third surface for something
   the room panel is already the place for. The tab shape is the sub-agent window's,
   not a new one.
-  Inside it, each member folds: what is RUNNING is always drawn, what has gone quiet
-  and what is finished sit behind one switch in that member's own header - in the
-  header rather than under the cards, because folding twenty entries back up must not
-  require scrolling past all twenty first. Finished work reads green and failed work
-  red: a status rendered as grey text is a status nobody reads.
-  The RECORD is opened from the room's own figures rather than from a third tab: how
-  much this room has done belongs beside its kind, your role and its members, and a
-  tab would have put it next to "who is here" as though it were another view of the
-  same thing. Clicking it widens the panel and splits it - left the chain of every
-  task in the order it happened, opened at the newest; right a search over it and the
-  entry picked, with who did it, who asked, when, and what came of it in the words of
-  whoever reported last. Same shape the memory surface uses, for the same reason: a
-  list answers "which one" and only a detail answers "what came of it". Fetched when
-  it is opened. The live board keeps thirty minutes
+  The second tab is the TASK LIST: every task the room has ever had. Opening it widens
+  the panel and splits it - on the left the chain in the order things happened, grouped
+  by day and opened at the newest, one LINE per task (time, who, a coloured dot for how
+  it went, what it was); on the right a search over the whole record and the entry
+  picked, with who did it, who asked, when the last report came, how many reports it
+  took, and the outcome in the words of whoever reported last. A task nobody reported
+  an outcome for says so rather than showing an empty box.
+  Rows and not cards, deliberately: every tool that shows this - Asana's action log,
+  Jira's activity view, Linear's issue list - puts one piece of work on one line, and
+  the card version turned twenty entries into a page and a half of padding that reads
+  as empty and crowded at once. The two-column shape is the memory surface's, for the
+  same reason: a list answers "which one" and only a detail answers "what came of it".
+  Fetched when the tab is opened, never carried in the payload the browser polls every
+  three seconds; how many tasks a room has stands with its other figures (kind, your
+  role, members, opened) as a fact rather than a button, because the tab is the way in. The live board keeps thirty minutes
   of finished work and nothing older, which is the ordinary pattern (Google Tasks
   folds, Linear and Gmail archive, monday auto-archives) with one simplification VAF
   can afford: the archive already exists and is authoritative, since the transcript is

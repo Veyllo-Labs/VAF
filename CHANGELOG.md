@@ -82,11 +82,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only thirty minutes of finished work; everything older is in the record rather than
   in the way. It is fetched when the record is opened rather than carried in the
   payload the browser polls every three seconds.
-- Each member's finished and silent work folds behind ONE switch in that member's
-  header. It used to be two links under the cards, which is fine for three entries and
-  wrong for twenty: folding a list back up meant scrolling past everything it was
-  supposed to fold away. Finished work now reads green and failed work red, instead of
-  both being grey text nobody reads.
+- The room panel's second tab is now the TASK LIST itself: one door instead of two.
+  A per-member view and a record answered nearly the same question in two places that
+  had to be kept in step, so the per-member one is gone - what is running right now is
+  on the strip above the message box, and everything else is in the list, searchable.
+  Finished work reads green and failed work red instead of both being grey text
+  nobody reads.
 - Work that has gone quiet is counted before it is stacked too - five grey cards
   weigh as much on screen as five live ones, so the panel answered "what is happening
   here" with a wall of what is not. It folds into one line per member and unfolds on

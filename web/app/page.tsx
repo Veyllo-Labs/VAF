@@ -1373,7 +1373,7 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
                 crowded at once. Grouped by day, the way the conversation next to it
                 already separates days. */}
             <div ref={listRef}
-                className="w-[40%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b py-2">
+                className="w-[46%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b py-2">
                 {loading && <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryLoading')}</div>}
                 {!loading && matches.length === 0 && (
                     <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryEmpty')}</div>
@@ -1474,139 +1474,6 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
         </div>
     );
 }
-
-
-function RoomWorkPanel({ tasks, members }: {
-    tasks: RoomTask[];
-    members: Array<{ peer: string; label: string; role: string }>;
-}) {
-    const t = useTranslations('main');
-    // Which members' finished work is unfolded. Folded by default and per member:
-    // an agent that finishes twenty things in an afternoon would otherwise bury the
-    // one task still running under twenty that are over, and the panel exists to
-    // answer what is happening - the record of what was done is a click away and
-    // whole in the transcript.
-    // ONE switch per member, and it lives in that member's HEADER. The counts used to
-    // be links under the cards, which is fine for three of them and wrong for twenty:
-    // to fold a list back up you first had to scroll to its end. The affordance a list
-    // is opened and closed with belongs where the list starts.
-    //
-    // What folds is what is over or has gone silent. Live work never does - five grey
-    // cards weigh as much on screen as five live ones, and this panel exists to answer
-    // what is happening, not what is not.
-    const [openMember, setOpenMember] = useState<Record<string, boolean>>({});
-    const byMember = new Map<string, RoomTask[]>();
-    for (const member of members) byMember.set(member.label, []);
-    for (const task of tasks) {
-        const key = task.assignee || task.requester || '?';
-        byMember.set(key, [...(byMember.get(key) || []), task]);
-    }
-    const groups = [...byMember.entries()]
-        // Whoever has something running comes first: a panel that lists idle members
-        // above working ones answers "who is here" again instead of "who is on what".
-        .sort((a, b) => {
-            const active = (rows: RoomTask[]) => rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status)).length;
-            return active(b[1]) - active(a[1]) || a[0].localeCompare(b[0]);
-        });
-    return (
-        <div className="px-6 py-4 space-y-4">
-            {groups.map(([label, rows]) => {
-                const open = rows.filter(r => ROOM_TASK_ACTIVE.includes(r.status));
-                // Running means open AND heard from. The rest is neither running nor
-                // finished, and calling it either would be the room inventing news.
-                const active = open.filter(r => !r.quiet);
-                const quiet = open.filter(r => r.quiet);
-                const done = rows.filter(r => !ROOM_TASK_ACTIVE.includes(r.status));
-                return (
-                    <div key={label}>
-                        {(() => {
-                            const folded = quiet.length + done.length;
-                            const isOpen = !!openMember[label];
-                            const head = (
-                                <div className="flex items-baseline gap-2">
-                                    <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{label}</span>
-                                    <span className="text-[11px] text-gray-400">
-                                        {active.length > 0
-                                            ? t('roomWorkRunning', { count: active.length })
-                                            : t('roomWorkNothing')}
-                                        {quiet.length > 0
-                                            ? ` \u00b7 ${t('roomWorkQuiet', { count: quiet.length })}` : ''}
-                                        {done.length > 0
-                                            ? ` \u00b7 ${t('roomWorkDone', { count: done.length })}` : ''}
-                                    </span>
-                                    {folded > 0 && (
-                                        <span className="text-[11px] text-gray-400 ml-auto" aria-hidden>
-                                            {isOpen ? '\u2303' : '\u2304'}
-                                        </span>
-                                    )}
-                                </div>
-                            );
-                            return folded > 0 ? (
-                                <button type="button" aria-expanded={isOpen}
-                                    onClick={() => setOpenMember(prev => ({ ...prev, [label]: !prev[label] }))}
-                                    className="w-full text-left mb-1.5 rounded-lg px-1 -mx-1 hover:bg-gray-100/70 dark:hover:bg-[#242424] transition-colors">
-                                    {head}
-                                </button>
-                            ) : <div className="mb-1.5">{head}</div>;
-                        })()}
-                        <div className="space-y-1.5">
-                            {[...active,
-                              ...(openMember[label] ? [...quiet, ...done] : [])].map(task => {
-                                const progress = task.progress || {};
-                                const counted = typeof progress.done === 'number'
-                                    && typeof progress.total === 'number';
-                                const finished = !ROOM_TASK_ACTIVE.includes(task.status);
-                                const asleep = !finished && !!task.quiet;
-                                const waiting = task.status === 'input_required' && !asleep;
-                                const dead = task.status === 'failed' || task.status === 'rejected'
-                                    || task.status === 'canceled';
-                                return (
-                                    <div key={task.id}
-                                        className={cn(
-                                            "rounded-xl border px-3 py-2 flex items-start gap-2.5",
-                                            "border-gray-200 bg-gray-50/70 dark:border-[#2f2f2f] dark:bg-[#202020]",
-                                            (finished || asleep) && "opacity-60")}>
-                                        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0 mt-1.5",
-                                            dead ? "bg-red-500"
-                                                : asleep ? "bg-gray-400"
-                                                    : waiting ? "bg-amber-400 animate-pulse"
-                                                        : finished ? "bg-gray-400" : "bg-emerald-500")}
-                                            aria-hidden />
-                                        <div className="min-w-0 flex-1">
-                                            <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] break-words">
-                                                {task.title}
-                                            </div>
-                                            <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                                                {/* The word carries the outcome, not just
-                                                    the dot beside it: a status rendered as
-                                                    grey text is a status nobody reads. */}
-                                                <span className={cn(
-                                                    task.status === 'completed' && "text-emerald-600 dark:text-emerald-400",
-                                                    dead && "text-red-600 dark:text-red-400")}>
-                                                    {task.status}
-                                                </span>
-                                                {counted ? ` · ${progress.done}/${progress.total}` : ''}
-                                                {progress.step ? ` · ${progress.step}` : ''}
-                                                {task.requester ? ` · ${t('roomWorkFrom', { who: task.requester })}` : ''}
-                                                {asleep
-                                                    ? ` · ${t('roomWorkSilentFor', { hours: Math.max(1, Math.round((task.silentFor ?? 0) / 3600)) })}`
-                                                    : ''}
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                            {rows.length === 0 && (
-                                <div className="text-[12px] text-gray-400">{t('roomWorkNone')}</div>
-                            )}
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
 function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
@@ -8097,7 +7964,17 @@ function VAFDashboardContent() {
                                     {roomView && (
                                         <RoomWorkDock tasks={roomView.room?.tasks ?? []}
                                             widthClass={chatWidthClass}
-                                            onOpen={() => { setRoomPanelTab('work'); setRoomMembersOpen(true); }} />
+                                            onOpen={() => {
+                                            // The strip is a summary; the list behind it
+                                            // is where the rest of the answer lives.
+                                            setRoomPanelTab('history');
+                                            setRoomMembersOpen(true);
+                                            setRoomHistoryLoading(true);
+                                            ws?.send(JSON.stringify({
+                                                type: 'room_task_history',
+                                                room_id: roomView.room.roomId,
+                                            }));
+                                        }} />
                                     )}
                                 </div>
                                 {/* The suggestions popup moved INTO the input row (anchored above
@@ -9846,7 +9723,7 @@ function VAFDashboardContent() {
                     <div className="absolute inset-0 bg-black/60" onClick={() => setRoomMembersOpen(false)} />
                     <div className={cn(
                         "relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full flex flex-col border border-gray-200 dark:border-[#2a2a2a] overflow-hidden transition-[max-width,height] duration-300",
-                        roomPanelTab === 'history' ? "max-w-6xl h-[88vh]" : "max-w-3xl h-[80vh]")}>
+                        roomPanelTab === 'history' ? "max-w-7xl h-[90vh]" : "max-w-3xl h-[80vh]")}>
 
                         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
                             <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
@@ -9872,10 +9749,23 @@ function VAFDashboardContent() {
                             nothing running. Same tab shape the sub-agent window uses. */}
                         <div className="flex items-end gap-1 px-6 pt-2 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
                             {([['members', tMain('roomTabMembers')],
-                               ['work', tMain('roomTabWork')]] as const).map(([key, label]) => (
+                               ['history', tMain('roomTabTasks')]] as const).map(([key, label]) => (
                                 <button key={key} type="button" role="tab"
                                     aria-selected={roomPanelTab === key}
-                                    onClick={() => setRoomPanelTab(key)}
+                                    onClick={() => {
+                                        setRoomPanelTab(key);
+                                        // One door instead of two: the tab that used to
+                                        // list work per member IS the record now, and it
+                                        // fetches when it is opened rather than riding in
+                                        // the payload polled every three seconds.
+                                        if (key === 'history') {
+                                            setRoomHistoryLoading(true);
+                                            ws?.send(JSON.stringify({
+                                                type: 'room_task_history',
+                                                room_id: roomView.room.roomId,
+                                            }));
+                                        }
+                                    }}
                                     className={cn(
                                         "flex-none rounded-t-lg border border-b-0 px-3 py-1.5 text-[12px]",
                                         roomPanelTab === key
@@ -9910,39 +9800,23 @@ function VAFDashboardContent() {
                                     it beside "who is here" as if it were a third view of
                                     the same thing. Opening it widens the panel, because a
                                     record is read in two columns and a member list is not. */}
-                                <button type="button"
-                                    onClick={() => {
-                                        const opening = roomPanelTab !== 'history';
-                                        setRoomPanelTab(opening ? 'history' : 'members');
-                                        if (opening) {
-                                            setRoomHistoryLoading(true);
-                                            ws?.send(JSON.stringify({
-                                                type: 'room_task_history',
-                                                room_id: roomView.room.roomId,
-                                            }));
-                                        }
-                                    }}
-                                    className={cn(
-                                        "min-w-0 text-left rounded-lg px-2 -mx-2 transition-colors",
-                                        roomPanelTab === 'history'
-                                            ? "bg-gray-100 dark:bg-[#242424]"
-                                            : "hover:bg-gray-100/70 dark:hover:bg-[#242424]")}>
+                                {/* A figure among the room's figures. It was a button
+                                    for a while and that made two doors to one room -
+                                    the tab beside it is the way in now, and a fact does
+                                    not need to be clickable to be worth stating. */}
+                                <div className="min-w-0">
                                     <div className="text-[10px] uppercase tracking-wide text-gray-400">
                                         {tMain('roomInfoTasks')}
                                     </div>
                                     <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">
                                         {roomHistory.length || (roomView.room.tasks?.length ?? 0)}
                                     </div>
-                                </button>
+                                </div>
                             </div>
                             {roomView.room.closed && (
                                 <div className="px-6 py-2 text-xs text-gray-400 border-b border-gray-200 dark:border-[#2a2a2a]">
                                     {tMain('roomClosedNote')}
                                 </div>
-                            )}
-                            {roomPanelTab === 'work' && (
-                                <RoomWorkPanel tasks={roomView.room.tasks ?? []}
-                                    members={roomView.room.members_list ?? []} />
                             )}
                             {roomPanelTab === 'history' && (
                                 <RoomTaskHistory rows={roomHistory}

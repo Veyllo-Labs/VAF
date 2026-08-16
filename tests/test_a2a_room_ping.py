@@ -330,25 +330,28 @@ def test_running_work_is_visible_without_scrolling():
         "the name belongs in front of the work, the way a speaker does")
 
 
-def test_the_work_strip_opens_the_rooms_own_panel_on_a_work_tab():
-    """MUTATION: give the strip its own dialog, or drop the tab and dump the board
-    into the member list.
+def test_the_work_strip_opens_the_rooms_task_list():
+    """MUTATION: give the strip its own dialog, or leave it opening a member list.
 
-    "Who is in this room" and "who is on what" are two questions. Answered in one
-    list, the second is buried under every member who has nothing running; answered
-    in a surface of its own, a group chat grows a third window for a question the
-    room panel is already the place for. The strip is the whole button, because
-    hunting for a hit area inside a two-line summary is not a click anybody makes.
+    The strip answers "what is happening" for three entries; everything beyond that -
+    the rest of the list, what was finished, what somebody said about it - belongs one
+    click away, and the room's panel is already where a reader looks. A surface of its
+    own would be a third window for a question that already has a place.
+
+    The strip is the whole button: hunting for a hit area inside a two-line summary is
+    not a click anybody makes.
     """
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    assert "<RoomWorkPanel" in page, "there is no work tab"
-    assert "roomPanelTab === 'work' && (" in page and "roomPanelTab === 'members' && (" in page, (
-        "the panel does not switch between the two questions")
-    # Both doors set the tab, so a click lands where it was aimed.
+    assert "roomPanelTab === 'members' && (" in page, "the panel lost its member list"
+    assert "roomPanelTab === 'history' && (" in page, "the panel has no task list"
+    # Both doors say which half they mean, so a click lands where it was aimed.
     assert "setRoomPanelTab('members'); setRoomMembersOpen(true);" in page, (
         "the header button opens some other tab than the members")
-    assert "setRoomPanelTab('work'); setRoomMembersOpen(true);" in page, (
-        "the work strip does not open the work tab")
+    strip_open = page.split("onOpen={() => {", 1)[1][:600]
+    assert "setRoomPanelTab('history')" in strip_open and "setRoomMembersOpen(true)" in strip_open, (
+        "the work strip does not open the task list")
+    assert "type: 'room_task_history'" in strip_open, (
+        "it opens the list without asking for it, so the list arrives empty")
     # And the strip itself is the target, not something inside it.
     strip = page.split("function RoomWorkDock", 1)[1].split("function ", 1)[0]
     assert 'role="button"' in strip and "onClick={onOpen}" in strip
@@ -359,8 +362,7 @@ def test_the_work_strip_opens_the_rooms_own_panel_on_a_work_tab():
     import json
     for locale in ("de", "en"):
         messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
-        for key in ("roomTabMembers", "roomTabWork", "roomWorkRunning",
-                    "roomWorkNothing", "roomWorkFrom"):
+        for key in ("roomTabMembers", "roomTabTasks", "roomInfoTasks"):
             assert key in messages["main"], f"{key} missing in {locale}.json"
 
 
@@ -453,19 +455,20 @@ def test_the_surfaces_count_only_what_has_been_heard_from():
 
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     assert "open.filter(t => !t.quiet)" in page, "the strip still counts silent work"
-    assert "const quiet = open.filter(r => r.quiet)" in page, "the panel does too"
     # Shown, not hidden: they are not finished, and a board that drops them would be
     # the room forgetting work instead of reporting on it. Finished work is the one
     # thing folded away, and only because it is over.
-    # Silent work is FOLDED, not dropped: five grey cards weigh as much on screen as
-    # five live ones, so the count is the way in and one click brings them back.
-    body = page.split("function RoomWorkPanel", 1)[1].split("\nfunction ", 1)[0]
-    assert "openMember[label] ? [...quiet, ...done] : []" in body, (
-        "silent work is either stacked unfolded again or gone entirely")
-    assert "roomWorkQuiet" in body, "the count that is the way in"
-    # Live work is never behind a fold - that is the one thing the panel is for.
-    assert "{[...active,\n" in body, "running work must be drawn unconditionally"
-    assert "roomWorkSilentFor" in page, "a silent entry must say how long it has been"
+    # The strip counts only what has been heard from, and SAYS how much it is leaving
+    # out - a strip that silently dropped the rest would be a different lie from the
+    # one it was built to fix.
+    strip = page.split("function RoomWorkDock", 1)[1].split("\nfunction ", 1)[0]
+    assert "open.filter(t => !t.quiet)" in strip, "the strip counts silent work again"
+    assert "ohne Meldung" in strip, "it drops the silent ones without saying so"
+    # How long it has been silent is answered where a reader asks it - in the record's
+    # detail, as the moment of the last report. The strip says how MANY are silent; a
+    # per-entry duration on three summary lines was noise on the surface that answers
+    # "what is happening right now".
+    assert "roomHistoryWhen" in page, "nothing says when the last report came"
 
 
 def test_the_room_asks_about_work_that_has_gone_quiet(rooms, monkeypatch):
@@ -573,24 +576,13 @@ def test_finished_work_is_counted_before_it_is_stacked():
         "open work and finished work share one cap again")
     assert "t[\"status\"] not in done_states" in board
 
+    # And the surface that answers "what is happening" shows only what is running -
+    # everything else is one click away in the record, which is a different question.
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    panel = page.split("function RoomWorkPanel", 1)[1].split("\nfunction ", 1)[0]
-    assert "openMember[label] ? [...quiet, ...done] : []" in panel, (
-        "every finished task is drawn at once")
-    assert "roomWorkDone" in panel, "the count is not offered as a way in"
-    # Per member, not one switch for the panel: two agents' histories are two answers.
-    assert "setOpenMember(prev => ({ ...prev, [label]: !prev[label] }))" in panel
-    # And the switch sits in the HEADER: with twenty entries, a link under the cards
-    # can only be reached by scrolling past everything it is meant to fold away.
-    header = panel.split("const head = (", 1)[1].split("return folded > 0", 1)[0]
-    assert "{label}" in header and "roomWorkRunning" in header
-    assert 'aria-expanded={isOpen}' in panel, "a fold must say whether it is open"
-
-    import json
-    for locale in ("de", "en"):
-        messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
-        for key in ("roomWorkQuiet", "roomWorkDone"):
-            assert key in messages["main"], f"{key} missing in {locale}.json"
+    strip = page.split("function RoomWorkDock", 1)[1].split("\nfunction ", 1)[0]
+    assert "active.slice(0, 3)" in strip, "an uncapped strip is the wall again"
+    assert "ROOM_TASK_ACTIVE.includes(t.status)" in strip, (
+        "finished work is back on the surface that answers what is happening")
 
 
 def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
@@ -630,10 +622,13 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
     # The way IN is a figure among the room's other facts, not a third tab: how much
     # this room has done is a fact about it, and a tab would have put it beside "who is
     # here" as though it were another view of the same thing.
-    assert "roomInfoTasks" in page, "the record has no way in"
-    assert "setRoomPanelTab(opening ? 'history' : 'members')" in page
+    assert "roomInfoTasks" in page, "the room's own figures stopped counting its work"
+    # ONE door: the tab that used to list work per member IS the record now. Two ways
+    # into one place is two things to explain and two states to keep in step.
+    assert "roomTabTasks" in page, "the tab does not say what it holds"
+    assert "type: 'room_task_history'" in page
     # Opening it widens the panel - a record is read in two columns, a member list is not.
-    assert "roomPanelTab === 'history' ? \"max-w-6xl h-[88vh]\"" in page
+    assert "roomPanelTab === 'history' ? \"max-w-7xl h-[90vh]\"" in page
 
     history = page.split("function RoomTaskHistory", 1)[1].split("\nfunction ", 1)[0]
     assert "roomHistorySearch" in history, "a record without search is an archive nobody reads"

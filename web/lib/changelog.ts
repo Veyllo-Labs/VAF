@@ -31,6 +31,50 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a22',
+    date: '2026-08-16',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Agent rooms: several agents in one conversation, across machines. A room has a mission, a task board, a shared folder and votes any member can call, it shows who is typing and who is doing the work, and joining one from another machine is a single command. Your agent learns from a room the way it learns from a chat with you, and you decide from inside the room how far it may go.',
+          'Your chats are encrypted on disk, with a recovery key so a reinstall is not the end of them. All encryption keys left config.json, and the terminal asks for your password before it opens anything.',
+          'Update and Repair, at the bottom of Settings under Advanced: your containers as a map, a repair button for whatever is not connected, and one-click updates that stop, update and start VAF for you. The Logs overview got a matching health row that lights up when an update is waiting.',
+          'Learning a large document finally learns the whole document, page ranges like "read pages 100 to 120" work, and every attached document has a learn button.',
+          'As an admin you can pick a user in the Logs window and read that person\'s timeline and tool calls.',
+          'Developers can build voice assistants on VAF, and you can see and cap what the API costs per user.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'The agent can point at your other chats when they are relevant, and memory search looks through them too.',
+          'Hands-off mode, granted per user: the agent stops asking that person for tool confirmations, and every skipped dialog is still recorded.',
+          'The tool-step budget per request is yours to set, including no limit at all.',
+          'A local model that can see images finally does, and turning that on no longer needs a restart.',
+          'The voice call got measurably faster and now measures itself.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Reading a huge PDF no longer eats gigabytes, scanned PDFs no longer poison the memory, and learning the same document twice is refused instead of duplicated.',
+          'Session search only searches your own chats, and a confirmation you granted no longer speaks for everyone on the machine.',
+          'Log files stop collecting your conversations in the clear, and old conversation snapshots no longer pile up forever.',
+          '"Remember this" is no longer flagged as something the agent made up.',
+          'Encryption at rest behaves on Windows and macOS, not only on Linux, and a first start can no longer mint two different master keys.',
+          'The interface animates again, and a long turn no longer pushes the chat sideways.',
+        ],
+      },
+      {
+        kind: 'removed',
+        items: [
+          'The Debug Logs switch is gone from Settings: debug logging is on by default, and turning it off is a deliberate edit in config.json rather than a toggle to trip over.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a21',
     date: '2026-08-08',
     sections: [

@@ -79,6 +79,16 @@ waiting for a stable `X.Y.Z`.
    `web/package.json` to the npm/semver spelling of the same version
    (e.g. `0.1.0a0` -> `0.1.0-alpha.0`, `0.1.0` -> `0.1.0`). The release workflow fails
    the build if the two disagree, so they must stay in lockstep.
+   The npm spelling appears in a THIRD place: `web/package-lock.json` carries it
+   twice, at the top level and in `packages[""]`. Edit those two fields rather
+   than running `npm install` to do it - the installer rewrites the whole lock,
+   which is what deadlocked the updater in 0.1.0a7 to a13.
+   `tests/test_json_validity.py::test_npm_manifest_agrees_with_its_lockfile`
+   fails when the manifest and its lock disagree, so a forgotten lock is caught
+   locally rather than in CI.
+   A fourth place is not a version but moves with one: `web/lib/changelog.ts`
+   needs an entry whose `version` matches the new full version exactly, or the
+   in-app "what's new" announcement still describes the previous release.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a22] - 2026-08-16
+
 ### Fixed
 - Asking your agent in a room to remember something (from you or the room's
   leader) is honoured now - the permission was decided but never handed to the
@@ -1197,9 +1199,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The shield gets out of the way in a narrow window.** It is anchored to the
   middle of the protection panel, which is right while the headline and the
   status rows sit side by side. Once the panel stacks, that middle IS the status
-  list, so the big shield sat behind the rows. Stacked, it now moves up into the
-  free corner beside the headline and shrinks to match it, glow and all. Wide
-  windows are unchanged.
+  list, so the big shield sat behind the rows. Stacked, it now sits level with
+  the headline, to its left, and shrinks to match it, glow and all. Wide windows
+  are unchanged.
 - **Repair waits while the containers are still starting.** Right after VAF
   starts, the services are on their way up and do not answer yet, which read as
   a fault and invited a repair that would only have restarted what was already

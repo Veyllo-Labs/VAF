@@ -1589,29 +1589,22 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
 
             Once the panel WRAPS, the vertical centre it is anchored to stops
             being the headline and becomes the module list, so a 210px shield
-            lands behind the rows and reads as clutter. Stacked, it moves up to
-            the free corner beside the headline and shrinks to match it: same
-            motif, same glow, out of the reading path. The wide layout is
-            untouched. */}
-        <div aria-hidden style={{
-          position: 'absolute', zIndex: 0, pointerEvents: 'none',
-          borderRadius: '50%', aspectRatio: '1 / 1',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          transform: 'translate(-50%, -50%)',
-          // 50 is the centre of the headline block (18px padding + a 65px block
-          // of eyebrow, headline and sub-line), so the shield sits level with
-          // the words rather than above or below them; a 100px shield then ends
-          // exactly where the wrapped module list begins, which is what keeps it
-          // out of the rows. The glow reaches past that, softly and on purpose.
-          ...(heroStacked
-            ? { top: 50, left: 70, height: 168 }
-            : { top: '50%', left: 90, height: '116%' }),
-          background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)`,
-        }}>
-          <div style={{ color: overall.shield }}>
-            <OverallIcon size={heroStacked ? 100 : 210} strokeWidth={1.4} />
+            lands behind the rows. Stacked, the shield is rendered INSIDE the
+            headline column instead (below), which is the box it should be level
+            with; anchoring it to the section by pixel got it wrong, because the
+            panel has a 300px minimum height and centres its flex line, so the
+            headline does not sit where its own size suggests. */}
+        {!heroStacked && (
+          <div aria-hidden style={{
+            position: 'absolute', top: '50%', left: 90, height: '116%',
+            aspectRatio: '1 / 1', transform: 'translate(-50%, -50%)',
+            borderRadius: '50%', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 0, pointerEvents: 'none',
+            background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)`,
+          }}>
+            <div style={{ color: overall.shield }}><OverallIcon size={210} strokeWidth={1.4} /></div>
           </div>
-        </div>
+        )}
         {/* The minWidth states the TRUTH about this box: the 160px inset that clears
             the shield, plus room for the longest headline word (German
             "Auffaelligkeiten" is about 200px at 24px/700; English "anomalies" is 138).
@@ -1623,6 +1616,22 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
             own line on a phone. Everything wider than about 1720px CSS pixels is
             unchanged to the pixel. */}
         <div style={{ position: 'relative', zIndex: 1, flex: '1 1 220px', minWidth: 'min(360px, 100%)', paddingLeft: 160 }}>
+          {/* Stacked, the shield lives HERE: this box is the headline block, so
+              `top: 50%` is level with the words by construction, whatever the
+              panel does with its spare height - no pixel to keep in step with a
+              font size or a minimum height. `left: 80` centres it inside the
+              160px inset that exists to clear it, so it never reaches the text. */}
+          {heroStacked && (
+            <div aria-hidden style={{
+              position: 'absolute', top: '50%', left: 80, height: 168,
+              aspectRatio: '1 / 1', transform: 'translate(-50%, -50%)',
+              borderRadius: '50%', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', zIndex: 0, pointerEvents: 'none',
+              background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)`,
+            }}>
+              <div style={{ color: overall.shield }}><OverallIcon size={100} strokeWidth={1.4} /></div>
+            </div>
+          )}
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: C.textDim, fontWeight: 600, marginBottom: 3 }}>{t('ovEyebrow')}</div>
           {/* break-word, deliberately not anywhere: `anywhere` takes part in intrinsic
               sizing and would collapse min-content to one character, disarming the floor

@@ -18,7 +18,8 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 
 import requests
 from vaf.core.agent import Agent
-from vaf.core.identity_binding import bind_identity, identity_from_metadata, reassert_identity
+from vaf.core.identity_binding import (Identity, bind_identity, identity_from_metadata,
+                                       reassert_identity, resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import SessionManager, Session, turn_context_messages_since_last_user
@@ -2613,9 +2614,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             pass
                         _prev_identity = None
                         try:
-                            from vaf.core.identity_binding import (Identity,
-                                                                   bind_identity,
-                                                                   resolve_scope_identity)
+                            # Identity/bind_identity/resolve_scope_identity are imported at module
+                            # level. Re-importing them HERE made bind_identity a function-local name
+                            # for the whole of run_headless_agent, so the much earlier call at the
+                            # top of the loop raised UnboundLocalError and every local-model turn
+                            # died with "[Headless] Loop error: cannot access local variable
+                            # 'bind_identity'" - the agent simply never answered.
                             _prev_identity = Identity(
                                 scope=getattr(agent, "_current_user_scope_id", None),
                                 username=getattr(agent, "_current_username", None),
@@ -2673,7 +2677,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 os.environ[ROOM_ACTOR_ENV] = _prev_actor
                             if _prev_identity is not None:
                                 try:
-                                    from vaf.core.identity_binding import bind_identity
                                     bind_identity(agent, _prev_identity)
                                 except Exception:
                                     pass

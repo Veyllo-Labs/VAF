@@ -52,6 +52,17 @@ and never takes the others down.
 The response also carries `security_latest_ts` (timestamp of today's newest
 security event) so the frontend badge can be unread-based.
 
+One row in the list does not come from this response and does not open a detail
+popup: **Health and updates**, below Guardrails. It reads
+`GET /api/system/services` and `GET /api/system/update` on the pane's existing
+30 second tick (the services call is in-flight guarded, because it shells out to
+docker and can outlast one tick), and clicking it opens the Update and Repair
+dialog rather than a card. Its precedence is the dashboard's honesty rule in
+order: not measured, then an unreachable docker daemon, then services that are
+down, then degraded ones, then an available update, and only then green. The
+update half reads the cached answer from disk and never asks GitHub - that stays
+the dialog's button. See [WEB_UI.md](../web-ui/WEB_UI.md).
+
 ### The owner DB lane
 
 `get_admin_isolation_metrics` runs on the owner engine, which bypasses RLS.

@@ -9722,6 +9722,7 @@ function VAFDashboardContent() {
                 notifications={notifications}
                 onFetchComplete={setNotifications}
                 userTimeFormat={userTimeFormat}
+                currentUser={currentUser}
                 onSecuritySeen={(ts) => {
                     setSecuritySeenTs(ts);
                     try { localStorage.setItem('vaf_logs_seen_ts', ts); } catch { /* private mode */ }

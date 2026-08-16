@@ -1185,7 +1185,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file produced during a longer agent turn no longer disappears from view, and a
   coding agent that finishes minutes later still finds the right message.
 
+### Fixed
+- **The Overview headline no longer runs into the module list.** On a Mac at the
+  usual laptop widths, "Keine Auffaelligkeiten" was drawn straight across the
+  status dots beside it. The text column claimed it could shrink to 200 pixels
+  while 160 of those were reserved for the shield next to it, so the headline was
+  handed 40 pixels and simply painted past them. It now says what it actually
+  needs, so the panel stacks the way it already did on narrower screens, and a
+  long word breaks rather than overflowing. Nothing moves on wide screens.
+
 ### Added
+- **Health and updates, in the Logs overview.** A new row under Guardrails shows
+  whether your services are connected and lights up amber when an update is
+  waiting; clicking it opens the same Update and Repair dialog as Settings. It
+  reads the update answer from disk, so opening Logs never asks GitHub anything.
+- **See what one user did.** Next to the date in the Logs window, an admin can
+  now pick a user and read that person's timeline and tool calls alone. It
+  appears once a machine has more than one account. Two deliberate honesty
+  points: a name that matches nobody shows nothing rather than everything, and
+  entries that carry no user - background work, and anything logged before this
+  release stamped identities - are counted and named under the filter instead of
+  quietly disappearing into someone's empty day.
 - **Update and Repair, at the bottom of Settings -> Advanced.** One dialog for
   the two things that used to need a terminal. On the right, your containers as
   a map: green means the service answers, not merely that it runs, so a

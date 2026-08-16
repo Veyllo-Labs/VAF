@@ -26,6 +26,8 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
+import UpdateRepairModal, { healthOf, type ServiceRow } from './settings/UpdateRepairModal';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type NotificationItem = {
@@ -236,6 +238,21 @@ type MemoryHealth = {
   memory_enabled?: boolean;
 };
 
+// Service health and update state for the "Health and Update" row. The row shape
+// and the traffic-light rule come from the dialog it opens, so the two surfaces
+// cannot drift apart on what counts as healthy (ServiceRow/healthOf are exported
+// from UpdateRepairModal for exactly this).
+type SystemServices = {
+  docker: { available: boolean; reason?: string; detail?: string };
+  services: ServiceRow[];
+};
+
+type SystemUpdate = {
+  current?: string;
+  cache?: { checked_at?: string; latest_version?: string | null; relevant?: boolean } | null;
+  can_apply?: boolean;
+};
+
 // Shape of the v2 mail store rows (GET /api/mail/messages). The legacy
 // /api/email/messages lane this used to read is removed with the old mail stack;
 // the v2 rows name the sender `from_addr` and carry epoch seconds rather than a
@@ -266,6 +283,9 @@ export interface NotificationsModalProps {
   /** Called when the admin views the security log; carries the newest event ts
    *  so the parent can clear the sidebar notification dot in sync. */
   onSecuritySeen?: (ts: string) => void;
+  /** Who is looking. The window is already admin-only where it is opened from;
+   *  this is what the Update and Repair dialog checks for itself as well. */
+  currentUser?: { id?: string; username?: string; role?: string } | null;
 }
 
 // ─── Domain colors ─────────────────────────────────────────────────────────────
@@ -1253,7 +1273,7 @@ function OvNoData({ C, label }: { C: OvColors; label: string }) {
   );
 }
 
-function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateChange, security, memHealth, mail, thinking, supervisor, securityLogFile, onOpenLogFile, onRefreshSecurity }: {
+function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateChange, security, memHealth, mail, thinking, supervisor, systemServices, systemUpdate, securityLogFile, onOpenLogFile, onRefreshSecurity, onOpenUpdateRepair }: {
   chainOk: boolean | null;
   events: TimelineEvent[];
   totalRaw: number | null;
@@ -1266,9 +1286,12 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   mail: MailMessage[] | null;
   thinking: ThinkingStatus | null;
   supervisor: SupervisorStatus | null;
+  systemServices: SystemServices | null;
+  systemUpdate: SystemUpdate | null;
   securityLogFile?: string;
   onOpenLogFile: (filename: string) => void;
   onRefreshSecurity: () => void;
+  onOpenUpdateRepair: () => void;
 }) {
   const t = useTranslations('notifications');
   const dark = useThemeStore((st) => st.theme) === 'dark';
@@ -1279,6 +1302,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   // Honesty floor: chain_ok defaults true on an empty/missing file, so "no events"
   // must render as not-measured (grey), never as verified-green.
   const hasChainData = chainOk !== null && (totalRaw ?? 0) > 0;
+  const amberInk = dark ? '#fbbf24' : '#b45309';
   const heroState: 'ok' | 'broken' | 'nodata' = chainOk === false ? 'broken' : hasChainData ? 'ok' : 'nodata';
   const green = dark ? '#4ade80' : '#15803d';
   const red = dark ? '#f87171' : '#b91c1c';
@@ -1357,6 +1381,37 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   const channels = security?.channels;
   const guardrails = security?.guardrails;
   const skills = security?.skills;
+
+  // ── Health and update row ────────────────────────────────────────────────
+  // Order matters and is the dashboard's honesty rule: not measured beats
+  // green, an unreachable engine beats a service count (with docker down every
+  // service reads "unknown", so counting them first would report a healthy
+  // stack as merely idle), and a broken service beats an available update -
+  // a container that is down is the more urgent of the two.
+  const health = (() => {
+    const updateReady = Boolean(systemUpdate?.cache?.relevant && systemUpdate?.cache?.latest_version);
+    if (!systemServices) {
+      return updateReady
+        ? { dot: '#f59e0b', status: t('ovHealthUpdate', { version: String(systemUpdate?.cache?.latest_version) }), color: amberInk }
+        : { dot: C.textFaint, status: noData, color: C.textDim };
+    }
+    if (!systemServices.docker?.available) {
+      return { dot: '#ef4444', status: t('ovHealthDockerDown'), color: red };
+    }
+    const rows = systemServices.services ?? [];
+    const down = rows.filter(s => healthOf(s) === 'down');
+    const degraded = rows.filter(s => healthOf(s) === 'degraded');
+    if (down.length) {
+      return { dot: '#ef4444', status: t('ovHealthDown', { n: down.length }), color: red };
+    }
+    if (degraded.length) {
+      return { dot: '#f59e0b', status: t('ovHealthDegraded', { n: degraded.length }), color: amberInk };
+    }
+    if (updateReady) {
+      return { dot: '#f59e0b', status: t('ovHealthUpdate', { version: String(systemUpdate?.cache?.latest_version) }), color: amberInk };
+    }
+    return { dot: '#22c55e', status: t('ovHealthOk', { n: rows.filter(s => healthOf(s) === 'ok').length }), color: green };
+  })();
 
   // ── Skill resolution actions (delete / acknowledge-2FA / restore-2FA / isolate) ─
   type SkillAction = 'delete' | 'acknowledge' | 'restore' | 'isolate';
@@ -1498,10 +1553,24 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
         <div aria-hidden style={{ position: 'absolute', top: '50%', left: 90, height: '116%', aspectRatio: '1 / 1', transform: 'translate(-50%, -50%)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 0, pointerEvents: 'none', background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)` }}>
           <div style={{ color: overall.shield }}><OverallIcon size={210} strokeWidth={1.4} /></div>
         </div>
-        <div style={{ position: 'relative', zIndex: 1, flex: '1 1 220px', minWidth: 200, paddingLeft: 160 }}>
+        {/* The minWidth states the TRUTH about this box: the 160px inset that clears
+            the shield, plus room for the longest headline word (German
+            "Auffaelligkeiten" is about 200px at 24px/700; English "anomalies" is 138).
+            It used to say 200, which is less than the inset alone leaves - and because
+            an explicit min-width replaces min-width:auto, flexbox was allowed to squeeze
+            this box to 40px of text and let the headline paint over the module list
+            beside it. A truthful floor makes the panel stack BEFORE that happens, which
+            is what it already does at narrower widths. min(...,100%) keeps it inside its
+            own line on a phone. Everything wider than about 1720px CSS pixels is
+            unchanged to the pixel. */}
+        <div style={{ position: 'relative', zIndex: 1, flex: '1 1 220px', minWidth: 'min(360px, 100%)', paddingLeft: 160 }}>
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: C.textDim, fontWeight: 600, marginBottom: 3 }}>{t('ovEyebrow')}</div>
-          <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.01em', color: overallState === 'nodata' ? C.textMid : overall.color, ...(overall.pulse ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }}>{overall.head}</div>
-          <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>{overall.sub}</div>
+          {/* break-word, deliberately not anywhere: `anywhere` takes part in intrinsic
+              sizing and would collapse min-content to one character, disarming the floor
+              above. This one only acts when a word would otherwise overflow, so a locale
+              nobody measured cannot reproduce the collision. */}
+          <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.01em', overflowWrap: 'break-word', color: overallState === 'nodata' ? C.textMid : overall.color, ...(overall.pulse ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }}>{overall.head}</div>
+          <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6, overflowWrap: 'break-word' }}>{overall.sub}</div>
           {/* Today's blocked/rejected attempts, AT THE SHIELD. The
               only place a count of blocked events appeared was inside the skills panel
               and the firewall row, so the summary that people actually read carried
@@ -1592,13 +1661,24 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                   : t('ovGrActiveNoCount'),
               statusColor: !guardrails ? C.textDim : green,
             },
-          ]).map((m, mi, arr) => (
+            // Health and update. The one row that does not open a detail popup:
+            // it opens the Update and Repair dialog, which is where a broken
+            // container is actually put back and an update is applied.
+            {
+              key: 'health',
+              name: t('ovCardHealth'),
+              dot: health.dot,
+              status: health.status,
+              statusColor: health.color,
+              onClick: onOpenUpdateRepair,
+            },
+          ] as Array<{ key: string; name: string; dot: string; status: string; statusColor: string; onClick?: () => void }>).map((m, mi, arr) => (
             <div
               key={m.key}
               role="button"
               tabIndex={0}
-              onClick={() => setDetail(m.key)}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setDetail(m.key); }}
+              onClick={() => (m.onClick ? m.onClick() : setDetail(m.key))}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { m.onClick ? m.onClick() : setDetail(m.key); } }}
               className="group"
               style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 6px', margin: '0 -6px', borderRadius: 7, cursor: 'pointer', borderBottom: mi < arr.length - 1 ? `1px solid ${C.borderFaint}` : 'none' }}
               onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = dark ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.04)'; }}
@@ -2473,6 +2553,7 @@ export default function NotificationsModal({
   onFetchComplete,
   userTimeFormat,
   onSecuritySeen,
+  currentUser,
 }: NotificationsModalProps) {
   const t = useTranslations('notifications');
 
@@ -2501,11 +2582,24 @@ export default function NotificationsModal({
   }, []);
   const [timelineChainOk, setTimelineChainOk] = useState<boolean | null>(null);
   const [timelineTotalRaw, setTimelineTotalRaw] = useState<number | null>(null);
+  // Whose activity is being shown ("" = everyone), the usernames that can be
+  // picked, and how many of the day's rows carry no identity at all. The last
+  // one is what keeps a filtered view honest: records written before the scope
+  // was stamped, and background work that belongs to nobody, are invisible under
+  // a filter and would otherwise read as "this person did nothing".
+  const [timelineUser, setTimelineUser] = useState('');
+  const [logUsers, setLogUsers] = useState<string[]>([]);
+  const [timelineUnattributed, setTimelineUnattributed] = useState(0);
+  const pickTimelineUser = useCallback((u: string) => setTimelineUser(u), []);
   // Aggregated protection-module status (GET /api/security/overview, admin-gated).
   // null = not fetched / unavailable (403, backend down) -> rows stay grey.
   const [securityOverview, setSecurityOverview] = useState<SecurityOverview | null>(null);
   const [thinkingStatus, setThinkingStatus] = useState<ThinkingStatus | null>(null);
   const [supervisorStatus, setSupervisorStatus] = useState<SupervisorStatus | null>(null);
+  const [systemServices, setSystemServices] = useState<SystemServices | null>(null);
+  const [systemUpdate, setSystemUpdate] = useState<SystemUpdate | null>(null);
+  const [showUpdateRepair, setShowUpdateRepair] = useState(false);
+  const systemServicesInFlight = useRef(false);
   // User-isolation health input: the EXISTING endpoint is reused on purpose -
   // isolation-critical logic must never be reimplemented in a second place.
   // (Admin aggregate metrics come from /api/security/overview's isolation block.)
@@ -2622,14 +2716,21 @@ export default function NotificationsModal({
       .catch(() => setTimelineDates([]));
   }, []);
 
-  const fetchTimeline = useCallback((date: string) => {
+  const fetchTimeline = useCallback((date: string, user?: string) => {
     setLoadingTimeline(true);
-    fetch(`${getApiBase()}/api/logs/timeline/events?date=${encodeURIComponent(date)}&merge=true`, { credentials: 'include' })
+    // The filter is a USERNAME: scope ids never reach the client, so the backend
+    // resolves the name. chain_ok and total_raw keep describing the whole day
+    // even when a user is picked, which is why the audit badge stays truthful.
+    const who = (user ?? '').trim();
+    const url = `${getApiBase()}/api/logs/timeline/events?date=${encodeURIComponent(date)}&merge=true`
+      + (who ? `&user=${encodeURIComponent(who)}` : '');
+    fetch(url, { credentials: 'include' })
       .then(r => r.ok ? r.json() : { events: [], chain_ok: null, total_raw: null })
       .then(d => {
         setTimelineEvents(Array.isArray(d?.events) ? d.events : []);
         setTimelineChainOk(d?.chain_ok ?? null);
         setTimelineTotalRaw(typeof d?.total_raw === 'number' ? d.total_raw : null);
+        setTimelineUnattributed(typeof d?.unattributed === 'number' ? d.unattributed : 0);
       })
       .catch(() => { setTimelineEvents([]); setTimelineChainOk(null); setTimelineTotalRaw(null); })
       .finally(() => setLoadingTimeline(false));
@@ -2644,10 +2745,23 @@ export default function NotificationsModal({
     fetchTimelineDates();
   }, [isOpen, fetchFiles, fetchActivity, fetchTimelineDates]);
 
+  // The names the user filter offers. Admin-only endpoint, so a non-admin gets
+  // nothing and the picker never appears - the filter is an oversight tool, and
+  // the backend refuses it independently of whether this list arrived.
+  useEffect(() => {
+    if (!isOpen || currentUser?.role !== 'admin') return;
+    fetch(`${getApiBase()}/api/users`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : []))
+      .then(d => setLogUsers(Array.isArray(d)
+        ? d.map((u: any) => String(u?.username || '')).filter(Boolean).sort()
+        : []))
+      .catch(() => setLogUsers([]));
+  }, [isOpen, currentUser?.role]);
+
   useEffect(() => {
     if (!isOpen || !(isTimelineView || isOverview) || !timelineDate) return;
-    fetchTimeline(timelineDate);
-  }, [isOpen, isTimelineView, isOverview, timelineDate, fetchTimeline]);
+    fetchTimeline(timelineDate, timelineUser);
+  }, [isOpen, isTimelineView, isOverview, timelineDate, timelineUser, fetchTimeline]);
 
   // Overview: keep the audit chain live - always show the NEWEST end of today's
   // chain (5 s cadence, matching the Live toggle's interval). Past dates are
@@ -2655,9 +2769,9 @@ export default function NotificationsModal({
   useEffect(() => {
     if (!isOpen || !isOverview || !timelineDate) return;
     if (timelineDate !== localDateStr()) return;
-    const iv = setInterval(() => fetchTimeline(timelineDate), 5000);
+    const iv = setInterval(() => fetchTimeline(timelineDate, timelineUser), 5000);
     return () => clearInterval(iv);
-  }, [isOpen, isOverview, timelineDate, fetchTimeline]);
+  }, [isOpen, isOverview, timelineDate, timelineUser, fetchTimeline]);
 
   // Overview: protection-module status. Fetched on open + a slow 30 s cadence
   // (docker inspect etc. change rarely; no need for the 5 s chain rhythm).
@@ -2687,6 +2801,25 @@ export default function NotificationsModal({
       .then(r => (r.ok ? r.json() : null))
       .then(d => setMailMessages(Array.isArray(d?.messages) ? d.messages : null))
       .catch(() => setMailMessages(null));
+    // Service health for the Health and Update row. In-flight guarded, unlike its
+    // neighbours: this one shells out to docker (a daemon probe and an inspect,
+    // 10s each, plus up to six 3s service probes), so a slow answer can outlast
+    // the 30s tick and two runs would stack on one docker socket. Skipping a tick
+    // is better than queueing.
+    if (!systemServicesInFlight.current) {
+      systemServicesInFlight.current = true;
+      fetch(`${getApiBase()}/api/system/services`, { credentials: 'include' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => setSystemServices(d && Array.isArray(d.services) ? d : null))
+        .catch(() => setSystemServices(null))
+        .finally(() => { systemServicesInFlight.current = false; });
+    }
+    // Reads the cached answer from disk; it never asks GitHub. The check button
+    // in the Update and Repair dialog is the only thing that does.
+    fetch(`${getApiBase()}/api/system/update`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setSystemUpdate(d && typeof d === 'object' ? d : null))
+      .catch(() => setSystemUpdate(null));
     // Keep the day list fresh so the follow-today effect sees the new day's
     // file as soon as it exists (otherwise the list is only loaded on open).
     fetchTimelineDates();
@@ -2714,7 +2847,7 @@ export default function NotificationsModal({
     if (autoRefreshRef.current) { clearInterval(autoRefreshRef.current); autoRefreshRef.current = null; }
     if (autoRefresh && isOpen) {
       if (isTimelineView) {
-        autoRefreshRef.current = setInterval(() => timelineDate && fetchTimeline(timelineDate), 5000);
+        autoRefreshRef.current = setInterval(() => timelineDate && fetchTimeline(timelineDate, timelineUser), 5000);
       } else if (isFileView) {
         autoRefreshRef.current = setInterval(() => fetchContent(selectedSource), 5000);
       }
@@ -2910,6 +3043,22 @@ export default function NotificationsModal({
 
           <div className="flex-1 min-w-0" />
 
+          {/* User selector - timeline views. A machine with one account has
+              nothing to choose, so it only appears once a second user exists. */}
+          {isTimelineView && logUsers.length > 1 && (
+            <select
+              value={timelineUser}
+              onChange={e => pickTimelineUser(e.target.value)}
+              title={t('userFilterTitle')}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400 bg-gray-50 shrink-0 max-md:max-w-[110px] max-md:px-1.5"
+            >
+              <option value="">{t('userFilterAll')}</option>
+              {logUsers.map(u => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+          )}
+
           {/* Date selector — timeline views */}
           {isTimelineView && (
             <select
@@ -2976,7 +3125,7 @@ export default function NotificationsModal({
             <button
               type="button"
               onClick={() => {
-                if (isTimelineView) { timelineDate && fetchTimeline(timelineDate); }
+                if (isTimelineView) { timelineDate && fetchTimeline(timelineDate, timelineUser); }
                 else { fetchContent(selectedSource); }
               }}
               disabled={loadingContent || loadingTimeline}
@@ -3191,9 +3340,12 @@ export default function NotificationsModal({
                 mail={mailMessages}
                 thinking={thinkingStatus}
                 supervisor={supervisorStatus}
+                systemServices={systemServices}
+                systemUpdate={systemUpdate}
                 securityLogFile={domainLatest['security']?.filename}
                 onOpenLogFile={(f) => setSelectedSource(f)}
                 onRefreshSecurity={loadSecurity}
+                onOpenUpdateRepair={() => setShowUpdateRepair(true)}
               />
 
             /* HORIZONTAL TIMELINE */
@@ -3222,6 +3374,15 @@ export default function NotificationsModal({
             /* VERTICAL TOOL USE */
             ) : selectedSource === 'tooluse' ? (
               <div className="flex-1 overflow-auto p-4">
+                {/* Say what the filter cannot show. Records written before the
+                    identity was stamped, and work that belongs to no user, carry
+                    no name and vanish under a filter - without this line a short
+                    list reads as "this person did nothing today". */}
+                {timelineUser && timelineUnattributed > 0 && (
+                  <p className="text-xs text-gray-400 mb-3">
+                    {t('userFilterUnattributed', { n: timelineUnattributed })}
+                  </p>
+                )}
                 {loadingTimeline && timelineEvents.length === 0 ? (
                   <div className="flex items-center gap-2 text-sm text-gray-400">
                     <Loader2 size={14} className="animate-spin" />
@@ -3446,6 +3607,17 @@ export default function NotificationsModal({
           </div>
         </div>
       </div>
+
+      {/* The Health and Update row opens the same dialog as Settings -> Advanced.
+          Rendered here rather than inside the pane so it sits above the window's
+          own chrome, and mounted only while open so its polling does not run
+          behind a closed dialog. */}
+      {showUpdateRepair && (
+        <UpdateRepairModal
+          currentUser={currentUser}
+          onClose={() => { setShowUpdateRepair(false); loadSecurity(); }}
+        />
+      )}
     </div>
   );
 }

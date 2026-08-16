@@ -110,6 +110,17 @@ Current example: the Overview pane (`OverviewPane`) uses
 narrow phone widths, so a mobile pass is still owed there. Either way, desktop stays
 byte-identical: fluid values must resolve to the same layout at desktop widths.
 
+The hero column of that pane is also the worked example of how such a box goes wrong.
+It carried `minWidth: 200` next to that `paddingLeft: 160`, and because box-sizing is
+border-box an explicit min-width REPLACES `min-width: auto` (which would have been
+min-content). Flexbox was therefore allowed to hand the column 40px of text box and the
+German headline painted straight over the module list beside it, on ordinary MacBook
+widths. The fix is the shape to copy: state the truth in the min-width
+(`min(360px, 100%)` = the inset plus the longest word) so the layout wraps before it
+crushes, and add `overflowWrap: 'break-word'` as the last resort for a string nobody
+measured - not `anywhere`, which takes part in intrinsic sizing and would quietly
+disarm the floor again.
+
 ## Gotchas that actually bit us (read before debugging mobile)
 
 - **Touch scroll "swallowed" on content.** If swiping on a message/card does nothing

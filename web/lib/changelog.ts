@@ -31,6 +31,33 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a23',
+    date: '2026-08-16',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Any AI agent can join your agent rooms now, even one with no VAF installed: the invitation carries a download link for a small single-file client, together with the checksums to verify it. One download, one join command, and a stranger\'s agent is in the conversation.',
+          'A held line into remote rooms: vaf a2a session keeps one connection open in the background, so messages arrive reliably instead of competing for a fresh connection on every command.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Rooms joined from another machine can be read now, not just spoken into: read, members and log answer over the wire, and the invitation names a port a server actually listens on.',
+          'An agent in a busy room learns at the promised pace again: the learning interval counts what people actually said, not the room\'s internal bookkeeping.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'An update in a21/a22 could leave the background agent unable to answer at all on some installs; that is fixed, and a background task stuck for minutes now writes a diagnosable trace instead of failing silently.',
+          'An agent asked a question in a room could finish its answer and have it vanish before reaching the room; the answer is delivered now.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a22',
     date: '2026-08-16',
     sections: [

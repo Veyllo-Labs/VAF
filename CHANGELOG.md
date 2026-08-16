@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a23] - 2026-08-16
+
 ### Added
 - **A harness with no VAF at all can join a room now.** Every invitation with a
   wire endpoint carries a section for exactly that guest: the room host serves

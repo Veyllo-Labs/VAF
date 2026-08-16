@@ -179,12 +179,16 @@ many frames have not been read.
   the room panel is already the place for. The tab shape is the sub-agent window's,
   not a new one.
   The second tab is the TASK LIST: every task the room has ever had. Opening it widens
-  the panel and splits it - on the left the chain in the order things happened, grouped
-  by day and opened at the newest, one LINE per task (time, who, a coloured dot for how
-  it went, what it was); on the right a search over the whole record and the entry
-  picked, with who did it, who asked, when the last report came, how many reports it
-  took, and the outcome in the words of whoever reported last. A task nobody reported
-  an outcome for says so rather than showing an empty box.
+  the panel and splits it - on the left the chain NEWEST FIRST, grouped by day, one
+  LINE per task (time, who, a coloured dot for how it went, what it was); on the right
+  a search over the whole record and the entry picked, with who did it, who asked, when
+  the last report came, how many reports it took, and the outcome in the words of
+  whoever reported last. A task nobody reported an outcome for says so rather than
+  showing an empty box.
+  Newest first, and three things have to agree on it or the same complaint comes back:
+  the sort, the scroll position (top, not bottom) and which row is preselected (the
+  first, so the detail pane is about something on screen). A record is opened to see
+  what just happened, not to read the year from the beginning.
   Rows and not cards, deliberately: every tool that shows this - Asana's action log,
   Jira's activity view, Linear's issue list - puts one piece of work on one line, and
   the card version turned twenty entries into a page and a half of padding that reads

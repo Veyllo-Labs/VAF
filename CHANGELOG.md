@@ -82,7 +82,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The room's task panel got a record of its own.** How much a room has done stands
   with its other facts - kind, your role, members, opened - as a figure you can click,
   and clicking it widens the panel into the record: on the left the chain of every
-  task the room has ever had in the order it happened, opened at the newest; on the
+  task the room has ever had, newest at the top and grouped by day; on the
   right a search over it and the entry you picked, with who did it, who asked, when,
   and what came of it in the words of whoever reported last. The live board now keeps
   only thirty minutes of finished work; everything older is in the record rather than

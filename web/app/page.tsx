@@ -1339,21 +1339,28 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
     const needle = query.trim().toLowerCase();
     const isActive = (status: string) => status === 'working' || status === 'input_required';
     const activeCount = rows.filter(r => isActive(r.status)).length;
-    // The CHAIN, oldest first: a record of work is read the way it happened, and the
-    // newest thing is the one at the end - which is also where the eye lands when a
-    // list is scrolled to the bottom on open.
-    const chain = rows.slice().sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    // The CHAIN, NEWEST FIRST. A record is opened to see what just happened, not to
+    // read the year from the beginning, and every log people actually live in - a
+    // mail box, an activity feed, this room's own message list read from its end -
+    // puts the latest line where the eye already is. Scrolling to the bottom to find
+    // today was the whole complaint.
+    const chain = rows.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
     const searched = needle
         ? chain.filter(r => `${r.title} ${r.assignee} ${r.requester} ${r.status} ${r.result}`
             .toLowerCase().includes(needle))
         : chain;
     const matches = activeOnly ? searched.filter(r => isActive(r.status)) : searched;
-    const current = matches.find(r => r.id === selected) || matches[matches.length - 1];
+    // Nothing picked yet means the newest, which is now the first row - the same
+    // entry the list opens on, so the pane on the right is never about something the
+    // reader has to scroll to find.
+    const current = matches.find(r => r.id === selected) || matches[0];
     const listRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
-        // Opened at the newest entry, not at the beginning of the year.
+        // Opened at the newest entry, which is the TOP now. Kept rather than dropped:
+        // a list that grew while somebody was reading further down would otherwise
+        // leave them where they were, one row off, every time a report lands.
         const el = listRef.current;
-        if (el && !needle) el.scrollTop = el.scrollHeight;
+        if (el && !needle) el.scrollTop = 0;
     }, [rows.length, needle]);
 
     const stamp = (value?: number) => value

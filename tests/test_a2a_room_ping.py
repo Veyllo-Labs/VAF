@@ -642,9 +642,17 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
         "an activity list without day separators is a wall of times - computing the "
         "flag and not drawing it is the same wall")
     assert "toLocaleTimeString(" in history, "a row needs the time, not the full stamp"
-    # Left: the chain in the order it happened, newest at the end and scrolled to it.
-    assert "(a.ts ?? 0) - (b.ts ?? 0)" in history, "the chain must read oldest to newest"
-    assert "el.scrollTop = el.scrollHeight" in history, "it must open at the newest entry"
+    # Left: the chain NEWEST FIRST, and every one of these three has to agree with the
+    # other two. Sorted the other way round the reader lands in the oldest day; sorted
+    # right but scrolled to the bottom they land in it anyway; sorted and scrolled right
+    # but with the last row preselected, the pane beside the list is about an entry
+    # nowhere near the top. Three ways to rebuild the same complaint, so three pins.
+    assert "(b.ts ?? 0) - (a.ts ?? 0)" in history, "the chain must read newest to oldest"
+    assert "(a.ts ?? 0) - (b.ts ?? 0)" not in history, "it still sorts oldest first"
+    assert "el.scrollTop = 0" in history, "it does not open at the newest entry"
+    assert "|| matches[0]" in history, "the pane opens on the oldest entry, not the newest"
+    assert "matches[matches.length - 1]" not in history, (
+        "the last row is still the one preselected")
     # Right: the detail, which is the half a list cannot answer.
     assert "current.result" in history, "what came of it is not shown"
     assert "roomHistoryNoResult" in history, (

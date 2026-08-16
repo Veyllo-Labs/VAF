@@ -355,7 +355,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `ux_auto_open_outputs` | `True` | Auto-open finished outputs: HTML reports in the browser, other output files via their folder in the file manager, created project folders (skipped in non-interactive runs). |
 | `ux_auto_open_max_tabs` | `8` | Cap on browser tabs auto-opened per search; clamped to 1-20. |
 | `ux_voice_review` | `False` | Terminal-app voice capture: `False` sends the transcript immediately (classic flow), `True` puts it into the input box for editing first. |
-| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). Toggleable in Settings → Advanced (the Logs page's audit timeline depends on it). Location resolves via `VAF_LOG_DIR`, then the platform data dir, then `~/.vaf/logs/`; the checkout's own `logs/` is a candidate only when `VAF_DEV_LOGS` is set, so logs stay under the same home as the other stores - see [DEBUGGING.md](../DEBUGGING.md). |
+| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). No UI toggle; opt out by setting it to `false` in `config.json` (the Logs page's audit timeline depends on it, and its empty states name this key). Location resolves via `VAF_LOG_DIR`, then the platform data dir, then `~/.vaf/logs/`; the checkout's own `logs/` is a candidate only when `VAF_DEV_LOGS` is set, so logs stay under the same home as the other stores - see [DEBUGGING.md](../DEBUGGING.md). |
 | `redis_enabled` | `True` | Use Redis (cache/queues). |
 | `redis_url` | `redis://localhost:6379/0` | Redis DSN. |
 | `gc_enabled` | `True` | Background garbage collection of stale data. |

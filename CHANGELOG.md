@@ -1185,6 +1185,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file produced during a longer agent turn no longer disappears from view, and a
   coding agent that finishes minutes later still finds the right message.
 
+### Changed
+- **The Debug Logs switch is gone from Settings.** Debug logging is on by
+  default and stays on; turning it off is a deliberate opt-out via
+  `debug_logs_enabled` in `config.json`, not a toggle to trip over. The Logs
+  page's empty states name that config key now, so a config with it off does
+  not dead-end pointing at a switch that no longer exists.
+
 ## [0.1.0a21] - 2026-08-08
 
 ### Added

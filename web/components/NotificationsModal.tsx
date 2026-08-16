@@ -833,7 +833,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
     return (
       <div className="flex-1 flex items-center justify-center bg-white">
         <p className="text-sm whitespace-pre-line text-center text-gray-400">
-          {i18n?.empty ?? 'No events yet.\nEnable Debug Logs and run the agent.'}
+          {i18n?.empty ?? 'No events yet.\nRun the agent, or check debug_logs_enabled in ~/.vaf/config.json.'}
         </p>
       </div>
     );

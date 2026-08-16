@@ -4040,18 +4040,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: boolean) => handleChange('memory_enabled', v)}
                                     />
                                     */}
-                                    {/* Debug logs switch is visible again: the Logs page gates its audit
-                                        timeline on debug_logs_enabled and its empty states tell the user
-                                        to "Enable Debug Logs" - so the switch must exist in the UI (live
-                                        incident: a legacy config had it off and the Logs page dead-ended
-                                        with no way to turn it back on). */}
-                                    <div className="h-4" />
-                                    <Switch
-                                        label={tAdvanced('debugLogs')}
-                                        description={tAdvanced('debugLogsDesc')}
-                                        checked={localConfig.debug_logs_enabled ?? true}
-                                        onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
-                                    />
+                                    {/* Debug logs have no UI switch: debug_logs_enabled defaults to ON
+                                        (config.py) and only changes when a user opts out manually in
+                                        ~/.vaf/config.json. The Logs page's empty states name that config
+                                        key, so a config with a legacy false is not a dead end (the
+                                        earlier incident that once forced the switch back into the UI). */}
                                     <div className="h-4" />
                                     <Input
                                         label={tAdvanced('toolTurnCap')}

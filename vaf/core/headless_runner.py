@@ -461,6 +461,85 @@ def _maybe_open_draft_in_editor(
         pass
 
 
+# One stall report per stuck task, remembered here so a three-hour hang writes
+# one stack dump rather than one every metrics tick.
+_REPORTED_STALLS: set = set()
+STALL_THRESHOLD_S = 300.0
+
+
+def report_stalls(tq, *, threshold_s: float = STALL_THRESHOLD_S,
+                  reported: set = _REPORTED_STALLS) -> int:
+    """Say WHERE a stuck worker is stuck, while it still can be said.
+
+    The live incident this exists for: a worker took a LOAD_SESSION command and
+    never finished it. For three hours the metrics printed inflight_total=1,
+    every queue count read zero, and when the process was finally stopped the
+    stack of the stuck thread died with it - the root cause is unknowable to
+    this day. A task in flight past the threshold now writes one loud log line
+    and dumps EVERY thread's Python stack to stall_<date>.log, so the next such
+    hang carries the line of code it is sleeping on.
+
+    Returns how many NEW stalls were reported (for tests; the caller ignores it).
+    """
+    try:
+        stalls = tq.stalled_tasks(threshold_s)
+    except Exception:
+        return 0
+    new = 0
+    for stall in stalls:
+        key = (stall.get("worker"), stall.get("session_id"), stall.get("preview"))
+        if key in reported:
+            continue
+        reported.add(key)
+        new += 1
+        append_domain_log_always(
+            "headless",
+            f"[STALL] worker={stall.get('worker')} has held a task for "
+            f"{stall.get('age_s')}s (session={stall.get('session_id') or '-'}, "
+            f"preview={stall.get('preview')!r}); dumping all thread stacks")
+        try:
+            import faulthandler
+            with open(get_dated_log_path("stall", "log"), "a", encoding="utf-8") as fh:
+                fh.write(f"\n=== stall report: {stall} ===\n")
+                faulthandler.dump_traceback(file=fh, all_threads=True)
+        except Exception:
+            pass
+    return new
+
+
+def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) -> bool:
+    """Post a room turn's plain-text answer into its room when room_send never ran.
+
+    Detection is by the turn's own history: a room_send that ran left a tool
+    entry behind. Placeholder returns ("...", empty) are not answers and are
+    not delivered. Returns True when a fallback delivery happened.
+    """
+    try:
+        text = str(answer or "").strip()
+        if not text or text == "...":
+            return False
+        history = getattr(agent, "history", []) or []
+        for entry in history[hist_before:]:
+            if (entry.get("role") == "tool"
+                    and str(entry.get("name") or "") == "room_send"):
+                return False
+        from vaf.core.a2a.room import Room, participant_key
+        room = Room.open(str(room_wake.get("room_id") or ""))
+        identity = room.identity_for(
+            participant_key("agent", room_wake.get("scope")))
+        if identity is None:
+            return False
+        room.say(identity, text[:4000])
+        append_domain_log_always(
+            "headless",
+            f"[ROOM] answer delivered by fallback (model wrote plain text, "
+            f"{len(text)} chars) room={room_wake.get('room_id')}")
+        return True
+    except Exception as e:
+        append_domain_log_always("headless", f"[ROOM] stray-answer fallback failed: {e}")
+        return False
+
+
 def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
@@ -806,6 +885,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 "stats": qstats,
                             }
                         )
+                        report_stalls(tq)
                     except Exception:
                         pass
             # check for tasks
@@ -2649,13 +2729,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except Exception:
                             _room_memory = ""
                         try:
-                            agent.chat_step(
+                            _hist_before = len(getattr(agent, "history", []) or [])
+                            _room_answer = agent.chat_step(
                                 user_input=_room_wake["prompt"],
                                 skip_input=False,
                                 disable_workflows=True,
                                 disable_tools=False,
                                 memory_context=_room_memory or None,
                             )
+                            # The turn's words must not evaporate. The prompt
+                            # tells the model to answer via room_send, but when
+                            # it answers in plain text instead there is nobody
+                            # on the other end of that text - a synthetic drain
+                            # turn has no chat window - and the room saw an
+                            # agent think for a minute and say nothing. Live
+                            # incident: a direct question in the room, a
+                            # finished 264-character answer, zero tool calls,
+                            # and the answer vanished; the owner read it as the
+                            # agent being dead. If the turn ran no room_send,
+                            # its text IS the answer and is delivered as one.
+                            deliver_stray_room_answer(
+                                agent, _room_wake, _room_answer, _hist_before)
                         except Exception as _room_err:
                             append_domain_log_always(
                                 "headless", f"[ROOM] delivery failed: {_room_err}"

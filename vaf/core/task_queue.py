@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 @dataclass
 class AgentTask:
@@ -62,6 +62,7 @@ class TaskQueue:
                     cls._instance._stop_requests = set()  # Session IDs that requested stop
                     cls._instance._session_inflight = set()
                     cls._instance._inflight_by_worker = {}
+                    cls._instance._inflight_since = {}
                     cls._instance._class_weights = {
                         cls.TASK_CLASS_INTERACTIVE: 5,
                         cls.TASK_CLASS_AUTOMATION: 3,
@@ -212,6 +213,7 @@ class TaskQueue:
                 if task is not None:
                     self._session_inflight.add(task.session_id)
                     self._inflight_by_worker[worker_key] = task
+                    self._inflight_since[worker_key] = time.time()
                     if self.active_task is None:
                         self.active_task = task
                     return task
@@ -229,6 +231,7 @@ class TaskQueue:
             self.active_task = None
             self._session_inflight.clear()
             self._inflight_by_worker.clear()
+            self._inflight_since.clear()
             if include_queued:
                 if self._legacy_mode:
                     self._legacy_heap.clear()
@@ -269,6 +272,34 @@ class TaskQueue:
             self._session_inflight.discard(session_id)
             self._cv.notify_all()
 
+    def stalled_tasks(self, threshold_s: float) -> "List[Dict[str, Any]]":
+        """Tasks that have been IN FLIGHT longer than the threshold.
+
+        A worker that took a task and never called task_done is invisible in
+        every queue count - the queues read empty while a whole worker is gone.
+        The one live incident ran three hours: a LOAD_SESSION command entered
+        flight and the metrics printed inflight_total=1 until shutdown, with
+        nothing anywhere saying WHERE it hung. This is the hook the stall
+        reporter reads so the next one dumps its stacks instead.
+        """
+        now = time.time()
+        out: List[Dict[str, Any]] = []
+        with self._cv:
+            for worker_key, since in self._inflight_since.items():
+                age = now - since
+                if age < threshold_s:
+                    continue
+                task = self._inflight_by_worker.get(worker_key)
+                preview = ""
+                try:
+                    preview = str(getattr(task, "input_text", "") or "")[:80]
+                except Exception:
+                    pass
+                out.append({"worker": str(worker_key), "age_s": int(age),
+                            "session_id": str(getattr(task, "session_id", "") or ""),
+                            "preview": preview})
+        return out
+
     def task_done(self, task: Optional[AgentTask] = None, worker_id: Optional[str] = None):
         """Mark a task as done and release session in-flight lock."""
         worker_key = worker_id or str(threading.get_ident())
@@ -277,6 +308,7 @@ class TaskQueue:
             if resolved is not None:
                 self._session_inflight.discard(resolved.session_id)
             self._inflight_by_worker.pop(worker_key, None)
+            self._inflight_since.pop(worker_key, None)
             self.active_task = next(iter(self._inflight_by_worker.values()), None)
             self._cv.notify_all()
 

@@ -23,6 +23,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   first one's pid. Runs in the foreground, or detached with `--background`.
 
 ### Fixed
+- **A hung worker says where it hangs.** One background worker took a task and
+  never finished it; for three hours the queue looked empty while half the
+  agent was gone, and the stuck thread's stack died with the process. A task
+  held past five minutes now writes one loud log line and a dump of every
+  thread's stack to its own log file, so the next hang can be diagnosed instead
+  of guessed at.
+- **A room answer cannot vanish any more.** An agent asked a direct question in
+  its room wrote a finished reply as plain text instead of through the room
+  tool - and the reply was silently discarded, which read as the agent being
+  dead. A room turn's plain-text answer is now delivered into the room, once,
+  and only when the turn did not already send one properly.
 - **A remote peer can hear now, not just talk.** `read`, `members` and `log`
   answered "there is no room on this machine" for rooms joined over the wire,
   while the sending verbs worked - so the first cross-machine agent spoke into

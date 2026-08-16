@@ -1997,7 +1997,7 @@ class Agent:
                 """
                 try:
                     from uuid import UUID as _UUID
-                    from vaf.core.a2a.room import transcript
+                    from vaf.core.a2a.room import contribution_count, transcript
                     from vaf.memory.rag import run_session_compaction_sync
                     try:
                         _scope = _UUID(str(room_scope)) if room_scope else None
@@ -2006,8 +2006,13 @@ class Agent:
                     if _scope is None:
                         return
                     _all = room.store.frames()
+                    # Contributions, never len(_all): the interval means "every
+                    # 15 things somebody said". A frame count also rises with
+                    # pings, joins and tallies, which grow with the number of
+                    # members - measured live, "every 15" fired every ~2.5 of
+                    # the owner's messages in a three-voice room.
                     run_session_compaction_sync(
-                        self, _scope, room.room_id, len(_all),
+                        self, _scope, room.room_id, contribution_count(_all),
                         conversation=transcript(_all, labels=labels),
                         source=f"room/{room.room_id}",
                     )

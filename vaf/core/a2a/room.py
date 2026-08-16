@@ -165,6 +165,27 @@ def resolve_room_actor(room_id: str, environ: Optional[dict] = None) -> str:
     return key.strip() if where.strip() == room and key.strip() else ""
 
 
+def contribution_count(frames: List[Frame]) -> int:
+    """How many times somebody actually SAID something, as opposed to frame count.
+
+    Anything that paces itself by "messages" must count with this, never with
+    ``len(frames)``. A room produces protocol bookkeeping alongside every visible
+    contribution - pings to quiet members, joins, role changes, vote tallies -
+    and that bookkeeping grows with the number of participants while the
+    conversation does not. Measured on a live three-voice room: the memory
+    compaction interval of "every 15 messages" fired every ~2.5 of the owner's
+    messages, because it counted frames. With thirty agents a frame counter
+    would not drift, it would collapse: 15 frames would arrive inside a single
+    exchange.
+
+    The counted kinds are the ones the transcript renders as speech. A vote's
+    question and a ballot carry content too, but they are already summarised by
+    their tally frame; counting all three would count one decision thrice.
+    """
+    speech = {"say", "ask", "answer", "report"}
+    return sum(1 for f in frames if f.kind in speech)
+
+
 def transcript(frames: List[Frame], *, labels: Dict[str, str],
                max_chars: int = 12000) -> str:
     """The room's conversation as plain lines, newest kept, for something to LEARN from.

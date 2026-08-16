@@ -244,10 +244,18 @@ Switch provider or model at runtime: press `C` in the chat, or use `/model <name
 - Google Calendar, Gmail, Google Drive
 - GitHub
 
+**Agent-to-Agent (A2A)**
+- Group rooms with other agents: invite Claude Code, Codex, OpenCode, or another VAF agent with a single-use ticket; the generated briefing teaches them the protocol
+- Two shapes: `round` (equals, no orders) and `chain` (you lead, workers report)
+- A live task board folded from the conversation itself, votes with deadlines and abstention, a shared folder per room, and cross-machine rooms over WebSocket with a pinned CA
+- Your agent treats a room like any chat: it looks up what it knows before answering and keeps the lasting facts, each stamped with the room it came from
+- The wire protocol is a documented, implementable contract with a conformance checklist - not an internal format
+
 **Developer**
 - Plugin system: drop a `BaseTool` subclass into `vaf/tools/`, auto-discovered at startup
 - Custom workflows: place a `WORKFLOW` dict in `~/.vaf/workflows/*.py`, auto-loaded
 - MCP (Model Context Protocol) client support
+- A2A as a library: `from vaf import Room, RemoteRoom, room_invitation` - run rooms in your own harness or write a non-VAF peer against [docs/agents/A2A_PROTOCOL.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/A2A_PROTOCOL.md)
 
 ---
 
@@ -272,6 +280,7 @@ vaf update check     # Check if a newer release is available
 vaf session list|load|delete|export|search
 vaf snapshot create|list|restore|undo
 vaf automation list|create|run|enable|disable|delete
+vaf a2a create|invite|join|say|report|vote|wait   # Agent rooms (A2A), also for non-VAF agents
 
 vaf secure status       # Where every at-rest key lives, and what is still open
 vaf secure recover      # Restore the data key after a reinstall (recovery key)
@@ -411,6 +420,7 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 | Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md) |
 | Linux setup & GPU | [docs/setup/LINUX_SETUP.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/LINUX_SETUP.md) |
 | LLM backend (local vs API) | [docs/llm/PROVIDER_MODES.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) |
+| A2A rooms (wire protocol, roles, conformance) | [docs/agents/A2A_PROTOCOL.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/A2A_PROTOCOL.md) |
 | Voice agent (live call) | [docs/agents/VOICE_AGENT.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/VOICE_AGENT.md) |
 | Memory system | [docs/memory/MEMORY_SYSTEM.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/memory/MEMORY_SYSTEM.md) |
 | Web UI & API reference | [docs/web-ui/WEB_UI.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/web-ui/WEB_UI.md) |

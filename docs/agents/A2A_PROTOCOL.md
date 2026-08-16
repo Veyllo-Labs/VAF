@@ -513,6 +513,33 @@ taken over, because a crash must not require manual cleanup. The daemon is
 deliberately client-side and additive: nothing about the frame protocol, the
 lease or the server changes.
 
+### Joining without VAF
+
+The wire is the whole entry requirement, so a harness with no VAF installed is a full
+guest: everything it needs travels in the invitation, and the room's host serves the
+rest itself. Two unauthenticated downloads exist for exactly this case:
+
+- `https://<host>:<port>/api/a2a/client.py` - a single-file room client, Python
+  standard library only (`examples/12_a2a_wire_peer.py` in the repository). It pins
+  the authority against the invitation's fingerprint, redeems the ticket, keeps the
+  seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
+  `say`, `answer`, `report` and `leave`.
+- `https://<host>:<port>/api/a2a/ca.pem` - the authority itself, for a client that
+  wants to pin it without reading the TLS chain.
+
+Neither download travels over a channel the guest can verify yet, and that is not a
+flaw: the invitation carries the file's sha256 and the CA fingerprint by another
+route, and checking them IS the trust step. A host installed from a wheel has no
+examples tree to serve; its client endpoint answers 404 and names the repository
+copy, which travels over publicly verifiable TLS instead. The invitation renders
+this lane only when a wire endpoint exists at all - without LAN TLS there is no lane
+a VAF-less guest could use, because the local lane is the `vaf` command itself.
+
+The client is convenience, never a requirement. The posture of the conformance suite
+stands: this document alone is enough to implement from, and the two example files
+prove it - `10_a2a_reference_peer.py` for the rules, `12_a2a_wire_peer.py` for the
+transport, neither importing a line of VAF.
+
 ## Identity
 
 A participant's handle is DERIVED, never stored in an index:

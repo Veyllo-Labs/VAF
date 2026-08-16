@@ -38,18 +38,24 @@ def _load_reference():
 
 # ── the property that makes this a proof ───────────────────────────────────
 
-def test_the_reference_peer_knows_nothing_about_vaf():
-    """MUTATION: import anything from vaf in the reference peer.
+@pytest.mark.parametrize("path", [REFERENCE,
+                                  ROOT / "examples" / "12_a2a_wire_peer.py"],
+                         ids=["rules", "transport"])
+def test_the_reference_peer_knows_nothing_about_vaf(path):
+    """MUTATION: import anything from vaf in the reference peer or the wire peer.
 
-    The moment it does, both sides of every check below run the same lines, and the
+    The moment one does, both sides of every check below run the same lines, and the
     suite goes from proving the protocol is implementable to proving VAF agrees with
-    itself - which it would do whatever the protocol said.
+    itself - which it would do whatever the protocol said. The wire peer is under the
+    same ban for a second reason: it is DOWNLOADED and run on machines that have no
+    VAF to import, so a vaf import would not merely weaken the proof, it would break
+    every guest.
     """
-    source = REFERENCE.read_text(encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
     body = "\n".join(line for line in source.split("\n")
                      if not line.lstrip().startswith("#"))
     for shape in ("import vaf", "from vaf", "vaf.core"):
-        assert shape not in body, f"the reference peer reached into VAF: {shape}"
+        assert shape not in body, f"{path.name} reached into VAF: {shape}"
 
 
 # ── the two implementations, behind one interface ──────────────────────────

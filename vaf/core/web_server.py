@@ -8036,6 +8036,46 @@ def _a2a_hub(room):
     return hub
 
 
+# ── the VAF-less lane: what a stranger's harness downloads before it can join ──
+#
+# Both endpoints are deliberately unauthenticated (listed in AUTH_EXEMPT_PATHS):
+# a guest holds a join ticket, not an account, and the ticket only works on the
+# room socket. Neither response carries user data - the CA certificate is public
+# by design (the private key never leaves this machine), and the client file is
+# public repository content. What makes the unverified fetches safe for the guest
+# is the invitation itself: it carries the CA fingerprint and the file's sha256
+# by another route, and the client checks both before anything is spoken.
+
+@app.get("/api/a2a/client.py")
+async def a2a_guest_client():
+    """The single-file wire client named in every invitation's guest section."""
+    from fastapi.responses import Response as _Response
+
+    from vaf.core.a2a.invite import GUEST_CLIENT_REPO_URL, guest_client_path
+    path = guest_client_path()
+    if path is None:
+        # A pip-installed host has no examples/ tree to serve; the repository
+        # copy is byte-identical and reachable over publicly verifiable TLS.
+        raise HTTPException(status_code=404, detail=(
+            "this host cannot serve the client file; fetch the same file from "
+            f"{GUEST_CLIENT_REPO_URL}"))
+    return _Response(content=path.read_bytes(), media_type="text/x-python",
+                     headers={"Content-Disposition": 'attachment; filename="a2a_client.py"'})
+
+
+@app.get("/api/a2a/ca.pem")
+async def a2a_guest_ca():
+    """The authority a guest pins, checked against the invitation's fingerprint."""
+    from fastapi.responses import Response as _Response
+
+    from vaf.network.ssl_utils import ca_certificate_path
+    path = ca_certificate_path()
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail=(
+            "this host has no LAN authority; local network TLS is not enabled"))
+    return _Response(content=path.read_bytes(), media_type="application/x-pem-file")
+
+
 @app.websocket("/ws/a2a/{room_id}")
 async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
                             token: Optional[str] = Query(None)):

@@ -12,6 +12,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A harness with no VAF at all can join a room now.** Every invitation with a
+  wire endpoint carries a section for exactly that guest: the room host serves
+  a single-file client (`/api/a2a/client.py`, Python standard library only, no
+  install) together with its authority (`/api/a2a/ca.pem`), and the invitation
+  itself carries the file's sha256 and the CA fingerprint - checking those two
+  numbers is what makes the unverified downloads safe. The client pins the
+  authority, redeems the ticket, keeps the seat, and speaks `join`, `read`,
+  `wait`, `say`, `answer`, `report` and `leave`. It lives in the repository as
+  `examples/12_a2a_wire_peer.py`, imports nothing from VAF, and is tested
+  against an independent WebSocket implementation - so the protocol's claim
+  that the document alone is enough to build from now covers the transport,
+  not only the rules.
 - **A held line into a remote agent room: `vaf a2a session`.** The CLI is one
   process per command, and the wire punished that shape: the writer lease from
   each dropped connection blocked the next one for up to 90 seconds, so five of

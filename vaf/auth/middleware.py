@@ -37,6 +37,14 @@ AUTH_EXEMPT_PATHS: set[str] = {
     # tokenless-localhost path no longer covers a browser on another device.
     "/api/auth/test-veyllo-key",
     "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
+    # The A2A guest lane: a foreign harness holds a join ticket, not an account,
+    # so it cannot authenticate here - and must not need to. Both files are
+    # public by design (the CA certificate's private key never leaves this
+    # machine; the client file is public repository content), and the invitation
+    # carries their checksums by another route, which is what makes fetching
+    # them over an unverified channel safe for the guest.
+    "/api/a2a/client.py",
+    "/api/a2a/ca.pem",
     "/docs",
     "/openapi.json",
 }

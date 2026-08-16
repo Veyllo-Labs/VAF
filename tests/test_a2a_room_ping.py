@@ -622,17 +622,32 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
 
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     assert "function RoomTaskHistory" in page, "the record has no surface"
-    assert "roomHistorySearch" in page, "a record without search is an archive nobody reads"
-    assert "type: 'room_task_history'" in page, "the tab never asks for it"
+    assert "type: 'room_task_history'" in page, "nothing ever asks for it"
     assert "setRoomHistory(Array.isArray(data.tasks)" in page, "the answer is dropped"
     # Kept apart from the polled view on purpose.
     assert "roomHistory" in page and "setRoomView({ room: data.room" in page
+
+    # The way IN is a figure among the room's other facts, not a third tab: how much
+    # this room has done is a fact about it, and a tab would have put it beside "who is
+    # here" as though it were another view of the same thing.
+    assert "roomInfoTasks" in page, "the record has no way in"
+    assert "setRoomPanelTab(opening ? 'history' : 'members')" in page
+    # Opening it widens the panel - a record is read in two columns, a member list is not.
+    assert "roomPanelTab === 'history' ? \"max-w-6xl h-[88vh]\"" in page
+
     history = page.split("function RoomTaskHistory", 1)[1].split("\nfunction ", 1)[0]
-    assert "(b.ts ?? 0) - (a.ts ?? 0)" in history, "a record reads newest first"
-    assert "row.result" in history, "what came of it is not shown"
+    assert "roomHistorySearch" in history, "a record without search is an archive nobody reads"
+    # Left: the chain in the order it happened, newest at the end and scrolled to it.
+    assert "(a.ts ?? 0) - (b.ts ?? 0)" in history, "the chain must read oldest to newest"
+    assert "el.scrollTop = el.scrollHeight" in history, "it must open at the newest entry"
+    # Right: the detail, which is the half a list cannot answer.
+    assert "current.result" in history, "what came of it is not shown"
+    assert "roomHistoryNoResult" in history, (
+        "a task nobody reported an outcome for must say so rather than look empty")
 
     import json
     for locale in ("de", "en"):
         messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
-        for key in ("roomHistoryTab", "roomHistorySearch", "roomHistoryEmpty"):
+        for key in ("roomInfoTasks", "roomHistorySearch", "roomHistoryEmpty",
+                    "roomHistoryResult", "roomHistoryNoResult"):
             assert key in messages["main"], f"{key} missing in {locale}.json"

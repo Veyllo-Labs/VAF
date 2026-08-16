@@ -183,9 +183,15 @@ many frames have not been read.
   header rather than under the cards, because folding twenty entries back up must not
   require scrolling past all twenty first. Finished work reads green and failed work
   red: a status rendered as grey text is a status nobody reads.
-  A third tab holds the RECORD: every task the room has ever had, newest first, with
-  who did it, when, and what came of it in the words of whoever reported last -
-  searchable, and fetched only when it is opened. The live board keeps thirty minutes
+  The RECORD is opened from the room's own figures rather than from a third tab: how
+  much this room has done belongs beside its kind, your role and its members, and a
+  tab would have put it next to "who is here" as though it were another view of the
+  same thing. Clicking it widens the panel and splits it - left the chain of every
+  task in the order it happened, opened at the newest; right a search over it and the
+  entry picked, with who did it, who asked, when, and what came of it in the words of
+  whoever reported last. Same shape the memory surface uses, for the same reason: a
+  list answers "which one" and only a detail answers "what came of it". Fetched when
+  it is opened. The live board keeps thirty minutes
   of finished work and nothing older, which is the ordinary pattern (Google Tasks
   folds, Linear and Gmail archive, monday auto-archives) with one simplification VAF
   can afford: the archive already exists and is authoritative, since the transcript is

@@ -1330,56 +1330,114 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
 }) {
     const t = useTranslations('main');
     const [query, setQuery] = useState('');
+    const [selected, setSelected] = useState<string>('');
     const needle = query.trim().toLowerCase();
-    const shown = (needle
-        ? rows.filter(r => `${r.title} ${r.assignee} ${r.requester} ${r.status} ${r.result}`
+    // The CHAIN, oldest first: a record of work is read the way it happened, and the
+    // newest thing is the one at the end - which is also where the eye lands when a
+    // list is scrolled to the bottom on open.
+    const chain = rows.slice().sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    const matches = needle
+        ? chain.filter(r => `${r.title} ${r.assignee} ${r.requester} ${r.status} ${r.result}`
             .toLowerCase().includes(needle))
-        : rows).slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+        : chain;
+    const current = matches.find(r => r.id === selected) || matches[matches.length - 1];
+    const listRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        // Opened at the newest entry, not at the beginning of the year.
+        const el = listRef.current;
+        if (el && !needle) el.scrollTop = el.scrollHeight;
+    }, [rows.length, needle]);
+
+    const stamp = (value?: number) => value
+        ? new Date(value * 1000).toLocaleString(undefined,
+            timeFormat ? { hour12: timeFormat === '12h' } : undefined)
+        : '';
+    const tone = (status: string) => cn(
+        status === 'completed' && "text-emerald-600 dark:text-emerald-400",
+        ['failed', 'rejected', 'canceled'].includes(status) && "text-red-600 dark:text-red-400",
+        !['failed', 'rejected', 'canceled', 'completed'].includes(status) && "text-gray-400");
+
     return (
-        <div className="px-6 py-4">
-            <input value={query} onChange={e => setQuery(e.target.value)}
-                placeholder={t('roomHistorySearch')}
-                className="w-full mb-3 px-3 py-2 rounded-xl text-[13px] border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 dark:border-[#2f2f2f] dark:bg-[#202020] dark:text-[#e6e6e6]" />
-            {loading && <div className="text-[12px] text-gray-400">{t('roomHistoryLoading')}</div>}
-            {!loading && shown.length === 0 && (
-                <div className="text-[12px] text-gray-400">{t('roomHistoryEmpty')}</div>
-            )}
-            <div className="space-y-1.5">
-                {shown.map(row => {
-                    const dead = row.status === 'failed' || row.status === 'rejected'
-                        || row.status === 'canceled';
-                    return (
-                        <div key={row.id}
-                            className="rounded-xl border border-gray-200 bg-gray-50/70 dark:border-[#2f2f2f] dark:bg-[#202020] px-3 py-2">
-                            <div className="flex items-baseline gap-2">
-                                <span className="text-[11px] tabular-nums text-gray-400 shrink-0">
-                                    {row.ts ? new Date(row.ts * 1000).toLocaleString(
-                                        undefined, timeFormat ? { hour12: timeFormat === '12h' } : undefined) : ''}
-                                </span>
-                                <span className="text-[12px] font-medium text-gray-900 dark:text-[#e6e6e6] shrink-0">
-                                    {row.assignee || row.requester || '?'}
-                                </span>
-                                <span className={cn("text-[11px] shrink-0",
-                                    row.status === 'completed' && "text-emerald-600 dark:text-emerald-400",
-                                    dead && "text-red-600 dark:text-red-400",
-                                    !dead && row.status !== 'completed' && "text-gray-400")}>
-                                    {row.status}
-                                </span>
-                            </div>
-                            <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] break-words mt-0.5">
-                                {row.title}
-                            </div>
-                            {/* What came of it, in the words of whoever reported last. A
-                                history that says "completed" and not what came of it
-                                answers half the question it was opened for. */}
-                            {row.result && row.result !== row.title && (
-                                <div className="text-[11px] text-gray-500 dark:text-[#9a9a9a] break-words mt-0.5">
-                                    {row.result}
-                                </div>
-                            )}
+        <div className="flex min-h-0 flex-1 max-md:flex-col">
+            {/* LEFT: the chain. Every task the room has ever had, in the order it
+                happened, with when. Narrow on purpose - it is an index, and the thing
+                being read lives on the right. */}
+            <div ref={listRef}
+                className="w-[38%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b px-3 py-3 space-y-1">
+                {loading && <div className="text-[12px] text-gray-400 px-2">{t('roomHistoryLoading')}</div>}
+                {!loading && matches.length === 0 && (
+                    <div className="text-[12px] text-gray-400 px-2">{t('roomHistoryEmpty')}</div>
+                )}
+                {matches.map(row => (
+                    <button key={row.id} type="button" onClick={() => setSelected(row.id)}
+                        className={cn(
+                            "w-full text-left rounded-xl px-3 py-2 transition-colors",
+                            current?.id === row.id
+                                ? "bg-gray-100 dark:bg-[#242424]"
+                                : "hover:bg-gray-50 dark:hover:bg-[#202020]")}>
+                        <div className="flex items-baseline gap-2">
+                            <span className="text-[10px] tabular-nums text-gray-400 shrink-0">{stamp(row.ts)}</span>
+                            <span className={cn("text-[10px] shrink-0", tone(row.status))}>{row.status}</span>
                         </div>
-                    );
-                })}
+                        <div className="text-[12.5px] text-gray-800 dark:text-[#e0e0e0] truncate">{row.title}</div>
+                        <div className="text-[11px] text-gray-400 truncate">{row.assignee || row.requester}</div>
+                    </button>
+                ))}
+            </div>
+
+            {/* RIGHT: search over the record, and the one entry being read - the shape
+                the memory surface uses, for the same reason: a list answers "which one"
+                and only a detail answers "what came of it". */}
+            <div className="flex-1 min-w-0 flex flex-col">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-[#2a2a2a]">
+                    <input value={query} onChange={e => { setQuery(e.target.value); setSelected(''); }}
+                        placeholder={t('roomHistorySearch')}
+                        className="w-full px-3 py-2 rounded-xl text-[13px] border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 dark:border-[#2f2f2f] dark:bg-[#202020] dark:text-[#e6e6e6]" />
+                    <div className="text-[11px] text-gray-400 mt-1.5">
+                        {t('roomHistoryCount', { shown: matches.length, total: rows.length })}
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 py-4">
+                    {current ? (
+                        <div className="space-y-4">
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                                    {t('roomHistoryWhat')}
+                                </div>
+                                <div className="text-[15px] text-gray-900 dark:text-[#e6e6e6] break-words mt-0.5">
+                                    {current.title}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                {[
+                                    [t('roomHistoryWho'), current.assignee || '-'],
+                                    [t('roomHistoryAsked'), current.requester || '-'],
+                                    [t('roomHistoryWhen'), stamp(current.ts)],
+                                    [t('roomHistoryReports'), String(current.reports ?? 0)],
+                                ].map(([label, value]) => (
+                                    <div key={label} className="min-w-0">
+                                        <div className="text-[10px] uppercase tracking-wide text-gray-400">{label}</div>
+                                        <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] truncate">{value}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                                    {t('roomHistoryResult')}
+                                </div>
+                                <div className={cn("text-[12px] mt-0.5", tone(current.status))}>{current.status}</div>
+                                {/* In the words of whoever reported last: a record that says
+                                    "completed" and not what came of it answers half the
+                                    question it was opened for. */}
+                                <div className="text-[13px] text-gray-700 dark:text-[#c8c8c8] break-words mt-1 whitespace-pre-wrap">
+                                    {current.result || t('roomHistoryNoResult')}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-[12px] text-gray-400">{t('roomHistoryEmpty')}</div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -9754,7 +9812,9 @@ function VAFDashboardContent() {
             {roomMembersOpen && roomView && (
                 <div className="fixed inset-0 z-[85] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-black/60" onClick={() => setRoomMembersOpen(false)} />
-                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-3xl h-[80vh] flex flex-col border border-gray-200 dark:border-[#2a2a2a] overflow-hidden">
+                    <div className={cn(
+                        "relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full flex flex-col border border-gray-200 dark:border-[#2a2a2a] overflow-hidden transition-[max-width,height] duration-300",
+                        roomPanelTab === 'history' ? "max-w-6xl h-[88vh]" : "max-w-3xl h-[80vh]")}>
 
                         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
                             <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
@@ -9780,20 +9840,10 @@ function VAFDashboardContent() {
                             nothing running. Same tab shape the sub-agent window uses. */}
                         <div className="flex items-end gap-1 px-6 pt-2 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
                             {([['members', tMain('roomTabMembers')],
-                               ['work', tMain('roomTabWork')],
-                               ['history', tMain('roomHistoryTab', { count: roomHistory.length || (roomView.room.tasks?.length ?? 0) })]] as const).map(([key, label]) => (
+                               ['work', tMain('roomTabWork')]] as const).map(([key, label]) => (
                                 <button key={key} type="button" role="tab"
                                     aria-selected={roomPanelTab === key}
-                                    onClick={() => {
-                                        setRoomPanelTab(key);
-                                        if (key === 'history') {
-                                            setRoomHistoryLoading(true);
-                                            ws?.send(JSON.stringify({
-                                                type: 'room_task_history',
-                                                room_id: roomView.room.roomId,
-                                            }));
-                                        }
-                                    }}
+                                    onClick={() => setRoomPanelTab(key)}
                                     className={cn(
                                         "flex-none rounded-t-lg border border-b-0 px-3 py-1.5 text-[12px]",
                                         roomPanelTab === key
@@ -9808,7 +9858,7 @@ function VAFDashboardContent() {
                             {/* What the room IS. A group chat's panel that answered only
                                 "who" left the reader without the two things they ask
                                 next: what kind of room this is, and since when. */}
-                            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="px-6 py-4 border-b border-gray-200 dark:border-[#2a2a2a] grid grid-cols-2 md:grid-cols-5 gap-4">
                                 {[
                                     [tMain('roomInfoKind'), roomView.room.roomKind || '-'],
                                     [tMain('roomInfoYou'), roomView.room.role || '-'],
@@ -9822,6 +9872,36 @@ function VAFDashboardContent() {
                                         <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">{value}</div>
                                     </div>
                                 ))}
+                                {/* The record's way in, standing with the other facts about
+                                    the room rather than as a third tab: how much this room
+                                    has done IS one of those facts, and a tab would have put
+                                    it beside "who is here" as if it were a third view of
+                                    the same thing. Opening it widens the panel, because a
+                                    record is read in two columns and a member list is not. */}
+                                <button type="button"
+                                    onClick={() => {
+                                        const opening = roomPanelTab !== 'history';
+                                        setRoomPanelTab(opening ? 'history' : 'members');
+                                        if (opening) {
+                                            setRoomHistoryLoading(true);
+                                            ws?.send(JSON.stringify({
+                                                type: 'room_task_history',
+                                                room_id: roomView.room.roomId,
+                                            }));
+                                        }
+                                    }}
+                                    className={cn(
+                                        "min-w-0 text-left rounded-lg px-2 -mx-2 transition-colors",
+                                        roomPanelTab === 'history'
+                                            ? "bg-gray-100 dark:bg-[#242424]"
+                                            : "hover:bg-gray-100/70 dark:hover:bg-[#242424]")}>
+                                    <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                                        {tMain('roomInfoTasks')}
+                                    </div>
+                                    <div className="text-sm text-gray-900 dark:text-[#e6e6e6] truncate">
+                                        {roomHistory.length || (roomView.room.tasks?.length ?? 0)}
+                                    </div>
+                                </button>
                             </div>
                             {roomView.room.closed && (
                                 <div className="px-6 py-2 text-xs text-gray-400 border-b border-gray-200 dark:border-[#2a2a2a]">

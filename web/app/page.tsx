@@ -1352,6 +1352,12 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
         ? new Date(value * 1000).toLocaleString(undefined,
             timeFormat ? { hour12: timeFormat === '12h' } : undefined)
         : '';
+    const dot = (status: string) => cn(
+        status === 'completed' && "bg-emerald-500",
+        ['failed', 'rejected', 'canceled'].includes(status) && "bg-red-500",
+        status === 'input_required' && "bg-amber-400",
+        !['failed', 'rejected', 'canceled', 'completed', 'input_required'].includes(status)
+            && "bg-gray-400");
     const tone = (status: string) => cn(
         status === 'completed' && "text-emerald-600 dark:text-emerald-400",
         ['failed', 'rejected', 'canceled'].includes(status) && "text-red-600 dark:text-red-400",
@@ -1359,30 +1365,56 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
 
     return (
         <div className="flex min-h-0 flex-1 max-md:flex-col">
-            {/* LEFT: the chain. Every task the room has ever had, in the order it
-                happened, with when. Narrow on purpose - it is an index, and the thing
-                being read lives on the right. */}
+            {/* LEFT: the chain, as LINES rather than cards. Every project tool that
+                shows this - Asana's action log, Jira's activity, Linear's issue list -
+                puts one piece of work on one row: when, who, what, and a chip for how
+                it went. Cards were the mistake here: the same twenty entries turned
+                into a page and a half of padding, so the surface looked empty and
+                crowded at once. Grouped by day, the way the conversation next to it
+                already separates days. */}
             <div ref={listRef}
-                className="w-[38%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b px-3 py-3 space-y-1">
-                {loading && <div className="text-[12px] text-gray-400 px-2">{t('roomHistoryLoading')}</div>}
+                className="w-[40%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b py-2">
+                {loading && <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryLoading')}</div>}
                 {!loading && matches.length === 0 && (
-                    <div className="text-[12px] text-gray-400 px-2">{t('roomHistoryEmpty')}</div>
+                    <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryEmpty')}</div>
                 )}
-                {matches.map(row => (
-                    <button key={row.id} type="button" onClick={() => setSelected(row.id)}
-                        className={cn(
-                            "w-full text-left rounded-xl px-3 py-2 transition-colors",
-                            current?.id === row.id
-                                ? "bg-gray-100 dark:bg-[#242424]"
-                                : "hover:bg-gray-50 dark:hover:bg-[#202020]")}>
-                        <div className="flex items-baseline gap-2">
-                            <span className="text-[10px] tabular-nums text-gray-400 shrink-0">{stamp(row.ts)}</span>
-                            <span className={cn("text-[10px] shrink-0", tone(row.status))}>{row.status}</span>
-                        </div>
-                        <div className="text-[12.5px] text-gray-800 dark:text-[#e0e0e0] truncate">{row.title}</div>
-                        <div className="text-[11px] text-gray-400 truncate">{row.assignee || row.requester}</div>
-                    </button>
-                ))}
+                {matches.map((row, i) => {
+                    const prev = i > 0 ? matches[i - 1] : null;
+                    const newDay = !prev || !isSameDay((prev.ts ?? 0) * 1000, (row.ts ?? 0) * 1000);
+                    return (
+                        <Fragment key={row.id}>
+                            {newDay && (
+                                <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-gray-400">
+                                    {row.ts ? new Date(row.ts * 1000).toLocaleDateString() : ''}
+                                </div>
+                            )}
+                            <button type="button" onClick={() => setSelected(row.id)}
+                                className={cn(
+                                    "w-full text-left px-4 py-1.5 flex items-center gap-2.5 transition-colors",
+                                    current?.id === row.id
+                                        ? "bg-gray-100 dark:bg-[#242424]"
+                                        : "hover:bg-gray-50 dark:hover:bg-[#202020]")}>
+                                <span className="text-[11px] tabular-nums text-gray-400 shrink-0 w-10">
+                                    {row.ts ? new Date(row.ts * 1000).toLocaleTimeString(
+                                        undefined, { hour: '2-digit', minute: '2-digit',
+                                                     hour12: timeFormat === '12h' }) : ''}
+                                </span>
+                                {/* Who did it, as the initials the room shows everywhere
+                                    else - a name column would push the work itself off
+                                    the row it is meant to be about. */}
+                                <span className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]"
+                                    title={row.assignee || row.requester}>
+                                    {(row.assignee || row.requester || '?').slice(0, 2)}
+                                </span>
+                                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dot(row.status))}
+                                    aria-hidden title={row.status} />
+                                <span className="text-[12.5px] text-gray-800 dark:text-[#e0e0e0] truncate flex-1">
+                                    {row.title}
+                                </span>
+                            </button>
+                        </Fragment>
+                    );
+                })}
             </div>
 
             {/* RIGHT: search over the record, and the one entry being read - the shape

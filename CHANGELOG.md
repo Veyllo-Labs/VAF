@@ -67,6 +67,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stops counting as work in progress on every surface. It is never marked finished:
   nobody said it was, and the room does not invent an ending. Any report - even
   "still on it" - puts it back among the living.
+- Fixed: the record stayed on "fetching..." forever while the count beside it showed
+  ten. The request was handled inside the block of commands that act in a room, which
+  is gated by a list of names it was not in, so it never arrived. It has its own
+  read-only branch now - which it needed anyway, because that block joins the person
+  into the room when they are not a member yet, and looking at a record must not make
+  anybody a member of anything.
 - **The room's task panel got a record of its own.** How much a room has done stands
   with its other facts - kind, your role, members, opened - as a figure you can click,
   and clicking it widens the panel into the record: on the left the chain of every

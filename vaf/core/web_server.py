@@ -3868,6 +3868,41 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "type": "session_list",
                         "sessions": session_list_payload(web_sessions)
                     })                
+                elif type == "room_task_history":
+                    # The room's whole record, ON DEMAND and READ-ONLY.
+                    #
+                    # Its own branch rather than a sixth entry in the acting-commands
+                    # block below: that block JOINS the person into the room when they
+                    # are not a member yet, which is right for speaking and wrong for
+                    # looking - opening a record must not make anybody a member of
+                    # anything. Membership is decided by the same function that decided
+                    # the sidebar, exactly as `open_room` does.
+                    user_scope_id = manager.get_connection_user(websocket)
+                    wanted = str(cmd.get("room_id") or "")
+                    try:
+                        from vaf.core.a2a.room import Room
+                        from vaf.core.session import _room_rows
+
+                        if wanted not in {row["room_id"] for row in _room_rows(user_scope_id)}:
+                            await websocket.send_json({"type": "error",
+                                                       "message": "Access denied"})
+                            continue
+                        room = Room.open(wanted)
+                        history = [
+                            {"id": t["id"], "title": t["title"], "status": t["status"],
+                             "assignee": t["assignee_label"],
+                             "requester": t["requester_label"],
+                             "result": str(t.get("result") or "")[:400],
+                             "reports": t["reports"],
+                             "started": t["created_ts"], "ts": t["updated_ts"]}
+                            for t in room.tasks()
+                        ][:400]
+                    except Exception as _hist_err:
+                        log("API", f"room_task_history failed: {_hist_err}")
+                        history = []
+                    await websocket.send_json({"type": "room_task_history",
+                                               "roomId": wanted, "tasks": history})
+
                 elif type == "open_room":
                     # A room is NOT a session and must never reach the session loader:
                     # Session.save rewrites the whole message list, which with N peers
@@ -4002,31 +4037,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     "type": "error",
                                     "message": f"Could not cast that vote: {_vote_err}"})
                                 continue
-
-                        elif type == "room_task_history":
-                            # The whole record, ON DEMAND. Deliberately not part of the
-                            # room payload: that one is polled every three seconds, and
-                            # a room that has run for a month would then pay for its
-                            # entire history on every tick. The live board is a window;
-                            # this is the archive behind it, and it is opened by a
-                            # click rather than carried around just in case.
-                            try:
-                                history = [
-                                    {"id": t["id"], "title": t["title"],
-                                     "status": t["status"],
-                                     "assignee": t["assignee_label"],
-                                     "requester": t["requester_label"],
-                                     "result": str(t.get("result") or "")[:400],
-                                     "reports": t["reports"],
-                                     "started": t["created_ts"], "ts": t["updated_ts"]}
-                                    for t in room.tasks()
-                                ][:400]
-                            except Exception:
-                                history = []
-                            await websocket.send_json({
-                                "type": "room_task_history",
-                                "roomId": room.room_id, "tasks": history})
-                            continue
 
                         elif type == "rename_room":
                             title = str(cmd.get("title") or "").strip()

@@ -637,6 +637,16 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
 
     history = page.split("function RoomTaskHistory", 1)[1].split("\nfunction ", 1)[0]
     assert "roomHistorySearch" in history, "a record without search is an archive nobody reads"
+    # ROWS, not cards. Every tool that shows this - Asana's action log, Jira's
+    # activity, Linear's issue list - puts one piece of work on one line: when, who,
+    # what, and a chip for how it went. Cards turned twenty entries into a page and a
+    # half of padding, which reads as empty and crowded at the same time.
+    assert "rounded-xl border" not in history, "the chain is drawn as cards again"
+    assert "flex items-center gap-2.5" in history, "the row is not a row"
+    assert "{newDay && (" in history, (
+        "an activity list without day separators is a wall of times - computing the "
+        "flag and not drawing it is the same wall")
+    assert "toLocaleTimeString(" in history, "a row needs the time, not the full stamp"
     # Left: the chain in the order it happened, newest at the end and scrolled to it.
     assert "(a.ts ?? 0) - (b.ts ?? 0)" in history, "the chain must read oldest to newest"
     assert "el.scrollTop = el.scrollHeight" in history, "it must open at the newest entry"
@@ -651,3 +661,29 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
         for key in ("roomInfoTasks", "roomHistorySearch", "roomHistoryEmpty",
                     "roomHistoryResult", "roomHistoryNoResult"):
             assert key in messages["main"], f"{key} missing in {locale}.json"
+
+
+def test_asking_for_the_record_neither_needs_nor_creates_membership():
+    """MUTATION: put the record beside the acting commands, or leave it out of the
+    dispatch list entirely.
+
+    Both were real. It WAS in the acting block, which is gated by a list of command
+    names it was not in - so the request fell through and the panel sat on "fetching
+    the record" forever, with the count beside it showing ten. And that block JOINS the
+    person into the room when they are not a member yet, which is right for speaking
+    and wrong for looking: opening a record must not make anybody a member of anything.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert 'elif type == "room_task_history":' in server
+
+    # Its own branch, not inside the acting block: the acting block starts at the
+    # `elif type in (...)` list, and the record must be handled before it.
+    acting_at = server.index('elif type in ("room_say", "close_room"')
+    record_at = server.index('elif type == "room_task_history":')
+    assert record_at < acting_at, (
+        "the record is handled inside the block that joins people into rooms")
+
+    branch = server[record_at:acting_at]
+    assert "_room_rows(user_scope_id)" in branch, "membership is not checked at all"
+    assert "room.join(" not in branch, "looking at a record must not join anybody"
+    assert '"message": "Access denied"' in branch, "a room you are not in must be refused"

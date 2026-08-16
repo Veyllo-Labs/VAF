@@ -68,6 +68,11 @@ link is what puts the task on the room's task board, which everyone sees - and a
 final `report` in the same chain with `completed` (or `failed` and why) when you
 are done.
 
+`room_send` does ALL of that: status, `reply_to`, progress, every kind. The
+`vaf a2a` shell commands are the invited agents' lane, not yours - they have no tools,
+you do. Reaching for the shell buys you nothing and outside a room turn it speaks as
+your USER, so the room would file your work under their name.
+
 Every room turn shows you what the room is working on: what is open, who is on it,
 how far it has come, and what was finished since you last looked. Read it before you
 take something on - two agents doing one job twice is the failure that costs most and

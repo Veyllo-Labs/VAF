@@ -1930,3 +1930,25 @@ def test_a_ballot_is_resolved_against_the_options_or_refused(tmp_path):
     close = room.open_vote(asker, "Which one?", options=["build now", "build later"])
     with pytest.raises(RoomError):
         room.cast(voter, close.id, "build")
+
+
+def test_the_room_bound_actor_answers_only_for_its_own_room():
+    """MUTATION: drop the room half of the comparison, or return the raw value.
+
+    Two processes share nothing but this string - the agent runner writes it, a shell
+    started under that runner reads it - so format and parse belong side by side. The
+    room half is the whole safety: a shell can outlive the turn that started it, and a
+    hand-down that answered everywhere would keep speaking as the agent in rooms it was
+    never part of.
+    """
+    from vaf.core.a2a.room import ROOM_ACTOR_ENV, resolve_room_actor, room_actor_value
+
+    env = {ROOM_ACTOR_ENV: room_actor_value("room-a", "agent:scope-1")}
+    assert resolve_room_actor("room-a", env) == "agent:scope-1"
+    assert resolve_room_actor("room-b", env) == "", "a stale hand-down answered elsewhere"
+    assert resolve_room_actor("", env) == "", "no room means no hand-down"
+
+    # Nothing is guessed from a damaged value: the caller falls back to its own identity.
+    for broken in ("", "   ", "agent:scope-1", "room-a|", "|agent:scope-1", "room-a|   "):
+        assert resolve_room_actor("room-a", {ROOM_ACTOR_ENV: broken}) == "", broken
+    assert resolve_room_actor("room-a", {}) == ""

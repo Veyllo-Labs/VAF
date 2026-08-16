@@ -58,14 +58,36 @@ def _install_stop_handler() -> None:
             pass
 
 
-def _key() -> str:
-    """Who is acting: the machine owner, from the TERMINAL lane.
+#: How an AGENT's shell says which lane it is acting on, and in WHICH room.
+#:
+#: Format: ``<room_id>|<participant key>``. Both halves matter. The key alone would let
+#: a call that outlives its turn keep speaking as the agent in a room it has nothing to
+#: do with; bound to one room, a later call elsewhere simply does not match and falls
+#: back to the ordinary answer.
+#:
+#: This grants nothing new: anyone who can set this variable can already run `vaf` on
+#: this machine, which is the whole reason there is no `--scope` flag. What it fixes is
+#: an ATTRIBUTION. An agent that has its own handle in a room was writing under the
+#: machine owner's whenever it reached for a shell instead of its own tool, so the room
+#: recorded its work as the owner's - measured live, eight reports in a row, and with a
+#: task board that now names who did what, that stopped being a cosmetic difference.
+from vaf.core.a2a.room import ROOM_ACTOR_ENV as ACTOR_ENV   # noqa: E402  (one home for the name)
+
+
+def _key(room_id: str = "") -> str:
+    """Who is acting: the machine owner from the TERMINAL lane, unless a room-bound
+    actor was handed down.
 
     The lane is what keeps this apart from the same owner's agent, which is a different
     actor in a room even though it is the same account. See the module docstring for
-    why there is no way to name another account here.
+    why there is no way to name another account here - and `ACTOR_ENV` above for why
+    naming a LANE, bound to one room, is a different question from naming a scope.
     """
-    from vaf.core.a2a.room import participant_key
+    from vaf.core.a2a.room import participant_key, resolve_room_actor
+
+    handed = resolve_room_actor(room_id)
+    if handed:
+        return handed
     try:
         return participant_key("cli")
     except Exception:
@@ -457,7 +479,7 @@ def _me(room, *, required: bool = True, as_peer: str = ""):
         record = room.store.member(wanted) or {}
         return Identity(wanted, record.get("display") or wanted, None, role)
 
-    identity = room.identity_for(_key())
+    identity = room.identity_for(_key(room.room_id))
     if identity is None and required:
         _fail(f"You have not joined '{room.room_id}'. Run: vaf a2a join {room.room_id}",
               EXIT_NO_ROOM)

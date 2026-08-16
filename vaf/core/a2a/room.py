@@ -127,6 +127,44 @@ def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
     return f"{lane}:{scope}"
 
 
+#: How a running agent hands its lane down to the shells it starts, bound to ONE room.
+#:
+#: A shell inherits the agent's environment, and `vaf a2a` answers as the machine owner
+#: by design - so an agent that reached for a shell command instead of its own tool wrote
+#: under its USER's handle, and the room recorded the agent's work as the person's.
+#:
+#: The room id travels with the key because a shell can outlive the turn that started it
+#: (a coder subprocess does): elsewhere the value simply does not match and the ordinary
+#: answer stands. It grants nothing - whoever can set it can already run `vaf`.
+ROOM_ACTOR_ENV = "VAF_A2A_ROOM_ACTOR"
+
+
+def room_actor_value(room_id: str, key: str) -> str:
+    """The hand-down as it is written into the environment.
+
+    Format and parse live next to each other on purpose: the writer is the agent runner
+    and the reader is the CLI, two processes that share nothing but this string, and one
+    of them changing the separator alone is a silence, not an error.
+    """
+    return f"{str(room_id or '').strip()}|{str(key or '').strip()}"
+
+
+def resolve_room_actor(room_id: str, environ: Optional[dict] = None) -> str:
+    """The handed-down participant key for this room, or "" - never a guess.
+
+    Empty for any other room, which is what keeps a stale hand-down from speaking where
+    it has no business. The caller falls back to its ordinary identity on "".
+    """
+    import os as _os
+
+    raw = str((environ if environ is not None else _os.environ).get(ROOM_ACTOR_ENV) or "").strip()
+    room = str(room_id or "").strip()
+    if not raw or not room or "|" not in raw:
+        return ""
+    where, _, key = raw.partition("|")
+    return key.strip() if where.strip() == room and key.strip() else ""
+
+
 def owner_tenant(value: Optional[str]) -> str:
     """A room's owning TENANT, healing a participant key that was stored as one.
 

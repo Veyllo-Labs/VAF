@@ -19,13 +19,18 @@ from vaf.core.a2a.room import Room
 
 runner = CliRunner()
 
+# The REAL identity resolver, captured before any fixture replaces it: the module-wide
+# `rooms` fixture pins a stand-in, and a test that wants to exercise the real one has to
+# hold on to it from before that happened.
+REAL_KEY = a2a_cmd._key
+
 
 @pytest.fixture()
 def rooms(tmp_path, monkeypatch):
     """Point every store at a temporary directory and pin the acting identity."""
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path)
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: "scope-terminal")
+    monkeypatch.setattr(a2a_cmd, "_key", lambda room_id="": "scope-terminal")
     return tmp_path
 
 
@@ -140,10 +145,10 @@ def test_a_spent_ticket_is_refused_the_second_time(rooms, monkeypatch):
     ticket = _lines(runner.invoke(a2a_cmd.app, ["invite", room_id]))[0]["ticket"]
 
     # A different participant redeems it: the terminal is already a member.
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: "scope-guest")
+    monkeypatch.setattr(a2a_cmd, "_key", lambda room_id="": "scope-guest")
     assert runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket]).exit_code == 0
 
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: "scope-third")
+    monkeypatch.setattr(a2a_cmd, "_key", lambda room_id="": "scope-third")
     again = runner.invoke(a2a_cmd.app, ["join", room_id, "--ticket", ticket])
     assert again.exit_code == a2a_cmd.EXIT_REFUSED
 
@@ -697,7 +702,8 @@ def test_a_shared_room_names_the_accounts_it_takes(rooms, monkeypatch):
 
     # The real lane key: the module fixture pins a stand-in, and a stand-in never
     # matches a host handle - which is derived from the account and the lane.
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+    monkeypatch.setattr(a2a_cmd, "_key",
+                        lambda room_id="": participant_key("cli", a2a_cmd._scope()))
 
     opened = runner.invoke(a2a_cmd.app, ["create", "--shared", "--id", "room-shared-cli"])
     assert opened.exit_code == 0, opened.stdout
@@ -729,7 +735,8 @@ def test_members_says_who_belongs_to_whom(rooms, monkeypatch):
     """
     from vaf.core.a2a.room import Room, derive_peer_id, participant_key
 
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+    monkeypatch.setattr(a2a_cmd, "_key",
+                        lambda room_id="": participant_key("cli", a2a_cmd._scope()))
     runner.invoke(a2a_cmd.app, ["create", "--id", "room-who"])
     room = Room.open("room-who", base=rooms)
     owner = a2a_cmd._scope()
@@ -760,7 +767,8 @@ def test_letting_an_account_in_is_written_down_for_the_administrator(rooms, monk
     """
     from vaf.core.a2a.room import participant_key
 
-    monkeypatch.setattr(a2a_cmd, "_key", lambda: participant_key("cli", a2a_cmd._scope()))
+    monkeypatch.setattr(a2a_cmd, "_key",
+                        lambda room_id="": participant_key("cli", a2a_cmd._scope()))
     events = []
     import vaf.core.security_events as sec
     monkeypatch.setattr(sec, "log_security_event",
@@ -779,3 +787,81 @@ def test_letting_an_account_in_is_written_down_for_the_administrator(rooms, monk
     # And the throttle really keys on it, or the second line above never survives.
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "security_events.py").read_text(encoding="utf-8")
     assert 'key = f"{kind}|{ip}|{username}|{channel}|{path}"' in src
+
+
+def test_an_agents_shell_reports_under_the_agent_and_only_in_its_own_room(rooms, monkeypatch):
+    """MUTATION: honour the handed-down actor without checking the room, or drop it.
+
+    Measured live: an agent closed eight tasks with `vaf a2a report` instead of its own
+    tool, and every one of them landed under the MACHINE OWNER's handle - because the
+    CLI acts as the owner by design, which is also why it has no `--scope` flag. The
+    room then recorded the agent's work as the person's, and with a board that now
+    names who did what that stopped being a cosmetic difference.
+
+    The lane is handed down bound to ONE room. Without that binding a call that outlives
+    its turn - a coder subprocess, say - would keep speaking as the agent in rooms it
+    has nothing to do with.
+    """
+    import os
+
+    from vaf.core.a2a.room import Room, derive_peer_id, participant_key
+
+    owner = a2a_cmd._scope()
+    monkeypatch.setattr(a2a_cmd, "_key", REAL_KEY)
+    room = Room.create(kind="round", owner_scope=owner, base=rooms, room_id="room-actor")
+    agent = room.join(display="Nobel", scope_id=owner,
+                      peer_id=derive_peer_id(participant_key("agent", owner), "room-actor"))
+    person = room.join(display="Alice", scope_id=owner,
+                       peer_id=derive_peer_id(participant_key("cli", owner), "room-actor"))
+    asked = room.ask(person, "close this")
+
+    # No hand-down: the shell is the person, exactly as documented.
+    monkeypatch.delenv(a2a_cmd.ACTOR_ENV, raising=False)
+    runner.invoke(a2a_cmd.app, ["report", "room-actor", "plain", "--status", "working",
+                                "--reply-to", asked.id])
+    assert [f.sender for f in room.store.frames() if f.kind == "report"][-1] == person.peer_id
+
+    # Handed down for THIS room: the shell is the agent.
+    monkeypatch.setenv(a2a_cmd.ACTOR_ENV,
+                       f"room-actor|{participant_key('agent', owner)}")
+    runner.invoke(a2a_cmd.app, ["report", "room-actor", "as the agent",
+                                "--status", "completed", "--reply-to", asked.id])
+    assert [f.sender for f in room.store.frames() if f.kind == "report"][-1] == agent.peer_id, (
+        "the agent's own shell still reports under its user's name")
+
+    # Handed down for ANOTHER room: not honoured here.
+    monkeypatch.setenv(a2a_cmd.ACTOR_ENV,
+                       f"room-somewhere-else|{participant_key('agent', owner)}")
+    runner.invoke(a2a_cmd.app, ["report", "room-actor", "stale hand-down",
+                                "--status", "working", "--reply-to", asked.id])
+    assert [f.sender for f in room.store.frames() if f.kind == "report"][-1] == person.peer_id, (
+        "a hand-down from another room was honoured, so it outlives its turn")
+
+
+def test_the_runner_hands_the_lane_down_and_takes_it_back():
+    """MUTATION: set the actor and never clear it.
+
+    The agent process is ONE process for every account on the machine, and an
+    environment variable is process-wide. Left standing, the next shell - another
+    tenant's, or a coder run long after the turn - would speak as this agent in this
+    room. The house has a rule for exactly this shape, written after a marker left
+    standing pushed every later coder run into the wrong mode.
+    """
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    branch = src.split("_room_wake = agent.collect_room_wake", 1)[1].split("_pushed = False", 1)[0]
+    assert "os.environ[ROOM_ACTOR_ENV] = room_actor_value(" in branch, (
+        "the lane is never handed down")
+    assert '_room_wake["room_id"]' in branch.split("room_actor_value(", 1)[1][:200], (
+        "the hand-down is not bound to the room, so it outlives the turn")
+    restore = branch.split("finally:", 1)[1]
+    assert "os.environ.pop(ROOM_ACTOR_ENV, None)" in restore, "it is never cleared"
+    assert "os.environ[ROOM_ACTOR_ENV] = _prev_actor" in restore, (
+        "a previous value is not put back")
+    # One home for the name and for the format. Both ends of this string live in
+    # different processes, so a separator changed on one side alone is a silence.
+    assert 'ROOM_ACTOR_ENV = "VAF_A2A_ROOM_ACTOR"' in (
+        (Path(__file__).resolve().parents[1] / "vaf" / "core" / "a2a" / "room.py")
+        .read_text(encoding="utf-8")), "the contract does not live in the framework"
+    assert '"VAF_A2A_ROOM_ACTOR"' not in (
+        (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py")
+        .read_text(encoding="utf-8")), "the runner still spells the name by hand"

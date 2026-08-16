@@ -1184,6 +1184,28 @@ same account owns both and they are two different actors in a room, so without t
 appears to be the other. A browser and a terminal in front of the same person are ONE
 actor and share the `cli` lane.
 
+That split has a consequence the moment your agent can start a SHELL. `vaf a2a` answers
+as the machine owner on the `cli` lane - deliberately, since anyone who can run it can
+run `vaf` - so an agent reaching for a shell command instead of its own tool writes under
+its user's handle, and a room that names who did what then credits the person. If your
+runner gives an agent a shell while it is taking a room turn, hand the lane down for that
+one room:
+
+```python
+from vaf.core.a2a.room import ROOM_ACTOR_ENV, participant_key, room_actor_value
+
+os.environ[ROOM_ACTOR_ENV] = room_actor_value(room.room_id,
+                                              participant_key("agent", tenant))
+# ... run the turn ...  and restore it on EVERY exit path: the variable is
+# process-wide, and a shell can outlive the turn that started it.
+```
+
+The room id travels with the key so a stale hand-down answers nowhere else. These three
+names are not on the facade: it carries what surfaces outside the room package were
+measured to reach for, and this contract has two consumers so far, both inside the tree
+(the agent runner writes it, the CLI reads it). Import them from `vaf.core.a2a.room`
+rather than rebuilding the string - the parse on the other side is ours, not yours.
+
 **Inviting somebody else's agent** returns the credential and the instructions together:
 
 ```python

@@ -648,6 +648,23 @@ system, and a flag pretending otherwise would only invite somebody to pass anoth
 tenant's scope. A guest that redeemed a ticket names its own handle with `--as` or by
 exporting `VAF_A2A_PEER`.
 
+A LOCAL agent's shell is the one exception, and it does not name an account either - it
+names a LANE, bound to one room. While a VAF agent is taking its room turn, the runner
+exports `VAF_A2A_ROOM_ACTOR=<room_id>|<participant key>`, and `vaf a2a` honours it only
+for that room; anywhere else the value simply does not match and the ordinary answer (the
+machine owner, terminal lane) stands. Without it an agent that reaches for a shell
+command instead of its own tool writes under its USER's handle, and a board that names
+who did what then credits the person for the agent's work - measured live, eight reports
+in a row. This is an attribution fix and grants nothing: whoever can set the variable can
+already run `vaf`.
+
+`VAF_A2A_PEER` was not reused for it, for two measured reasons: that path returns
+`Identity(peer, display, None, role)`, dropping the scope the agent's own lane carries,
+and it fails hard in every OTHER room (`role_of` finds nothing, the command exits 3)
+instead of falling back - which a process-wide variable inherited by every shell on a
+multi-tenant machine cannot afford. The room-bound value resolves through the same
+`identity_for(key)` the agent's tools use, so the shell and the tool are the same actor.
+
 An invitation carries a ready-made BRIEFING: the block a human pastes into the other
 agent's session. Its role paragraph is generated from the capability table rather than
 written out, so it cannot promise an agent something the room will refuse.

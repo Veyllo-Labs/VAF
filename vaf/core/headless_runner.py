@@ -2584,6 +2584,28 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # are built for whoever was bound last - the cross-user leak the
                         # binding contract exists to prevent. Restored on every exit
                         # path, same discipline as the markers around it (Rule 4.5).
+                        # And the same for a SHELL this turn might open. An agent has
+                        # its own handle in a room, but `vaf a2a` acts as the machine
+                        # owner by design - so an agent that reached for a shell instead
+                        # of its own tool wrote under its user's name, and the task board
+                        # recorded its work as the user's. Measured live: eight reports
+                        # in a row.
+                        #
+                        # Bound to THIS room, not just to this turn, because a coder
+                        # subprocess can outlive the turn: a later call in another room
+                        # does not match the id and falls back to the ordinary answer.
+                        # Restored on every exit path like everything else here - a
+                        # marker left standing is how one wrong mode used to leak into
+                        # every later run.
+                        from vaf.core.a2a.room import (ROOM_ACTOR_ENV, participant_key,
+                                                       room_actor_value)
+                        _prev_actor = os.environ.get(ROOM_ACTOR_ENV)
+                        try:
+                            os.environ[ROOM_ACTOR_ENV] = room_actor_value(
+                                _room_wake["room_id"],
+                                participant_key("agent", _room_wake.get("scope")))
+                        except Exception:
+                            pass
                         _prev_identity = None
                         try:
                             from vaf.core.identity_binding import (Identity,
@@ -2612,6 +2634,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 "headless", f"[ROOM] delivery failed: {_room_err}"
                             )
                         finally:
+                            if _prev_actor is None:
+                                os.environ.pop(ROOM_ACTOR_ENV, None)
+                            else:
+                                os.environ[ROOM_ACTOR_ENV] = _prev_actor
                             if _prev_identity is not None:
                                 try:
                                     from vaf.core.identity_binding import bind_identity

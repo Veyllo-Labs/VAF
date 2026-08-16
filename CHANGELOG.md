@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **An agent's work in a room is filed under the agent, not under you.** A VAF
+  agent has its own handle in a room, but the `vaf a2a` shell commands answer as
+  the machine owner by design - so whenever an agent reached for the shell
+  instead of its own tool, the room recorded its reports under its USER's name,
+  and the task board credited the person for the agent's work. While an agent is
+  taking a room turn its shell now acts as the agent, in that one room only.
 - **Editing a skill no longer throws away what the editor cannot show.** The
   editor has a name and a description, and saving rebuilt the whole file
   header from exactly those two - so a skill written elsewhere lost its own

@@ -49,14 +49,57 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
         fingerprint = str(ca_fingerprint() or "").strip()
         if not host or not fingerprint:
             return {}
-        port = int(Config.get("local_network_https_port", 443) or 443)
+        port, confirmed = _effective_port()
         return {
             "origin": f"wss://{host}:{port}",
             "url": f"wss://{host}:{port}/ws/a2a/{room_id}",
             "ca_fingerprint": fingerprint,
+            "port_confirmed": confirmed,
         }
     except Exception:
         return {}
+
+
+def _effective_port() -> "tuple[int, bool]":
+    """(the HTTPS port peers can actually reach, was it CONFIRMED against a live server).
+
+    The configured port and the bound port routinely differ: 443 is privileged,
+    a desktop VAF cannot bind it and falls back to 8443 - by design, and
+    recorded. An invitation built from the configuration alone therefore named
+    a port nothing listened on, and the peer on the other end saw only
+    "connection refused"; the first field join cost twenty minutes of port
+    scanning against a correct CA fingerprint.
+
+    Three sources, most truthful first. The in-process record covers the tray
+    (which hosts both the proxy and most invitations). The local status
+    endpoint covers `vaf a2a invite` run from a terminal, a SEPARATE process
+    where the in-process record is empty - the running server answers on the
+    always-on internal channel. The configuration is last, and a port that
+    came only from there is reported UNCONFIRMED so the invitation can say so
+    instead of asserting a number nobody verified.
+    """
+    from vaf.core.config import Config
+
+    configured = int(Config.get("local_network_https_port", 443) or 443)
+    try:
+        from vaf.network import runtime_status
+        bound = runtime_status.effective_https_port(default=None)
+        if bound:
+            return int(bound), True
+    except Exception:
+        pass
+    try:
+        import json as _json
+        import urllib.request
+        with urllib.request.urlopen(
+                "http://127.0.0.1:8005/api/network/status", timeout=2) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "replace"))
+        effective = int(data.get("effective_https_port") or 0)
+        if effective:
+            return effective, True
+    except Exception:
+        pass
+    return configured, False
 
 
 def _capability_lines(role: str) -> Dict[str, str]:
@@ -241,6 +284,16 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
             f"   vaf a2a trust {endpoint['origin']} --ca-fp {endpoint['ca_fingerprint']}\n"
             f"   vaf a2a join {room_id} --ticket {ticket} --url {endpoint['url']}"
         )
+        if not endpoint.get("port_confirmed", True):
+            # An invitation that asserts a number nobody verified sends the peer
+            # port-scanning against a correct fingerprint; saying it is a guess
+            # is what turns twenty minutes of that into one look at the host.
+            where += (
+                "\n\nNOTE: the port above comes from this host's CONFIGURATION; no "
+                "running server confirmed it. If the connection is refused, ask the "
+                "host what `vaf status` reports as the HTTPS address - a desktop "
+                "host falls back from 443 to 8443."
+            )
 
     headline = f"You have been invited into an agent room called {room_id}."
     if already_in:

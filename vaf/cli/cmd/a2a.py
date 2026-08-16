@@ -320,6 +320,48 @@ def _remote_frames(record: dict) -> list:
     return frames
 
 
+def _remote_read_frames(room_id: str, record: dict) -> list:
+    """Frames for a remote READ: the session mirror when a daemon holds the
+    room, one wire connection otherwise.
+
+    The mirror is free and instant - the daemon already paid for the frames as
+    they arrived. The one-shot fallback works without a daemon but pays the
+    connection (and, until the server-side lease release lands, may have to
+    wait a previous connection's lease out). Both return the same Frames, so
+    the verbs cannot drift on which lane served them.
+    """
+    try:
+        from vaf.core.a2a.session import mirror_frames, session_pid
+        if session_pid(room_id):
+            return mirror_frames(room_id)
+    except Exception:
+        pass
+    return _remote_frames(record)
+
+
+def _remote_rows(record: dict, frames: list, *, membership: bool) -> list:
+    """Frames as the NDJSON rows `read` prints, one shape with the wait lane."""
+    from vaf.core.a2a.room import BOOKKEEPING_KINDS
+
+    labels = _remote_labels(frames)
+    rows = []
+    for frame in sorted(frames, key=lambda f: (f.lamport, f.id)):
+        if frame.sender == record.get("peer"):
+            continue                     # own echo is not news
+        if frame.kind in BOOKKEEPING_KINDS and not membership:
+            continue
+        if frame.kind == "ping":
+            continue
+        body = frame.body or {}
+        rows.append({"id": frame.id, "peer": frame.sender,
+                     "display": labels.get(frame.sender, frame.sender),
+                     "role": frame.role, "kind": frame.kind,
+                     "text": str(body.get("text") or ""), "body": body,
+                     "lamport": frame.lamport, "ts": frame.ts,
+                     "reply_to": frame.reply_to, "remote": True})
+    return rows
+
+
 def _remote_labels(frames: list) -> dict:
     """Who is who, from the log alone: the display name each peer joined under.
 
@@ -1143,7 +1185,31 @@ def introduce(room_id: str = typer.Argument(...),
 @app.command()
 def members(room_id: str = typer.Argument(...)) -> None:
     """Who is in the room: role, liveness, and who belongs to whom."""
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        # Remote: folded from the frames the seat may read. Honest about what
+        # the wire cannot know - liveness and household pairing live on the
+        # host, so a remote roster carries neither and says so with nulls
+        # rather than inventing "stale" for people who are merely far away.
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        frames = _remote_read_frames(room_id, record)
+        labels = _remote_labels(frames)
+        cards: dict = {}
+        roles: dict = {}
+        for frame in sorted(frames, key=lambda f: f.lamport):
+            if frame.kind == "join":
+                card = (frame.body or {}).get("card")
+                if isinstance(card, dict):
+                    cards[frame.sender] = card
+            roles[frame.sender] = frame.role
+        for peer_id in _remote_members(frames):
+            _emit({"peer": peer_id, "display": labels.get(peer_id, peer_id),
+                   "role": roles.get(peer_id, "peer"), "stale": None,
+                   "card": cards.get(peer_id, {}), "kind": "unknown",
+                   "partner": "", "partner_display": "", "remote": True})
+        return
     _me(room)
     # Which member is a person, which is an agent, and which two are one household.
     # Printed here so an agent that never sees our surfaces can read it too - in a
@@ -1224,6 +1290,85 @@ def _conversation(room, identity, *, since: int, membership: bool):
 
 
 @app.command()
+def session(
+    room_id: str = typer.Argument(...),
+    stop: bool = typer.Option(False, "--stop", help="Stop the running session."),
+    status: bool = typer.Option(False, "--status", help="Print the session's state."),
+    once: bool = typer.Option(False, "--once",
+                              help="Drain the backlog and the outbox, then exit."),
+    background: bool = typer.Option(False, "--background",
+                                    help="Run detached; this command returns at once."),
+) -> None:
+    """Hold ONE connection to a room on another machine and mirror it to files.
+
+    The CLI is one process per command, and the wire punishes that shape: the
+    writer lease from a dropped connection blocks the next one for up to 90
+    seconds, and reading needs a connection too. Measured in the field: two of
+    seven messages arrived over one-connection-per-command, eight of eight over
+    a held one. While a session runs, `read`, `members` and `log` answer from
+    its mirror instantly, and anything dropped into the session's outbox folder
+    is sent on the held line.
+
+    One session per room; a second start names the first one's pid instead of
+    silently fighting it over the outbox.
+    """
+    from vaf.core.a2a.session import (SessionBusy, read_status, run_session,
+                                      session_paths, session_pid)
+
+    if status:
+        pid = session_pid(room_id)
+        state = read_status(room_id) or {}
+        _emit({"room": room_id, "running": bool(pid), "pid": pid or None,
+               **{k: v for k, v in state.items() if k != "pid"}})
+        return
+    if stop:
+        pid = session_pid(room_id)
+        if not pid:
+            _emit({"room": room_id, "stopped": False, "reason": "no session running"})
+            return
+        try:
+            import psutil
+            psutil.Process(pid).terminate()
+        except Exception:
+            if os.name != "nt":
+                import signal as _signal
+                os.kill(pid, _signal.SIGTERM)
+            else:
+                _fail(f"could not stop pid {pid}; end it from the task manager",
+                      EXIT_ERROR)
+        _emit({"room": room_id, "stopped": True, "pid": pid})
+        return
+
+    record = _remote_record(room_id)
+    if record is None:
+        _fail(f"There is no remote room '{room_id}' on this machine - join it "
+              f"first (`vaf a2a join ... --url ...`).", EXIT_NO_ROOM)
+
+    if background:
+        import subprocess
+        import sys as _sys
+        argv = [_sys.executable, "-m", "vaf.main", "a2a", "session", room_id]
+        kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                        "stderr": subprocess.DEVNULL, "close_fds": True}
+        if os.name == "nt":
+            flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            if flags:
+                kwargs["creationflags"] = flags
+        else:
+            kwargs["start_new_session"] = True
+        proc = subprocess.Popen(argv, **kwargs)
+        _emit({"room": room_id, "started": True, "pid": proc.pid,
+               "inbox": str(session_paths(room_id).inbox)})
+        return
+
+    try:
+        raise typer.Exit(run_session(room_id, record, once=once))
+    except SessionBusy as e:
+        _fail(str(e), EXIT_REFUSED)
+
+
+@app.command()
 def read(
     room_id: str = typer.Argument(...),
     all_messages: bool = typer.Option(False, "--all", help="The whole transcript, not just what is new."),
@@ -1234,7 +1379,27 @@ def read(
     as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),
 ) -> None:
     """Print new messages as NDJSON, one object per line."""
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        # A room on another machine. This branch is why a remote peer can HEAR:
+        # the first field join spoke into a room for an hour without seeing the
+        # answers, because read only searched this disk while the wire lane sat
+        # unused. Frames come from the session mirror when a daemon holds the
+        # room, one wire connection otherwise; the cursor lives in the seat
+        # record, exactly where wait keeps it.
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        cursor = 0 if all_messages else int(record.get("cursor") or 0)
+        frames = [f for f in _remote_read_frames(room_id, record)
+                  if f.lamport > cursor]
+        rows = _remote_rows(record, frames, membership=membership)
+        for entry in rows:
+            _emit(entry)
+        if rows and not keep_position and not all_messages:
+            record["cursor"] = int(rows[-1]["lamport"])
+            _remote_save(room_id, record)
+        return
     identity = _me(room, as_peer=as_peer)
     since = 0 if all_messages else room.store.cursor(identity.peer_id)
     rows = _conversation(room, identity, since=since, membership=membership)
@@ -1314,7 +1479,26 @@ def log(room_id: str = typer.Argument(...),
         interval: float = typer.Option(0.5, help="Seconds between checks when following.")) -> None:
     """Show the room as a group chat, for a human to read."""
     _install_stop_handler()
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        if follow:
+            _fail("--follow needs a live lane: run `vaf a2a session` for this room "
+                  "and follow its inbox, or use `vaf a2a wait`.", EXIT_ERROR)
+        from vaf.core.a2a.room import BOOKKEEPING_KINDS
+        frames = _remote_read_frames(room_id, record)
+        labels = _remote_labels(frames)
+        for frame in sorted(frames, key=lambda f: (f.lamport, f.id)):
+            if frame.kind in BOOKKEEPING_KINDS or frame.kind == "ping":
+                continue
+            label = f"{labels.get(frame.sender, frame.sender)} [{frame.role}]"
+            if frame.kind != "say":
+                label += f" ({frame.kind})"
+            text = str((frame.body or {}).get("text") or "").strip()
+            typer.echo(f"{label}: {text}".rstrip())
+        return
     _me(room, required=False)
     shown = 0
 

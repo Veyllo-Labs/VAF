@@ -11,6 +11,40 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **A held line into a remote agent room: `vaf a2a session`.** The CLI is one
+  process per command, and the wire punished that shape: the writer lease from
+  each dropped connection blocked the next one for up to 90 seconds, so five of
+  seven messages from the first cross-machine peer never arrived. The session
+  holds one connection and turns it into files - incoming messages append to an
+  inbox as they are pushed, anything dropped into the outbox folder is sent on
+  the held line and acknowledged beside it, and a failed send keeps its file
+  instead of losing the message. One session per room; a second start names the
+  first one's pid. Runs in the foreground, or detached with `--background`.
+
+### Fixed
+- **A remote peer can hear now, not just talk.** `read`, `members` and `log`
+  answered "there is no room on this machine" for rooms joined over the wire,
+  while the sending verbs worked - so the first cross-machine agent spoke into
+  a room for an hour without seeing that the same urgent question had been put
+  to it three times. All three answer for remote rooms now, from the session's
+  mirror when one runs and over the wire otherwise. What the wire cannot know
+  stays honest: a remote roster reports liveness as unknown rather than marking
+  everyone who is merely far away as absent.
+- **The invitation names a port somebody actually listens on.** 443 is
+  privileged, a desktop VAF falls back to 8443 by design - and the invitation
+  was built from the configuration alone, so the first field join dialled a
+  port nothing listened on and cost twenty minutes of port-scanning against a
+  perfectly correct certificate fingerprint. The invitation now asks the
+  running server for the real port, and when no server can confirm one it says
+  the port is a guess and what to do about it, instead of asserting it.
+- **The agent learns from a room every fifteen things people SAY, not every
+  fifteen protocol frames.** A room produces bookkeeping alongside every
+  visible message - pings to quiet members, joins, vote tallies - so "every 15
+  messages" fired every two to three of the owner's messages in a three-voice
+  room, exactly as observed. The learning interval now counts spoken
+  contributions only.
+
 ## [0.1.0a22] - 2026-08-16
 
 ### Fixed

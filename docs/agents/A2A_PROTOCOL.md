@@ -472,15 +472,46 @@ outcome for a bearer secret nobody wrote down. A seat opens exactly the room who
 store holds its hash, and an account token still needs no seat at all - it can
 always reconnect as itself.
 
-What stays LOCAL on purpose: `members`, `log`, `export`, `introduce`, `kick`,
-`close` and `read` speak the files, because a transcript belongs to its host.
-And a leading `@Name` mention sent over the wire travels as TEXT: the member
+`read`, `members` and `log` answer for remote rooms too, folded from the frames
+the seat may read - the same frames `tasks` and `votes` already fold. This
+boundary used to be drawn at "a transcript belongs to its host", and the first
+field join proved it was drawn wrong: a peer spoke into a room for an hour
+without seeing that the same urgent question had been put to it three times,
+because `read` only searched the local disk. What the wire genuinely cannot
+know stays honest instead of invented: a remote `members` reports `stale: null`
+(liveness lives on the host, and a roster that marks everyone far away as
+absent is worse than none) and no household pairing. `export`, `audit`,
+`mission`, `introduce`, `kick` and `close` remain local: the first three read
+host-side state the frames do not carry, and the last two are the host's
+authority by design.
+
+A leading `@Name` mention sent over the wire travels as TEXT: the member
 table that resolves names lives on the host, and a half-resolved mention would
 sometimes wake the wrong agent and never say so - addressing one member remotely
 is `--to <peer-id>`, taken from the line being answered. The remote reading
 position lives in the client's seat file, not in the host's cursor store, so
 presence derived from host-side cursors does not see a remote reader today;
 named boundary, not an accident.
+
+### The session daemon
+
+`vaf a2a session <room>` holds ONE connection to a remote room and mirrors it
+to files (`inbox.ndjson`, an `outbox/` folder, `status.json`, under the same
+owner-only directory as the seat record). It exists because a CLI is one
+process per command, and the wire punishes that shape: the writer lease from a
+dropped connection blocks the next one for up to its 90 second TTL, and reading
+needs a connection too - so read and write competed for one resource. Measured
+in the first field use: two of seven messages arrived over
+one-connection-per-command, eight of eight over a held connection.
+
+While a session runs, `read`, `members` and `log` answer from its mirror
+instantly and open no wire connection of their own; a payload dropped into the
+outbox is sent on the held line and answered with a sibling `.ack` file (a
+failed send keeps its file, with the reason beside it). One session per room,
+enforced by a lock that names the holder's pid; a lock whose holder is dead is
+taken over, because a crash must not require manual cleanup. The daemon is
+deliberately client-side and additive: nothing about the frame protocol, the
+lease or the server changes.
 
 ## Identity
 
@@ -603,6 +634,7 @@ NDJSON on stdout.
 create  list  invite  join  introduce  trust  say  ask  answer  report
 directive  hire  role  kick  leave  close  delete  members  tasks  read
 wait  log  howto  skill  mission  vote  ballot  votes  audit  export  share
+session
 ```
 
 `mission` says what the room is FOR at length - the paragraph every member is reminded

@@ -21,22 +21,23 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
 import typer
 
 from vaf import __version__
 from vaf.cli.cmd import service
 from vaf.cli.cmd.git import is_git_repo, run_git
 from vaf.cli.ui import UI
+# The check half of updating (is a newer release published, when was that last
+# asked, has an update been left unfinished) lives in the framework: the web
+# server needs the same answers, and importing vaf.cli from vaf.core to get
+# them would point the dependency the wrong way round. Applying an update is
+# what stays here.
+from vaf.core import update_check
 
 app = typer.Typer(help="Check for and apply VAF updates")
 
-GITHUB_REPO = "Veyllo-Labs/VAF"
-_REPO_URL = f"https://github.com/{GITHUB_REPO}.git"
-# The LIST endpoint (newest first) — unlike /releases/latest it INCLUDES prereleases, so an alpha
-# build (e.g. 0.1.0aN, published as a GitHub prerelease) is visible to the updater. Eligibility is
-# then decided in code (_eligible_prereleases) rather than by the endpoint.
-_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+GITHUB_REPO = update_check.GITHUB_REPO
+_REPO_URL = update_check.REPO_URL
 
 
 class _UpdateError(Exception):
@@ -44,184 +45,21 @@ class _UpdateError(Exception):
 
 
 def _update_command() -> str:
-    """The platform-correct command to apply an update.
-
-    `vaf` is a console-script/alias/shim that is not always on PATH (esp. on Windows,
-    where the installer ships `vaf.bat` and adds it to PATH, but a NEW terminal is needed
-    for that to take effect). Point users at a command that always works regardless:
-    the shipped run script in the install directory, which forwards its args to the CLI.
-    """
-    if os.name == "nt":
-        return "run_vaf.bat update"
-    return "vaf update"
-
-
-# ── version / release helpers ────────────────────────────────────────────────
-
-def _eligible_prereleases(include_prereleases: "bool | None" = None) -> bool:
-    """Whether the update check should consider GitHub PRERELEASES.
-
-    `include_prereleases` wins if given (CLI --pre/--stable). Else the `update_include_prereleases`
-    config key wins if set (True/False). Else AUTO: track prereleases only when the INSTALLED build
-    is itself a prerelease — so an alpha (0.1.0aN) follows alpha releases, while a stable build
-    follows stable releases only.
-    """
-    if include_prereleases is not None:
-        return bool(include_prereleases)
-    try:
-        from vaf.core.config import Config
-        cfg = Config.get("update_include_prereleases", None)
-        if cfg is not None:
-            return bool(cfg)
-    except Exception:
-        pass
-    try:
-        from packaging.version import Version
-        return Version(__version__).is_prerelease
-    except Exception:
-        return False
-
-
-def _resolve_latest_release(include_prereleases: "bool | None" = None):
-    """Fetch the newest ELIGIBLE published VAF release from GitHub (offline-safe).
-
-    Uses the releases LIST endpoint (newest first) instead of /releases/latest, because the latter
-    excludes prereleases — during the alpha that hides every release. Stable releases are always
-    eligible; prereleases only when `_eligible_prereleases()` allows.
-
-    Returns `(release, why)`: the highest-version eligible release as {tag, version (tag without
-    leading 'v'), html_url, body, prerelease} with why=None, or `(None, reason)` naming WHY there
-    is no answer. The reason exists because three different situations used to collapse into one
-    sentence ("offline, or none published yet") whose two halves suggest opposite reactions - and
-    the live case that exposed it was neither: GitHub's ANONYMOUS API limit is 60 requests/hour
-    per IP, shared by every process on the network, so a burst from any tool on the same
-    connection makes the updater claim there is no release while one is sitting published.
-    Reasons: "rate_limited:<epoch>", "http:<code>", "offline", "malformed", "none".
-    """
-    incl = _eligible_prereleases(include_prereleases)
-    try:
-        from packaging.version import parse as _parse
-        # per_page=100 (the max) instead of GitHub's default 30, so eligibility is computed over the
-        # full release set, not just the 30 most-recently-created tags.
-        try:
-            resp = requests.get(_RELEASES_URL, timeout=5, params={"per_page": 100},
-                                headers={"Accept": "application/vnd.github+json"})
-        except requests.RequestException:
-            return None, "offline"
-        if resp.status_code != 200:
-            # 403 is how GitHub says "rate limited" (429 is the documented spare);
-            # the remaining-header check keeps a real permission 403 honest.
-            if (resp.status_code in (403, 429)
-                    and resp.headers.get("X-RateLimit-Remaining") == "0"):
-                return None, f"rate_limited:{resp.headers.get('X-RateLimit-Reset', '')}"
-            return None, f"http:{resp.status_code}"
-        data = resp.json()
-        if not isinstance(data, list):
-            return None, "malformed"
-        best = None
-        best_v = None
-        for r in data:
-            if not isinstance(r, dict) or r.get("draft"):
-                continue
-            if r.get("prerelease") and not incl:
-                continue
-            tag = r.get("tag_name", "") or ""
-            ver = tag[1:] if tag.startswith("v") else tag
-            if not ver:
-                continue
-            try:
-                pv = _parse(ver)
-            except Exception:
-                continue
-            if best_v is None or pv > best_v:
-                best_v, best = pv, {
-                    "tag": tag,
-                    "version": ver,
-                    "html_url": r.get("html_url", ""),
-                    "body": r.get("body", ""),
-                    "prerelease": bool(r.get("prerelease", False)),
-                }
-        return best, (None if best is not None else "none")
-    except Exception:
-        pass
-    return None, "malformed"
-
-
-def _resolve_failure_message(why: "str | None") -> str:
-    """One honest sentence per reason - each names the reaction it calls for."""
-    why = why or ""
-    if why.startswith("rate_limited"):
-        suffix = ""
-        try:
-            reset = int(why.split(":", 1)[1])
-            suffix = f" - try again after {datetime.fromtimestamp(reset).strftime('%H:%M')}"
-        except Exception:
-            pass
-        return ("GitHub's API rate limit for this network is used up"
-                f"{suffix}. This says nothing about whether a release exists.")
-    if why == "offline":
-        return "Could not reach GitHub (offline, or a proxy in the way?)."
-    if why == "none":
-        return "No published release found yet."
-    return f"GitHub answered unexpectedly ({why or 'unknown error'})."
-
-
-def _compare_versions(current: str, latest: str) -> int:
-    """Return -1 if current < latest, 0 if equal, 1 if current > latest."""
-    try:
-        from packaging.version import parse
-        c, lt = parse(current), parse(latest)
-    except Exception:
-        c, lt = current, latest
-    return (c > lt) - (c < lt)
-
-
-# ── opt-in startup "update available" hint ────────────────────────────────────
-
-def _update_cache_path() -> Path:
-    return Path.home() / ".vaf" / "update_cache.json"
-
-
-def _cached_or_fetch_latest():
-    """Return {version, relevant} from a <24h cache, else fetch once and cache it.
-
-    None when the latest version is unknown (offline). `relevant` is True when the
-    latest published release is newer than the installed version.
-    """
-    cache = _update_cache_path()
-    now = datetime.now(timezone.utc)
-    try:
-        cached = json.loads(cache.read_text())
-        checked = datetime.fromisoformat(cached["checked_at"])
-        if (now - checked).total_seconds() < 86400:
-            return {"version": cached.get("latest_version"), "relevant": bool(cached.get("relevant"))}
-    except Exception:
-        pass
-    rel, _why = _resolve_latest_release()   # background check: silent either way
-    if not rel or not rel.get("version"):
-        return None
-    version = rel["version"]
-    relevant = _compare_versions(__version__, version) < 0
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"checked_at": now.isoformat(), "latest_version": version, "relevant": relevant}))
-    except Exception:
-        pass
-    return {"version": version, "relevant": relevant}
+    return update_check.update_command_hint()
 
 
 def maybe_notify_update() -> None:
     """Print a one-line 'update available' hint at startup, if enabled.
 
     Opt-out via the `update_check_on_start` config flag; throttled to one network
-    check per day via an on-disk cache. Fully defensive — any error is ignored,
+    check per day via an on-disk cache. Fully defensive - any error is ignored,
     and it never applies an update.
     """
     try:
         from vaf.core.config import Config
         if not Config.get("update_check_on_start", True):
             return
-        info = _cached_or_fetch_latest()
+        info = update_check.cached_or_fetch_latest()
         if info and info.get("relevant") and info.get("version"):
             UI.event("Update", f"Update available: {__version__} -> {info['version']}. Run `{_update_command()}`.")
     except Exception:
@@ -241,30 +79,6 @@ def _repo_root() -> Path:
 def _git(root: Path, *args):
     code, out, err = run_git(list(args), cwd=str(root))
     return code, (out or "").strip(), (err or "").strip()
-
-
-def _is_vaf_source_tree(root: Path) -> bool:
-    """True when `root` is a VAF source tree the self-updater may manage.
-
-    A git checkout and a downloaded ZIP both carry vaf/version.py AND
-    requirements.txt at the root; a pip/wheel install (site-packages) and a
-    foreign repository do not.
-    """
-    return (root / "vaf" / "version.py").exists() and (root / "requirements.txt").exists()
-
-
-def _breadcrumb_path() -> Path:
-    return Path.home() / ".vaf" / "last_update.json"
-
-
-def _write_breadcrumb(data: dict) -> None:
-    p = _breadcrumb_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2))
-
-
-def _clear_breadcrumb() -> None:
-    _breadcrumb_path().unlink(missing_ok=True)
 
 
 # ── update steps (each effect goes through a mockable seam) ───────────────────
@@ -512,7 +326,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
     # git-init and hard-reset site-packages; (b) a venv nested in some OTHER
     # git repository, where `git rev-parse --show-toplevel` resolves to that
     # foreign repo and fetch/checkout would run against it.
-    if not _is_vaf_source_tree(root):
+    if not update_check.is_source_tree(root):
         UI.warning(f"{root} is not a VAF source checkout, so the self-updater does not apply.")
         UI.print("If VAF was installed with pip, update it with:  pip install -U --pre vaf")
         UI.print("(The git self-updater only manages source checkouts / installer setups.)")
@@ -535,15 +349,15 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         except Exception:
             UI.error(f"--tag '{target_tag}' is not a valid version tag (expected like v0.1.0a1).")
             raise typer.Exit(1)
-        if _compare_versions(__version__, target_version) > 0:
+        if update_check.compare_versions(__version__, target_version) > 0:
             UI.warning(f"--tag {target} is OLDER than the installed {__version__} — this is a DOWNGRADE.")
     else:
-        rel, why = _resolve_latest_release(include_prereleases)
+        rel, why = update_check.resolve_latest_release(include_prereleases)
         if not rel or not rel.get("tag"):
-            UI.error(f"Could not determine the latest release: {_resolve_failure_message(why)}")
+            UI.error(f"Could not determine the latest release: {update_check.resolve_failure_message(why)}")
             raise typer.Exit(1)
         target, target_version, notes_url = rel["tag"], rel["version"], rel.get("html_url", "")
-        if _compare_versions(__version__, target_version) >= 0:
+        if update_check.compare_versions(__version__, target_version) >= 0:
             UI.event("Update", f"Already up to date ({__version__}).")
             raise typer.Exit(0)
 
@@ -620,7 +434,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             UI.event("Update", "Cancelled.")
             raise typer.Exit(0)
 
-    _write_breadcrumb({
+    update_check.write_breadcrumb({
         "recorded_head": cur_sha,
         "branch": cur_branch,
         "from_version": __version__,
@@ -671,7 +485,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         _start_service()
         _verify(target_version)
 
-        _clear_breadcrumb()
+        update_check.clear_breadcrumb()
         UI.success(f"VAF updated to {target_version}.")
         if notes_url:
             UI.print(f"Release notes: {notes_url}")
@@ -683,9 +497,9 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             # retry cleanly.
             UI.error("The install was being converted to a git checkout when this failed; it is now a "
                      "git checkout, so re-run `vaf update` to retry.")
-            _clear_breadcrumb()
+            update_check.clear_breadcrumb()
         elif _rollback(root, cur_sha or cur_branch or "HEAD"):
-            _clear_breadcrumb()
+            update_check.clear_breadcrumb()
         else:
             UI.error("Automatic rollback did not complete — the update breadcrumb is kept. "
                      "Resolve the issue, then run `vaf update --recover`.")
@@ -693,7 +507,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
 
 
 def _recover() -> None:
-    p = _breadcrumb_path()
+    p = update_check.last_update_breadcrumb_path()
     if not p.exists():
         UI.event("Update", "No interrupted update to recover.")
         raise typer.Exit(0)
@@ -706,7 +520,7 @@ def _recover() -> None:
     # Same source-tree guard as _apply: never run git against site-packages or
     # a foreign repo. The breadcrumb is kept so recovery still works once the
     # user is back on the real checkout.
-    if not _is_vaf_source_tree(root):
+    if not update_check.is_source_tree(root):
         UI.warning(f"{root} is not a VAF source checkout; recovery does not apply here.")
         UI.print("(The update breadcrumb is kept for the real checkout.)")
         raise typer.Exit(1)
@@ -717,7 +531,7 @@ def _recover() -> None:
         UI.error("Recovery did not complete; the update breadcrumb is kept. "
                  "Resolve the issue and re-run `vaf update --recover`.")
         raise typer.Exit(1)
-    _clear_breadcrumb()
+    update_check.clear_breadcrumb()
     UI.success("Recovered to the previous version.")
 
 
@@ -747,17 +561,17 @@ def check(
 ):
     """Check whether a newer VAF release is available (read-only)."""
     UI.event("Update", f"Installed version: {__version__}")
-    if _breadcrumb_path().exists():
+    if update_check.last_update_breadcrumb_path().exists():
         UI.warning("A previous update did not finish. Run `vaf update --recover`.")
-    rel, why = _resolve_latest_release(pre)
+    rel, why = update_check.resolve_latest_release(pre)
     if rel is None:
-        UI.event("Update", _resolve_failure_message(why), style="warning")
+        UI.event("Update", update_check.resolve_failure_message(why), style="warning")
         raise typer.Exit(0)
     latest = rel["version"]
     if not latest:
         UI.event("Update", "No published release found yet.", style="warning")
         raise typer.Exit(0)
-    cmp = _compare_versions(__version__, latest)
+    cmp = update_check.compare_versions(__version__, latest)
     if cmp < 0:
         UI.event("Update", f"Update available: {__version__} -> {latest}")
         if rel.get("html_url"):

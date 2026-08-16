@@ -8,6 +8,7 @@ import pytest
 import typer
 
 import vaf.cli.cmd.update as upd
+import vaf.core.update_check as uc
 
 
 class FakeGit:
@@ -48,7 +49,7 @@ def patched(monkeypatch, tmp_path):
     monkeypatch.setattr(upd, "is_git_repo", lambda p: True)
     # The fake root is not a real VAF tree on disk; the source-tree guard has
     # its own dedicated tests below.
-    monkeypatch.setattr(upd, "_is_vaf_source_tree", lambda p: True)
+    monkeypatch.setattr(uc, "is_source_tree", lambda p: True)
 
     events = {"stopped": 0, "started": 0}
     monkeypatch.setattr(upd.service, "cmd_stop", lambda: events.__setitem__("stopped", events["stopped"] + 1))
@@ -67,8 +68,8 @@ def patched(monkeypatch, tmp_path):
     monkeypatch.setattr(upd, "_run_migrations", lambda: None)
 
     bc = tmp_path / "last_update.json"
-    monkeypatch.setattr(upd, "_breadcrumb_path", lambda: bc)
-    monkeypatch.setattr(upd, "_resolve_latest_release", lambda pre=None: ({
+    monkeypatch.setattr(uc, "last_update_breadcrumb_path", lambda: bc)
+    monkeypatch.setattr(uc, "resolve_latest_release", lambda pre=None: ({
         "tag": "v9.9.9", "version": "9.9.9", "html_url": "u", "body": "", "prerelease": False
     }, None))
     return types.SimpleNamespace(git=fg, events=events, state=state, breadcrumb=bc)
@@ -91,7 +92,7 @@ def test_apply_non_git_converts_and_resets(patched, monkeypatch):
     calls = patched.git.calls
     heads = [c[0] for c in calls]
     assert "init" in heads                                   # converted to a git checkout
-    assert any(c[0] == "remote" and upd._REPO_URL in c for c in calls)  # origin -> official repo
+    assert any(c[0] == "remote" and uc.REPO_URL in c for c in calls)  # origin -> official repo
     assert ["reset", "--hard", "v9.9.9"] in calls            # adopts the tag
     assert "checkout" not in heads                           # never uses checkout in the non-git path
     assert patched.events["stopped"] == 1 and patched.events["started"] == 1
@@ -232,14 +233,14 @@ def test_apply_tag_downgrade_warns(patched, monkeypatch):
 def test_is_vaf_source_tree_layouts(tmp_path):
     """Git checkouts and ZIP installs qualify; pip/foreign layouts do not."""
     # Empty dir (site-packages-like): no markers.
-    assert not upd._is_vaf_source_tree(tmp_path)
+    assert not uc.is_source_tree(tmp_path)
     # Only the package marker (a wheel install DOES ship vaf/version.py).
     (tmp_path / "vaf").mkdir()
     (tmp_path / "vaf" / "version.py").write_text('__version__ = "0.0.0"\n', encoding="utf-8")
-    assert not upd._is_vaf_source_tree(tmp_path)
+    assert not uc.is_source_tree(tmp_path)
     # Full source layout (checkout or ZIP): both markers present.
     (tmp_path / "requirements.txt").write_text("typer\n", encoding="utf-8")
-    assert upd._is_vaf_source_tree(tmp_path)
+    assert uc.is_source_tree(tmp_path)
 
 
 def test_apply_refuses_non_source_layout(monkeypatch, tmp_path, capsys):

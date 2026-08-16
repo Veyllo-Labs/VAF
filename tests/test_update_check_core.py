@@ -71,7 +71,13 @@ def test_a_stale_cache_is_still_readable(cache):
 # ── checking on demand ───────────────────────────────────────────────────────
 
 def test_check_now_ignores_a_fresh_cache_and_records_the_new_answer(cache, monkeypatch):
-    fresh = datetime.now(timezone.utc).isoformat()
+    # An hour old: still FRESH for the 24h TTL, which is the point of the test,
+    # but far enough from now that the comparison below does not depend on the
+    # clock's resolution. Asserting against a timestamp taken in the same breath
+    # failed on Windows, whose clock granularity handed both calls the same
+    # microsecond - a true statement about the code, expressed so that a coarse
+    # clock could refute it.
+    fresh = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     cache.write_text(json.dumps({"checked_at": fresh, "latest_version": "1.0.0",
                                  "relevant": False}))
     monkeypatch.setattr(uc, "resolve_latest_release", lambda pre=None: (
@@ -83,7 +89,8 @@ def test_check_now_ignores_a_fresh_cache_and_records_the_new_answer(cache, monke
     assert result["release_url"] == "https://x/r"
     written = json.loads(cache.read_text())
     assert written["latest_version"] == "999.0.0"
-    assert written["checked_at"] != fresh, "the button must refresh the timestamp"
+    assert datetime.fromisoformat(written["checked_at"]) > datetime.fromisoformat(fresh), \
+        "the button must refresh the timestamp"
 
 
 def test_check_now_reports_an_older_release_as_not_relevant(cache, monkeypatch):

@@ -58,8 +58,9 @@ popup: **Health and updates**, below Guardrails. It reads
 30 second tick (the services call is in-flight guarded, because it shells out to
 docker and can outlast one tick), and clicking it opens the Update and Repair
 dialog rather than a card. Its precedence is the dashboard's honesty rule in
-order: not measured, then an unreachable docker daemon, then services that are
-down, then degraded ones, then an available update, and only then green. The
+order: not measured, then an unreachable docker daemon, then containers that are
+still inside their own start window (booting is not a fault), then services that
+are down, then degraded ones, then an available update, and only then green. The
 update half reads the cached answer from disk and never asks GitHub - that stays
 the dialog's button. See [WEB_UI.md](../web-ui/WEB_UI.md).
 

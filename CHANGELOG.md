@@ -1194,6 +1194,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   needs, so the panel stacks the way it already did on narrower screens, and a
   long word breaks rather than overflowing. Nothing moves on wide screens.
 
+- **The shield gets out of the way in a narrow window.** It is anchored to the
+  middle of the protection panel, which is right while the headline and the
+  status rows sit side by side. Once the panel stacks, that middle IS the status
+  list, so the big shield sat behind the rows. Stacked, it now moves up into the
+  free corner beside the headline and shrinks to match it, glow and all. Wide
+  windows are unchanged.
+- **Repair waits while the containers are still starting.** Right after VAF
+  starts, the services are on their way up and do not answer yet, which read as
+  a fault and invited a repair that would only have restarted what was already
+  booting. The button now counts down and says the containers are starting, the
+  overview says the same, and a repair leaves a booting container alone. The
+  wait is each container's own start window, so it is thirty seconds for the
+  database and two minutes for the speech services rather than one guess for
+  everything.
+
 ### Added
 - **Health and updates, in the Logs overview.** A new row under Guardrails shows
   whether your services are connected and lights up amber when an update is

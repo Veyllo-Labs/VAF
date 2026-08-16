@@ -245,6 +245,8 @@ type MemoryHealth = {
 type SystemServices = {
   docker: { available: boolean; reason?: string; detail?: string };
   services: ServiceRow[];
+  /** Something is inside its own start window: coming up, not broken. */
+  starting?: boolean;
 };
 
 type SystemUpdate = {
@@ -1303,6 +1305,35 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   // must render as not-measured (grey), never as verified-green.
   const hasChainData = chainOk !== null && (totalRaw ?? 0) > 0;
   const amberInk = dark ? '#fbbf24' : '#b45309';
+
+  // ── Is the protection panel stacked? ─────────────────────────────────────
+  // The shield is decorative and vertically centred, which is right while the
+  // headline and the module list sit side by side. Once the panel wraps, the
+  // centre of the panel IS the module list, and a 210px shield lands behind the
+  // rows. Measured rather than guessed from the viewport: the panel is one grid
+  // track inside a modal inside a window, so its own width is the only thing
+  // that decides whether it wrapped. Same deferred-rAF shape as the timeline's
+  // observer below, for the same reason - a synchronous re-entry spams the
+  // console with undelivered-notification warnings.
+  const heroRef = useRef<HTMLElement | null>(null);
+  const [heroStacked, setHeroStacked] = useState(false);
+  useEffect(() => {
+    let raf = 0;
+    const measure = () => {
+      const el = heroRef.current;
+      if (!el) return;
+      // 662 = the hero column's floor (360) + the gap (22) + the module list's
+      // floor (280). Below it the two cannot share a flex line.
+      setHeroStacked(el.getBoundingClientRect().width < 662);
+    };
+    measure();
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    });
+    if (heroRef.current) ro.observe(heroRef.current);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
   const heroState: 'ok' | 'broken' | 'nodata' = chainOk === false ? 'broken' : hasChainData ? 'ok' : 'nodata';
   const green = dark ? '#4ade80' : '#15803d';
   const red = dark ? '#f87171' : '#b91c1c';
@@ -1397,6 +1428,11 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
     }
     if (!systemServices.docker?.available) {
       return { dot: '#ef4444', status: t('ovHealthDockerDown'), color: red };
+    }
+    // Still inside their own start windows: on their way up, not broken. Said
+    // before any count, so a stack that is booting never reads as a fault.
+    if (systemServices.starting) {
+      return { dot: '#f59e0b', status: t('ovHealthStarting'), color: amberInk };
     }
     const rows = systemServices.services ?? [];
     const down = rows.filter(s => healthOf(s) === 'down');
@@ -1536,7 +1572,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
            dots: green ok, amber attention, red alert, grey not measured), and
            the audit-chain + skills panels STACKED in the right column. ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 12, alignItems: 'stretch' }}>
-      <section style={{
+      <section ref={heroRef} style={{
         position: 'relative', overflow: 'hidden', minHeight: 300,
         border: `1px solid ${overall.border}`, borderRadius: 14, padding: '18px 20px',
         display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap',
@@ -1549,9 +1585,32 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
             (owner: circle centre must equal shield centre). The soft radial
             fade IS the "mega blur" - no filter/blur (banned by the anti-leak
             rules). height 116% overflows top/bottom so the glow softly touches
-            both panel edges. */}
-        <div aria-hidden style={{ position: 'absolute', top: '50%', left: 90, height: '116%', aspectRatio: '1 / 1', transform: 'translate(-50%, -50%)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 0, pointerEvents: 'none', background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)` }}>
-          <div style={{ color: overall.shield }}><OverallIcon size={210} strokeWidth={1.4} /></div>
+            both panel edges.
+
+            Once the panel WRAPS, the vertical centre it is anchored to stops
+            being the headline and becomes the module list, so a 210px shield
+            lands behind the rows and reads as clutter. Stacked, it moves up to
+            the free corner beside the headline and shrinks to match it: same
+            motif, same glow, out of the reading path. The wide layout is
+            untouched. */}
+        <div aria-hidden style={{
+          position: 'absolute', zIndex: 0, pointerEvents: 'none',
+          borderRadius: '50%', aspectRatio: '1 / 1',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transform: 'translate(-50%, -50%)',
+          // 50 is the centre of the headline block (18px padding + a 65px block
+          // of eyebrow, headline and sub-line), so the shield sits level with
+          // the words rather than above or below them; a 100px shield then ends
+          // exactly where the wrapped module list begins, which is what keeps it
+          // out of the rows. The glow reaches past that, softly and on purpose.
+          ...(heroStacked
+            ? { top: 50, left: 70, height: 168 }
+            : { top: '50%', left: 90, height: '116%' }),
+          background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)`,
+        }}>
+          <div style={{ color: overall.shield }}>
+            <OverallIcon size={heroStacked ? 100 : 210} strokeWidth={1.4} />
+          </div>
         </div>
         {/* The minWidth states the TRUTH about this box: the 160px inset that clears
             the shield, plus room for the longest headline word (German

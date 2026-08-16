@@ -29,6 +29,8 @@ export interface ServiceRow {
     configured_port?: number | null;
     port_mismatch?: boolean;
     probe_ok?: boolean | null;
+    starting?: boolean;
+    starting_seconds_left?: number;
     state?: string;
     reason?: string;
 }
@@ -37,6 +39,10 @@ interface ServicesSnapshot {
     docker: { available: boolean; reason?: string; detail?: string };
     stack_root?: string | null;
     services: ServiceRow[];
+    /** Something is inside its own start window: repairing it now would only
+     *  restart a container that is already on its way up. */
+    starting?: boolean;
+    starting_seconds_left?: number;
 }
 
 interface RepairStep {
@@ -82,6 +88,7 @@ export function healthOf(svc: ServiceRow): Health {
     if (svc.exists === false || svc.exists === null) return svc.required ? 'down' : 'idle';
     if (!svc.running) return svc.required ? 'down' : 'idle';
     if (svc.port_mismatch) return 'degraded';
+    if (svc.starting) return 'degraded';
     if (svc.probe_ok === false) return svc.required ? 'down' : 'degraded';
     if (svc.health && !['healthy', 'none', ''].includes(svc.health)) return 'degraded';
     return 'ok';
@@ -141,6 +148,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     const [elapsed, setElapsed] = useState(0);
 
     const [services, setServices] = useState<ServicesSnapshot | null>(null);
+    const servicesStarting = Boolean(services?.starting);
     const [servicesError, setServicesError] = useState<string | null>(null);
     const [repairBusy, setRepairBusy] = useState(false);
     const [repairSteps, setRepairSteps] = useState<RepairStep[] | null>(null);
@@ -362,14 +370,16 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
 
     useEffect(() => {
         loadServices();
+        // Faster while the stack is coming up: the wait is being counted down on
+        // screen, and a ten second tick would make it jump in tens.
         const id = setInterval(() => {
             const kind = phaseRef.current.kind;
             if (kind === 'applying' || kind === 'waiting' || kind === 'done' || kind === 'timeout') return;
             if (repairBusy) return;
             loadServices();
-        }, 10000);
+        }, servicesStarting ? 3000 : 10000);
         return () => clearInterval(id);
-    }, [loadServices, repairBusy]);
+    }, [loadServices, repairBusy, servicesStarting]);
 
     useEffect(() => {
         if (phase.kind !== 'waiting') return;
@@ -436,6 +446,13 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // exactly the state while the server is restarting during an update.
     const rows = useMemo(() => services?.services ?? [], [services]);
     const issues = useMemo(() => rows.filter((s) => healthOf(s) !== 'ok'), [rows]);
+    // While the stack is inside its own start window there is nothing to repair
+    // yet: the containers are already on their way up, and a repair would only
+    // restart them and begin the wait again. The countdown is the container's
+    // own start period (30s for the database, 120s for the speech services), so
+    // it is right for each of them rather than one invented number for all.
+    const starting = Boolean(services?.starting);
+    const startingLeft = Math.max(0, Number(services?.starting_seconds_left ?? 0));
 
     const statusLabel = useCallback((svc: ServiceRow): string => {
         const h = healthOf(svc);
@@ -741,15 +758,21 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                     </span>
                                     <button
                                         onClick={runRepair}
-                                        disabled={repairBusy || overlayActive}
+                                        disabled={repairBusy || overlayActive || starting}
+                                        title={starting ? tM('startingHint') : undefined}
                                         className={`h-9 px-4 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50 ${
-                                            issues.length
+                                            issues.length && !starting
                                                 ? 'bg-amber-500 hover:bg-amber-600 text-white'
                                                 : 'border border-gray-200 bg-white hover:bg-gray-50 text-gray-700'
                                         }`}
                                     >
                                         {repairBusy ? (
                                             <><Loader2 size={14} className="animate-spin" /> {tM('repairRunning')}</>
+                                        ) : starting ? (
+                                            <><Loader2 size={14} className="animate-spin" />
+                                                {startingLeft > 0
+                                                    ? tM('startingWaitSeconds', { n: startingLeft })
+                                                    : tM('startingWait')}</>
                                         ) : (
                                             <><Wrench size={14} /> {tM('repair')}</>
                                         )}
@@ -757,6 +780,16 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                 </div>
 
                                 <div className="mt-3 space-y-1.5">
+                                    {starting && (
+                                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-700">
+                                            <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin" />
+                                            <span>
+                                                {startingLeft > 0
+                                                    ? tM('startingBannerSeconds', { n: startingLeft })
+                                                    : tM('startingBanner')}
+                                            </span>
+                                        </div>
+                                    )}
                                     {issues.length === 0 && rows.length > 0 && (
                                         <div className="flex items-center gap-2 text-xs text-green-600">
                                             <Check size={13} /> {tM('noIssues')}

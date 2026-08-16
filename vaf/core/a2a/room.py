@@ -2274,6 +2274,10 @@ def fold_tasks(frames: List[Frame], *, labels: Dict[str, str],
                 "status": "submitted",
                 "progress": None,
                 "reports": 0,
+                # WHAT CAME OF IT, in the words of whoever reported last. A history
+                # that says a task was completed and not what came of it answers half
+                # the question anybody opens a history for.
+                "result": "",
                 "created_ts": root.ts,
                 "updated_ts": root.ts,
                 "updated_lamport": root.lamport,
@@ -2299,6 +2303,7 @@ def fold_tasks(frames: List[Frame], *, labels: Dict[str, str],
             if progress is not None:
                 entry["progress"] = progress
             entry["assignee"] = entry["assignee"] or frame.sender
+            entry["result"] = str((frame.body or {}).get("text") or "")[:400] or entry["result"]
             entry["updated_ts"] = frame.ts
             entry["updated_lamport"] = frame.lamport
 

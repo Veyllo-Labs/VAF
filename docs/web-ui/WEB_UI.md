@@ -178,6 +178,18 @@ many frames have not been read.
   answered in a window of its own, a group chat grows a third surface for something
   the room panel is already the place for. The tab shape is the sub-agent window's,
   not a new one.
+  Inside it, each member folds: what is RUNNING is always drawn, what has gone quiet
+  and what is finished sit behind one switch in that member's own header - in the
+  header rather than under the cards, because folding twenty entries back up must not
+  require scrolling past all twenty first. Finished work reads green and failed work
+  red: a status rendered as grey text is a status nobody reads.
+  A third tab holds the RECORD: every task the room has ever had, newest first, with
+  who did it, when, and what came of it in the words of whoever reported last -
+  searchable, and fetched only when it is opened. The live board keeps thirty minutes
+  of finished work and nothing older, which is the ordinary pattern (Google Tasks
+  folds, Linear and Gmail archive, monday auto-archives) with one simplification VAF
+  can afford: the archive already exists and is authoritative, since the transcript is
+  write-once and `vaf a2a tasks` prints every task there has ever been.
 - **The row carries a pencil and a bin**, in the place a conversation carries them,
   doing the room's version of each. The pencil edits the name IN THE ROW, exactly as a
   conversation does - the same gesture one row apart must not be a different interaction

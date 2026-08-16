@@ -67,6 +67,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stops counting as work in progress on every surface. It is never marked finished:
   nobody said it was, and the room does not invent an ending. Any report - even
   "still on it" - puts it back among the living.
+- **The room's task panel got a record of its own.** A third tab holds every task the
+  room has ever had - newest first, searchable, with who did it, when, and what came
+  of it in the words of whoever reported last. The live board now keeps only thirty
+  minutes of finished work; everything older is in the record rather than in the way.
+  It is fetched when the tab is opened rather than carried in the payload the browser
+  polls every three seconds.
+- Each member's finished and silent work folds behind ONE switch in that member's
+  header. It used to be two links under the cards, which is fine for three entries and
+  wrong for twenty: folding a list back up meant scrolling past everything it was
+  supposed to fold away. Finished work now reads green and failed work red, instead of
+  both being grey text nobody reads.
 - Work that has gone quiet is counted before it is stacked too - five grey cards
   weigh as much on screen as five live ones, so the panel answered "what is happening
   here" with a wall of what is not. It folds into one line per member and unfolds on

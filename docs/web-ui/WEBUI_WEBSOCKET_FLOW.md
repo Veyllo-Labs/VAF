@@ -188,6 +188,13 @@ Key rules:
   exist so the view can leave the button off rather than offer one that is refused.
   `rename_room` changes the manifest topic and is host-only; it deliberately writes no
   frame, because a topic is a property of the room and not something anybody said.
+- `room_task_history` (`{ room_id }`): the room's whole task record, answered with
+  `room_task_history` (`{ roomId, tasks }`, up to 400, each `{ id, title, status,
+  assignee, requester, result, reports, started, ts }`). Deliberately NOT part of
+  `room_transcript`: that payload is polled every three seconds, and a room that has
+  run for a month would pay for its entire history on every tick. The transcript
+  carries a WINDOW of finished work (thirty minutes); this is the record behind it,
+  fetched when somebody opens it.
 - `cast_room_vote` (`{ room_id, vote_id, choice }`): the person voting in an open
   question, on the same CLI lane. The choice is RESOLVED against the vote's options by
   the room at ingest, not here - a shortened answer lands on the option it means, and one

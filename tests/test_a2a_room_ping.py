@@ -459,13 +459,11 @@ def test_the_surfaces_count_only_what_has_been_heard_from():
     # thing folded away, and only because it is over.
     # Silent work is FOLDED, not dropped: five grey cards weigh as much on screen as
     # five live ones, so the count is the way in and one click brings them back.
-    assert "openQuiet[label] ? quiet : []" in page, (
-        "silent work is either stacked unfolded again or gone entirely")
-    assert "roomWorkShowQuiet" in page and "roomWorkHideQuiet" in page
-    assert "openDone[label] ? done : []" in page, (
-        "finished work must stay folded as well")
-    # Live work is never behind a fold - that is the one thing the panel is for.
     body = page.split("function RoomWorkPanel", 1)[1].split("\nfunction ", 1)[0]
+    assert "openMember[label] ? [...quiet, ...done] : []" in body, (
+        "silent work is either stacked unfolded again or gone entirely")
+    assert "roomWorkQuiet" in body, "the count that is the way in"
+    # Live work is never behind a fold - that is the one thing the panel is for.
     assert "{[...active,\n" in body, "running work must be drawn unconditionally"
     assert "roomWorkSilentFor" in page, "a silent entry must say how long it has been"
 
@@ -576,14 +574,65 @@ def test_finished_work_is_counted_before_it_is_stacked():
     assert "t[\"status\"] not in done_states" in board
 
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    assert "openDone[label] ? done : []" in page, "every finished task is drawn at once"
-    assert "roomWorkShowDone" in page and "roomWorkHideDone" in page, (
-        "the count is not offered as a way in")
+    panel = page.split("function RoomWorkPanel", 1)[1].split("\nfunction ", 1)[0]
+    assert "openMember[label] ? [...quiet, ...done] : []" in panel, (
+        "every finished task is drawn at once")
+    assert "roomWorkDone" in panel, "the count is not offered as a way in"
     # Per member, not one switch for the panel: two agents' histories are two answers.
-    assert "setOpenDone(prev => ({ ...prev, [label]: !prev[label] }))" in page
+    assert "setOpenMember(prev => ({ ...prev, [label]: !prev[label] }))" in panel
+    # And the switch sits in the HEADER: with twenty entries, a link under the cards
+    # can only be reached by scrolling past everything it is meant to fold away.
+    header = panel.split("const head = (", 1)[1].split("return folded > 0", 1)[0]
+    assert "{label}" in header and "roomWorkRunning" in header
+    assert 'aria-expanded={isOpen}' in panel, "a fold must say whether it is open"
 
     import json
     for locale in ("de", "en"):
         messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
-        for key in ("roomWorkShowDone", "roomWorkHideDone"):
+        for key in ("roomWorkQuiet", "roomWorkDone"):
+            assert key in messages["main"], f"{key} missing in {locale}.json"
+
+
+def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
+    """MUTATION: put the history in the room payload, or leave the live board carrying
+    everything that was ever finished.
+
+    Two questions, two surfaces. "What is happening here" needs the last half hour;
+    "what came of that thing on Tuesday" needs the record - and a single list answers
+    the first one badly after a week. Every task UI grows this eventually: Google Tasks
+    folds, Linear and Gmail archive, monday auto-archives after N days. VAF's own twist
+    is that the archive already exists and is authoritative (the write-once transcript,
+    `vaf a2a tasks`), so the panel needs a WINDOW, never an archive of its own.
+
+    The record must NOT ride in the room payload: that is polled every three seconds,
+    and a room that has run for a month would pay for its whole history on every tick.
+    """
+    server = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert 'elif type == "room_task_history":' in server, (
+        "there is no way to ask for the record")
+    assert '"type": "room_task_history"' in server
+    # The live board keeps a WINDOW of finished work, not all of it.
+    assert "ROOM_DONE_WINDOW_S = 1800.0" in server
+    assert "done_window_s <= 0 or float(t.get(\"updated_ts\") or 0.0) >= cutoff" in server
+
+    # And what came of a task travels with it - a record that says "completed" and not
+    # what came of it answers half the question it was opened for.
+    room_src = (ROOT / "vaf" / "core" / "a2a" / "room.py").read_text(encoding="utf-8")
+    assert 'entry["result"] = str((frame.body or {}).get("text") or "")[:400]' in room_src
+
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "function RoomTaskHistory" in page, "the record has no surface"
+    assert "roomHistorySearch" in page, "a record without search is an archive nobody reads"
+    assert "type: 'room_task_history'" in page, "the tab never asks for it"
+    assert "setRoomHistory(Array.isArray(data.tasks)" in page, "the answer is dropped"
+    # Kept apart from the polled view on purpose.
+    assert "roomHistory" in page and "setRoomView({ room: data.room" in page
+    history = page.split("function RoomTaskHistory", 1)[1].split("\nfunction ", 1)[0]
+    assert "(b.ts ?? 0) - (a.ts ?? 0)" in history, "a record reads newest first"
+    assert "row.result" in history, "what came of it is not shown"
+
+    import json
+    for locale in ("de", "en"):
+        messages = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
+        for key in ("roomHistoryTab", "roomHistorySearch", "roomHistoryEmpty"):
             assert key in messages["main"], f"{key} missing in {locale}.json"

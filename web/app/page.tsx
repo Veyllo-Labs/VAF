@@ -1215,6 +1215,12 @@ function RoomVoteDock({ votes, onVote, leaving, widthClass }: {
 
 type RoomTask = NonNullable<RoomView['tasks']>[number];
 
+/** One row of a room's task history: who did what, when, and what came of it. */
+type RoomHistoryRow = {
+    id: string; title: string; status: string; assignee: string; requester: string;
+    result: string; reports: number; started?: number; ts?: number;
+};
+
 const ROOM_TASK_ACTIVE = ['submitted', 'working', 'input_required'];
 
 /** What is being worked on RIGHT NOW, docked above the message box.
@@ -1305,6 +1311,81 @@ function RoomWorkDock({ tasks, widthClass, onOpen }: {
  *  question "what is Nobel on" has a place to be asked. Same derivation, one level
  *  of detail apart, the way the tally line and an agent's own summary are.
  */
+/** Everything this room has ever worked on: newest first, searchable.
+ *
+ *  A separate view rather than a longer list, because the two answer different
+ *  questions - "what is happening" needs the last hour, "what came of that thing last
+ *  Tuesday" needs the record. Keeping both in one list makes the first one unusable
+ *  after a week, which is the shape every task UI eventually grows out of (Google
+ *  Tasks folds, Linear and Gmail archive, monday auto-archives after N days).
+ *
+ *  Fetched on demand and not carried in the room payload: that one is polled every
+ *  three seconds, and a room that has run for a month would pay for its whole history
+ *  on every tick.
+ */
+function RoomTaskHistory({ rows, loading, timeFormat }: {
+    rows: RoomHistoryRow[];
+    loading: boolean;
+    timeFormat?: string;
+}) {
+    const t = useTranslations('main');
+    const [query, setQuery] = useState('');
+    const needle = query.trim().toLowerCase();
+    const shown = (needle
+        ? rows.filter(r => `${r.title} ${r.assignee} ${r.requester} ${r.status} ${r.result}`
+            .toLowerCase().includes(needle))
+        : rows).slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+    return (
+        <div className="px-6 py-4">
+            <input value={query} onChange={e => setQuery(e.target.value)}
+                placeholder={t('roomHistorySearch')}
+                className="w-full mb-3 px-3 py-2 rounded-xl text-[13px] border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 dark:border-[#2f2f2f] dark:bg-[#202020] dark:text-[#e6e6e6]" />
+            {loading && <div className="text-[12px] text-gray-400">{t('roomHistoryLoading')}</div>}
+            {!loading && shown.length === 0 && (
+                <div className="text-[12px] text-gray-400">{t('roomHistoryEmpty')}</div>
+            )}
+            <div className="space-y-1.5">
+                {shown.map(row => {
+                    const dead = row.status === 'failed' || row.status === 'rejected'
+                        || row.status === 'canceled';
+                    return (
+                        <div key={row.id}
+                            className="rounded-xl border border-gray-200 bg-gray-50/70 dark:border-[#2f2f2f] dark:bg-[#202020] px-3 py-2">
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-[11px] tabular-nums text-gray-400 shrink-0">
+                                    {row.ts ? new Date(row.ts * 1000).toLocaleString(
+                                        undefined, timeFormat ? { hour12: timeFormat === '12h' } : undefined) : ''}
+                                </span>
+                                <span className="text-[12px] font-medium text-gray-900 dark:text-[#e6e6e6] shrink-0">
+                                    {row.assignee || row.requester || '?'}
+                                </span>
+                                <span className={cn("text-[11px] shrink-0",
+                                    row.status === 'completed' && "text-emerald-600 dark:text-emerald-400",
+                                    dead && "text-red-600 dark:text-red-400",
+                                    !dead && row.status !== 'completed' && "text-gray-400")}>
+                                    {row.status}
+                                </span>
+                            </div>
+                            <div className="text-[13px] text-gray-800 dark:text-[#e0e0e0] break-words mt-0.5">
+                                {row.title}
+                            </div>
+                            {/* What came of it, in the words of whoever reported last. A
+                                history that says "completed" and not what came of it
+                                answers half the question it was opened for. */}
+                            {row.result && row.result !== row.title && (
+                                <div className="text-[11px] text-gray-500 dark:text-[#9a9a9a] break-words mt-0.5">
+                                    {row.result}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+
 function RoomWorkPanel({ tasks, members }: {
     tasks: RoomTask[];
     members: Array<{ peer: string; label: string; role: string }>;
@@ -1315,13 +1396,15 @@ function RoomWorkPanel({ tasks, members }: {
     // one task still running under twenty that are over, and the panel exists to
     // answer what is happening - the record of what was done is a click away and
     // whole in the transcript.
-    const [openDone, setOpenDone] = useState<Record<string, boolean>>({});
-    // And the same for work that has gone quiet. Shown as a count first for the reason
-    // the panel exists at all: five grey cards weigh exactly as much on screen as five
-    // live ones, so leaving them unfolded answers "what is happening here" with a wall
-    // of what is not. Nothing is hidden - the count is the way in, and one click
-    // brings them back with how long each has been silent.
-    const [openQuiet, setOpenQuiet] = useState<Record<string, boolean>>({});
+    // ONE switch per member, and it lives in that member's HEADER. The counts used to
+    // be links under the cards, which is fine for three of them and wrong for twenty:
+    // to fold a list back up you first had to scroll to its end. The affordance a list
+    // is opened and closed with belongs where the list starts.
+    //
+    // What folds is what is over or has gone silent. Live work never does - five grey
+    // cards weigh as much on screen as five live ones, and this panel exists to answer
+    // what is happening, not what is not.
+    const [openMember, setOpenMember] = useState<Record<string, boolean>>({});
     const byMember = new Map<string, RoomTask[]>();
     for (const member of members) byMember.set(member.label, []);
     for (const task of tasks) {
@@ -1346,19 +1429,39 @@ function RoomWorkPanel({ tasks, members }: {
                 const done = rows.filter(r => !ROOM_TASK_ACTIVE.includes(r.status));
                 return (
                     <div key={label}>
-                        <div className="flex items-baseline gap-2 mb-1.5">
-                            <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{label}</span>
-                            <span className="text-[11px] text-gray-400">
-                                {active.length > 0
-                                    ? t('roomWorkRunning', { count: active.length })
-                                    : t('roomWorkNothing')}
-
-                            </span>
-                        </div>
+                        {(() => {
+                            const folded = quiet.length + done.length;
+                            const isOpen = !!openMember[label];
+                            const head = (
+                                <div className="flex items-baseline gap-2">
+                                    <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{label}</span>
+                                    <span className="text-[11px] text-gray-400">
+                                        {active.length > 0
+                                            ? t('roomWorkRunning', { count: active.length })
+                                            : t('roomWorkNothing')}
+                                        {quiet.length > 0
+                                            ? ` \u00b7 ${t('roomWorkQuiet', { count: quiet.length })}` : ''}
+                                        {done.length > 0
+                                            ? ` \u00b7 ${t('roomWorkDone', { count: done.length })}` : ''}
+                                    </span>
+                                    {folded > 0 && (
+                                        <span className="text-[11px] text-gray-400 ml-auto" aria-hidden>
+                                            {isOpen ? '\u2303' : '\u2304'}
+                                        </span>
+                                    )}
+                                </div>
+                            );
+                            return folded > 0 ? (
+                                <button type="button" aria-expanded={isOpen}
+                                    onClick={() => setOpenMember(prev => ({ ...prev, [label]: !prev[label] }))}
+                                    className="w-full text-left mb-1.5 rounded-lg px-1 -mx-1 hover:bg-gray-100/70 dark:hover:bg-[#242424] transition-colors">
+                                    {head}
+                                </button>
+                            ) : <div className="mb-1.5">{head}</div>;
+                        })()}
                         <div className="space-y-1.5">
                             {[...active,
-                              ...(openQuiet[label] ? quiet : []),
-                              ...(openDone[label] ? done : [])].map(task => {
+                              ...(openMember[label] ? [...quiet, ...done] : [])].map(task => {
                                 const progress = task.progress || {};
                                 const counted = typeof progress.done === 'number'
                                     && typeof progress.total === 'number';
@@ -1384,7 +1487,14 @@ function RoomWorkPanel({ tasks, members }: {
                                                 {task.title}
                                             </div>
                                             <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                                                {task.status}
+                                                {/* The word carries the outcome, not just
+                                                    the dot beside it: a status rendered as
+                                                    grey text is a status nobody reads. */}
+                                                <span className={cn(
+                                                    task.status === 'completed' && "text-emerald-600 dark:text-emerald-400",
+                                                    dead && "text-red-600 dark:text-red-400")}>
+                                                    {task.status}
+                                                </span>
                                                 {counted ? ` · ${progress.done}/${progress.total}` : ''}
                                                 {progress.step ? ` · ${progress.step}` : ''}
                                                 {task.requester ? ` · ${t('roomWorkFrom', { who: task.requester })}` : ''}
@@ -1396,24 +1506,6 @@ function RoomWorkPanel({ tasks, members }: {
                                     </div>
                                 );
                             })}
-                            {quiet.length > 0 && (
-                                <button type="button"
-                                    onClick={() => setOpenQuiet(prev => ({ ...prev, [label]: !prev[label] }))}
-                                    className="text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-[#c8c8c8] transition-colors block">
-                                    {openQuiet[label]
-                                        ? t('roomWorkHideQuiet', { count: quiet.length })
-                                        : t('roomWorkShowQuiet', { count: quiet.length })}
-                                </button>
-                            )}
-                            {done.length > 0 && (
-                                <button type="button"
-                                    onClick={() => setOpenDone(prev => ({ ...prev, [label]: !prev[label] }))}
-                                    className="text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-[#c8c8c8] transition-colors">
-                                    {openDone[label]
-                                        ? t('roomWorkHideDone', { count: done.length })
-                                        : t('roomWorkShowDone', { count: done.length })}
-                                </button>
-                            )}
                             {rows.length === 0 && (
                                 <div className="text-[12px] text-gray-400">{t('roomWorkNone')}</div>
                             )}
@@ -2135,7 +2227,12 @@ function VAFDashboardContent() {
     // "who is here"; opening it from the work strip asks "who is on what", so the
     // caller says which - a panel that always opened on the same tab would make the
     // strip's click a two-step.
-    const [roomPanelTab, setRoomPanelTab] = useState<'members' | 'work'>('members');
+    const [roomPanelTab, setRoomPanelTab] = useState<'members' | 'work' | 'history'>('members');
+    // The record, fetched when it is asked for. It is not in the room payload on
+    // purpose: that is polled every three seconds, and a room that has run for a month
+    // would pay for its whole history on every tick.
+    const [roomHistory, setRoomHistory] = useState<RoomHistoryRow[]>([]);
+    const [roomHistoryLoading, setRoomHistoryLoading] = useState(false);
     // The member a user has asked to remove, pending confirmation. Removing somebody
     // from a room ends their access to a conversation they were invited into, and they
     // are not here to be asked, so it never happens on one click.
@@ -4349,6 +4446,12 @@ function VAFDashboardContent() {
                     // sequence. Re-sorting here by timestamp would undo that, because
                     // wall clocks differ between the machines in a room.
                     setRoomView({ room: data.room, messages: data.messages || [] });
+                }
+                else if (data.type === 'room_task_history') {
+                    // The record, answered once per click. Kept apart from roomView so
+                    // the three-second poll never overwrites it and never carries it.
+                    setRoomHistory(Array.isArray(data.tasks) ? data.tasks : []);
+                    setRoomHistoryLoading(false);
                 }
                 else if (data.type === 'workflow_start') {
                     if (!eventBelongsHere(data, activeSessionId, 'chat')) return;
@@ -9677,10 +9780,20 @@ function VAFDashboardContent() {
                             nothing running. Same tab shape the sub-agent window uses. */}
                         <div className="flex items-end gap-1 px-6 pt-2 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0">
                             {([['members', tMain('roomTabMembers')],
-                               ['work', tMain('roomTabWork')]] as const).map(([key, label]) => (
+                               ['work', tMain('roomTabWork')],
+                               ['history', tMain('roomHistoryTab', { count: roomHistory.length || (roomView.room.tasks?.length ?? 0) })]] as const).map(([key, label]) => (
                                 <button key={key} type="button" role="tab"
                                     aria-selected={roomPanelTab === key}
-                                    onClick={() => setRoomPanelTab(key)}
+                                    onClick={() => {
+                                        setRoomPanelTab(key);
+                                        if (key === 'history') {
+                                            setRoomHistoryLoading(true);
+                                            ws?.send(JSON.stringify({
+                                                type: 'room_task_history',
+                                                room_id: roomView.room.roomId,
+                                            }));
+                                        }
+                                    }}
                                     className={cn(
                                         "flex-none rounded-t-lg border border-b-0 px-3 py-1.5 text-[12px]",
                                         roomPanelTab === key
@@ -9718,6 +9831,11 @@ function VAFDashboardContent() {
                             {roomPanelTab === 'work' && (
                                 <RoomWorkPanel tasks={roomView.room.tasks ?? []}
                                     members={roomView.room.members_list ?? []} />
+                            )}
+                            {roomPanelTab === 'history' && (
+                                <RoomTaskHistory rows={roomHistory}
+                                    loading={roomHistoryLoading}
+                                    timeFormat={userTimeFormat} />
                             )}
                             {roomPanelTab === 'members' && (<>
 

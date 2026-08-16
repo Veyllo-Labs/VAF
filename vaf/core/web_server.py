@@ -118,23 +118,41 @@ ROOM_TYPING_WINDOW_S = 120.0
 # but luck.
 
 
-def _room_board(room, *, open_cap: int = 40, done_cap: int = 8) -> list:
-    """The task board a browser gets: every piece of OPEN work, and the last few
-    finished ones.
+#: How long finished work stays on the LIVE board. Half an hour, which is long enough
+#: to see that the thing you just asked for is done and short enough that a room does
+#: not turn into its own changelog. What leaves it is not gone: it moves to the room's
+#: history, which is fetched on demand rather than riding along in a payload that is
+#: polled every three seconds.
+#:
+#: The pattern is the ordinary one (Google Tasks folds, Linear and Gmail archive,
+#: monday auto-archives after N days) with one VAF-specific simplification: the archive
+#: already exists and is authoritative - the transcript is write-once and
+#: `vaf a2a tasks` prints every task there has ever been - so the panel needs a WINDOW,
+#: never an archive of its own.
+ROOM_DONE_WINDOW_S = 1800.0
+
+
+def _room_board(room, *, open_cap: int = 40, done_cap: int = 8,
+                done_window_s: float = ROOM_DONE_WINDOW_S) -> list:
+    """The task board a browser gets: every piece of OPEN work, and what was finished
+    recently.
 
     The cap used to be a flat slice of the whole board, which cuts by recency and
     therefore cuts the wrong end: an agent that finishes twenty things in an afternoon
     pushes the one task still running off a list sorted with finished work in it. Open
     work is what a surface is for, so it is never dropped for something that is over.
 
-    Finished work is not dropped either, only stopped at the last few - the record of
-    what was done lives in the transcript and in `vaf a2a tasks`, which is where a long
-    history belongs. A panel is not an archive.
+    Finished work is bounded twice, by age and by count, and neither is a deletion: the
+    record lives in the transcript and in `vaf a2a tasks`, which is where a long history
+    belongs. A panel is not an archive.
     """
+    import time as _t
     done_states = ("completed", "failed", "rejected", "canceled")
     board = room.tasks()
+    cutoff = _t.time() - float(done_window_s or 0.0)
     open_work = [t for t in board if t["status"] not in done_states]
-    finished = [t for t in board if t["status"] in done_states]
+    finished = [t for t in board if t["status"] in done_states
+                and (done_window_s <= 0 or float(t.get("updated_ts") or 0.0) >= cutoff)]
     return open_work[:open_cap] + finished[:done_cap]
 
 
@@ -382,6 +400,7 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                  # such fills up with entries nobody is doing.
                  "quiet": bool(t.get("quiet")),
                  "silentFor": float(t.get("silent_for_s") or 0.0),
+                 "result": str(t.get("result") or "")[:400],
                  # Rebuilt field by field here, so every new one has to be named
                  # or it vanishes without a word - which has shipped twice. This
                  # one is how far the work has come, from the last report that
@@ -3983,6 +4002,31 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     "type": "error",
                                     "message": f"Could not cast that vote: {_vote_err}"})
                                 continue
+
+                        elif type == "room_task_history":
+                            # The whole record, ON DEMAND. Deliberately not part of the
+                            # room payload: that one is polled every three seconds, and
+                            # a room that has run for a month would then pay for its
+                            # entire history on every tick. The live board is a window;
+                            # this is the archive behind it, and it is opened by a
+                            # click rather than carried around just in case.
+                            try:
+                                history = [
+                                    {"id": t["id"], "title": t["title"],
+                                     "status": t["status"],
+                                     "assignee": t["assignee_label"],
+                                     "requester": t["requester_label"],
+                                     "result": str(t.get("result") or "")[:400],
+                                     "reports": t["reports"],
+                                     "started": t["created_ts"], "ts": t["updated_ts"]}
+                                    for t in room.tasks()
+                                ][:400]
+                            except Exception:
+                                history = []
+                            await websocket.send_json({
+                                "type": "room_task_history",
+                                "roomId": room.room_id, "tasks": history})
+                            continue
 
                         elif type == "rename_room":
                             title = str(cmd.get("title") or "").strip()

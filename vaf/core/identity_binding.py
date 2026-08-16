@@ -270,6 +270,16 @@ def bind_identity(agent: Any, identity: Identity) -> None:
     agent._current_user_scope_id = identity.scope
     agent._current_username = identity.username
     agent._current_user_role = identity.role
+    # The log learns whose turn this is here, at the one place in the tree where
+    # that becomes true, instead of at each of the eight writers - seven of which
+    # never passed it, which is why the timeline could not be read per user.
+    # Unconditional for the same reason as the three writes above: a turn without
+    # an identity must clear the previous one, never inherit it.
+    try:
+        from vaf.core.log_helper import set_log_scope
+        set_log_scope(identity.scope)
+    except Exception:
+        pass
 
 
 def reassert_identity(agent: Any, identity: Identity) -> None:

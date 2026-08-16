@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -360,6 +361,41 @@ def _timeline_hash(event_dict: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# Whose turn is being logged. One agent object serves many queued turns, so the
+# answer cannot be an attribute the log reads from somewhere - it has to travel
+# with the turn. Set once where identity is bound (vaf/core/identity_binding.py)
+# and read here, so a writer does not have to know it and cannot forget it:
+# eight places write timeline events and exactly ONE of them passed a scope,
+# which is why a timeline could not be read per user at all.
+#
+# Fail direction, deliberately: an unset context stamps nothing, so a record is
+# UNATTRIBUTED rather than attributed to whoever ran last. A bare thread starts
+# with an empty context, so a lane that spawns one binds inside it or accepts
+# unattributed records - the wrong name on an audit line is far worse than no
+# name.
+_log_scope_ctx: ContextVar[str] = ContextVar("vaf_log_scope", default="")
+
+
+def set_log_scope(scope: Optional[str]) -> None:
+    """Bind the scope every later log line in this turn is stamped with.
+
+    Unconditional, including None or "": a turn that carries no identity must
+    CLEAR the previous one rather than inherit it.
+    """
+    try:
+        _log_scope_ctx.set(str(scope or ""))
+    except Exception:
+        pass
+
+
+def current_log_scope() -> str:
+    """The scope bound to this turn, or "" when nothing is bound."""
+    try:
+        return str(_log_scope_ctx.get() or "")
+    except Exception:
+        return ""
+
+
 def log_timeline_event(event_type: str, **kwargs) -> None:
     """
     Append one JSONL event to timeline_YYYY-MM-DD.jsonl when debug_logs_enabled.
@@ -383,6 +419,14 @@ def log_timeline_event(event_type: str, **kwargs) -> None:
             "prev_hash": prev_hash,
         }
         event.update(kwargs)
+        # Stamp whose turn this was when the caller did not say. BEFORE the hash:
+        # _timeline_hash covers every field except `hash` itself and the reader
+        # recomputes it, so a field added afterwards would break the chain and
+        # paint the audit badge red on a file nobody touched.
+        if not event.get("scope"):
+            scope = current_log_scope()
+            if scope:
+                event["scope"] = scope
         event["hash"] = _timeline_hash(event)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")

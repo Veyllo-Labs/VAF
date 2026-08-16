@@ -162,10 +162,16 @@ type RoomView = {
     id: string; roomId: string; title: string; roomKind?: string;
     role?: string; closed?: boolean; members?: number; me?: string;
     canManage?: boolean;
-    /** Who is composing, derived by the server: 'turn' = our agent's room turn is
-     *  actually running, 'read' = a peer took the newest message recently and has
-     *  not answered it yet. The 3s poll refreshes and expires this. */
+    /** Who is composing, and only actually composing: 'turn' = our agent's room
+     *  turn is running right now, 'keys' = a human is pressing keys in their
+     *  input box. Merely READING paints nobody as typing any more - that signal
+     *  arrives as readPositions instead. The 3s poll refreshes and expires this. */
     typing?: Array<{ peer: string; label: string; kind?: string }>;
+    /** Read receipts: each other member's read position as facts. The view stacks
+     *  a reader's face under the last message whose lamport their cursor covers.
+     *  Remote wire peers keep their position on their own machine and never
+     *  appear here - the documented protocol boundary. */
+    readPositions?: Array<{ peer: string; label: string; readTo: number; readAt?: number }>;
     /** The viewer's own AGENT in this room, drawn with the living agent avatar
      *  instead of initials. A foreign agent never gets it: an agent that is not
      *  ours is a full agent of its own, never a second face of ours. */
@@ -1531,6 +1537,25 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     // where an agent had been typing in the payload that happened to be last.
     // A conversation may go stale; a liveness signal may not.
     const typing = connected ? (view.room.typing ?? []) : [];
+    // Read receipts: each reader's face sits under the LAST message their cursor
+    // covers, and moves down as they read on - so a stack under a message means
+    // "read up to here", never "reacted to this". Computed per render from the
+    // poll's facts; a reader is skipped under their own message (their cursor
+    // there only proves they wrote it). Receipts freeze with the socket down for
+    // the same reason typing empties: both are claims about now.
+    const receiptsFor = new Map<string, Array<{ peer: string; label: string; readAt?: number }>>();
+    if (connected) {
+        for (const r of view.room.readPositions ?? []) {
+            let target: RoomMessage | null = null;
+            for (const m of view.messages) {
+                if ((m.lamport ?? 0) <= r.readTo) target = m; else break;
+            }
+            if (!target || target.peer === r.peer) continue;
+            const stack = receiptsFor.get(target.id) ?? [];
+            stack.push({ peer: r.peer, label: r.label, readAt: r.readAt });
+            receiptsFor.set(target.id, stack);
+        }
+    }
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
     // alive at a time - its newest message, or its typing bubble while it
@@ -1867,6 +1892,26 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
                                 {m.text}
                             </div>
+                            {/* Read receipts: the stack of everyone who has read
+                                UP TO here, overlapping circles, capped at 20 with
+                                the remainder as a number - a stack under a message
+                                means "read this far", never "reacted to this". */}
+                            {(receiptsFor.get(m.id)?.length ?? 0) > 0 && (
+                                <div className="flex justify-end items-center mt-1 pr-1">
+                                    {receiptsFor.get(m.id)!.slice(0, 20).map(r => (
+                                        <div key={r.peer}
+                                            title={r.readAt ? `${r.label} · ${formatMessageTime(r.readAt * 1000, timeFormat)}` : r.label}
+                                            className="w-[18px] h-[18px] rounded-full flex items-center justify-center text-[8px] font-semibold bg-gray-300 text-gray-700 dark:bg-[#3a3a3a] dark:text-[#d0d0d0] ring-2 ring-white dark:ring-[#181818] -ml-1.5 first:ml-0">
+                                            {(r.label || '?').slice(0, 2)}
+                                        </div>
+                                    ))}
+                                    {receiptsFor.get(m.id)!.length > 20 && (
+                                        <div className="h-[18px] px-1.5 rounded-full flex items-center text-[9px] font-semibold bg-gray-300 text-gray-600 dark:bg-[#3a3a3a] dark:text-[#b0b0b0] ring-2 ring-white dark:ring-[#181818] -ml-1.5">
+                                            +{receiptsFor.get(m.id)!.length - 20}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
                     {hasWorkerCards && m.id === lastAgentMsgId && workerCards}
@@ -2111,6 +2156,9 @@ function VAFDashboardContent() {
     // history to load, and sharing the renderer would put the path almost every user
     // is on at risk for the sake of a view a few users open.
     const [roomView, setRoomView] = useState<{ room: RoomView; messages: RoomMessage[] } | null>(null);
+    // When the composer last told the open room "a human is pressing keys" -
+    // throttles the room_typing signal to one per two seconds while typing.
+    const roomTypingSentRef = useRef(0);
     // For the WS onmessage closure (installed once): which room is open RIGHT NOW.
     // A room turn's live feed arrives stamped with roomId and per user, not per
     // session - accepting it must read the current room, not a stale capture.
@@ -3143,6 +3191,19 @@ function VAFDashboardContent() {
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const val = e.target.value;
         setInput(val);
+
+        // A keypress while a room is open tells that room's other viewers a
+        // human is composing. Throttled to one signal per two seconds; nothing
+        // fires on an emptied box (that is deletion or a send, not composing)
+        // and nothing ever fires for ordinary chats - typing there stays local.
+        if (roomView && !roomView.room.closed && val.trim()
+            && ws && ws.readyState === WebSocket.OPEN) {
+            const now = Date.now();
+            if (now - roomTypingSentRef.current > 2000) {
+                roomTypingSentRef.current = now;
+                ws.send(JSON.stringify({ type: 'room_typing', room_id: roomView.room.roomId }));
+            }
+        }
 
         // Simple trigger logic: Check last word
         const words = val.split(' ');

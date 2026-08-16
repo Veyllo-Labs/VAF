@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **Reading a group chat no longer shows as typing; it shows as a read receipt.**
+  The three bouncing dots used to appear for any member that had merely read the
+  newest message, for up to two minutes - an agent that only monitors its room
+  looked permanently busy. The dots now mean composing and nothing else: the
+  agent is really writing an answer, or a person is pressing keys in the input
+  box. Reading shows as small stacked profile circles under the last message
+  each member has read, moving down as they read on, capped at twenty faces
+  with the remainder as a number.
+
 ## [0.1.0a23] - 2026-08-16
 
 ### Added

@@ -105,11 +105,59 @@ SESSION_LIST_LIMIT = 500
 # `vaf a2a export` is for.
 ROOM_TRANSCRIPT_LIMIT = 500
 
-# How long "has read the newest message, has not answered" counts as composing.
-# Presentation taste, deliberately NOT in the framework: Room.activity() hands over
-# facts, and a peer that read something and chose silence should stop looking busy
-# on its own. Two minutes is roughly how long a person forgives a typing bubble.
-ROOM_TYPING_WINDOW_S = 120.0
+# How long a keypress in the room's input box counts as composing. The client
+# refreshes it every ~2 seconds while keys are actually pressed and the 3s room
+# poll carries it to the other viewers, so the dots die 3-6 seconds after the
+# last key - a bubble that outlives the typing is the lie this replaces.
+ROOM_KEYS_TYPING_WINDOW_S = 6.0
+
+# Who is PRESSING KEYS in which room's input box, {room_id: {peer_id: last_ts}}.
+# In-memory and ephemeral BY DESIGN: typing is presence, not conversation. It
+# never touches the store or the wire (the protocol deliberately has no typing
+# frame kind), and a restart forgetting it is correct behaviour. Written by the
+# `room_typing` websocket message, read and expired by the room projection.
+_ROOM_KEYS_TYPING: Dict[str, Dict[str, float]] = {}
+
+
+def derive_room_presence(*, activity: Dict[str, Dict[str, float]],
+                         members: Dict[str, dict], labels: Dict[str, str],
+                         acting: str, keys: Dict[str, float],
+                         busy_agent: str, now: float) -> "tuple[list, list]":
+    """(typing, read_positions) for the room projection. Pure, so it is testable.
+
+    Typing keeps exactly two honest signals: the host agent's TURN MARKER (it is
+    composing an answer right now) and a human's KEYPRESSES in the input box.
+    The old third signal - "took the newest message recently and has not
+    answered" - painted every reader as composing for two minutes, which made an
+    agent that merely monitors its room look permanently busy. That reading is
+    not discarded, it is PROMOTED: every member's read position goes out as a
+    read receipt, which says what the derivation actually knew ("has read up to
+    here") instead of what it guessed ("is about to speak").
+    """
+    def label_of(peer: str) -> str:
+        return labels.get(peer) or members[peer]["display"]
+
+    typing: list = []
+    read_positions: list = []
+    for peer, facts in activity.items():
+        if peer == acting or peer not in members:
+            # The viewer knows what they have read; their own receipt is noise.
+            continue
+        if int(facts.get("read_to") or 0) > 0:
+            read_positions.append({"peer": peer, "label": label_of(peer),
+                                   "readTo": int(facts["read_to"]),
+                                   "readAt": float(facts.get("read_at") or 0.0)})
+    for peer, pressed_at in list(keys.items()):
+        if (now - float(pressed_at)) > ROOM_KEYS_TYPING_WINDOW_S:
+            keys.pop(peer, None)
+            continue
+        if peer == acting or peer not in members:
+            continue
+        typing.append({"peer": peer, "label": label_of(peer), "kind": "keys"})
+    if busy_agent and busy_agent in members:
+        typing.append({"peer": busy_agent, "label": label_of(busy_agent),
+                       "kind": "turn"})
+    return typing, read_positions
 
 # The sidebar filter (channel + thinking sessions out) lives on the engine as
 # SessionManager.list_ui - one rule for every surface, the terminal app's
@@ -296,26 +344,25 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                     members, labels = room.members(), room.labels()
     except Exception:
         pass
-    # Who is composing, for the typing bubble. Two signals, each honest in its own
-    # way: the host's own agent is PRECISE - the runner's turn marker says it is
-    # answering this room right now - and everybody else is DERIVED - their cursor
-    # says they took the newest message (every reader advances it only AFTER the
-    # frame is in hand), their lane says they have not answered it, and the clock
-    # says that was recent. The window is what keeps the derivation honest: a peer
-    # that read and chose silence stops looking busy on its own. None of this is a
-    # wire concept - see Room.activity() for why there is no "typing" frame kind.
+    # Who is composing, and who has read how far. Composing keeps two honest
+    # signals - the host agent's turn marker (precise) and a human's keypresses
+    # in the input box (reported by the browser, expired by the clock). What used
+    # to be the third signal, "read the newest message recently and answered
+    # nothing", is promoted into READ RECEIPTS instead of being painted as
+    # typing: it made a merely-monitoring agent look busy for two minutes at a
+    # time. None of this is a wire concept - see Room.activity() for why there
+    # is no "typing" frame kind.
     typing = []
+    read_positions = []
     try:
         import time as _time
         latest = room.store.highest_lamport()
         if latest and not room.closed:
-            # The host agent's handle, derived ALWAYS - not only while its turn
-            # marker lives. Its cursor advances right AFTER a turn, including a
-            # turn in which it deliberately said nothing (the thank-you brake),
-            # so the moment the marker cleared, the derived rule read "took the
-            # newest, answered nothing, recent" and painted it as typing for the
-            # whole window - precisely when it had just decided to stay quiet.
-            # Only the marker may put this agent in the list.
+            # The host agent's handle, needed to resolve the turn marker to a
+            # peer. Only the marker may paint this agent as composing: its
+            # cursor advances right after every turn, including one in which it
+            # deliberately said nothing, so any cursor-based composing rule
+            # would show it busy precisely when it chose to stay quiet.
             host_agent = ""
             try:
                 owner = owner_tenant(room.manifest.get("owner_scope"))
@@ -334,21 +381,14 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                     busy_agent = host_agent
             except Exception:
                 busy_agent = ""
-            now = _time.time()
-            for peer, facts in room.activity().items():
-                if peer in (acting, host_agent) or peer not in members:
-                    continue
-                if (facts["read_to"] >= latest and facts["last_wrote"] < latest
-                        and (now - facts["read_at"]) <= ROOM_TYPING_WINDOW_S):
-                    typing.append({"peer": peer,
-                                   "label": labels.get(peer) or members[peer]["display"],
-                                   "kind": "read"})
-            if busy_agent and busy_agent in members:
-                typing.append({"peer": busy_agent,
-                               "label": labels.get(busy_agent) or members[busy_agent]["display"],
-                               "kind": "turn"})
+            typing, read_positions = derive_room_presence(
+                activity=room.activity(), members=members, labels=labels,
+                acting=acting,
+                keys=_ROOM_KEYS_TYPING.setdefault(room.room_id, {}),
+                busy_agent=busy_agent, now=_time.time())
     except Exception:
         typing = []
+        read_positions = []
     await websocket.send_json({
         "type": "room_transcript",
         "room": {
@@ -387,6 +427,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
                              if _derive_or_empty("agent", user_scope_id, room.room_id)
                              in members else []),
             "typing": typing,
+            # Read receipts: every other member's read position as facts, so the
+            # view can stack each reader's face under the last message they took.
+            # Remote wire peers keep their position in their own seat file and
+            # never appear here - the documented protocol boundary, not a bug.
+            "readPositions": read_positions,
             # The task board, derived exactly like typing is (Room.tasks): a
             # directive, or anything a report chain answers via reply_to. The 3s
             # poll keeps it fresh; nothing travels on the wire for it. Capped the
@@ -3938,6 +3983,29 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
 
+                elif type == "room_typing":
+                    # A keypress in the room's input box. Presence, not
+                    # conversation: it lands in an in-memory map the 3s room
+                    # poll reads, never in the store and never on the wire (the
+                    # protocol deliberately has no typing frame kind). Fire and
+                    # forget - no reply, the poll carries the effect to the
+                    # other viewers, and the timestamp expires on its own. The
+                    # membership check is the same question room_say asks,
+                    # answered the cheap way: a room the user is not in takes
+                    # no presence from them either.
+                    try:
+                        user_scope_id = manager.get_connection_user(websocket)
+                        wanted = str(cmd.get("room_id") or "")
+                        from vaf.core.a2a.room import derive_peer_id, participant_key
+                        from vaf.core.session import _room_rows
+                        if wanted and any(row["room_id"] == wanted
+                                          for row in _room_rows(user_scope_id)):
+                            peer = derive_peer_id(
+                                participant_key("cli", user_scope_id), wanted)
+                            import time as _time
+                            _ROOM_KEYS_TYPING.setdefault(wanted, {})[peer] = _time.time()
+                    except Exception:
+                        pass
                 elif type in ("room_say", "close_room", "delete_room", "kick_peer",
                               "rename_room", "set_room_agent_mode",
                               "cast_room_vote"):

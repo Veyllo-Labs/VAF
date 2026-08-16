@@ -989,30 +989,34 @@ def test_the_heal_never_writes_someone_elses_name(tmp_path, monkeypatch):
         "another account's member was renamed to the admin")
 
 
-def test_the_typing_list_is_derived_and_expires(tmp_path, monkeypatch):
-    """MUTATION: drop the answered check, or the window, or the viewer exclusion.
+def test_reading_is_a_receipt_and_only_keys_or_turn_compose(tmp_path, monkeypatch):
+    """MUTATION: paint a reader as typing again, drop the receipt, drop the
+    viewer exclusion, or let a keypress live past its window.
 
-    A peer that took the newest message and has not answered is composing; a peer
-    that answered is done; a peer that read and chose silence stops looking busy
-    when the window passes; and the viewer is never their own typing bubble. Each
-    clause carries one of those, so losing any of them repaints somebody as busy
-    who is not.
+    The old rule derived "took the newest message recently, answered nothing"
+    into the typing list for two minutes at a time, so an agent that merely
+    monitors its room looked permanently busy - watched live for hours. Reading
+    is a READ RECEIPT now (the view stacks it under the last message the
+    reader's cursor covers), and composing is exactly two things: a keypress a
+    browser reported, or the agent's live turn (pinned by the test below).
     """
     import asyncio
     import time as time_mod
 
+    import vaf.core.web_server as web_server_mod
+    from vaf.core.web_server import _send_room_transcript
+
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path)
+    monkeypatch.setattr(web_server_mod, "_ROOM_KEYS_TYPING", {})
     room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
                        room_id="room-typing")
     me_key = participant_key("cli", "scope-a")
     me = derive_peer_id(me_key, "room-typing")
     mine = room.join(display="Alice", scope_id="scope-a", peer_id=me)
-    codex = room.join(display="Codex", scope_id=None, peer_id="p-codex")
+    room.join(display="Codex", scope_id=None, peer_id="p-codex")
 
     latest = room.say(mine, "anyone there?")
-
-    from vaf.core.web_server import _send_room_transcript
 
     class _WS:
         def __init__(self):
@@ -1021,36 +1025,36 @@ def test_the_typing_list_is_derived_and_expires(tmp_path, monkeypatch):
         async def send_json(self, payload):
             self.sent.append(payload)
 
-    def typing_now():
+    def projection():
         ws = _WS()
         asyncio.run(_send_room_transcript(ws, Room.open("room-typing", base=tmp_path),
                                           "scope-a"))
-        return {t["peer"]: t for t in ws.sent[0]["room"]["typing"]}
+        payload = ws.sent[0]["room"]
+        return ({t["peer"]: t for t in payload["typing"]},
+                {r["peer"]: r for r in payload["readPositions"]})
 
-    # Nobody has read anything: nobody is composing.
-    assert typing_now() == {}
+    # Nobody has read anything: no bubbles, no receipts.
+    typing, receipts = projection()
+    assert typing == {} and receipts == {}
 
-    # Codex takes the newest message the way every reader does - cursor AFTER the
-    # frame is in hand - and becomes the typing bubble.
+    # Codex takes the newest message the way every reader does - cursor AFTER
+    # the frame is in hand. That is a receipt saying where it stands, and it is
+    # NEVER a typing bubble again.
     room.store.set_cursor("p-codex", latest.lamport)
-    listed = typing_now()
-    assert "p-codex" in listed and listed["p-codex"]["kind"] == "read"
-    assert me not in listed, "the viewer is their own typing bubble"
+    typing, receipts = projection()
+    assert typing == {}, "a mere reader was painted as composing"
+    assert receipts["p-codex"]["readTo"] == latest.lamport
+    assert me not in receipts, ("the viewer's own position is noise - they know "
+                                "what they have read")
 
-    # Codex answers and then reads again, the way a read-tool loop does - its cursor
-    # now stands ON its own newest frame. Composing is over: the answered check is
-    # the only clause separating "read the newest" from "read what I just wrote".
-    answer = room.say(codex, "here")
-    room.store.set_cursor("p-codex", answer.lamport)
-    assert "p-codex" not in typing_now(), "an answered message still shows as composing"
-
-    # A peer that read the newest and stays silent expires with the window.
-    latest2 = room.say(mine, "and now?")
-    room.store.set_cursor("p-codex", latest2.lamport)
-    assert "p-codex" in typing_now()
+    # A keypress composes, and dies by the clock seconds after the last key.
+    web_server_mod._ROOM_KEYS_TYPING.setdefault("room-typing", {})["p-codex"] = time_mod.time()
+    typing, _ = projection()
+    assert typing["p-codex"]["kind"] == "keys"
     real_time = time_mod.time
-    monkeypatch.setattr(time_mod, "time", lambda: real_time() + 300.0)
-    assert "p-codex" not in typing_now(), "silence never expires"
+    monkeypatch.setattr(time_mod, "time", lambda: real_time() + 30.0)
+    typing, _ = projection()
+    assert "p-codex" not in typing, "the dots outlived the typing"
 
 
 def test_the_agents_running_room_turn_is_the_precise_signal(tmp_path, monkeypatch):

@@ -171,6 +171,13 @@ Key rules:
   a room the caller has not joined is answered with `Access denied`. The reply is
   read-only - writing into a room happens through the agent's room tools or
   `vaf a2a say`.
+- `room_typing` (`{ room_id }`): the browser reporting that a human is pressing keys in
+  the open room's input box, throttled client-side to one signal per two seconds and
+  only while the box carries text. Fire and forget - no reply; the signal lands in an
+  in-memory map, the 3-second room poll carries it to the room's other viewers as a
+  `typing` entry of kind `keys`, and it expires by clock seconds after the last key.
+  It never touches the room store or the A2A wire: the protocol deliberately has no
+  typing frame kind, and presence must stay off the transcript.
 - `room_say` (`{ room_id, text }`) and `close_room` (`{ room_id }`): the person at the
   browser acting in a room themselves. They act on the **CLI participant lane**, not on
   a lane of their own: the lanes separate the human from the agent, and a browser and a
@@ -206,7 +213,7 @@ Key rules:
 - `room_transcript`: answers `open_room`. Payload: `{ room, messages }`, where `room`
   carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
   members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, typing,
-  tasks, votes }` and each message
+  readPositions, tasks, votes }` and each message
   is `{ id, peer, label, role, kind, text, ts, lamport, to }`. **Already in canonical
   order** - the server sorts by `(lamport, sender, seq)` so every surface shows the same
   sequence, and a frontend that re-sorted by `ts` would undo it, because the wall clocks

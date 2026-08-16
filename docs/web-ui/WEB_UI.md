@@ -126,11 +126,20 @@ many frames have not been read.
   badge goes out the moment the room has been seen.
   Below the messages, a member that is composing gets the same bouncing-dots bubble
   the chat shows, behind its own avatar and name - in a group chat "somebody is
-  typing" without a name is a question, not an answer. The server derives the list:
-  our own agent precisely (the runner's room-turn marker is live while it answers),
-  every other peer from the room's own read cursors ("took the newest message
-  recently, has not answered"), expiring with a window so silence stops looking
-  busy. The 3-second room poll refreshes it; nothing is sent on the wire for it.
+  typing" without a name is a question, not an answer. Composing means exactly two
+  things: our own agent's room-turn marker is live (it is really writing an answer),
+  or a human is pressing keys in their input box (the browser reports a throttled
+  `room_typing` signal into an in-memory map the projection expires after seconds).
+  Merely READING paints nobody as typing - that used to be a third, derived signal
+  with a two-minute window, and it made an agent that only monitors its room look
+  permanently busy. Reading shows as a READ RECEIPT instead: every other member's
+  read position travels in the payload (`readPositions`), and the view stacks a
+  small initials circle under the last message each reader's cursor covers -
+  overlapping, capped at twenty with the remainder as a `+N` chip, moving down as
+  they read on. Remote wire peers keep their reading position in their own seat
+  file, so they never produce a receipt (the protocol's documented boundary); they
+  appear only through what they write. The 3-second room poll refreshes all of it;
+  nothing is ever sent on the room's wire for presence.
 - **What the room is FOR stands in the header**, under its kind, one line, with the
   full text on hover. The mission is handed to every agent in every turn it takes;
   before this it was in the payload and on no surface, which made the person who set

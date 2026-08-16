@@ -199,12 +199,15 @@ def derive_service_status(spec: ServiceSpec,
     exists = inspect is not None
     running = False
     health = "none"
+    starting_left = 0
     host_ports: List[Dict[str, str]] = []
     if inspect is not None:
         try:
             state = inspect.get("State") or {}
             running = bool(state.get("Running"))
             health = str(((state.get("Health") or {}).get("Status") or "none"))
+            if running:
+                starting_left = _startup_seconds_left(inspect, health)
             bindings = (inspect.get("HostConfig") or {}).get("PortBindings") or {}
             for cport, binds in (bindings or {}).items():
                 for b in (binds or []):
@@ -220,6 +223,11 @@ def derive_service_status(spec: ServiceSpec,
     port_mismatch = bool(running and cfg_port and bound and str(cfg_port) not in bound)
 
     probe_ok: Optional[bool] = None if probe is None else bool(probe.get("ok"))
+    # A container inside its own start window is BOOTING, not broken. Checked
+    # before the probe verdict on purpose: a database that has not finished
+    # starting does not answer yet, and calling that "does not answer" sends the
+    # user to a repair button for something that only needs a few more seconds.
+    starting = bool(running and (health == "starting" or starting_left > 0))
 
     if not exists:
         state = "error" if spec.required else "absent"
@@ -233,6 +241,10 @@ def derive_service_status(spec: ServiceSpec,
         state = "error" if spec.required else "warn"
         reason = (f"The container publishes host port {sorted(bound)[0]}, but VAF is "
                   f"configured to reach it on {cfg_port}.")
+    elif starting:
+        state = "warn"
+        reason = ("The container is still starting up"
+                  + (f" (about {starting_left}s left)." if starting_left else "."))
     elif probe_ok is False:
         state = "error" if spec.required else "warn"
         detail = str((probe or {}).get("detail") or "").strip()
@@ -240,9 +252,6 @@ def derive_service_status(spec: ServiceSpec,
     elif health == "unhealthy":
         state = "warn"
         reason = "The container answers, but its own health check reports unhealthy."
-    elif health == "starting":
-        state = "warn"
-        reason = "The container is still starting up."
     else:
         state = "ok"
         reason = "Connected."
@@ -259,9 +268,53 @@ def derive_service_status(spec: ServiceSpec,
         "port_mismatch": port_mismatch,
         "probe": probe,
         "probe_ok": probe_ok,
+        "starting": starting,
+        "starting_seconds_left": starting_left,
         "state": state,
         "reason": reason,
     }
+
+
+def _startup_seconds_left(inspect: Dict[str, Any], health: str) -> int:
+    """How much of this container's own start window is left, or 0.
+
+    Both numbers come from the container rather than from a constant here: the
+    compose file gives each service its own start period (30s for the database,
+    120s for the speech services), so any figure VAF invented would be wrong for
+    most of them in one direction or the other.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        period_ns = int(((inspect.get("Config") or {}).get("Healthcheck") or {})
+                        .get("StartPeriod") or 0)
+        if period_ns <= 0:
+            return 0
+        started_raw = str((inspect.get("State") or {}).get("StartedAt") or "")
+        if not started_raw:
+            return 0
+        # Docker prints nanosecond precision, which fromisoformat rejects.
+        cleaned = started_raw.replace("Z", "+00:00")
+        if "." in cleaned:
+            head, _, tail = cleaned.partition(".")
+            frac = "".join(ch for ch in tail if ch.isdigit())[:6]
+            offset = tail[len(frac):] if not tail[len(frac):].isdigit() else ""
+            for marker in ("+", "-"):
+                idx = tail.find(marker)
+                if idx != -1:
+                    offset = tail[idx:]
+                    break
+            cleaned = f"{head}.{frac or '0'}{offset or '+00:00'}"
+        started = datetime.fromisoformat(cleaned)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        left = int(period_ns / 1_000_000_000 - elapsed)
+        # health "starting" is docker's own verdict and outranks the arithmetic:
+        # a slow first boot can outlast the window and still be starting.
+        if left <= 0:
+            return 1 if health == "starting" else 0
+        return left
+    except Exception:
+        return 0
 
 
 def collect_service_status(
@@ -313,6 +366,10 @@ def collect_service_status(
                 probe = service_probe(spec, cfg_port)
             services.append(derive_service_status(spec, ins, cfg_port, probe))
 
+    # Is the stack still coming up? Surfaced at the top so a caller does not have
+    # to re-derive it, and so a button can wait instead of offering to repair
+    # something that is merely booting.
+    starting = [s for s in services if s.get("starting")]
     return {
         "docker": {
             "available": bool(daemon.get("ok")),
@@ -321,6 +378,9 @@ def collect_service_status(
         },
         "stack_root": str(root) if root else None,
         "services": services,
+        "starting": bool(starting),
+        "starting_seconds_left": max([int(s.get("starting_seconds_left") or 0)
+                                      for s in starting], default=0),
         "checked_at": _now_iso(),
     }
 
@@ -470,6 +530,12 @@ def repair_service_stack(
     after_up = status_probe()
     for svc in after_up.get("services", []):
         if not svc.get("running") or svc.get("port_mismatch"):
+            continue
+        if svc.get("starting"):
+            # Restarting a container that is still booting throws away the
+            # progress it has made and starts the wait over.
+            add(f"starting:{svc.get('name')}", "wait", True,
+                f"{svc.get('name')} is still starting; left alone.")
             continue
         unhealthy = svc.get("health") == "unhealthy"
         unreachable = svc.get("probe_ok") is False

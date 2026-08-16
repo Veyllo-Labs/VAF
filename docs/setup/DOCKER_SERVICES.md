@@ -337,8 +337,21 @@ service):
 | `host_ports` | what the container actually publishes |
 | `configured_port` / `port_mismatch` | the port VAF is configured to reach it on, and whether the two disagree |
 | `probe_ok` | whether the service ANSWERED (TCP connect, HTTP GET, or `SELECT 1` for the database) |
+| `starting` / `starting_seconds_left` | the container is inside its own start window: booting, not broken |
 | `state` | `ok`, `warn`, `error`, `absent`, or `unknown` when the daemon is down |
 | `reason` | one sentence, the same text the dialog and the terminal print |
+
+**Still starting is not broken.** Right after a start a database does not answer
+yet, so a status that called that "does not answer" would send someone to a
+repair button for something that needs a few more seconds. A container counts as
+starting while docker's own health status says `starting`, or while it is inside
+the `start_period` from the compose file. Both numbers come from the container:
+the start periods differ per service (30s for the database, 120s for the speech
+containers), so any single figure VAF invented would be wrong for most of them.
+The snapshot repeats this at the top level as `starting` and
+`starting_seconds_left` so a caller does not have to re-derive it, which is what
+lets the Repair button wait and count down instead of offering to fix a stack
+that is already on its way up.
 
 A running container is not a reachable one: the probe is what catches a firewall
 dropping loopback traffic, a service still loading, and a port published somewhere
@@ -358,7 +371,10 @@ as it finishes:
    reported honestly, not as a failure to fix.
 3. **Missing or stopped containers.** One idempotent `compose up` for the whole
    stack, not one command per container.
-4. **Running but unreachable, or unhealthy.** `docker restart -t 5 <container>`.
+4. **Running but unreachable, or unhealthy.** `docker restart -t 5 <container>` -
+   unless the container is still starting, which is left alone: restarting
+   something that is booting throws away the progress it has made and begins
+   the wait again.
 5. **Port mismatch.** Reported with both numbers and the config key that carries the
    expectation. Never corrected: which port VAF talks to is a configuration decision,
    and a restart cannot make two different numbers agree anyway.
@@ -367,8 +383,8 @@ as it finishes:
    macOS). Detection only.
 
 **What repair never does:** no `compose down`, no volume or image removal, no config
-writes, no restart of a container runtime that is already running, and no privilege
-escalation - a daemon needing `sudo systemctl start docker` gets a named instruction
+writes, no restart of a container runtime that is already running, no restart of a
+container that is still inside its start window, and no privilege escalation - a daemon needing `sudo systemctl start docker` gets a named instruction
 instead of a sudo attempt.
 
 ## Configuration

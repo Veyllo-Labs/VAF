@@ -218,3 +218,17 @@ def test_a_still_unreachable_service_gets_the_firewall_hint(monkeypatch, recorde
     hints = [s for s in result["steps"] if s["step"].startswith("firewall:")]
     assert len(hints) == 1
     assert "firewall" in hints[0]["message"].lower()
+
+
+def test_a_starting_container_is_left_alone(monkeypatch, recorder):
+    """Restarting a container that is still booting throws away the progress it
+    has made and starts the wait over - the button would make things slower."""
+    booting = _svc(starting=True, probe_ok=False, state="warn",
+                   reason="The container is still starting up (about 12s left).")
+    _, probe = _patch_env(monkeypatch, statuses=[_status([booting]), _status([booting]),
+                                                 _status([_svc()])])
+    result = sh.repair_service_stack(status_probe=probe)
+    assert recorder == [], "a booting container must not be restarted"
+    step = [s for s in result["steps"] if s["step"].startswith("starting:")][0]
+    assert step["ok"] is True
+    assert "still starting" in step["message"]

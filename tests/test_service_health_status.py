@@ -175,3 +175,65 @@ def test_configured_port_survives_a_hand_edited_url():
     assert sh.configured_port(REDIS, config_get=lambda k, d: "not a url at all",
                               environ={}) == 6379
     assert sh.configured_port(SANDBOX, config_get=lambda k, d: "", environ={}) is None
+
+
+# ── the start window ─────────────────────────────────────────────────────────
+
+def _inspect_starting(health="starting", start_period_ns=30_000_000_000, ago_s=5):
+    from datetime import datetime, timedelta, timezone
+    started = (datetime.now(timezone.utc) - timedelta(seconds=ago_s))
+    return {
+        "Name": "/vaf-redis",
+        "State": {"Running": True, "Health": {"Status": health},
+                  "StartedAt": started.isoformat().replace("+00:00", "Z")},
+        "HostConfig": {"PortBindings": {"6379/tcp": [{"HostIp": "127.0.0.1", "HostPort": "6379"}]}},
+        "Config": {"Healthcheck": {"StartPeriod": start_period_ns}},
+    }
+
+
+def test_a_container_inside_its_start_window_is_starting_not_broken():
+    """The reason this exists: right after a start the database does not answer
+    yet, and calling that "does not answer" sends the user to a repair button
+    for something that only needs a few more seconds."""
+    row = sh.derive_service_status(REDIS, _inspect_starting(), 6379,
+                                   {"kind": "tcp", "ok": False, "detail": "refused"})
+    assert row["starting"] is True
+    assert row["state"] == "warn"
+    assert "starting up" in row["reason"]
+    assert row["starting_seconds_left"] > 0
+
+
+def test_the_countdown_comes_from_the_container_not_from_a_constant():
+    """Start periods differ per service (30s for the database, 120s for the
+    speech containers), so one invented number would be wrong for most."""
+    quick = sh.derive_service_status(REDIS, _inspect_starting(start_period_ns=30_000_000_000, ago_s=10),
+                                     6379, {"kind": "tcp", "ok": False})
+    slow = sh.derive_service_status(REDIS, _inspect_starting(start_period_ns=120_000_000_000, ago_s=10),
+                                    6379, {"kind": "tcp", "ok": False})
+    assert 15 <= quick["starting_seconds_left"] <= 21
+    assert 105 <= slow["starting_seconds_left"] <= 111
+
+
+def test_a_container_past_its_window_that_still_fails_is_broken_again():
+    row = sh.derive_service_status(REDIS, _inspect_starting(health="unhealthy", ago_s=600),
+                                   6379, {"kind": "tcp", "ok": False})
+    assert row["starting"] is False
+    assert row["state"] == "error"
+
+
+def test_docker_saying_starting_outranks_the_arithmetic():
+    """A slow first boot can outlast its own start period and still be starting."""
+    row = sh.derive_service_status(REDIS, _inspect_starting(health="starting", ago_s=600),
+                                   6379, {"kind": "tcp", "ok": False})
+    assert row["starting"] is True
+
+
+def test_the_snapshot_says_the_stack_is_coming_up():
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": True, "reason": "ok", "detail": ""},
+        inspect_probe=lambda names: [_inspect_starting()],
+        port_reader=lambda spec: 6379,
+        service_probe=lambda spec, port: {"kind": "tcp", "ok": False},
+    )
+    assert status["starting"] is True
+    assert status["starting_seconds_left"] > 0

@@ -682,3 +682,34 @@ def test_asking_for_the_record_neither_needs_nor_creates_membership():
     assert "_room_rows(user_scope_id)" in branch, "membership is not checked at all"
     assert "room.join(" not in branch, "looking at a record must not join anybody"
     assert '"message": "Access denied"' in branch, "a room you are not in must be refused"
+
+
+def test_the_task_list_scrolls_in_two_columns_and_can_show_only_live_work():
+    """MUTATION: leave the panel body scrolling, or filter without saying so.
+
+    An outer scroller swallows the inner ones: with the body scrolling, dragging the
+    chain moved the detail beside it, and neither column could be read while the other
+    was long. The body holds still and the two columns scroll themselves.
+
+    And a filter is a state somebody has to be able to SEE. Filtering silently makes a
+    list look shorter than it is, and the next question is why entries are missing -
+    so the control says what it does when it is off, says it is on when it is, and the
+    same click turns it off again.
+    """
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "roomPanelTab === 'history' ? \"overflow-hidden flex flex-col\"" in page, (
+        "the panel body still scrolls, so the two columns cannot")
+    history = page.split("function RoomTaskHistory", 1)[1].split("\nfunction ", 1)[0]
+    assert history.count("overflow-y-auto scrollbar-hide") == 2, (
+        "each column needs its own scroll, and neither should show a bar")
+
+    # The count of what is still live, and the filter behind it.
+    assert "const activeCount = rows.filter(r => isActive(r.status)).length" in history
+    assert "activeOnly ? searched.filter(r => isActive(r.status)) : searched" in history, (
+        "the filter does not actually narrow the list")
+    assert "status === 'working' || status === 'input_required'" in history, (
+        "active means working or waiting for an answer, nothing else")
+    # Visible when on, and the same click clears it.
+    assert 'aria-pressed={activeOnly}' in history
+    assert "setActiveOnly(v => !v)" in history, "the filter cannot be switched off again"
+    assert "roomHistoryFilterOn" in history, "a filter nobody can see is missing entries"

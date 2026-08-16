@@ -82,6 +82,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only thirty minutes of finished work; everything older is in the record rather than
   in the way. It is fetched when the record is opened rather than carried in the
   payload the browser polls every three seconds.
+- In the task list, the chain and the detail scroll separately and neither shows a
+  scrollbar; the list carries a count of what is still ACTIVE (working or waiting for
+  an answer) that filters to exactly those on a click, says so while it is on, and
+  clears on the next click. A filter nobody can see just makes a list look shorter
+  than it is.
 - The room panel's second tab is now the TASK LIST itself: one door instead of two.
   A per-member view and a record answered nearly the same question in two places that
   had to be kept in step, so the per-member one is gone - what is running right now is

@@ -1331,15 +1331,23 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
     const t = useTranslations('main');
     const [query, setQuery] = useState('');
     const [selected, setSelected] = useState<string>('');
+    // A filter is a state somebody has to be able to SEE, or the list simply looks
+    // shorter than it is and the next question is why entries are missing. It says
+    // what it does when it is off, says it is on when it is, and the same click turns
+    // it off again - one control, one place, no hidden mode.
+    const [activeOnly, setActiveOnly] = useState(false);
     const needle = query.trim().toLowerCase();
+    const isActive = (status: string) => status === 'working' || status === 'input_required';
+    const activeCount = rows.filter(r => isActive(r.status)).length;
     // The CHAIN, oldest first: a record of work is read the way it happened, and the
     // newest thing is the one at the end - which is also where the eye lands when a
     // list is scrolled to the bottom on open.
     const chain = rows.slice().sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-    const matches = needle
+    const searched = needle
         ? chain.filter(r => `${r.title} ${r.assignee} ${r.requester} ${r.status} ${r.result}`
             .toLowerCase().includes(needle))
         : chain;
+    const matches = activeOnly ? searched.filter(r => isActive(r.status)) : searched;
     const current = matches.find(r => r.id === selected) || matches[matches.length - 1];
     const listRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
@@ -1373,7 +1381,26 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
                 crowded at once. Grouped by day, the way the conversation next to it
                 already separates days. */}
             <div ref={listRef}
-                className="w-[46%] max-md:w-full shrink-0 overflow-y-auto border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b py-2">
+                className="w-[46%] max-md:w-full shrink-0 overflow-y-auto scrollbar-hide border-r border-gray-200 dark:border-[#2a2a2a] max-md:border-r-0 max-md:border-b py-2">
+                {/* Above the chain and staying there: how much of this is still live,
+                    and the way to see only that. */}
+                <div className="sticky top-0 z-10 px-4 pb-2 bg-white/95 dark:bg-[#181818]/95 backdrop-blur-sm">
+                    <button type="button" aria-pressed={activeOnly}
+                        onClick={() => { setActiveOnly(v => !v); setSelected(''); }}
+                        className={cn(
+                            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] border transition-colors",
+                            activeOnly
+                                ? "border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                : "border-gray-200 dark:border-[#3a3a3a] text-gray-500 dark:text-[#9a9a9a] hover:border-gray-400 dark:hover:border-[#6b6b6b]")}>
+                        <span className={cn("w-1.5 h-1.5 rounded-full",
+                            activeCount > 0 ? "bg-emerald-500" : "bg-gray-400")} aria-hidden />
+                        {t('roomHistoryActive', { count: activeCount })}
+                        {activeOnly && <span aria-hidden>{'\u00d7'}</span>}
+                    </button>
+                    {activeOnly && (
+                        <div className="text-[10px] text-gray-400 mt-1">{t('roomHistoryFilterOn')}</div>
+                    )}
+                </div>
                 {loading && <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryLoading')}</div>}
                 {!loading && matches.length === 0 && (
                     <div className="text-[12px] text-gray-400 px-4 py-2">{t('roomHistoryEmpty')}</div>
@@ -1427,9 +1454,10 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
                         className="w-full px-3 py-2 rounded-xl text-[13px] border border-gray-200 bg-white text-gray-900 placeholder:text-gray-400 dark:border-[#2f2f2f] dark:bg-[#202020] dark:text-[#e6e6e6]" />
                     <div className="text-[11px] text-gray-400 mt-1.5">
                         {t('roomHistoryCount', { shown: matches.length, total: rows.length })}
+                        {activeOnly ? ` \u00b7 ${t('roomHistoryFilterOn')}` : ''}
                     </div>
                 </div>
-                <div className="flex-1 overflow-y-auto px-5 py-4">
+                <div className="flex-1 overflow-y-auto scrollbar-hide px-5 py-4">
                     {current ? (
                         <div className="space-y-4">
                             <div>
@@ -9776,7 +9804,12 @@ function VAFDashboardContent() {
                             ))}
                         </div>
 
-                        <div className="flex-1 overflow-y-auto min-h-0">
+                        <div className={cn("flex-1 min-h-0",
+                            // The record scrolls in its two columns, so the body around
+                            // them must not: an outer scroller swallows the inner ones
+                            // and moves the detail whenever the list is dragged.
+                            roomPanelTab === 'history' ? "overflow-hidden flex flex-col"
+                                                       : "overflow-y-auto")}>
                             {/* What the room IS. A group chat's panel that answered only
                                 "who" left the reader without the two things they ask
                                 next: what kind of room this is, and since when. */}

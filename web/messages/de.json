@@ -171,6 +171,8 @@
     "roomHistorySearch": "Im Verlauf suchen: wer, was, Ergebnis",
     "roomHistoryLoading": "Verlauf wird geholt...",
     "roomHistoryEmpty": "noch nichts verzeichnet",
+    "roomHistoryActive": "{count} aktiv",
+    "roomHistoryFilterOn": "Filter aktiv: nur laufend und wartend",
     "roomHistoryCount": "{shown} von {total}",
     "roomHistoryWhat": "Aufgabe",
     "roomHistoryWho": "Erledigt von",

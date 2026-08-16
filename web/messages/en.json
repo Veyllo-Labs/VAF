@@ -171,6 +171,8 @@
     "roomHistorySearch": "Search the record: who, what, result",
     "roomHistoryLoading": "fetching the record...",
     "roomHistoryEmpty": "nothing recorded yet",
+    "roomHistoryActive": "{count} active",
+    "roomHistoryFilterOn": "filter on: only working and waiting",
     "roomHistoryCount": "{shown} of {total}",
     "roomHistoryWhat": "Task",
     "roomHistoryWho": "Done by",

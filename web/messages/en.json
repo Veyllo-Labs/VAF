@@ -583,7 +583,21 @@
       "inTokens": "Sent",
       "outTokens": "Received",
       "note": "Last {days} days, heaviest user first.",
-      "unknownModels": "Some calls used a model that is not in the price list. Those are priced at the expensive end, so the cost estimate is an upper bound."
+      "unknownModels": "Some calls used a model that is not in the price list. Those are priced at the expensive end, so the cost estimate is an upper bound.",
+      "legacyLedger": "These requests were recorded before token counts were kept, so only their estimated cost is known. New activity is counted in full.",
+      "lastDays": "Last 7 days",
+      "peakDay": "Busiest day: {tokens} tokens (dashed line).",
+      "shareLine": "{percent}% · {calls} requests · {tokens} tokens",
+      "elsewhere": "What this would cost elsewhere",
+      "elsewhereDesc": "The same tokens priced with each provider's public list price. Tap a provider to see which model and price the figure uses.",
+      "priceBasis": "Based on {model}: ${input} per 1M sent tokens, ${output} per 1M received.",
+      "custom": "Custom price",
+      "customName": "Name",
+      "customInput": "$ per 1M sent",
+      "customOutput": "$ per 1M received",
+      "export": "Export",
+      "exportDesc": "The last 30 days as an XML file: per user, API calls, sent and received tokens, and a statement of how each number was measured.",
+      "exportButton": "Export usage as XML"
     },
     "general": {
       "apiKeys": "API Keys",

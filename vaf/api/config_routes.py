@@ -123,6 +123,90 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
     return {"days": full.get("days"), "users": rows, "totals": totals}
 
 
+@router.get("/usage/prices")
+async def get_usage_prices(request: Request) -> Dict[str, Any]:
+    """Public list prices per provider, for the "what would this cost elsewhere" panel."""
+    from vaf.core.cost import price_catalog
+
+    get_current_user_or_local_admin(request)
+    return {"providers": price_catalog()}
+
+
+@router.get("/usage/export")
+async def export_usage(
+    request: Request,
+    days: int = 30,
+    _admin: Dict[str, Any] = Depends(require_admin),
+):
+    """The usage report as XML, for a transparency record outside the product.
+
+    Carries HOW each number was arrived at, not only the number: the tokens are
+    the provider's own report for calls it billed, the money is an estimate from
+    a price table, and calls to a model missing from that table are priced at
+    the expensive end. A record that omits its own method invites being read as
+    an invoice.
+    """
+    from xml.etree.ElementTree import Element, SubElement, tostring
+
+    from fastapi.responses import Response
+
+    from vaf.core.cost import usage_totals
+
+    data = usage_totals(days=days)
+    root = Element("vaf-usage", {"days": str(data.get("days", days))})
+    method = SubElement(root, "method")
+    SubElement(method, "tokens").text = (
+        "Reported by the provider for each billed call (usage.input_tokens / "
+        "usage.output_tokens). Not counted by a tokenizer in VAF, so providers "
+        "that tokenize differently still sum to their own invoices.")
+    SubElement(method, "cost").text = (
+        "Estimated from public list prices per million tokens. A model absent "
+        "from that table is priced at the most expensive entry, so the figure "
+        "is an upper bound, never an invoice.")
+    SubElement(method, "scope").text = (
+        "One ledger per account under the data directory; local models are free "
+        "and contribute tokens but no cost.")
+
+    totals = data.get("totals") or {}
+    SubElement(root, "totals", {
+        "input-tokens": str(totals.get("input_tokens", 0)),
+        "output-tokens": str(totals.get("output_tokens", 0)),
+        "tokens": str(totals.get("tokens", 0)),
+        "api-calls": str(totals.get("calls", 0)),
+        "estimated-usd": f"{float(totals.get('usd', 0.0)):.4f}",
+        "cost-is-upper-bound": "true" if totals.get("estimated_usd_incomplete") else "false",
+    })
+
+    users = SubElement(root, "users")
+    for row in data.get("users") or []:
+        SubElement(users, "user", {
+            "name": str(row.get("username", "")),
+            "input-tokens": str(row.get("input_tokens", 0)),
+            "output-tokens": str(row.get("output_tokens", 0)),
+            "tokens": str(row.get("tokens", 0)),
+            "api-calls": str(row.get("calls", 0)),
+            "token-share-percent": str(row.get("token_share", 0.0)),
+            "estimated-usd": f"{float(row.get('usd', 0.0)):.4f}",
+            "tokens-recorded": "true" if row.get("tokens_recorded") else "false",
+        })
+
+    daily = SubElement(root, "daily")
+    for day in data.get("daily") or []:
+        SubElement(daily, "day", {
+            "date": str(day.get("day", "")),
+            "tokens": str(day.get("tokens", 0)),
+            "api-calls": str(day.get("calls", 0)),
+            "estimated-usd": f"{float(day.get('usd', 0.0)):.4f}",
+        })
+
+    xml = tostring(root, encoding="utf-8", xml_declaration=True)
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="vaf-usage-{days}d.xml"'},
+    )
+
+
 @router.get("/provider-models")
 async def get_provider_models() -> Dict[str, Any]:
     """Static per-provider model metadata (default + fallback list) — the single source

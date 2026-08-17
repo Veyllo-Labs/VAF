@@ -121,3 +121,65 @@ def test_usage_route_is_admin_only():
     assert "require_admin" in inspect.getsource(config_routes.get_usage)
     # The self-view exists so a non-admin still has an answer about themselves.
     assert "usage/me" in inspect.getsource(config_routes)
+
+
+def test_daily_series_covers_every_day_including_quiet_ones(spend_dir):
+    """A chart that drops quiet days makes a burst look like steady traffic."""
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
+
+    out = usage_totals(days=7)
+
+    assert len(out["daily"]) == 7
+    assert [d["day"] for d in out["daily"]] == sorted(d["day"] for d in out["daily"])
+    assert out["daily"][-1]["tokens"] == 1100, "today carries the traffic"
+    assert sum(d["tokens"] for d in out["daily"][:-1]) == 0
+    assert sum(d["tokens"] for d in out["daily"]) == out["totals"]["tokens"]
+
+
+def test_shares_answer_who_used_the_most(spend_dir):
+    record_spend(None, estimate_cost("openai", "gpt-4o", 750, 0))
+    record_spend("ab12cd34", estimate_cost("openai", "gpt-4o", 250, 0))
+
+    out = usage_totals(days=30)
+
+    assert out["users"][0]["token_share"] == 75.0
+    assert out["users"][1]["token_share"] == 25.0
+    assert round(sum(u["token_share"] for u in out["users"])) == 100
+
+
+def test_price_catalog_never_shows_a_price_it_cannot_justify():
+    from vaf.core.cost import PRICES, price_catalog
+
+    catalog = price_catalog()
+    assert catalog, "the comparison panel needs at least one priced provider"
+    for row in catalog:
+        assert row["model"], "a comparison without its model is not a comparison"
+        price = PRICES.get(row["model"]) or PRICES.get(row["model"].rsplit("/", 1)[-1])
+        assert price == (row["input_per_1m"], row["output_per_1m"]), (
+            "the panel must quote the SAME table the ledger estimates with"
+        )
+
+
+def test_xml_export_carries_the_numbers_and_how_they_were_measured(spend_dir):
+    """A transparency record that omits its own method reads as an invoice."""
+    import asyncio
+    from xml.etree.ElementTree import fromstring
+
+    from vaf.api.config_routes import export_usage
+
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
+    resp = asyncio.run(export_usage(request=None, days=30, _admin={"role": "admin"}))
+
+    assert resp.media_type == "application/xml"
+    assert "attachment" in resp.headers["content-disposition"]
+    root = fromstring(resp.body)
+    assert root.tag == "vaf-usage"
+    assert root.find("totals").get("tokens") == "1100"
+    assert root.find("totals").get("api-calls") == "1"
+    assert root.find("users/user").get("name") == "Alice"
+    assert root.find("users/user").get("input-tokens") == "1000"
+    assert len(root.findall("daily/day")) == 30
+    # The method statement is the point of the export, not decoration.
+    method = root.find("method")
+    assert "provider" in method.find("tokens").text.lower()
+    assert "estimat" in method.find("cost").text.lower()

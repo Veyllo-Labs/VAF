@@ -22,6 +22,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the expensive end and marked as an upper bound. Everyone can open the tab,
   but only an admin sees other accounts; everyone else sees their own line.
   Local models contribute tokens and no cost.
+  The tab also carries a 7-day bar chart with the busiest day marked, a share
+  bar per account (percentage, requests, tokens), a panel pricing the same
+  tokens against every provider's public list price - tap one to see which
+  model and rates the figure used, or define your own price in the last row -
+  and an XML export of the last 30 days that states in prose how each number
+  was measured. Requests recorded before token counting existed are now
+  labelled as such instead of showing a bare zero.
+- The Settings window is slightly larger, so the new tab is not cramped.
 - **"Context effort": choose what a reply is allowed to cost.** Settings -> AI
   & Model now carries a stepped slider from 8,000 tokens up to whatever the
   configured model's real context window is - seven positions on a 128k model,

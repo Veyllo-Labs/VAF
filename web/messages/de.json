@@ -583,7 +583,21 @@
       "inTokens": "Gesendet",
       "outTokens": "Empfangen",
       "note": "Letzte {days} Tage, groesster Verbrauch zuerst.",
-      "unknownModels": "Einige Aufrufe nutzten ein Modell, das nicht in der Preisliste steht. Diese werden am oberen Ende bepreist, die Kostenschaetzung ist also eine Obergrenze."
+      "unknownModels": "Einige Aufrufe nutzten ein Modell, das nicht in der Preisliste steht. Diese werden am oberen Ende bepreist, die Kostenschaetzung ist also eine Obergrenze.",
+      "legacyLedger": "Diese Anfragen wurden erfasst, bevor Token-Zahlen gespeichert wurden, daher sind nur die geschaetzten Kosten bekannt. Neue Aktivitaet wird vollstaendig gezaehlt.",
+      "lastDays": "Letzte 7 Tage",
+      "peakDay": "Staerkster Tag: {tokens} Tokens (gestrichelte Linie).",
+      "shareLine": "{percent}% · {calls} Anfragen · {tokens} Tokens",
+      "elsewhere": "Was das anderswo kosten wuerde",
+      "elsewhereDesc": "Dieselben Tokens, bepreist mit der oeffentlichen Preisliste des jeweiligen Anbieters. Anbieter antippen, um Modell und Preis hinter der Zahl zu sehen.",
+      "priceBasis": "Basis {model}: ${input} pro 1 Mio. gesendete Tokens, ${output} pro 1 Mio. empfangene.",
+      "custom": "Eigener Preis",
+      "customName": "Bezeichnung",
+      "customInput": "$ pro 1 Mio. gesendet",
+      "customOutput": "$ pro 1 Mio. empfangen",
+      "export": "Export",
+      "exportDesc": "Die letzten 30 Tage als XML-Datei: pro Nutzer, API-Aufrufe, gesendete und empfangene Tokens, und wie jede Zahl ermittelt wurde.",
+      "exportButton": "Verbrauch als XML exportieren"
     },
     "general": {
       "apiKeys": "API-Schlüssel",

@@ -551,11 +551,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Usage totals. An admin gets every account's line (/api/usage), everyone
     // else only their own (/api/usage/me) - the split is the backend's, not a
     // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
-    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd: number; calls: number };
+    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd: number; calls: number; token_share: number; call_share: number };
+    type UsageDay = { day: string; tokens: number; calls: number; usd: number };
     const [usage, setUsage] = useState<{
-        days: number; users: UsageRow[];
+        days: number; users: UsageRow[]; daily: UsageDay[];
         totals: { tokens: number; input_tokens: number; output_tokens: number; usd: number; calls: number; estimated_usd_incomplete?: boolean };
     } | null>(null);
+    // Price comparison: list prices from the backend (same table the ledger
+    // estimates with), plus one row the reader defines themselves. The custom
+    // row only asks for numbers once it is opened - an empty form beside the
+    // real providers reads as something that must be filled in.
+    const [prices, setPrices] = useState<Array<{ provider: string; model: string; input_per_1m: number; output_per_1m: number }>>([]);
+    const [openPrice, setOpenPrice] = useState<string | null>(null);
+    const [customPrice, setCustomPrice] = useState({ label: '', input: '', output: '' });
     const effortProvider = localConfig.provider || '';
     const effortModel = effortProvider ? (localConfig[`api_model_${effortProvider}`] || '') : '';
     useEffect(() => {
@@ -576,6 +584,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         fetch(`${base}${path}`, { credentials: 'include' })
             .then(r => (r.ok ? r.json() : null))
             .then(d => { if (d && d.totals) setUsage(d); })
+            .catch(() => {});
+        fetch(`${base}/api/usage/prices`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && Array.isArray(d.providers)) setPrices(d.providers); })
             .catch(() => {});
     }, [activeTab, apiBase, currentUser?.role]);
     // ElevenLabs catalogs, fetched via the admin-only backend proxy
@@ -2198,7 +2210,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             />
 
             {/* Modal Window */}
-            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-4xl h-[650px] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:flex-col max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0">
+            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-[906px] h-[660px] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:flex-col max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0">
 
                 {/* Sidebar */}
                 <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1 max-md:w-full max-md:flex-row max-md:items-center max-md:overflow-x-auto max-md:border-r-0 max-md:border-b max-md:pt-2 max-md:pb-2 max-md:shrink-0">
@@ -3130,9 +3142,139 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {usage.totals.estimated_usd_incomplete && (
                                                 <p className="text-xs text-amber-600 mt-1">{tUsage('unknownModels')}</p>
                                             )}
+                                            {usage.totals.calls > 0 && usage.totals.tokens === 0 && (
+                                                <p className="text-xs text-amber-600 mt-1">{tUsage('legacyLedger')}</p>
+                                            )}
                                         </>
                                     )}
                                 </Section>
+
+                                {usage && usage.daily.length > 0 && (
+                                    <Section title={tUsage('lastDays')}>
+                                        {(() => {
+                                            const week = usage.daily.slice(-7);
+                                            const peak = Math.max(...week.map(d => d.tokens), 1);
+                                            const W = 100, H = 34, gap = 2.4;
+                                            const bw = (W - gap * (week.length - 1)) / week.length;
+                                            const peakY = H - (H * (peak / peak)) + 0.4;
+                                            return (
+                                                <>
+                                                    <svg viewBox={`0 0 ${W} ${H + 1}`} className="w-full h-28 mt-3" preserveAspectRatio="none" role="img">
+                                                        {/* Dashed line marking the peak day, so a bar is read against
+                                                            the busiest day rather than against nothing. */}
+                                                        <line x1="0" y1={peakY} x2={W} y2={peakY}
+                                                              className="stroke-gray-400 dark:stroke-gray-500"
+                                                              strokeWidth="0.3" strokeDasharray="1.6 1.4" vectorEffect="non-scaling-stroke" />
+                                                        {week.map((d, i) => {
+                                                            const h = Math.max(d.tokens ? 0.6 : 0, (d.tokens / peak) * H);
+                                                            return (
+                                                                <rect key={d.day} x={i * (bw + gap)} y={H - h} width={bw} height={h}
+                                                                      rx="0.6"
+                                                                      className="fill-gray-400 dark:fill-[#d9d9d9]">
+                                                                    <title>{`${d.day}: ${d.tokens.toLocaleString()} · ${d.calls}`}</title>
+                                                                </rect>
+                                                            );
+                                                        })}
+                                                    </svg>
+                                                    <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                                                        {week.map(d => (
+                                                            <span key={d.day} className="flex-1 text-center">{d.day.slice(5)}</span>
+                                                        ))}
+                                                    </div>
+                                                    <p className="text-xs text-gray-400 mt-2">
+                                                        {tUsage('peakDay', { tokens: peak.toLocaleString() })}
+                                                    </p>
+                                                </>
+                                            );
+                                        })()}
+
+                                        <div className="mt-5 space-y-3">
+                                            {usage.users.map((u) => (
+                                                <div key={`share-${u.scope}`}>
+                                                    <div className="flex justify-between text-xs">
+                                                        <span className="text-gray-700 dark:text-gray-300">{u.username}</span>
+                                                        <span className="text-gray-500 tabular-nums">
+                                                            {tUsage('shareLine', {
+                                                                percent: (u.tokens ? u.token_share : u.call_share).toFixed(1),
+                                                                calls: u.calls.toLocaleString(),
+                                                                tokens: u.tokens.toLocaleString(),
+                                                            })}
+                                                        </span>
+                                                    </div>
+                                                    <div className="h-1.5 mt-1 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                                        <div className="h-full bg-gray-500 dark:bg-[#d9d9d9]"
+                                                             style={{ width: `${Math.max(1, u.tokens ? u.token_share : u.call_share)}%` }} />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Section>
+                                )}
+
+                                {usage && (
+                                    <Section title={tUsage('elsewhere')}>
+                                        <p className="text-xs text-gray-500">{tUsage('elsewhereDesc')}</p>
+                                        <div className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
+                                            {prices.map((p) => {
+                                                const cost = (usage.totals.input_tokens * p.input_per_1m
+                                                    + usage.totals.output_tokens * p.output_per_1m) / 1_000_000;
+                                                const open = openPrice === p.provider;
+                                                return (
+                                                    <div key={p.provider}>
+                                                        <button type="button"
+                                                                onClick={() => setOpenPrice(open ? null : p.provider)}
+                                                                className="w-full flex justify-between items-center py-2 text-sm text-left">
+                                                            <span className="capitalize text-gray-800 dark:text-gray-200">{p.provider}</span>
+                                                            <span className="tabular-nums text-gray-600 dark:text-gray-300">~${cost.toFixed(2)}</span>
+                                                        </button>
+                                                        {open && (
+                                                            <p className="text-xs text-gray-500 pb-3">
+                                                                {tUsage('priceBasis', {
+                                                                    model: p.model,
+                                                                    input: p.input_per_1m.toFixed(2),
+                                                                    output: p.output_per_1m.toFixed(2),
+                                                                })}
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                            <div>
+                                                <button type="button"
+                                                        onClick={() => setOpenPrice(openPrice === '__custom__' ? null : '__custom__')}
+                                                        className="w-full flex justify-between items-center py-2 text-sm text-left">
+                                                    <span className="text-gray-800 dark:text-gray-200">
+                                                        {customPrice.label.trim() || tUsage('custom')}
+                                                    </span>
+                                                    <span className="tabular-nums text-gray-600 dark:text-gray-300">
+                                                        ~${((usage.totals.input_tokens * (parseFloat(customPrice.input) || 0)
+                                                            + usage.totals.output_tokens * (parseFloat(customPrice.output) || 0)) / 1_000_000).toFixed(2)}
+                                                    </span>
+                                                </button>
+                                                {openPrice === '__custom__' && (
+                                                    <div className="grid grid-cols-3 gap-3 pb-3 max-md:grid-cols-1">
+                                                        <Input label={tUsage('customName')} value={customPrice.label}
+                                                               onChange={(v: string) => setCustomPrice(c => ({ ...c, label: v }))} />
+                                                        <Input label={tUsage('customInput')} value={customPrice.input} type="number"
+                                                               onChange={(v: string) => setCustomPrice(c => ({ ...c, input: v }))} />
+                                                        <Input label={tUsage('customOutput')} value={customPrice.output} type="number"
+                                                               onChange={(v: string) => setCustomPrice(c => ({ ...c, output: v }))} />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </Section>
+                                )}
+
+                                {usage && currentUser?.role === 'admin' && (
+                                    <Section title={tUsage('export')}>
+                                        <p className="text-xs text-gray-500">{tUsage('exportDesc')}</p>
+                                        <a href={`${apiBase || ''}/api/usage/export?days=30`}
+                                           className="inline-flex items-center gap-2 mt-3 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800">
+                                            <Download className="w-4 h-4" /> {tUsage('exportButton')}
+                                        </a>
+                                    </Section>
+                                )}
                             </div>
                         )}
 

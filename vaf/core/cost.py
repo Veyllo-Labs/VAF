@@ -196,14 +196,19 @@ def usage_totals(days: int = 30) -> dict:
     """
     from datetime import datetime, timedelta
 
-    out = {"days": max(1, int(days or 1)), "users": [], "totals": {
+    out = {"days": max(1, int(days or 1)), "users": [], "daily": [], "totals": {
         "input_tokens": 0, "output_tokens": 0, "tokens": 0,
         "usd": 0.0, "calls": 0, "estimated_usd_incomplete": False}}
     try:
         base = Platform.data_dir() / "spend"
         if not base.is_dir():
             return out
-        cutoff = (datetime.now() - timedelta(days=max(1, int(days or 1)) - 1)).strftime("%Y-%m-%d")
+        span = max(1, int(days or 1))
+        cutoff = (datetime.now() - timedelta(days=span - 1)).strftime("%Y-%m-%d")
+        # Every day in the window, including the ones nobody used: a chart that
+        # silently drops quiet days makes a burst look like steady traffic.
+        by_day = {(datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d"):
+                  {"tokens": 0, "calls": 0, "usd": 0.0} for n in range(span)}
         rows = []
         for path in sorted(base.glob("*.json")):
             try:
@@ -217,13 +222,22 @@ def usage_totals(days: int = 30) -> dict:
                 if str(day) < cutoff:
                     continue
                 try:
-                    agg["input_tokens"] += int(entry.get("input_tokens") or 0)
-                    agg["output_tokens"] += int(entry.get("output_tokens") or 0)
-                    agg["usd"] += float(entry.get("usd") or 0.0)
-                    agg["calls"] += int(entry.get("calls") or 0)
+                    _din = int(entry.get("input_tokens") or 0)
+                    _dout = int(entry.get("output_tokens") or 0)
+                    _dusd = float(entry.get("usd") or 0.0)
+                    _dcalls = int(entry.get("calls") or 0)
+                    agg["input_tokens"] += _din
+                    agg["output_tokens"] += _dout
+                    agg["usd"] += _dusd
+                    agg["calls"] += _dcalls
                     agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
                 except Exception:
                     continue
+                if str(day) in by_day:
+                    slot = by_day[str(day)]
+                    slot["tokens"] += _din + _dout
+                    slot["calls"] += _dcalls
+                    slot["usd"] = round(slot["usd"] + _dusd, 6)
                 if str(day) > agg["last_active"]:
                     agg["last_active"] = str(day)
             if not agg["calls"]:
@@ -247,9 +261,47 @@ def usage_totals(days: int = 30) -> dict:
                 out["totals"]["estimated_usd_incomplete"] = True
         out["totals"]["tokens"] = out["totals"]["input_tokens"] + out["totals"]["output_tokens"]
         out["totals"]["usd"] = round(out["totals"]["usd"], 4)
+        out["daily"] = [{"day": d, **by_day[d]} for d in sorted(by_day)]
+        # Share of the instance's tokens per account, so "who used the most" is
+        # a number rather than a comparison the reader has to do by eye. Falls
+        # back to the call share while a legacy ledger has no token counts.
+        _tok = out["totals"]["tokens"]
+        _cal = out["totals"]["calls"]
+        for r in rows:
+            r["token_share"] = round(100.0 * r["tokens"] / _tok, 1) if _tok else 0.0
+            r["call_share"] = round(100.0 * r["calls"] / _cal, 1) if _cal else 0.0
     except Exception:
         pass  # a reporting view must never raise into a request
     return out
+
+
+def price_catalog() -> list:
+    """Public list prices per provider, for "what would this have cost elsewhere".
+
+    One representative model per provider - the one VAF would use by default -
+    named beside its price, because a comparison whose model is hidden is not a
+    comparison. The prices are the same table the ledger estimates with, so the
+    page cannot show one number and bill by another.
+    """
+    catalog = []
+    try:
+        from vaf.core.config import Config
+
+        for provider, meta in (Config.PROVIDER_MODELS or {}).items():
+            model = str((meta or {}).get("default") or "")
+            price = PRICES.get(model) or PRICES.get(model.rsplit("/", 1)[-1])
+            if price is None:
+                continue  # a provider we cannot price honestly is left out
+            catalog.append({
+                "provider": provider,
+                "model": model,
+                "input_per_1m": price[0],
+                "output_per_1m": price[1],
+            })
+    except Exception:
+        pass
+    catalog.sort(key=lambda c: c["provider"])
+    return catalog
 
 
 def _display_name(scope_key: str) -> str:

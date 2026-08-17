@@ -6132,7 +6132,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         const parts = m.content.split(new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
                                                         return parts.map((part, k) => (
                                                             part.toLowerCase() === term.toLowerCase()
-                                                                ? <mark key={k} className="bg-yellow-300 text-gray-900 rounded px-0.5">{part}</mark>
+                                                                ? <mark key={k} className="bg-yellow-300 !text-gray-900 dark:bg-yellow-400 dark:!text-gray-900 rounded px-0.5 font-medium">{part}</mark>
                                                                 : <span key={k}>{part}</span>
                                                         ));
                                                     })()}

@@ -420,6 +420,31 @@ def spent_today(user_scope_id: Optional[str]) -> float:
         return 0.0
 
 
+
+def _merge_currencies(target: dict, entry: dict) -> None:
+    """Add one record's amounts into `target`, per currency, losing nothing.
+
+    Records written before the currency was stored have only a bare number.
+    They cannot be attributed honestly - the field was called `usd` while a
+    Veyllo call in it was euros - so they go into `"?"` rather than being
+    guessed into a real currency or, worse, dropped. Dropping was the live
+    defect: a period holding both kinds displayed only the new amounts, which
+    silently hid almost the entire total.
+    """
+    known = entry.get("currencies") or {}
+    total = float(entry.get("usd") or 0.0)
+    for cur, val in known.items():
+        target[cur] = round(float(target.get(cur) or 0.0) + float(val or 0.0), 6)
+    # A record can be PART old: the day the currency started being stored holds
+    # calls from before it as well, so its map covers only some of its total.
+    # The remainder is as unattributable as a fully old record, and it has to be
+    # carried rather than dropped - dropping it is what hid nine tenths of a
+    # month behind a three-cent figure.
+    rest = round(total - sum(float(v or 0.0) for v in known.values()), 6)
+    if rest > 0.000001:
+        target["?"] = round(float(target.get("?") or 0.0) + rest, 6)
+
+
 def usage_totals(days: int = 30) -> dict:
     """What the instance spent, per user, over the last *days* days.
 
@@ -471,9 +496,7 @@ def usage_totals(days: int = 30) -> dict:
                     agg["input_tokens"] += _din
                     agg["output_tokens"] += _dout
                     agg["usd"] += _dusd
-                    for _c, _v in (entry.get("currencies") or {}).items():
-                        agg["currencies"][_c] = round(
-                            float(agg["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                    _merge_currencies(agg["currencies"], entry)
                     agg["calls"] += _dcalls
                     agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
                 except Exception:
@@ -483,9 +506,7 @@ def usage_totals(days: int = 30) -> dict:
                     slot["tokens"] += _din + _dout
                     slot["calls"] += _dcalls
                     slot["usd"] = round(slot["usd"] + _dusd, 6)
-                    for _c, _v in (entry.get("currencies") or {}).items():
-                        slot["currencies"][_c] = round(
-                            float(slot["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                    _merge_currencies(slot["currencies"], entry)
                     # Per-lane, summed across accounts: the day's bar answers
                     # "how much", and the only useful follow-up is "on what".
                     for _pk, _ps in (entry.get("providers") or {}).items():
@@ -495,9 +516,7 @@ def usage_totals(days: int = 30) -> dict:
                             _pa["tokens"] += int(_ps.get("tokens") or 0)
                             _pa["calls"] += int(_ps.get("calls") or 0)
                             _pa["usd"] = round(_pa["usd"] + float(_ps.get("usd") or 0.0), 6)
-                            for _c, _v in (_ps.get("currencies") or {}).items():
-                                _pa["currencies"][_c] = round(
-                                    float(_pa["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                            _merge_currencies(_pa["currencies"], _ps)
                         except Exception:
                             continue
                     for _lane, _ls in (entry.get("lanes") or {}).items():
@@ -507,9 +526,7 @@ def usage_totals(days: int = 30) -> dict:
                             _agg["tokens"] += int(_ls.get("tokens") or 0)
                             _agg["calls"] += int(_ls.get("calls") or 0)
                             _agg["usd"] = round(_agg["usd"] + float(_ls.get("usd") or 0.0), 6)
-                            for _c, _v in (_ls.get("currencies") or {}).items():
-                                _agg["currencies"][_c] = round(
-                                    float(_agg["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                            _merge_currencies(_agg["currencies"], _ls)
                         except Exception:
                             continue
                 if str(day) > agg["last_active"]:
@@ -530,9 +547,7 @@ def usage_totals(days: int = 30) -> dict:
             out["totals"]["input_tokens"] += r["input_tokens"]
             out["totals"]["output_tokens"] += r["output_tokens"]
             out["totals"]["usd"] += r["usd"]
-            for _c, _v in (r.get("currencies") or {}).items():
-                out["totals"]["currencies"][_c] = round(
-                    float(out["totals"]["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+            _merge_currencies(out["totals"]["currencies"], r)
             out["totals"]["calls"] += r["calls"]
             if r["unknown_model_calls"]:
                 out["totals"]["estimated_usd_incomplete"] = True
@@ -546,9 +561,7 @@ def usage_totals(days: int = 30) -> dict:
                 _t["tokens"] += int(_ps.get("tokens") or 0)
                 _t["calls"] += int(_ps.get("calls") or 0)
                 _t["usd"] = round(_t["usd"] + float(_ps.get("usd") or 0.0), 6)
-                for _c, _v in (_ps.get("currencies") or {}).items():
-                    _t["currencies"][_c] = round(
-                        float(_t["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                _merge_currencies(_t["currencies"], _ps)
         # Share of the instance's tokens per account, so "who used the most" is
         # a number rather than a comparison the reader has to do by eye. Falls
         # back to the call share while a legacy ledger has no token counts.

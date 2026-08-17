@@ -662,7 +662,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
         if (!entries.length) return `~$${(legacy ?? 0).toFixed(2)}`;
         return entries
-            .map(([cur, v]) => `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
+            // "?" is an amount recorded before the currency was stored. Shown
+            // with no symbol rather than a guessed one: the field it came from
+            // was called usd while a Veyllo call in it was euros.
+            .map(([cur, v]) => cur === '?'
+                ? `~${v.toFixed(2)} (?)`
+                : `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
             .join(' + ');
     }, []);
 

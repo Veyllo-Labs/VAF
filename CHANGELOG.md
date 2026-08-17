@@ -60,7 +60,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   bills in euros and the other providers in dollars, so the figures were
   euros wearing a dollar sign. Each call now records the unit it was priced
   in, and a period spanning two providers shows both amounts instead of
-  adding them together. And a new breakdown shows which provider and model
+  adding them together. Spending recorded before that change is still shown,
+  marked as being of unknown currency rather than dropped or assumed. And a new breakdown shows which provider and model
   did the work - chat, vision, sub-agents, the tool model and the thinker can
   each run somewhere else, or locally, and their prices differ by an order of
   magnitude, so the total alone said very little. The XML export carries all

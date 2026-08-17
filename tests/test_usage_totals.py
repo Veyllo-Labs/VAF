@@ -653,3 +653,29 @@ def test_the_ledger_says_which_provider_ran_where(spend_dir):
     # And the same split is on the day, so a bar can be opened on it.
     day = [d for d in out["daily"] if d["tokens"]][0]
     assert set(day["providers"]) == set(provs)
+
+
+def test_nothing_is_lost_when_old_and_new_records_meet(spend_dir):
+    """The live defect: a period holding records from before the currency was
+    stored displayed only the new amounts, so a month of spending hid behind a
+    three-cent figure. Amounts that cannot be attributed to a currency are
+    carried as unknown - never guessed into a real one, and never dropped."""
+    spend_dir.mkdir(parents=True, exist_ok=True)
+    (spend_dir / "default.json").write_text(json.dumps({
+        "format": cost_mod.SPEND_FORMAT,
+        "days": {
+            # Fully old: a bare number, no currency anywhere.
+            "2001-01-01": {"usd": 4.0, "calls": 10},
+            # PART old: the day the change landed carries calls from both sides.
+            cost_mod._today(): {"usd": 3.0, "calls": 5, "currencies": {"EUR": 1.0}},
+        },
+    }), encoding="utf-8")
+
+    out = usage_totals(days=10_000)
+    cur = out["totals"]["currencies"]
+
+    assert cur["EUR"] == 1.0
+    assert cur["?"] == 6.0, "4.00 fully old + 2.00 unattributed remainder"
+    assert round(sum(cur.values()), 6) == round(out["totals"]["usd"], 6), (
+        "the per-currency amounts must add up to the recorded total"
+    )

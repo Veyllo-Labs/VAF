@@ -12,7 +12,8 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus
+    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
+    Lock, Unlock,
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -10182,9 +10183,11 @@ function VAFDashboardContent() {
                                 }}
                                 className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
                             >
-                                {deleteArmedIn > 0
-                                    ? tMain('deleteArmedIn', { seconds: deleteArmedIn })
-                                    : tMain('roomCloseConfirm')}
+                                <span className="inline-flex items-center justify-center gap-2">
+                                    {deleteArmedIn > 0
+                                        ? (<><Lock className="w-4 h-4" />{deleteArmedIn}</>)
+                                        : (<><Unlock className="w-4 h-4" />{tMain('roomCloseConfirm')}</>)}
+                                </span>
                             </button>
                         </div>
                     </div>
@@ -10244,9 +10247,11 @@ function VAFDashboardContent() {
                                 onClick={() => { performChatDelete(chatToDelete); setChatToDelete(null); }}
                                 className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
                             >
-                                {deleteArmedIn > 0
-                                    ? tMain('deleteArmedIn', { seconds: deleteArmedIn })
-                                    : tMain('chatDeleteConfirm')}
+                                <span className="inline-flex items-center justify-center gap-2">
+                                    {deleteArmedIn > 0
+                                        ? (<><Lock className="w-4 h-4" />{deleteArmedIn}</>)
+                                        : (<><Unlock className="w-4 h-4" />{tMain('chatDeleteConfirm')}</>)}
+                                </span>
                             </button>
                         </div>
                     </div>

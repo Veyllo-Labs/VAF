@@ -16,7 +16,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   mis-click removed a conversation and its attachments for good. It now opens
   the same kind of confirmation the group chats already had, naming the
   documents that go with it, and the confirm button is disarmed for three
-  seconds with a visible countdown - a destructive button under the cursor is
+  seconds - a closed padlock and a count, opening to an unlocked one and the
+  wording when it is safe to press. A destructive button under the cursor is
   pressed before the sentence above it is read. That delay now guards the
   group-chat dialog too.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab

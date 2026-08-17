@@ -214,8 +214,7 @@
     "chatDeleteTitle": "Delete this chat?",
     "chatDeleteBody": "“{title}” and everything in it are removed from this machine, including any documents attached to it. This cannot be undone.",
     "chatDeleteDocs": "Attached in this chat ({count}):",
-    "chatDeleteConfirm": "Delete chat",
-    "deleteArmedIn": "Delete in {seconds}s"
+    "chatDeleteConfirm": "Delete chat"
   },
   "nav": {
     "settings": "Settings",

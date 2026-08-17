@@ -214,8 +214,7 @@
     "chatDeleteTitle": "Diesen Chat loeschen?",
     "chatDeleteBody": "„{title}“ und der gesamte Inhalt werden von diesem Rechner entfernt, samt aller angehaengten Dokumente. Das laesst sich nicht rueckgaengig machen.",
     "chatDeleteDocs": "In diesem Chat angehaengt ({count}):",
-    "chatDeleteConfirm": "Chat loeschen",
-    "deleteArmedIn": "Loeschen in {seconds}s"
+    "chatDeleteConfirm": "Chat loeschen"
   },
   "nav": {
     "settings": "Einstellungen",

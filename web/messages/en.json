@@ -606,7 +606,8 @@
       "popupYourCost": "Your usage",
       "popupCheapest": "cheapest",
       "popupBasis": "Calculated with your {input} sent and {output} received tokens from the last {days} days.",
-      "asOf": "Prices as of {date}."
+      "asOf": "Prices as of {date}.",
+      "refresh": "Refresh"
     },
     "general": {
       "apiKeys": "API Keys",

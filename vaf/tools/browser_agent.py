@@ -22,6 +22,7 @@ import logging
 import queue as _queue
 import random
 import threading
+from vaf.core.cost import usage_lane
 import time
 from typing import Any, Optional
 
@@ -42,6 +43,7 @@ def _model_supports_vision(provider: str, model: str) -> bool:
     return model_supports_vision(provider, model, probe_local=False)
 
 
+@usage_lane("browser")
 def _call_vision(image_url: str, prompt: str, max_tokens: int = 512) -> Optional[str]:
     """
     Send a screenshot to the configured vision backend with a custom prompt.
@@ -362,6 +364,7 @@ class VAFLLMBridge:
 
     # ── Synchronous LLM call (runs in thread pool) ────────────────────────────
 
+    @usage_lane("browser")
     def _call_sync(self, messages: list[dict], max_tokens: int) -> str:
         from vaf.core.api_backend import APIBackendManager
         backend = APIBackendManager(self._provider_name)

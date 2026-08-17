@@ -606,7 +606,8 @@
       "popupYourCost": "Dein Verbrauch",
       "popupCheapest": "guenstigstes",
       "popupBasis": "Berechnet mit deinen {input} gesendeten und {output} empfangenen Tokens aus den letzten {days} Tagen.",
-      "asOf": "Preise Stand {date}."
+      "asOf": "Preise Stand {date}.",
+      "refresh": "Aktualisieren"
     },
     "general": {
       "apiKeys": "API-Schlüssel",

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from vaf.core.cost import usage_lane
 from typing import Dict, List, Optional
 
 _log = logging.getLogger(__name__)
@@ -699,6 +700,7 @@ def _local_chat(messages) -> Optional[str]:
         return None
 
 
+@usage_lane("voice")
 def _call_model(messages: List[Dict[str, str]], provider: str, model) -> Optional[str]:
     """One first-layer completion on the resolved backend. Returns the raw
     assistant text (local: reasoning still wrapped in <think> for the

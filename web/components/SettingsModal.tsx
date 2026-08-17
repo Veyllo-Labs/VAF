@@ -586,22 +586,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .catch(() => {});
     }, [apiBase, effortProvider, effortModel]);
 
-    useEffect(() => {
-        if (activeTab !== 'usage') return;
+    // One fetch, two callers: opening the tab and the refresh button. The button
+    // exists because the ledger keeps being written while this dialog is open -
+    // a figure read five minutes ago is not the figure now.
+    const [usageLoading, setUsageLoading] = useState(false);
+    const loadUsage = useCallback(() => {
         const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
         const path = currentUser?.role === 'admin' ? '/api/usage' : '/api/usage/me';
-        fetch(`${base}${path}`, { credentials: 'include' })
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (d && d.totals) setUsage(d); })
-            .catch(() => {});
-        fetch(`${base}/api/usage/prices`, { credentials: 'include' })
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => {
-                if (d && Array.isArray(d.providers)) setPrices(d.providers);
-                if (d && d.as_of) setPricesAsOf(String(d.as_of));
-            })
-            .catch(() => {});
-    }, [activeTab, apiBase, currentUser?.role]);
+        setUsageLoading(true);
+        Promise.all([
+            fetch(`${base}${path}`, { credentials: 'include', cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(d => { if (d && d.totals) setUsage(d); })
+                .catch(() => {}),
+            fetch(`${base}/api/usage/prices`, { credentials: 'include' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(d => {
+                    if (d && Array.isArray(d.providers)) setPrices(d.providers);
+                    if (d && d.as_of) setPricesAsOf(String(d.as_of));
+                })
+                .catch(() => {}),
+        ]).finally(() => setUsageLoading(false));
+    }, [apiBase, currentUser?.role]);
+
+    useEffect(() => {
+        if (activeTab !== 'usage') return;
+        loadUsage();
+    }, [activeTab, loadUsage]);
     // ElevenLabs catalogs, fetched via the admin-only backend proxy
     // (/api/voice/elevenlabs/*; the API key never reaches the browser).
     // Empty arrays = fetch unavailable -> the UI falls back to hardcoded
@@ -3103,7 +3114,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'usage' && (
                             <div className="space-y-6">
                                 <Section title={tUsage('title')}>
-                                    <p className="text-xs text-gray-500">{tUsage('desc')}</p>
+                                    <div className="flex items-start justify-between gap-4">
+                                        <p className="text-xs text-gray-500">{tUsage('desc')}</p>
+                                        <button type="button" onClick={loadUsage} disabled={usageLoading}
+                                                className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50">
+                                            <RefreshCw className={`w-3.5 h-3.5 ${usageLoading ? 'animate-spin' : ''}`} />
+                                            {tUsage('refresh')}
+                                        </button>
+                                    </div>
                                     {!usage ? (
                                         <p className="text-xs text-gray-400 mt-4">{tUsage('loading')}</p>
                                     ) : usage.totals.calls === 0 ? (

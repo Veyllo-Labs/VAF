@@ -17,6 +17,7 @@ from vaf.core.text_match import compile_de
 import sys
 import subprocess
 import platform
+from vaf.core.cost import usage_lane
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -2288,6 +2289,7 @@ Remove duplicates and ensure smooth flow.
     # LLM EXECUTION (Slow Path - for complex queries)
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @usage_lane("librarian")
     def _execute_with_llm(self, task: str, *, caller) -> str:
         """Execute complex task using LLM reasoning, dispatching through the caller built once
         in `_run_impl`. It used to build its own, which is how the fast path kept dispatching

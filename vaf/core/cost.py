@@ -212,6 +212,48 @@ def usage_context(lane: Optional[str] = None, scope: Any = _UNSET):
             _SCOPE.reset(scope_token)
 
 
+def usage_lane(name: str):
+    """Label every model call made inside the decorated function.
+
+    A decorator rather than a ``with`` block at each site, because the lanes
+    that need labelling are whole functions whose bodies would otherwise have to
+    be reindented - a diff nobody can review for the one thing it changes. The
+    generator branch matters: a lane that streams does its work while the caller
+    consumes it, so wrapping only the call that BUILDS the generator would leave
+    the label off every token it later yields.
+    """
+    def decorate(fn):
+        import functools
+        import inspect
+
+        if inspect.isasyncgenfunction(fn):
+            @functools.wraps(fn)
+            async def agen(*args, **kwargs):
+                with usage_context(lane=name):
+                    async for item in fn(*args, **kwargs):
+                        yield item
+            return agen
+        if inspect.isgeneratorfunction(fn):
+            @functools.wraps(fn)
+            def gen(*args, **kwargs):
+                with usage_context(lane=name):
+                    yield from fn(*args, **kwargs)
+            return gen
+        if inspect.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def acall(*args, **kwargs):
+                with usage_context(lane=name):
+                    return await fn(*args, **kwargs)
+            return acall
+
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            with usage_context(lane=name):
+                return fn(*args, **kwargs)
+        return call
+    return decorate
+
+
 def set_usage_context(lane: Optional[str] = None, scope: Any = _UNSET) -> None:
     """Set the label without a scope to leave, for a turn that has no block.
 

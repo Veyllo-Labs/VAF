@@ -50,7 +50,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a copy for reading, never the source: the per-user ledger stays the record,
   so deleting logs cannot lose history. It is the one log that ignores the
   debug-logging switch, because a spend record that can be switched off is not
-  a record.
+  a record. Each lane names itself in that log - `memory`, `vision`, `voice`, `librarian`, `mail`, `browser`, `thinking`, `main` - so it answers which part
+  of the product spent the tokens. The Usage tab also gained a Refresh button.
 - **The API price table is current again** (checked 2026-08-17 against the
   providers' own pricing pages). It had been carrying a previous model
   generation, which made every cost estimate in the product wrong in both

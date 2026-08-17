@@ -15,6 +15,7 @@ Rules:
 import asyncio
 import logging
 import time
+from vaf.core.cost import usage_lane
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
@@ -909,6 +910,7 @@ def _composer_related(svc, instruction: str, thread_id: Optional[int]) -> str:
     return composer.format_related(rows)
 
 
+@usage_lane("mail")
 def _composer_stream(messages, max_tokens: int, temperature: float):
     """Yield text chunks from one tool-less completion.
 

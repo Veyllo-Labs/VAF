@@ -33,6 +33,7 @@ from vaf.core.log_helper import append_domain_log
 from vaf.memory.tag_links import expand_tags_with_links
 import logging
 import re
+from vaf.core.cost import usage_lane
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -714,6 +715,7 @@ Always cite which source(s) you used."""
             logger.error(f"Error generating answer: {e}")
             return f"Error generating answer: {str(e)}"
     
+    @usage_lane("memory")
     async def _stream_answer(self, prompt: str) -> AsyncGenerator[str, None]:
         """Stream answer tokens using VAF's API backend.
 

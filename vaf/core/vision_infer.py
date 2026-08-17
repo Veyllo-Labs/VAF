@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from vaf.core.cost import usage_lane
 from typing import Dict, List, Optional, Tuple
 
 _log = logging.getLogger(__name__)
@@ -121,6 +122,7 @@ def image_to_b64(img: Dict) -> Optional[Tuple[str, str]]:
     return None
 
 
+@usage_lane("vision")
 def vision_infer(
     images: List[Dict],
     prompt: str,

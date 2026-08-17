@@ -338,3 +338,37 @@ def test_the_report_survives_the_logs_being_deleted(tmp_path, monkeypatch):
     assert out["totals"]["tokens"] == 1100, "the totals come from the ledger, not the log"
     assert out["totals"]["calls"] == 1
     assert out["users"][0]["username"] == "Alice"
+
+
+def test_every_llm_lane_carries_its_label():
+    """A lane the log cannot name is a lane nobody can account for.
+
+    Pinned by source, deliberately: the decorator is one line above a function
+    and is exactly the kind of thing a later refactor drops without noticing.
+    """
+    import pathlib
+
+    for path, lane in (
+        ("vaf/memory/rag.py", "memory"),
+        ("vaf/core/vision_infer.py", "vision"),
+        ("vaf/core/voice_agent.py", "voice"),
+        ("vaf/tools/librarian.py", "librarian"),
+        ("vaf/api/mail_routes.py", "mail"),
+        ("vaf/tools/browser_agent.py", "browser"),
+    ):
+        src = pathlib.Path(path).read_text(encoding="utf-8")
+        assert f'@usage_lane("{lane}")' in src, f"{path} no longer labels its model calls"
+
+
+def test_the_lane_label_survives_a_streaming_call(tmp_path, monkeypatch):
+    """A streaming lane does its work while the CALLER consumes the generator,
+    so a decorator that exited at build time would label none of it."""
+    monkeypatch.setattr(cost_mod.Platform, "data_dir", staticmethod(lambda: tmp_path))
+
+    @cost_mod.usage_lane("memory")
+    def streaming_lane():
+        yield cost_mod.current_lane()
+
+    assert list(streaming_lane()) == ["memory"]
+    # And the label is gone again afterwards: a lane must not leak into the turn.
+    assert cost_mod.current_lane() == "main"

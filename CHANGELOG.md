@@ -53,6 +53,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   button that opens this tab directly. Clicking a bar in the 7-day chart
   opens that day's breakdown: which lane spent the tokens - chat, thinking,
   automation, a sub-agent, the browser - and how much each one used.
+  Coverage is complete now: individual tools bill under their own name, the
+  coder's own connection is counted, and local model calls are counted too -
+  they cost nothing, but leaving them out meant the page could not answer
+  what the machine actually did.
   Local models contribute tokens and no cost.
   The tab also carries a 7-day bar chart with the busiest day marked, a share
   bar per account (percentage, requests, tokens), a panel pricing the same

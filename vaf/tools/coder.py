@@ -4979,6 +4979,7 @@ Task {task_idx + 1}: {current_task}
             _vr_resp = requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=90)
             _vr_resp.raise_for_status()
             _vr_data = _vr_resp.json()
+            _record_coder_usage(_vr_data)
             _vr_msg = (_vr_data.get("choices") or [{}])[0].get("message") or {}
             return _vr_msg.get("content") or _vr_msg.get("reasoning_content") or ""
 
@@ -5683,6 +5684,12 @@ Task {task_idx + 1}: {current_task}
                             lg.event("request_msg_structure", loop=loop.loop_count, messages=_msg_summary)
                     except Exception:
                         pass
+                # Ask for usage on the stream: an OpenAI-compatible server sends
+                # none unless told to, and the coder is the biggest spender here.
+                try:
+                    _req_body.setdefault("stream_options", {"include_usage": True})
+                except Exception:
+                    pass
                 stream_response = requests.post(
                     _llm_chat_url,
                     headers=_req_headers,
@@ -5823,6 +5830,18 @@ Task {task_idx + 1}: {current_task}
                         continue
                     
                     data_str = line_str[6:]  # Remove 'data: ' prefix
+                    if data_str != '[DONE]':
+                        # The usage chunk arrives last and carries no choices, so
+                        # it is read here rather than inside the delta handling
+                        # below, which would skip it. Requested via stream_options
+                        # on the request; without this the coder - the heaviest
+                        # lane - would spend without appearing in the ledger.
+                        try:
+                            _peek = json.loads(data_str)
+                            if isinstance(_peek, dict) and _peek.get("usage"):
+                                _record_coder_usage(_peek)
+                        except Exception:
+                            pass
                     if data_str == '[DONE]':
                         # Flush remaining line
                         if current_line.strip():
@@ -9911,3 +9930,28 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
 #   - Stop previous instance when new one starts
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _record_coder_usage(payload) -> None:
+    """Book a coder call into the spend ledger.
+
+    The coder posts to the provider over its own HTTP client from a subprocess,
+    so it never passes APIBackendManager - the one place everything else is
+    counted. It was the last lane that could spend without appearing anywhere,
+    and it is typically the largest.
+    """
+    try:
+        usage = (payload or {}).get("usage") or {}
+        _in = int(usage.get("prompt_tokens") or 0)
+        _out = int(usage.get("completion_tokens") or 0)
+        if not (_in or _out):
+            return
+        from vaf.core.config import Config
+        from vaf.core.cost import record_call
+
+        provider = str(Config.get("provider", "local") or "local")
+        model = str((payload or {}).get("model")
+                    or Config.get(f"api_model_{provider}", "") or "")
+        record_call(provider, model, _in, _out, lane="coder")
+    except Exception:
+        pass  # accounting must never break a coder run

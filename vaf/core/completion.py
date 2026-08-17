@@ -130,6 +130,17 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
         if res.status_code != 200:
             return None
         data = res.json()
+        # The local server reports usage like any other OpenAI-compatible one.
+        # It costs no money, but it IS a model call, and a usage view that shows
+        # only the paid ones cannot answer "what did this machine do".
+        try:
+            _u = data.get("usage") or {}
+            _in, _out = int(_u.get("prompt_tokens") or 0), int(_u.get("completion_tokens") or 0)
+            if _in or _out:
+                from vaf.core.cost import record_call
+                record_call("local", str(data.get("model") or "local"), _in, _out)
+        except Exception:
+            pass
         choices = data.get("choices") or []
         if not choices:
             return None
@@ -228,6 +239,27 @@ def complete(messages, *, provider: Optional[str] = None, model: Optional[str] =
     and the event sink). ``timeout`` bounds the API wait (None = unbounded, the
     query_llm contract) and the local request (None = 120s).
     """
+    # Label the lane from the caller this function is ALREADY given, so a tool
+    # that reaches a model is counted under its own name instead of inheriting
+    # whatever turn it happened to run inside. `caller` is "tool:<name>" from
+    # BaseTool.query_llm and a plain lane elsewhere.
+    from vaf.core.cost import usage_context as _usage_context
+
+    _lane = (caller or "").strip() or None
+    with _usage_context(lane=_lane):
+        return _complete_inner(
+            messages, provider=provider, model=model, max_tokens=max_tokens,
+            temperature=temperature, timeout=timeout, strip_think=strip_think,
+            allow_reasoning_fallback=allow_reasoning_fallback,
+            fallback_model=fallback_model, backend=backend, caller=caller)
+
+
+def _complete_inner(messages, *, provider=None, model=None, max_tokens: int = 512,
+                    temperature: float = 0.2, timeout=None, strip_think: bool = True,
+                    allow_reasoning_fallback: bool = True, fallback_model=None,
+                    backend=None, caller: str = "") -> Optional[str]:
+    """The body of :func:`complete`; see there. Split out so the lane label wraps
+    every path, including the local one that never touches the backend manager."""
     if isinstance(messages, str):
         messages = [{"role": "user", "content": messages}]
 

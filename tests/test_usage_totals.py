@@ -499,3 +499,56 @@ def test_a_non_admin_gets_no_daily_series_at_all(spend_dir):
         user={"username": "Bob", "role": "user", "user_scope_id": "ab12cd34"}))
 
     assert asyncio.run(config_routes.get_usage_me(request=req, days=7))["daily"] == []
+
+
+def test_a_tool_is_counted_under_its_own_name(spend_dir, monkeypatch):
+    """`complete()` already knew who called it; it just never said so to the
+    ledger, so a web search inside a chat turn billed as "main"."""
+    from vaf.core import completion
+
+    seen = {}
+    monkeypatch.setattr(completion, "_complete_inner",
+                        lambda *a, **kw: seen.update(lane=cost_mod.current_lane()))
+    cost_mod.set_usage_context(lane="main", scope=None)
+    completion.complete("hi", caller="tool:web_search")
+    assert seen["lane"] == "tool:web_search"
+    # And the surrounding turn's lane comes back afterwards.
+    assert cost_mod.current_lane() == "main"
+
+
+def test_a_local_model_call_is_counted_too(spend_dir):
+    """Free is not the same as invisible: a local call is still a model call,
+    and it is the one lane that never passes the backend manager."""
+    from vaf.core import cost as c
+
+    c.record_call("local", "qwen-gguf", 800, 80, lane="tool:librarian")
+    out = usage_totals(days=1)
+    assert out["totals"]["tokens"] == 880
+    assert out["totals"]["usd"] == 0.0, "local tokens cost no API money"
+
+
+def test_the_coder_books_its_own_calls(spend_dir, monkeypatch):
+    """The coder posts from a subprocess over its own HTTP client, so it never
+    passes the backend manager - it was the last lane that could spend without
+    appearing anywhere, and it is usually the largest."""
+    from vaf.core.config import Config
+    from vaf.tools import coder
+
+    monkeypatch.setattr(Config, "get",
+                        classmethod(lambda cls, k, d=None: "openai" if k == "provider" else d))
+    coder._record_coder_usage({"model": "gpt-4o",
+                               "usage": {"prompt_tokens": 5000, "completion_tokens": 500}})
+
+    out = usage_totals(days=1)
+    assert out["totals"]["tokens"] == 5500
+    lanes = json.loads((spend_dir / "default.json").read_text(encoding="utf-8"))
+    assert lanes["days"][cost_mod._today()]["lanes"]["coder"]["tokens"] == 5500
+
+
+def test_the_coder_asks_the_stream_for_its_usage():
+    """An OpenAI-compatible server sends none unless asked, and the coder streams."""
+    import pathlib
+
+    src = pathlib.Path("vaf/tools/coder.py").read_text(encoding="utf-8")
+    assert '"include_usage": True' in src, "the stream would report no usage at all"
+    assert "_record_coder_usage(_peek)" in src, "the usage chunk is requested but never read"

@@ -7138,10 +7138,23 @@ function VAFDashboardContent() {
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                         e.stopPropagation();
+                                                        const isThinking = (s as { source?: string }).source === 'thinking';
+                                                        // An empty chat has nothing to lose and nothing to archive, so
+                                                        // asking about it is friction with no decision behind it - the
+                                                        // "new chat, never used" case is the one people delete most.
+                                                        // Attachments count as content even with no messages: a document
+                                                        // can be added and never sent, and losing it silently would be
+                                                        // exactly the confirmation this dialog exists for.
+                                                        const isEmpty = (s.messageCount || 0) === 0
+                                                            && !(sessionViewerState[s.id]?.documents || []).length;
+                                                        if (isEmpty) {
+                                                            performChatDelete({ id: s.id, isThinking, archive: false });
+                                                            return;
+                                                        }
                                                         setChatToDelete({
                                                             id: s.id,
                                                             title: s.title.replace(".json", ""),
-                                                            isThinking: (s as { source?: string }).source === 'thinking',
+                                                            isThinking,
                                                         });
                                                     }} />
                                                 </>

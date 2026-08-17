@@ -23,7 +23,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   instead of losing the conversation, ticked by default - the usual regret is a
   chat deleted for tidiness that the agent later needed. Archived chats stay
   readable by everything that reads a chat, so the agent's memory can use them,
-  and they are private to your account.
+  and they are private to your account. An empty chat - no messages, no
+  attachments - is still deleted with one click: there is nothing to lose,
+  so there is nothing to confirm.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab
   showing total tokens, request count, an estimated cost, and a table of
   accounts with the heaviest first. The token numbers do not depend on anyone

@@ -17,7 +17,7 @@ Order within `chat_step()`:
    - Detect the language, call `analyze_context(user_input)`, and build `new_prompt = build_prompt(...)`.
    - `new_prompt` is set **only within this block**; it is **not** written into the history.
 3. **Context Compression:**
-   - **Condition:** `context_manager.should_compress(self.history)` must be `True`.
+   - **Condition:** `context_manager.should_compress(self.history)` must be `True`. The check and the `compress()` call live in `Agent._compress_history_if_needed`, which is shared with the session-load path (section 7b) and reports the result to the Web UI system log (message count and remaining tokens).
    - If **yes:** call `compress()`, then append the context glue to `new_prompt` and overwrite the system prompt in `history[0]` with this `new_prompt` (including the glue and, if present, PROJECT CONTEXT).
    - If **no:** nothing happens to the history; a `new_prompt` built earlier is **not** written into `history[0]` (it is applied only when compression runs this turn).
 
@@ -36,9 +36,23 @@ def should_compress(self, history: List[Dict]) -> bool:
 - **`trigger_threshold`:** Dynamic, based on `max_tokens` (e.g. 0.70 for small windows, 0.85 for large windows up to 128k, 0.90 for very large windows).
 - **`get_usage_percent(history)`:**  
   `estimate_tokens(history) / max_tokens`  
-  – i.e. the estimated tokens of the current history divided by the configured context limit (e.g. 8192 or 128000).
+  – i.e. the estimated tokens of the current history divided by the manager's effective limit.
 
-**In short:** compression is triggered as soon as the estimated usage of the history reaches the dynamic threshold of the current context window.
+**The effective limit is NOT always the model window.** For API providers the
+agent pins the manager to `min(model window, context_compress_tokens)`
+(`Agent._sync_compression_limit`, called from `get_token_usage` and
+`manage_context`): an API resends and bills the whole history on every LLM
+round-trip, so waiting for 85% of a 128k window meant a ~65k-token conversation
+was resent in full on every turn and compression never fired. Local models keep
+the window as the limit (their tokens are free). The **emergency purge** in
+`manage_context` deliberately stays on the real window: an overflow breaks the
+request, so the budget must never shrink that guard. Limit changes go through
+`ContextManager.set_max_tokens`, which re-derives `trigger_threshold` and
+`recent_memory_size` in place - the manager instance is NEVER replaced, because
+the state registry's `ContextStateProvider` holds a reference to it (a rebuilt
+manager persisted as an empty snapshot and lost the checkpoint summary).
+
+**In short:** compression is triggered as soon as the estimated usage of the history reaches the dynamic threshold of the effective limit (model window, or the pay-per-token budget on APIs).
 
 ---
 
@@ -152,10 +166,22 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
 
 ## 7. Configuration (ContextManager)
 
-- **`max_tokens`:** Set when the `ContextManager` is created (e.g. from the agent config / `n_ctx`); default 8192 (can be raised to e.g. 128000).
+- **`max_tokens`:** Set when the `ContextManager` is created and moved afterwards ONLY via `set_max_tokens` (re-derives the two values below in place; the instance is never replaced, see section 2).
 - **`trigger_threshold`:** Dynamic, depending on `max_tokens` (small/medium/large windows).
 - **`recent_memory_size`:** Dynamic, depending on `max_tokens` (from small windows up to 200 for very large windows).
+- **`context_compress_tokens`** (config key, default 30000): the pay-per-token budget for API providers; the agent pins the manager to `min(window, budget)`. `0` restores window-based triggering. Local models ignore it.
 - **`preserve_tools`:** The tool list is extended; core tools are retained, and additional tool types are taken into account as well.
+
+## 7b. Compression on session load
+
+`Agent.load_session_context` replays the FULL saved transcript into the LLM
+history (the session file is the UI archive and keeps every message by design).
+After the replay it runs `_compress_history_if_needed` - the same structural
+pass as the per-turn check in `chat_step`, with no LLM summarization call. It
+reuses the narrative summary restored from the session's `runtime_state`, so a
+checkpoint or compression made before a restart keeps its effect instead of
+being replayed away. Before this pass existed as a budget-aware lane, a restart
+silently rebuilt the full history and every later round-trip resent it.
 
 ---
 

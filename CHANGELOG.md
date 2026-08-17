@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **API costs no longer grow without bound in long chats.** On a pay-per-token
+  provider every reply resends the whole conversation, and compression only
+  fired at 85% of the 128k model window - a three-week chat sat at ~65k tokens
+  forever, so even a one-line question paid ~65k tokens again, in every single
+  round-trip. Compression now triggers at a cost budget (`context_compress_tokens`,
+  default 30,000 tokens; `0` restores the old window-based behavior), posts a
+  visible system message with the before/after counts, and local models are
+  unaffected. Two bugs in the same lane went with it: the agent kept two
+  separate context managers, so a `checkpoint_context` summary was stored on an
+  object the session never persisted; and loading a session (or restarting the
+  app) replayed the full transcript back into the context, silently undoing
+  every checkpoint. One manager remains, its state persists, and a loaded
+  session is compressed again on arrival, reusing the saved summary without an
+  extra LLM call.
+
 ### Changed
 - **Reading a group chat no longer shows as typing; it shows as a read receipt.**
   The three bouncing dots used to appear for any member that had merely read the

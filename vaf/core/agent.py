@@ -3005,10 +3005,8 @@ class Agent:
 
         # Cleanup Context Archives (Temporary)
         try:
-            if hasattr(self, 'context_manager'):
+            if getattr(self, 'context_manager', None) is not None:
                 self.context_manager.cleanup()
-            elif hasattr(self, '_context_manager'):
-                self._context_manager.cleanup()
         except:
             pass
         
@@ -4898,14 +4896,15 @@ class Agent:
             set_current_session_id(session_id)
             self._bind_session_persistence(session_id)
 
-        # CRITICAL: Compress history immediately upon load IF needed
-        # Otherwise UI shows massive "Raw Truth" (e.g. 17k tokens) which looks broken,
-        # even though chat_step would compress it before sending.
-        # We want the UI to show the "Ready State".
-        current_tokens, max_tokens = self.get_token_usage()
-        if current_tokens > max_tokens * 0.9:
-            self.manage_context()
-            
+        # CRITICAL: Compress history immediately upon load IF needed.
+        # The session file keeps the FULL transcript by design (UI archive), so
+        # the replay above rebuilds the whole conversation - on a paid API that
+        # meant a restart silently undid every checkpoint/compression and the
+        # next turn resent all of it (measured live: 551 messages, ~65k tokens
+        # per round-trip). This structural pass reuses the narrative summary the
+        # state snapshot restored; no LLM call on a session switch.
+        self._compress_history_if_needed()
+
         # Broadcast new context stats to WebUI immediately
         self._broadcast_context_status()
 
@@ -5471,12 +5470,9 @@ class Agent:
             # at e.g. 128000 -- firing premature "Compressing…/CRITICAL OVERFLOW" at a fraction of the
             # real window. Re-sync the manager so the limit always tracks the real context size.
             max_tokens = max(int(Config.get("n_ctx", 32768) or 32768), 32768)  # FRESH read, not the __init__ snapshot
-            if self.context_manager.max_tokens != max_tokens:
-                try:
-                    append_domain_log("backend", f"[CTX-LIMIT] context_manager max_tokens {self.context_manager.max_tokens} -> {max_tokens}")
-                except Exception:
-                    pass
-                self.context_manager.max_tokens = max_tokens
+            # set_max_tokens (not a bare assignment) so trigger_threshold and
+            # recent_memory_size re-derive with the new limit.
+            self._sync_compression_limit(max_tokens)
         else:
             max_tokens = self.config.get("n_ctx", 8192)
 
@@ -5509,6 +5505,44 @@ class Agent:
         except Exception:
             pass  # accounting must never break a turn
 
+    def _compression_limit(self, window_tokens: int) -> int:
+        """Effective token limit the compression lanes trigger on.
+
+        An API provider resends the WHOLE history on every LLM round-trip and
+        bills each token, so the model window (128k) is the wrong compression
+        ceiling: a 65k-token conversation fits the window forever while every
+        one-line question pays the full 65k again. The ceiling is therefore
+        min(window, context_compress_tokens). Local models pay no per-token
+        price: there the window IS the limit and the budget key is ignored.
+        """
+        if not self.api_backend:
+            return window_tokens
+        try:
+            budget = int(self.config.get("context_compress_tokens", 30000) or 0)
+        except Exception:
+            budget = 0
+        if budget <= 0:
+            return window_tokens
+        return min(window_tokens, budget)
+
+    def _sync_compression_limit(self, window_tokens: int) -> None:
+        """Pin the ONE ContextManager to the effective compression limit.
+
+        Updated in place via set_max_tokens: replacing the instance would orphan
+        the ContextStateProvider reference the state registry serializes (the
+        empty-snapshot bug this replaces) and clobber intent/state/summary.
+        """
+        cm = getattr(self, 'context_manager', None)
+        if cm is None:
+            return
+        effective = self._compression_limit(window_tokens)
+        if cm.max_tokens != effective:
+            try:
+                append_domain_log("backend", f"[CTX-LIMIT] context_manager max_tokens {cm.max_tokens} -> {effective}")
+            except Exception:
+                pass
+            cm.set_max_tokens(effective)
+
     def get_token_usage(self):
         """
         Calculates a precise token usage by using the model's tokenizer.
@@ -5534,6 +5568,12 @@ class Agent:
             n_ctx = self.api_backend.get_model_context_window(
                 model=self.config.get(f"api_model_{self.provider}", "")
             )
+
+            # Every compression lane (chat_step block, manage_context, session
+            # load) reads the manager's limit; the RETURNED value stays the real
+            # window so overflow/purge decisions and the UI bar keep meaning
+            # "model window" while only compression tightens to the budget.
+            self._sync_compression_limit(n_ctx)
 
             return total, n_ctx
 
@@ -5904,11 +5944,17 @@ class Agent:
         # Determine appropriate context limit
         current_tokens_calc, max_tokens = self.get_token_usage()
 
-        # Initialize or update context manager if max_tokens changed (e.g. switched to API)
-        if not hasattr(self, '_context_manager') or self._context_manager.max_tokens != max_tokens:
+        # ONE manager, updated in place. Rebuilding here created a second instance
+        # next to the one __init__ registered with the state registry, so intent,
+        # narrative summary and checkpoint state were written to an object that
+        # was never serialized (measured live: an empty context snapshot captured
+        # two minutes after a checkpoint stored its summary).
+        if getattr(self, 'context_manager', None) is None:
             UI.event("Context", f"Initializing context manager (limit: {max_tokens} tokens)", style="dim")
-            self._context_manager = ContextManager(max_tokens=max_tokens)
-        
+            self.context_manager = ContextManager(max_tokens=self._compression_limit(max_tokens))
+        else:
+            self._sync_compression_limit(max_tokens)
+
         # Ensure prompt manager also has latest limit for dynamic decay
         if hasattr(self, 'prompt_manager') and self.prompt_manager.max_tokens != max_tokens:
             self.prompt_manager.max_tokens = max_tokens
@@ -5923,14 +5969,19 @@ class Agent:
                 self.prompt_manager.decay_start = 3
                 self.prompt_manager.module_decay_turns = {"coding": 5, "research": 4, "filesystem": 3}
 
-        cm = self._context_manager
-        
-        # Check if compression needed using PRECISE token count (including tools)
-        usage_percent = current_tokens_calc / max_tokens if max_tokens else 0
-        
+        cm = self.context_manager
+
+        # Check if compression needed using PRECISE token count (including tools).
+        # Two different ceilings on purpose: the PURGE guards the real model
+        # window (an overflow breaks the request), the compression TRIGGER fires
+        # on the effective limit (window, or the pay-per-token budget on APIs).
+        window_percent = current_tokens_calc / max_tokens if max_tokens else 0
+        limit_tokens = cm.max_tokens or max_tokens
+        usage_percent = current_tokens_calc / limit_tokens if limit_tokens else 0
+
         # 1. EMERGENCY PURGE (Hard Reset if > 100%)
         # If we are already over the hard limit, standard compression might be too slow or fail.
-        if usage_percent >= 1.0 and len(self.history) > 1:
+        if window_percent >= 1.0 and len(self.history) > 1:
             msg = f"CRITICAL OVERFLOW ({current_tokens_calc}/{max_tokens}). Emergency purge active!"
             UI.event("Context", msg, style="bold red")
             try:
@@ -5949,7 +6000,7 @@ class Agent:
             self._broadcast_context_status()
             # Continue to standard compression for remaining history if still needed
             current_tokens, _ = self.get_token_usage()
-            usage_percent = current_tokens / max_tokens if max_tokens else 0
+            usage_percent = current_tokens / limit_tokens if limit_tokens else 0
 
         if usage_percent < cm.trigger_threshold:
             return
@@ -5957,7 +6008,7 @@ class Agent:
         # Notify WebUI about standard compression
         try:
             from vaf.core.web_interface import get_web_interface
-            get_web_interface().log(f"Context usage at {usage_percent:.0%}. Optimizing memory...", level="info", source="System", session_id=getattr(self, 'current_session_id', None))
+            get_web_interface().log(f"Context usage at {usage_percent:.0%} of the compression limit ({limit_tokens:,} tokens). Optimizing memory...", level="info", source="System", session_id=getattr(self, 'current_session_id', None))
         except: pass
 
         # LLM-based Summarization Logic
@@ -5998,10 +6049,11 @@ class Agent:
                 working_memory = None
         self.history = cm.compress(self.history, working_memory=working_memory)
         new_count = len(self.history)
-        
+
         try:
             from vaf.core.web_interface import get_web_interface
-            get_web_interface().log(f"Context optimized: {old_count} messages reduced to {new_count}. Stable progress preserved.", level="success", source="System", session_id=getattr(self, 'current_session_id', None))
+            new_tokens = cm.estimate_tokens(self.history)
+            get_web_interface().log(f"Context compressed: {old_count} -> {new_count} messages (~{new_tokens:,} tokens now). Older turns are summarized; /restore recovers the full history.", level="success", source="System", session_id=getattr(self, 'current_session_id', None))
         except: pass
 
         # Broadcast update to WebUI
@@ -6023,12 +6075,14 @@ class Agent:
         if len(self.history) <= 2:
             return "[checkpoint] Nothing to checkpoint (history too short)."
 
-        # Use _context_manager if available, fall back to context_manager (always initialized in __init__)
-        cm = getattr(self, '_context_manager', None) or getattr(self, 'context_manager', None)
+        # THE manager __init__ registered with the state registry. A private
+        # fallback instance here stored the checkpoint summary on an object the
+        # session snapshot never serialized, so the summary died with the process.
+        cm = getattr(self, 'context_manager', None)
         if cm is None:
             _, max_tokens = self.get_token_usage()
-            cm = ContextManager(max_tokens=max_tokens)
-            self._context_manager = cm
+            cm = ContextManager(max_tokens=self._compression_limit(max_tokens))
+            self.context_manager = cm
 
         # 1. Archive full history (same as compress does)
         cm._archive_history(self.history)
@@ -6091,6 +6145,48 @@ class Agent:
             pass
 
         return f"[checkpoint] Context reset: {old_len} -> {len(new_history)} messages. Plan and working memory preserved."
+
+    def _compress_history_if_needed(self) -> bool:
+        """Structurally compress the history once it crossed the effective limit.
+
+        Shared by the per-turn check in chat_step AND the session-load path, so
+        both fire on the same limit (model window, or the pay-per-token budget
+        on APIs). Structural only - no LLM summarization call - which is what
+        makes it safe on a session switch: it reuses whatever narrative summary
+        the state snapshot restored, so a checkpoint made before a restart keeps
+        its effect instead of being replayed away. Returns True when it ran.
+        """
+        cm = getattr(self, 'context_manager', None)
+        if cm is None:
+            return False
+        try:
+            _, window = self.get_token_usage()
+            self._sync_compression_limit(window)
+        except Exception:
+            pass
+        if not cm.should_compress(self.history):
+            return False
+        from vaf.cli.ui import UI
+        old_count = len(self.history)
+        UI.event("Context", f"Threshold reached ({cm.get_usage_percent(self.history):.0%}) - compressing...", style="warning")
+        working_memory = None
+        if getattr(self, "main_persistence", None):
+            try:
+                working_memory = self.main_persistence.get_working_memory()
+            except Exception:
+                working_memory = None
+        self.history = cm.compress(self.history, working_memory=working_memory)
+        try:
+            from vaf.core.web_interface import get_web_interface
+            new_tokens = cm.estimate_tokens(self.history)
+            get_web_interface().log(
+                f"Context compressed: {old_count} -> {len(self.history)} messages "
+                f"(~{new_tokens:,} tokens now). Older turns are summarized; /restore recovers the full history.",
+                level="success", source="System",
+                session_id=getattr(self, 'current_session_id', None))
+        except Exception:
+            pass
+        return True
 
     def _broadcast_context_status(self):
         """Send precise context debug info to WebUI (X-Ray Vision)."""
@@ -6206,14 +6302,14 @@ class Agent:
         from vaf.cli.ui import UI
         from vaf.core.context import ContextManager
         
-        if not hasattr(self, '_context_manager'):
+        if getattr(self, 'context_manager', None) is None:
             UI.error("No context manager initialized.")
             return False
-        
-        restored = self._context_manager.restore_latest()
+
+        restored = self.context_manager.restore_latest()
         if restored:
             self.history = restored
-            tokens = self._context_manager.estimate_tokens(self.history)
+            tokens = self.context_manager.estimate_tokens(self.history)
             UI.event("Context", f"Restored! {len(self.history)} messages, {tokens} tokens", style="success")
             return True
         else:
@@ -6224,16 +6320,16 @@ class Agent:
         """Get current context status for UI display."""
         from vaf.core.context import ContextManager
         
-        if not hasattr(self, '_context_manager'):
+        if getattr(self, 'context_manager', None) is None:
             max_tokens = self.config.get("n_ctx", 8192)
-            self._context_manager = ContextManager(max_tokens=max_tokens)
-        
+            self.context_manager = ContextManager(max_tokens=max_tokens)
+
         # CRITICAL: Use Agent's get_token_usage() which includes Tool overhead
         # instead of ContextManager's estimate which only counts history text
         tokens, max_tokens = self.get_token_usage()
-        
+
         # Get other status info from context manager
-        cm_status = self._context_manager.get_status(self.history)
+        cm_status = self.context_manager.get_status(self.history)
         
         # Override token count with accurate value
         cm_status['tokens'] = tokens
@@ -8423,17 +8519,7 @@ class Agent:
         # ------------------------------------------------------------------
         # Context Compression: Check threshold and compress if needed
         # ------------------------------------------------------------------
-        compression_happened = False
-        if hasattr(self, 'context_manager') and self.context_manager.should_compress(self.history):
-            UI.event("Context", f"Threshold reached ({self.context_manager.get_usage_percent(self.history):.0%}) - compressing...", style="warning")
-            working_memory = None
-            if getattr(self, "main_persistence", None):
-                try:
-                    working_memory = self.main_persistence.get_working_memory()
-                except Exception:
-                    working_memory = None
-            self.history = self.context_manager.compress(self.history, working_memory=working_memory)
-            compression_happened = True
+        compression_happened = self._compress_history_if_needed()
             
         # Apply updated system prompt + context glue + project context
         if new_prompt is not None and len(self.history) > 0 and self.history[0].get("role") == "system":

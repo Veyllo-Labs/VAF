@@ -160,9 +160,9 @@ Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, Dee
 1. **Facts over Estimation**: After every API call, VAF captures the exact `input_tokens` and `output_tokens` reported by the provider.
 2. **Context Bar (Web UI)**: The context bar reflects the effective context fill. In API mode the displayed total is the maximum of the last request usage and a history-based estimate (so loading an old session shows the correct fill before any new request). Estimates use weighted ratios: 2.8 chars/token for code (e.g. messages containing ```), 3.6 for plain text; tool schemas (local/server) use 3.0. When a local server is available, the breakdown (system / history / tools) can use the server’s `/tokenize` endpoint for precision.
 3. **Session-Scoped Display**: Context updates (`context_status`) are sent only to the Web UI tab that has that session open (`_push_session_update(session_id, ...)`), so multiple tabs do not see each other’s token stats.
-4. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher). This prevents premature compression and allows full use of modern "Long Context" models.
+4. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher) so overflow handling can use the model's real window. The **compression trigger** deliberately does not follow the full window on APIs: the effective limit is `min(window, context_compress_tokens)` (default 30,000), because an API resends and bills the whole history on every round-trip - measured live, a ~65k-token chat fit the 128k window forever and every one-line question paid the full ~65k again. Set `context_compress_tokens: 0` to trigger on the window alone.
 5. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend automatically requests a continuation and concatenates the parts so the user receives the complete response.
-6. **Limit tracks the real window**: the compression / overflow limit is re-derived from the configured `n_ctx` every turn (`get_token_usage`) and the context manager is re-synced (logged `[CTX-LIMIT]`). A manager built before `n_ctx` was raised therefore never pins compression to the 32 768 floor while the model and server actually run at, e.g., 128 000, so compression is not triggered prematurely at a fraction of the real window.
+6. **Limit tracks the real window**: the compression / overflow limit is re-derived from the configured `n_ctx` every turn (`get_token_usage`) and the context manager is re-synced (logged `[CTX-LIMIT]`, via `ContextManager.set_max_tokens` so the trigger threshold and recent-window size re-derive with it). A manager built before `n_ctx` was raised therefore never pins compression to the 32 768 floor while the model and server actually run at, e.g., 128 000. There is exactly ONE `ContextManager` per agent, updated in place: it is the instance the state registry's `ContextStateProvider` serializes into the session's `runtime_state`, and a second private instance (the old `manage_context` rebuild) meant checkpoint summaries were stored on an object that was never persisted.
 7. **Compression never grows**: if the summary (context summary + resume block) would come out *larger* than the input (which can happen for short histories), it is dropped and only the system turn + recent messages are kept - always smaller than the input. The full history is archived for `/restore`.
 
 ### VRAM-Aware Efficiency
@@ -177,8 +177,10 @@ The Context Manager dynamically adjusts its behavior based on the configured con
 | **Small (≤ 12k)**       | **70%** | **6 messages**| Aggressive compression; minimal recent window. |
 | **Medium (≤ 20k)**      | **75%** | **8 messages**| Proactive compression; balanced history. |
 | **Large (≤ 64k)**       | **85%** | **50 msgs**   | Extended raw history for local long-context models. |
-| **API Boost (≤ 128k)**  | **85%** | **100 msgs**  | **Standard API Mode.** Preserves ~50 full turns raw. |
+| **API Boost (≤ 128k)**  | **85%** | **100 msgs**  | Window-based row; APIs normally run on the budget row below instead. |
 | **Ultra (> 128k)**      | **90%** | **200 msgs**  | Maximum retention for Gemini 1.5 Pro / Claude 3.5. |
+
+> The rows key on the manager's **effective limit**, not always the raw window: with an API backend the limit is `min(window, context_compress_tokens)` (default 30,000, so API mode normally uses the ≤ 64k row: 85% trigger, 50 recent messages). See point 4 above.
 
 ### Tool Output Compression
 
@@ -311,7 +313,7 @@ Set `"tool_loop_unlimited": true` in config to disable the hard limit entirely (
 
 To maintain maximum "depth" and accuracy in very long sessions (especially when using API providers like DeepSeek or OpenAI):
 
-1. **Leverage the 128k Boost:** Ensure your `provider` is set to an API service. VAF automatically boosts the internal `n_ctx` to 128,000, allowing the system to keep up to **100 messages** raw before compression even starts.
+1. **Mind the cost budget on APIs:** the model window is boosted to 128,000 tokens, but compression triggers at `min(window, context_compress_tokens)` (default 30,000) because every round-trip resends and bills the whole history. Raise the budget if you want more raw history per turn and accept the per-turn cost; `0` triggers on the window alone.
 2. **Use `checkpoint_context` for Milestones:** If you are working on a massive multi-step task (e.g., building a full app), use the `checkpoint_context` tool after completing a major phase. This archives the "noise" of implementation details while keeping your plan and high-level progress in the "Stable Progress Glue".
 3. **Tool Output Compression:** Large outputs (file contents, long email lists) are pruned automatically before entering the history. If you need the model to retain a specific detail from a large output, acknowledge it in chat (e.g., "I see the error on line 452") - this saves the fact into the State Context.
 4. **Prefer `memory_save` for Permanent Facts:** For information that should survive even across different chat sessions (e.g., your birthday, server IP addresses, specific project paths), use the `memory_save` tool. This moves data from transient chat context into the permanent RAG database.

@@ -257,8 +257,28 @@ class ContextManager:
     ARCHIVE_DIR = Path.home() / ".vaf" / "context_archive"
     
     def __init__(self, max_tokens: int = 8192):
+        self.set_max_tokens(max_tokens)
+
+        # Context layers
+        self.intent = IntentContext()
+        self.state = StateContext()
+
+        # Archive for restoration
+        self.archive: List[ContextSnapshot] = []
+        self.created_archives: List[Path] = []  # Track created files for cleanup
+        self.ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """Change the effective limit in place, re-deriving the dynamic thresholds.
+
+        This is the only supported way to move the limit after construction:
+        replacing the manager instead would orphan the intent/state/archive layers
+        AND the ContextStateProvider reference the state registry serializes, so a
+        rebuilt manager persisted as an empty snapshot (measured live: a checkpoint
+        summary that never reached the session file).
+        """
         self.max_tokens = max_tokens
-        
+
         # DYNAMIC LIMITS: React to small context sizes (VRAM efficiency)
         # Very small (e.g. 4k–8k): keep more raw so 1–2 turns visible after tool use
         # For 12k: recent 10; For 16k: recent 12; For >32k: recent 20 (default)
@@ -281,15 +301,6 @@ class ContextManager:
             # Ultra-large windows (e.g. Gemini 1M+, Claude 200k)
             self.trigger_threshold = 0.90
             self.recent_memory_size = 200
-        
-        # Context layers
-        self.intent = IntentContext()
-        self.state = StateContext()
-        
-        # Archive for restoration
-        self.archive: List[ContextSnapshot] = []
-        self.created_archives: List[Path] = []  # Track created files for cleanup
-        self.ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # TOKEN ESTIMATION

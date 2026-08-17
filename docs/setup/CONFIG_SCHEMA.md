@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (317 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (318 keys).
 
 ## How configuration is set
 
@@ -222,6 +222,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_rag_threshold` | `0.3` | Min similarity to include. |
 | `memory_rag_refine_query` | `True` | LLM query refinement before search. |
 | `context_archive_max_age_days` | `14` | Age sweep for the pre-compression conversation snapshots in `~/.vaf/context_archive` (`0` keeps them forever). Their old cleanup only ran on a clean shutdown, so they accumulated indefinitely. |
+| `context_compress_tokens` | `30000` | API providers only: compress the conversation history once it exceeds this token budget, instead of waiting for a share of the model window. An API resends and bills the whole history on every LLM round-trip, so the 128k window is the wrong compression ceiling (a ~65k-token chat fit it forever while every one-line question paid the full ~65k again). The effective limit is `min(model window, this budget)`; local models ignore it (their tokens are free, the window is the limit). `0` restores window-based triggering. |
 | `prompt_log_full_enabled` | `False` | Write the ENTIRE assembled system prompt (user profile, retrieved memories, working memory, contacts) into `prompt_*.log`. Debugging only: it is the richest plaintext copy of the user's data on the machine. |
 | `cli_password_gate` | `True` | The interactive terminal (`vaf run`, the TUI) and the whole `vaf session` group (`list`, `load`, `export`, `search`, `delete`) ask for the admin password before running. Scripts, `-p`, the tray, the headless runner and automations never do - they run inside the shield. Verified offline against a hash mirrored into the keyring, so a sleeping database does not lock you out. |
 | `secure_store_kek_backend` | `"auto"` | Where the master key that opens the keyring is stored. `auto` picks per platform: the **OS keyring on Windows**, because `chmod` there cannot restrict read access to a key file and the Credential Manager is reachable from the user's Startup-folder autostart; an owner-only **file on Linux and macOS**, because `chmod` is real there and both OS keyrings can lock the app out (Linux: a supervisor-started tray has no session bus; macOS: a Keychain item is bound to the requesting binary, so an interpreter upgrade re-prompts). `file` and `keyring` force one. Reading finds the key wherever an earlier version put it, so changing this never relocates an existing key. |

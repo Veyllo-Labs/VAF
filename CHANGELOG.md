@@ -28,7 +28,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   so there is nothing to confirm. Archived chats have their own window:
   **Settings -> Persona & Memory -> Archive**, with the search and its hits
   on the left and the chats on the right; opening a hit jumps to the message
-  it was found in.
+  it was found in, with every match highlighted. The search runs on the
+  server across all your archived chats - it no longer needs you to open the
+  right one first. Archived chats also stay available to the agent's memory:
+  Cross Chat Hints read them like any other chat of yours, which is what the
+  "keep a copy" option promises.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab
   showing total tokens, request count, an estimated cost, and a table of
   accounts with the heaviest first. The token numbers do not depend on anyone

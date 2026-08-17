@@ -139,6 +139,16 @@ async def list_archived_chats(request: Request) -> Dict[str, Any]:
     return {"chats": SessionManager().list_archived(user_scope_id=scope)}
 
 
+@router.get("/archive/search")
+async def search_archive(request: Request, q: str = "") -> Dict[str, Any]:
+    """Search every archived chat this account owns, not just an opened one."""
+    from vaf.core.session import SessionManager
+
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    return {"hits": SessionManager().search_archived(q, user_scope_id=scope)}
+
+
 @router.get("/archive/chats/{chat_id}")
 async def read_archived_chat(chat_id: str, request: Request) -> Dict[str, Any]:
     """One archived chat's messages, for the viewer."""

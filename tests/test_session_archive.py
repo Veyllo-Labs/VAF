@@ -123,3 +123,57 @@ def test_the_archive_routes_scope_on_the_caller_not_a_parameter():
     read_src = inspect.getsource(config_routes.read_archived_chat)
     assert "list_archived(user_scope_id=scope)" in read_src
     assert "404" in read_src
+
+
+def test_search_finds_a_phrase_without_opening_the_chat_first(mgr):
+    """The defect this replaced: the panel could only search a chat already open,
+    so it confirmed what the reader had found instead of finding it."""
+    a = _make(mgr, "first", "ab12cd34")
+    b = mgr.new(name="second", user_scope_id="ab12cd34")
+    b.add_message("user", "where did we discuss the invoice numbering")
+    mgr.save(b)
+    mgr.archive(a.id, user_scope_id="ab12cd34")
+    mgr.archive(b.id, user_scope_id="ab12cd34")
+
+    hits = mgr.search_archived("invoice", user_scope_id="ab12cd34")
+
+    assert [h["chat_id"] for h in hits] == [b.id]
+    assert hits[0]["index"] == 0, "the hit must name the message, not just the chat"
+    assert "invoice" in hits[0]["line"]
+    # The other chat is searched too, and simply does not match.
+    assert mgr.search_archived("lazy dog", user_scope_id="ab12cd34")[0]["chat_id"] == a.id
+
+
+def test_search_never_crosses_accounts(mgr):
+    theirs = _make(mgr, "theirs", "ef56ab78")
+    mgr.archive(theirs.id, user_scope_id="ef56ab78")
+    assert mgr.search_archived("lazy dog", user_scope_id="ab12cd34") == []
+    assert mgr.search_archived("lazy dog", user_scope_id="ef56ab78")
+
+
+def test_empty_query_returns_nothing_rather_than_everything(mgr):
+    s = _make(mgr, "kept", "ab12cd34")
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+    assert mgr.search_archived("", user_scope_id="ab12cd34") == []
+    assert mgr.search_archived("   ", user_scope_id="ab12cd34") == []
+
+
+def test_the_agent_can_still_remember_an_archived_chat(mgr):
+    """The promise the checkbox makes: "keep it so the agent can still remember".
+
+    Cross Chat Hints read `iter_owned_sessions`, which globbed the sessions
+    directory non-recursively - so archiving a chat used to hide it from the
+    agent's memory, which is the opposite of what the user asked for.
+    """
+    s = _make(mgr, "kept", "ab12cd34")
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+
+    seen = [d.get("id") for _, d in mgr.iter_owned_sessions("ab12cd34")]
+    assert s.id in seen, "an archived chat must stay readable by the memory lane"
+
+
+def test_remembering_still_stops_at_the_account_boundary(mgr):
+    theirs = _make(mgr, "theirs", "ef56ab78")
+    mgr.archive(theirs.id, user_scope_id="ef56ab78")
+    seen = [d.get("id") for _, d in mgr.iter_owned_sessions("ab12cd34")]
+    assert theirs.id not in seen

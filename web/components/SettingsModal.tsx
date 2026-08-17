@@ -47,7 +47,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3
+    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3, Folder
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -568,6 +568,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // When the price list was last checked. Rendered next to every price, so a
     // figure is never read as "today's" when it was verified months ago.
     const [pricesAsOf, setPricesAsOf] = useState<string>('');
+    // Archived chats: kept out of the sidebar but still the user's own, and
+    // readable only by them (the endpoint scopes on the authenticated caller).
+    type ArchivedChat = { id: string; name: string; updated_at: string; message_count: number };
+    type ArchivedMsg = { role: string; content: string; timestamp?: string };
+    const [showArchive, setShowArchive] = useState(false);
+    const [archiveChats, setArchiveChats] = useState<ArchivedChat[]>([]);
+    const [archiveQuery, setArchiveQuery] = useState('');
+    const [archiveOpenId, setArchiveOpenId] = useState<string | null>(null);
+    const [archiveMsgs, setArchiveMsgs] = useState<ArchivedMsg[]>([]);
+    const archiveBase = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+    useEffect(() => {
+        if (!showArchive) return;
+        fetch(`${archiveBase}/api/archive/chats`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && Array.isArray(d.chats)) setArchiveChats(d.chats); })
+            .catch(() => {});
+    }, [showArchive, archiveBase]);
+    useEffect(() => {
+        if (!archiveOpenId) { setArchiveMsgs([]); return; }
+        fetch(`${archiveBase}/api/archive/chats/${encodeURIComponent(archiveOpenId)}`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && Array.isArray(d.messages)) setArchiveMsgs(d.messages); })
+            .catch(() => {});
+    }, [archiveOpenId, archiveBase]);
     const asOfLabel = pricesAsOf
         ? new Date(pricesAsOf).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
         : '';
@@ -2586,6 +2610,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-amber-100 text-amber-700 hover:bg-amber-200"
                                                 >
                                                     <User size={16} /> {tPersona('userIdentity')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowArchive(true)}
+                                                    className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-[#242424] dark:text-[#c8c8c8] dark:hover:bg-[#2a2a2a]"
+                                                >
+                                                    <Folder size={16} /> {tPersona('archive')}
                                                 </button>
                                             </div>
                                         </Section>
@@ -6013,6 +6044,126 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             )}
 
             {/* Memory System Modal */}
+            {/* Chat archive. Same footprint as the memory graph, and the same split
+                the memory tab uses: the search and its hits on the LEFT, the chats
+                on the RIGHT. Clicking a hit opens that chat scrolled to the line the
+                hit was found in - a search that only names the chat leaves the
+                reader to find the sentence again by hand. */}
+            {showArchive && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowArchive(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white dark:bg-[#181818] w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 dark:border-[#2a2a2a] flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-[#2a2a2a] shrink-0 bg-gray-50 dark:bg-[#1f1f1f] max-md:p-4">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <Folder className="w-5 h-5 text-gray-500" />
+                                <div className="min-w-0">
+                                    <h2 className="text-base font-semibold text-gray-900 dark:text-[#e6e6e6]">{tPersona('archive')}</h2>
+                                    <p className="text-xs text-gray-500 truncate">{tPersona('archiveDesc')}</p>
+                                </div>
+                            </div>
+                            <button type="button" onClick={() => setShowArchive(false)} className="text-gray-400 hover:text-gray-600">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 flex min-h-0 max-md:flex-col">
+                            {/* LEFT: search + hits */}
+                            <div className="w-80 shrink-0 border-r border-gray-200 dark:border-[#2a2a2a] flex flex-col min-h-0 max-md:w-full max-md:border-r-0 max-md:border-b">
+                                <div className="p-4 shrink-0">
+                                    <div className="relative">
+                                        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                        <input
+                                            value={archiveQuery}
+                                            onChange={(e) => setArchiveQuery(e.target.value)}
+                                            placeholder={tPersona('archiveSearch')}
+                                            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] text-gray-800 dark:text-[#e6e6e6] outline-none focus:border-gray-400"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-2">
+                                    {(() => {
+                                        const q = archiveQuery.trim().toLowerCase();
+                                        if (!q) return (<p className="text-xs text-gray-400">{tPersona('archiveSearchHint')}</p>);
+                                        const hits: Array<{ chat: ArchivedChat; line: string; index: number }> = [];
+                                        // Searching what is loaded: the open chat's lines, plus every
+                                        // chat's title. Deliberately not a server-side full-text search
+                                        // yet - that belongs with the memory retrieval hook, and one
+                                        // half-built search is better than two that disagree.
+                                        archiveChats.forEach(c => {
+                                            if (c.name.toLowerCase().includes(q)) hits.push({ chat: c, line: c.name, index: -1 });
+                                        });
+                                        if (archiveOpenId) {
+                                            const chat = archiveChats.find(c => c.id === archiveOpenId);
+                                            if (chat) archiveMsgs.forEach((m, i) => {
+                                                if (m.content.toLowerCase().includes(q)) hits.push({ chat, line: m.content, index: i });
+                                            });
+                                        }
+                                        if (!hits.length) return (<p className="text-xs text-gray-400">{tPersona('archiveNoHits')}</p>);
+                                        return hits.slice(0, 60).map((h, i) => (
+                                            <button key={`${h.chat.id}-${h.index}-${i}`} type="button"
+                                                    onClick={() => {
+                                                        setArchiveOpenId(h.chat.id);
+                                                        if (h.index >= 0) {
+                                                            setTimeout(() => {
+                                                                document.getElementById(`arch-msg-${h.index}`)?.scrollIntoView({ block: 'center' });
+                                                            }, 60);
+                                                        }
+                                                    }}
+                                                    className="w-full text-left p-2 rounded-lg border border-gray-100 dark:border-[#242424] hover:bg-gray-50 dark:hover:bg-[#242424]">
+                                                <div className="text-xs font-medium text-gray-700 dark:text-[#c8c8c8] truncate">{h.chat.name}</div>
+                                                <div className="text-xs text-gray-500 line-clamp-2">{h.line}</div>
+                                            </button>
+                                        ));
+                                    })()}
+                                </div>
+                            </div>
+
+                            {/* RIGHT: the archived chats, or the opened one */}
+                            <div className="flex-1 overflow-y-auto p-6 min-h-0">
+                                {!archiveOpenId ? (
+                                    archiveChats.length === 0 ? (
+                                        <p className="text-sm text-gray-400">{tPersona('archiveEmpty')}</p>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {archiveChats.map(c => (
+                                                <button key={c.id} type="button" onClick={() => setArchiveOpenId(c.id)}
+                                                        className="w-full flex items-center justify-between gap-4 p-3 rounded-xl border border-gray-200 dark:border-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#242424] text-left">
+                                                    <span className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate">{c.name}</span>
+                                                    <span className="text-xs text-gray-400 shrink-0">
+                                                        {tPersona('archiveMeta', { count: c.message_count, date: (c.updated_at || '').slice(0, 10) })}
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )
+                                ) : (
+                                    <>
+                                        <button type="button" onClick={() => setArchiveOpenId(null)}
+                                                className="text-xs text-gray-500 hover:text-gray-700 mb-4">
+                                            {tPersona('archiveBack')}
+                                        </button>
+                                        <div className="space-y-3 max-w-3xl">
+                                            {archiveMsgs.map((m, i) => (
+                                                <div key={i} id={`arch-msg-${i}`}
+                                                     className={cn("p-3 rounded-xl text-sm whitespace-pre-wrap",
+                                                         m.role === 'user'
+                                                             ? "bg-gray-100 dark:bg-[#242424] text-gray-800 dark:text-[#e6e6e6]"
+                                                             : "bg-white dark:bg-[#1f1f1f] border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#c8c8c8]")}>
+                                                    {m.content}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {showMemoryModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowMemoryModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />

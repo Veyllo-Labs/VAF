@@ -674,7 +674,15 @@
       "viewGraph": "View graph",
       "userIdentity": "User identity",
       "crossChatHints": "Cross Chat Hints",
-      "crossChatHintsDesc": "Below the snippets, the agent also gets up to this many pointers into your OTHER chats when they match your question by keyword. Only your own chats, never a deleted one, and never a conversation with a contact."
+      "crossChatHintsDesc": "Below the snippets, the agent also gets up to this many pointers into your OTHER chats when they match your question by keyword. Only your own chats, never a deleted one, and never a conversation with a contact.",
+      "archive": "Archive",
+      "archiveDesc": "Chats you deleted but kept. Only you can see them.",
+      "archiveSearch": "Search the archive...",
+      "archiveSearchHint": "Type to search chat titles, and the messages of the chat you have open.",
+      "archiveNoHits": "No matches.",
+      "archiveEmpty": "Nothing archived yet. When you delete a chat, you can keep a copy here.",
+      "archiveMeta": "{count} messages · {date}",
+      "archiveBack": "← All archived chats"
     },
     "ai": {
       "provider": "Provider",

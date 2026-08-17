@@ -123,6 +123,53 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
     return {"days": full.get("days"), "users": rows, "totals": totals}
 
 
+@router.get("/archive/chats")
+async def list_archived_chats(request: Request) -> Dict[str, Any]:
+    """This account's archived chats. Never another account's.
+
+    The scope comes from the authenticated caller, never from a parameter: an
+    archive that can be asked for by id is one request away from being read by
+    the wrong person. The store re-checks the owner recorded inside each file
+    as well, so this is the second of two locks rather than the only one.
+    """
+    from vaf.core.session import SessionManager
+
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    return {"chats": SessionManager().list_archived(user_scope_id=scope)}
+
+
+@router.get("/archive/chats/{chat_id}")
+async def read_archived_chat(chat_id: str, request: Request) -> Dict[str, Any]:
+    """One archived chat's messages, for the viewer."""
+    from vaf.core.session import SessionManager
+
+    user = get_current_user_or_local_admin(request)
+    scope = user.get("user_scope_id")
+    mgr = SessionManager()
+    if chat_id not in {c["id"] for c in mgr.list_archived(user_scope_id=scope)}:
+        # Not "not found": the listing is already scoped, so anything missing
+        # from it is either absent or somebody else's, and the answer must not
+        # let the caller tell those two apart.
+        raise HTTPException(status_code=404, detail="Not found")
+    for ext in (".json", ".json.gz"):
+        path = mgr.archive_dir(scope) / f"{chat_id}{ext}"
+        if path.exists():
+            data = mgr._read_session_file(path)
+            return {
+                "id": data.get("id") or chat_id,
+                "name": data.get("name") or chat_id,
+                "updated_at": data.get("updated_at") or "",
+                "messages": [
+                    {"role": m.get("role"), "content": str(m.get("content") or ""),
+                     "timestamp": m.get("timestamp") or ""}
+                    for m in (data.get("messages") or [])
+                    if m.get("role") in ("user", "assistant")
+                ],
+            }
+    raise HTTPException(status_code=404, detail="Not found")
+
+
 @router.get("/usage/prices")
 async def get_usage_prices(request: Request) -> Dict[str, Any]:
     """Public list prices per provider, for the "what would this cost elsewhere" panel."""

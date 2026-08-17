@@ -104,3 +104,22 @@ def test_the_delete_handler_archives_before_deleting():
     )
     # And ownership is still checked before either path runs.
     assert "_ws_session_owner_ok" in block
+
+
+def test_the_archive_routes_scope_on_the_caller_not_a_parameter():
+    """An archive that can be asked for by id is one request from the wrong reader."""
+    import inspect
+
+    from vaf.api import config_routes
+
+    for fn in (config_routes.list_archived_chats, config_routes.read_archived_chat):
+        src = inspect.getsource(fn)
+        assert "get_current_user_or_local_admin(request)" in src, (
+            "the scope must come from the authenticated caller"
+        )
+        assert 'user.get("user_scope_id")' in src
+    # Reading re-checks membership of the caller's OWN listing before touching a
+    # file, so a guessed id cannot reach another account's archive.
+    read_src = inspect.getsource(config_routes.read_archived_chat)
+    assert "list_archived(user_scope_id=scope)" in read_src
+    assert "404" in read_src

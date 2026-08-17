@@ -674,7 +674,15 @@
       "viewGraph": "Graphen anzeigen",
       "userIdentity": "Benutzeridentität",
       "crossChatHints": "Cross Chat Hints",
-      "crossChatHintsDesc": "Unter den Ausschnitten bekommt der Agent zusätzlich bis zu so viele Verweise auf deine ANDEREN Chats, wenn sie stichwortmässig zu deiner Frage passen. Nur eigene Chats, nie ein gelöschter, und nie ein Verlauf mit einem Kontakt."
+      "crossChatHintsDesc": "Unter den Ausschnitten bekommt der Agent zusätzlich bis zu so viele Verweise auf deine ANDEREN Chats, wenn sie stichwortmässig zu deiner Frage passen. Nur eigene Chats, nie ein gelöschter, und nie ein Verlauf mit einem Kontakt.",
+      "archive": "Archiv",
+      "archiveDesc": "Geloeschte, aber aufbewahrte Chats. Nur du siehst sie.",
+      "archiveSearch": "Archiv durchsuchen...",
+      "archiveSearchHint": "Tippen, um Chat-Titel zu durchsuchen und die Nachrichten des geoeffneten Chats.",
+      "archiveNoHits": "Keine Treffer.",
+      "archiveEmpty": "Noch nichts archiviert. Beim Loeschen eines Chats kannst du hier eine Kopie behalten.",
+      "archiveMeta": "{count} Nachrichten · {date}",
+      "archiveBack": "← Alle archivierten Chats"
     },
     "ai": {
       "provider": "Anbieter",

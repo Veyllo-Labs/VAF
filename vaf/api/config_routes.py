@@ -227,51 +227,106 @@ async def export_usage(
     from vaf.core.cost import usage_totals
 
     data = usage_totals(days=days)
-    root = Element("vaf-usage", {"days": str(data.get("days", days))})
+    daily = data.get("daily") or []
+    period_from = daily[0]["day"] if daily else ""
+    period_to = daily[-1]["day"] if daily else ""
+    root = Element("vaf-usage", {
+        "days": str(data.get("days", days)),
+        "from": period_from,
+        "to": period_to,
+    })
+
+    # The note comes FIRST and in plain prose, because a reader who opens this
+    # file in a spreadsheet sees the numbers before any explanation - and the
+    # money in it is an estimate, not a bill. Written neutrally: it states how
+    # each figure was produced and leaves the reader to judge it.
+    SubElement(root, "note").text = (
+        "This report covers "
+        + (f"{period_from} to {period_to}" if period_from else "the selected period")
+        + ". Token counts are the figures each provider reported for calls it "
+        "billed; they are not counted by this software and do not depend on any "
+        "tokenizer. Monetary amounts are ESTIMATES: they are calculated from "
+        "published list prices per million tokens, without cache, batch or "
+        "off-peak discounts and without long-context surcharges, so they can "
+        "differ from an invoice. A model that is not in the price list is priced "
+        "at the most expensive entry, which makes the amount an upper bound. "
+        "Amounts are reported in the currency each provider publishes and are "
+        "not converted between currencies. Local models are counted in tokens "
+        "and carry no monetary amount."
+    )
+
     method = SubElement(root, "method")
     SubElement(method, "tokens").text = (
         "Reported by the provider for each billed call (usage.input_tokens / "
-        "usage.output_tokens). Not counted by a tokenizer in VAF, so providers "
-        "that tokenize differently still sum to their own invoices.")
+        "usage.output_tokens), recorded at the moment of the call.")
     SubElement(method, "cost").text = (
-        "Estimated from public list prices per million tokens. A model absent "
-        "from that table is priced at the most expensive entry, so the figure "
-        "is an upper bound, never an invoice.")
+        "Estimated from public list prices per million tokens, in the currency "
+        "the provider publishes. Never converted between currencies.")
     SubElement(method, "scope").text = (
-        "One ledger per account under the data directory; local models are free "
-        "and contribute tokens but no cost.")
+        "One ledger per account; lanes name the part of the software that made "
+        "the call, and provider/model names where it ran.")
+
+    def _amounts(parent, node_name: str, source: dict) -> None:
+        """Write one <amount currency=.. value=../> per currency, never a sum."""
+        for cur, val in sorted((source.get("currencies") or {}).items()):
+            SubElement(parent, node_name, {"currency": cur, "value": f"{float(val):.4f}"})
 
     totals = data.get("totals") or {}
-    SubElement(root, "totals", {
+    t_el = SubElement(root, "totals", {
         "input-tokens": str(totals.get("input_tokens", 0)),
         "output-tokens": str(totals.get("output_tokens", 0)),
         "tokens": str(totals.get("tokens", 0)),
         "api-calls": str(totals.get("calls", 0)),
-        "estimated-usd": f"{float(totals.get('usd', 0.0)):.4f}",
         "cost-is-upper-bound": "true" if totals.get("estimated_usd_incomplete") else "false",
     })
+    _amounts(t_el, "estimated-amount", totals)
 
     users = SubElement(root, "users")
     for row in data.get("users") or []:
-        SubElement(users, "user", {
+        u_el = SubElement(users, "user", {
             "name": str(row.get("username", "")),
             "input-tokens": str(row.get("input_tokens", 0)),
             "output-tokens": str(row.get("output_tokens", 0)),
             "tokens": str(row.get("tokens", 0)),
             "api-calls": str(row.get("calls", 0)),
             "token-share-percent": str(row.get("token_share", 0.0)),
-            "estimated-usd": f"{float(row.get('usd', 0.0)):.4f}",
             "tokens-recorded": "true" if row.get("tokens_recorded") else "false",
         })
+        _amounts(u_el, "estimated-amount", row)
 
-    daily = SubElement(root, "daily")
-    for day in data.get("daily") or []:
-        SubElement(daily, "day", {
+    providers = SubElement(root, "providers")
+    for key, prov in sorted((totals.get("providers") or {}).items()):
+        name, _, model = str(key).partition("/")
+        p_el = SubElement(providers, "provider", {
+            "name": name, "model": model,
+            "tokens": str(prov.get("tokens", 0)),
+            "api-calls": str(prov.get("calls", 0)),
+        })
+        _amounts(p_el, "estimated-amount", prov)
+
+    days_el = SubElement(root, "daily")
+    for day in daily:
+        d_el = SubElement(days_el, "day", {
             "date": str(day.get("day", "")),
             "tokens": str(day.get("tokens", 0)),
             "api-calls": str(day.get("calls", 0)),
-            "estimated-usd": f"{float(day.get('usd', 0.0)):.4f}",
         })
+        _amounts(d_el, "estimated-amount", day)
+        for lane, lv in sorted((day.get("lanes") or {}).items()):
+            l_el = SubElement(d_el, "lane", {
+                "name": str(lane),
+                "tokens": str(lv.get("tokens", 0)),
+                "api-calls": str(lv.get("calls", 0)),
+            })
+            _amounts(l_el, "estimated-amount", lv)
+        for key, pv in sorted((day.get("providers") or {}).items()):
+            name, _, model = str(key).partition("/")
+            p_el = SubElement(d_el, "provider", {
+                "name": name, "model": model,
+                "tokens": str(pv.get("tokens", 0)),
+                "api-calls": str(pv.get("calls", 0)),
+            })
+            _amounts(p_el, "estimated-amount", pv)
 
     xml = tostring(root, encoding="utf-8", xml_declaration=True)
     return Response(

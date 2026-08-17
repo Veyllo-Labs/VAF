@@ -217,6 +217,57 @@ def test_xml_export_carries_the_numbers_and_how_they_were_measured(spend_dir):
     assert "estimat" in method.find("cost").text.lower()
 
 
+def test_the_export_leads_with_a_neutral_note_and_names_its_period(spend_dir):
+    """A reader opens this in a spreadsheet and sees numbers before prose, so the
+    caveat has to be the first thing in the file - and it has to read as a
+    statement of method, not as a disclaimer arguing its own case."""
+    import asyncio
+    from xml.etree.ElementTree import fromstring
+
+    from vaf.api.config_routes import export_usage
+
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
+    root = fromstring(asyncio.run(
+        export_usage(request=None, days=30, _admin={"role": "admin"})).body)
+
+    assert list(root)[0].tag == "note", "the note must come first"
+    note = root.find("note").text.lower()
+    assert "estimate" in note and "not counted by this software" in note
+    assert "not converted between currencies" in note
+    assert "upper bound" in note
+    # The period is named on the document and matches the day rows.
+    days = root.findall("daily/day")
+    assert root.get("from") == days[0].get("date")
+    assert root.get("to") == days[-1].get("date")
+
+
+def test_the_export_carries_the_breakdowns_and_never_a_currency_sum(spend_dir):
+    import asyncio
+    from xml.etree.ElementTree import fromstring
+
+    from vaf.api.config_routes import export_usage
+    from vaf.core import cost as c
+
+    with c.usage_context(lane="coder", scope=None):
+        c.record_call("veyllo", "veyllo-chat", 1_000_000, 0)
+    with c.usage_context(lane="main", scope=None):
+        c.record_call("openai", "gpt-4o", 1_000_000, 0)
+
+    root = fromstring(asyncio.run(
+        export_usage(request=None, days=7, _admin={"role": "admin"})).body)
+
+    # Two currencies, reported side by side rather than added.
+    amounts = {a.get("currency"): a.get("value") for a in root.findall("totals/estimated-amount")}
+    assert set(amounts) == {"EUR", "USD"}
+    assert round(float(amounts["EUR"]), 2) == 0.90
+    assert round(float(amounts["USD"]), 2) == 2.50
+
+    assert {p.get("name") for p in root.findall("providers/provider")} == {"veyllo", "openai"}
+    today = [d for d in root.findall("daily/day") if d.get("tokens") != "0"][0]
+    assert {l.get("name") for l in today.findall("lane")} == {"coder", "main"}
+    assert {p.get("model") for p in today.findall("provider")} == {"veyllo-chat", "gpt-4o"}
+
+
 def test_prices_carry_the_date_they_were_checked():
     """A list price without a date is a claim about today, verified some other day."""
     import datetime as _dt

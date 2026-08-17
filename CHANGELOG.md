@@ -63,7 +63,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   adding them together. And a new breakdown shows which provider and model
   did the work - chat, vision, sub-agents, the tool model and the thinker can
   each run somewhere else, or locally, and their prices differ by an order of
-  magnitude, so the total alone said very little.
+  magnitude, so the total alone said very little. The XML export carries all
+  of it - period, per day, per lane, per provider and model, each amount in
+  its own currency - and opens with a plainly written note saying the money
+  is an estimate and how it was arrived at.
   Local models contribute tokens and no cost.
   The tab also carries a 7-day bar chart with the busiest day marked, a share
   bar per account (percentage, requests, tokens), a panel pricing the same

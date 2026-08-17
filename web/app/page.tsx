@@ -9265,6 +9265,19 @@ function VAFDashboardContent() {
                                                 </div>
                                             </div>
                                         )}
+                                        {/* The context bar says what this conversation is
+                                            carrying; Usage says what it has cost so far.
+                                            Reaching the second from the first saves the
+                                            trip through Settings, which is where the
+                                            question actually arises. */}
+                                        <button
+                                            type="button"
+                                            onClick={() => { setSettingsInitialTab('usage'); setIsSettingsOpen(true); }}
+                                            className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 self-center transition-colors"
+                                            title={tMain('usageButtonTitle')}
+                                        >
+                                            <Activity className="w-3.5 h-3.5" /> {tMain('usageButton')}
+                                        </button>
                                     </div>
                                     <p className="text-sm text-gray-500 mt-1">
                                         How your context window is being used

@@ -435,3 +435,35 @@ def test_a_subagent_process_bills_as_a_subagent(monkeypatch):
     a._run_kind = "chat"
     a._set_usage_context()
     assert cost_mod.current_lane() == "subagent"
+
+
+def test_a_non_admin_never_receives_cost_or_anyone_elses_share(spend_dir):
+    """Stripped on the SERVER, not hidden in the UI: what a browser never gets
+    cannot be read out of a network tab. Their own tokens and calls stay - that
+    is their consumption - but the instance's bill is the operator's business,
+    and a share is a statement about everyone else."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from vaf.api import config_routes
+
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
+    record_spend("ab12cd34", estimate_cost("openai", "gpt-4o", 400, 40))
+
+    req = SimpleNamespace(state=SimpleNamespace(
+        user={"username": "Bob", "role": "user", "user_scope_id": "ab12cd34"}))
+    mine = asyncio.run(config_routes.get_usage_me(request=req, days=30))
+
+    assert mine["costs_visible"] is False
+    assert mine["totals"]["tokens"] == 440, "own consumption stays visible"
+    for row in mine["users"] + [mine["totals"]]:
+        assert "usd" not in row, row
+        assert "token_share" not in row, row
+        assert "call_share" not in row, row
+    # And nothing about the other account travels at all.
+    assert [r["scope"] for r in mine["users"]] == ["ab12cd34"]
+
+    admin = asyncio.run(config_routes.get_usage(
+        request=req, days=30, _admin={"role": "admin"}))
+    assert admin["costs_visible"] is True
+    assert "usd" in admin["totals"]

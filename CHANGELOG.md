@@ -46,7 +46,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   invoice. The cost next to them is the single estimate on the page - it comes
   from a price list that ages, and a model missing from that list is priced at
   the expensive end and marked as an upper bound. Everyone can open the tab,
-  but only an admin sees other accounts; everyone else sees their own line.
+  but only an admin sees costs and other accounts. Everyone else sees their
+  own tokens and requests - no money, no percentage of the total, nothing
+  about anyone else - and that is stripped from the response itself rather
+  than hidden in the page. The chat's Context Window header now has a Usage
+  button that opens this tab directly.
   Local models contribute tokens and no cost.
   The tab also carries a 7-day bar chart with the busiest day marked, a share
   bar per account (percentage, requests, tokens), a panel pricing the same

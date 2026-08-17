@@ -103,7 +103,7 @@ async def get_usage(
     """
     from vaf.core.cost import usage_totals
 
-    return usage_totals(days=days)
+    return {**usage_totals(days=days), "costs_visible": True}
 
 
 @router.get("/usage/me")
@@ -118,9 +118,22 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
 
     mine = _scope_key(scope or None)
     rows = [r for r in full.get("users", []) if r.get("scope") == mine]
-    totals = rows[0] if rows else {"input_tokens": 0, "output_tokens": 0, "tokens": 0,
-                                   "usd": 0.0, "calls": 0}
-    return {"days": full.get("days"), "users": rows, "totals": totals}
+
+    # MONEY IS ADMIN-ONLY, and it is stripped HERE rather than hidden in the UI:
+    # what a non-admin's browser never receives cannot be read out of a network
+    # tab. Their own tokens and calls stay - that is their consumption - but the
+    # cost of the instance's API keys is the operator's business, and so is any
+    # comparison against the other accounts, which is why no share is sent
+    # either (a percentage of a total is a statement about everyone else).
+    def _own(row: dict) -> dict:
+        return {k: v for k, v in row.items()
+                if k not in ("usd", "token_share", "call_share", "unknown_model_calls")}
+
+    rows = [_own(r) for r in rows]
+    totals = dict(rows[0]) if rows else {"input_tokens": 0, "output_tokens": 0,
+                                         "tokens": 0, "calls": 0}
+    return {"days": full.get("days"), "users": rows, "totals": totals,
+            "costs_visible": False}
 
 
 @router.get("/archive/chats")

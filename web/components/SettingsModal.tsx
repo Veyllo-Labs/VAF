@@ -551,11 +551,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Usage totals. An admin gets every account's line (/api/usage), everyone
     // else only their own (/api/usage/me) - the split is the backend's, not a
     // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
-    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd: number; calls: number; token_share: number; call_share: number };
+    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd?: number; calls: number; token_share?: number; call_share?: number };
     type UsageDay = { day: string; tokens: number; calls: number; usd: number };
     const [usage, setUsage] = useState<{
         days: number; users: UsageRow[]; daily: UsageDay[];
-        totals: { tokens: number; input_tokens: number; output_tokens: number; usd: number; calls: number; estimated_usd_incomplete?: boolean };
+        totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; calls: number; estimated_usd_incomplete?: boolean };
+        costs_visible?: boolean;
     } | null>(null);
     // Price comparison: list prices from the backend (same table the ledger
     // estimates with), plus one row the reader defines themselves. The custom
@@ -3203,12 +3204,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     </div>
                                                     <div className="text-xs text-gray-500">{tUsage('requests')}</div>
                                                 </div>
-                                                <div>
-                                                    <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
-                                                        ~${usage.totals.usd.toFixed(2)}
+                                                {usage.costs_visible !== false && (
+                                                    <div>
+                                                        <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+                                                            ~${(usage.totals.usd ?? 0).toFixed(2)}
+                                                        </div>
+                                                        <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
                                                     </div>
-                                                    <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
-                                                </div>
+                                                )}
                                             </div>
                                             <table className="w-full mt-6 text-sm">
                                                 <thead>
@@ -3216,7 +3219,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <th className="py-2 font-medium">{tUsage('user')}</th>
                                                         <th className="py-2 font-medium text-right">{tUsage('inTokens')}</th>
                                                         <th className="py-2 font-medium text-right">{tUsage('outTokens')}</th>
-                                                        <th className="py-2 font-medium text-right">{tUsage('estimatedCost')}</th>
+                                                        {usage.costs_visible !== false && (
+                                                            <th className="py-2 font-medium text-right">{tUsage('estimatedCost')}</th>
+                                                        )}
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -3225,7 +3230,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             <td className="py-2 text-gray-800 dark:text-gray-200">{u.username}</td>
                                                             <td className="py-2 text-right tabular-nums">{u.input_tokens.toLocaleString()}</td>
                                                             <td className="py-2 text-right tabular-nums">{u.output_tokens.toLocaleString()}</td>
-                                                            <td className="py-2 text-right tabular-nums">~${u.usd.toFixed(2)}</td>
+                                                            {usage.costs_visible !== false && (
+                                                                <td className="py-2 text-right tabular-nums">~${(u.usd ?? 0).toFixed(2)}</td>
+                                                            )}
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -3288,13 +3295,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         })()}
 
                                         <div className="mt-5 space-y-3">
-                                            {usage.users.map((u) => (
+                                            {(usage.costs_visible === false ? [] : usage.users).map((u) => (
                                                 <div key={`share-${u.scope}`}>
                                                     <div className="flex justify-between text-xs">
                                                         <span className="text-gray-700 dark:text-gray-300">{u.username}</span>
                                                         <span className="text-gray-500 tabular-nums">
                                                             {tUsage('shareLine', {
-                                                                percent: (u.tokens ? u.token_share : u.call_share).toFixed(1),
+                                                                percent: ((u.tokens ? u.token_share : u.call_share) ?? 0).toFixed(1),
                                                                 calls: u.calls.toLocaleString(),
                                                                 tokens: u.tokens.toLocaleString(),
                                                             })}
@@ -3302,7 +3309,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     </div>
                                                     <div className="h-1.5 mt-1 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">
                                                         <div className="h-full bg-gray-500 dark:bg-[#d9d9d9]"
-                                                             style={{ width: `${Math.max(1, u.tokens ? u.token_share : u.call_share)}%` }} />
+                                                             style={{ width: `${Math.max(1, (u.tokens ? u.token_share : u.call_share) ?? 0)}%` }} />
                                                     </div>
                                                 </div>
                                             ))}
@@ -3310,7 +3317,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </Section>
                                 )}
 
-                                {usage && (
+                                {usage && usage.costs_visible !== false && (
                                     <Section title={tUsage('elsewhere')}>
                                         <p className="text-xs text-gray-500">
                                             {tUsage('elsewhereDesc', {

@@ -5489,11 +5489,32 @@ class Agent:
         composer all spent invisibly.
         """
         try:
+            import os as _os
+
             from vaf.core.cost import set_usage_context
 
-            set_usage_context(
-                lane="thinking" if getattr(self, "_background_run", False) else "main",
-                scope=getattr(self, "_current_user_scope_id", None))
+            # Derived from markers the agent already carries, so a lane cannot
+            # be labelled one way here and treated another way everywhere else.
+            # Order matters: a sub-agent process runs its OWN agent whose run
+            # kind is "chat", so the process marker has to win, and a room turn
+            # is a chat turn with foreign input rather than a kind of its own.
+            if _os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1":
+                lane = "subagent"
+            elif getattr(self, "_run_kind", None) == "automation":
+                lane = "automation"
+            elif getattr(self, "_run_kind", None) == "thinking":
+                lane = "thinking"
+            elif isinstance(getattr(self, "_room_turn", None), dict):
+                lane = "room"
+            elif getattr(self, "_background_run", False):
+                # A background pass whose kind nobody set. Named rather than
+                # folded into "main": an unattended run that bills like a
+                # person's chat is exactly what an operator needs to spot.
+                lane = "background"
+            else:
+                lane = "main"
+            set_usage_context(lane=lane,
+                              scope=getattr(self, "_current_user_scope_id", None))
         except Exception:
             pass  # labelling must never break a turn
 

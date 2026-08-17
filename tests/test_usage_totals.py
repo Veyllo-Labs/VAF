@@ -396,3 +396,42 @@ def test_totals_are_the_instance_not_the_heaviest_user(spend_dir):
         "the heaviest user must not be mistaken for the instance total"
     )
     assert out["totals"]["tokens"] == sum(u["tokens"] for u in out["users"])
+
+
+@pytest.mark.parametrize("markers,expected", [
+    ({}, "main"),
+    ({"_run_kind": "chat"}, "main"),
+    ({"_run_kind": "automation"}, "automation"),
+    ({"_run_kind": "thinking"}, "thinking"),
+    ({"_room_turn": {"room_id": "room-1"}}, "room"),
+    ({"_background_run": True}, "background"),
+    # A run kind wins over the generic background flag: automations set both.
+    ({"_run_kind": "automation", "_background_run": True}, "automation"),
+])
+def test_unattended_lanes_are_named_not_folded_into_the_chat(markers, expected, monkeypatch):
+    """Automations, thinking runs, room turns and background passes all bill the
+    owner's API key while nobody is watching. Counting them was never the gap -
+    they go through the same backend as everything else - but a bill that calls
+    them all "main" cannot tell an operator that a 2am automation is the reason."""
+    from vaf.core.agent import Agent
+
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    cost_mod.set_usage_context(lane="main", scope=None)
+    a = Agent.__new__(Agent)
+    for k, v in markers.items():
+        setattr(a, k, v)
+    a._set_usage_context()
+    assert cost_mod.current_lane() == expected
+
+
+def test_a_subagent_process_bills_as_a_subagent(monkeypatch):
+    """A sub-agent runs its OWN agent, whose run kind is an ordinary chat - so
+    the process marker has to win or every sub-agent would bill as the user."""
+    from vaf.core.agent import Agent
+
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    cost_mod.set_usage_context(lane="main", scope=None)
+    a = Agent.__new__(Agent)
+    a._run_kind = "chat"
+    a._set_usage_context()
+    assert cost_mod.current_lane() == "subagent"

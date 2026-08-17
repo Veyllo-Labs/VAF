@@ -51,7 +51,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   so deleting logs cannot lose history. It is the one log that ignores the
   debug-logging switch, because a spend record that can be switched off is not
   a record. Each lane names itself in that log - `memory`, `vision`, `voice`, `librarian`, `mail`, `browser`, `thinking`, `main` - so it answers which part
-  of the product spent the tokens. The Usage tab also gained a Refresh button,
+  of the product spent the tokens - including the lanes that run while nobody
+  is watching: `automation`, `thinking`, `subagent`, `room` and `background`
+  are named rather than billed as if a person had typed them. The Usage tab
+  also gained a Refresh button,
   and the price comparison now shows the arithmetic behind its figures -
   sent plus received equals the instance total - so the number it prices
   cannot be mistaken for one account's.

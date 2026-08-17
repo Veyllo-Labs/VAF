@@ -4366,22 +4366,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     if bool(cmd.get("archive")):
                         if not session_mgr.archive(sid, user_scope_id=user_scope_id):
                             session_mgr.delete(sid)
-                        else:
-                            # Learning needs an Agent, and the web server has none -
-                            # the headless runner owns it. Handed over as a command
-                            # on the same queue every other session command uses,
-                            # rather than building a second agent here.
-                            try:
-                                from vaf.core.task_queue import TaskQueue
-                                TaskQueue().add(
-                                    session_id="system",
-                                    input_text=f"__CMD__:ARCHIVE_INGEST:{sid}",
-                                    source="web",
-                                    metadata={"task_class": "background",
-                                              "user_scope_id": user_scope_id},
-                                )
-                            except Exception as _ing_err:
-                                log("API", f"archive ingest not queued for {sid}: {_ing_err}")
                     else:
                         session_mgr.delete(sid)
                     # Broadcast update ONLY to this user's connections

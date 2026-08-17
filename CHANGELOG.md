@@ -32,9 +32,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   server across all your archived chats - it no longer needs you to open the
   right one first. Archived chats also stay available to the agent's memory:
   Cross Chat Hints read them like any other chat of yours, which is what the
-  "keep a copy" option promises - and they are learned into the long-term
-  memory as well, so the RAG snippets in a later chat can surface what was
-  said in an archived one.
+  "keep a copy" option promises.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab
   showing total tokens, request count, an estimated cost, and a table of
   accounts with the heaviest first. The token numbers do not depend on anyone

@@ -1360,51 +1360,6 @@ def _trim_telegram_history_after_compaction(session_id: str, current_turn_count:
         _compaction_log("COMPACTION_HISTORY_TRIM_FAIL", session_id=sid, error=str(e)[:200])
 
 
-def ingest_archived_chat(session_data: dict, agent: Any,
-                         user_scope_id: Optional[UUID] = None) -> int:
-    """Learn from a chat the user archived, so the RAG snippets can find it.
-
-    The delete dialog's checkbox promises the agent can still remember an
-    archived conversation. Cross Chat Hints read the file directly, so those
-    worked as soon as the archive was in their iteration - but the SNIPPET lane
-    is a vector store, and nothing indexes into it except session compaction,
-    which only ever ran on a LIVE history at a turn interval. An archived chat
-    therefore reached the hints and never the snippets, which is half a promise.
-
-    This runs the same compaction over the archived transcript: same prompt,
-    same fact gates, same store, and `source` carries the chat so
-    `delete_memories_by_source_scope` can take back exactly what it taught.
-    Returns the number of messages handed over (0 = nothing to learn).
-    """
-    messages = [m for m in (session_data.get("messages") or [])
-                if m.get("role") in ("user", "assistant") and str(m.get("content") or "").strip()]
-    if not messages:
-        return 0
-    lines = []
-    for m in messages:
-        who = "User" if m.get("role") == "user" else "Assistant"
-        lines.append(f"{who}: {str(m.get('content') or '').strip()}")
-    conversation = "\n".join(lines)[-12000:]
-    session_id = str(session_data.get("id") or "")
-    try:
-        run_session_compaction_sync(
-            agent,
-            user_scope_id,
-            session_id,
-            # The interval gate counts turns of a live chat; an archived one is
-            # finished, so it is handed a count that always clears the gate -
-            # this is the only chance it gets to be learned from.
-            current_turn_count=10 ** 6,
-            conversation=conversation,
-            source=f"archive/{session_id}" if session_id else "archive",
-        )
-    except Exception as e:
-        _compaction_log("ARCHIVE_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
-        return 0
-    _compaction_log("ARCHIVE_INGEST", session_id=session_id, messages=str(len(messages)))
-    return len(messages)
-
-
 def run_session_compaction_sync(
     agent: Any,
     user_scope_id: Optional[UUID],

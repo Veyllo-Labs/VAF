@@ -3327,28 +3327,6 @@ def _handle_command(cmd_str, agent, session_mgr):
             agent.load_session_context(sid)
             print(f"[Headless] LOAD_SESSION: Switched agent context to {sid}")
 
-        elif cmd_type == "ARCHIVE_INGEST" and len(parts) >= 3:
-            # A chat was archived; teach the memory from it so the RAG snippets
-            # can find it later. Runs HERE because this process owns the Agent
-            # the compaction needs, and it reads the file from the archive - by
-            # now it has already been moved out of the sessions directory.
-            sid = parts[2].strip()
-            try:
-                from vaf.core.session import SessionManager
-                from vaf.memory.rag import ingest_archived_chat
-                _scope = getattr(agent, "_current_user_scope_id", None)
-                _sm = SessionManager()
-                _data = None
-                for _ext in (".json", ".json.gz"):
-                    _p = _sm.archive_dir(_scope) / f"{sid}{_ext}"
-                    if _p.exists():
-                        _data = _sm._read_session_file(_p)
-                        break
-                if _data:
-                    ingest_archived_chat(_data, agent, user_scope_id=_scope)
-            except Exception as _e:
-                print(f"[Headless] ARCHIVE_INGEST failed for {sid}: {_e}")
-
         elif cmd_type == "RENAME_SESSION":
             # Format: __CMD__:RENAME_SESSION:id:new_name. The disk write
             # already happened (SessionManager.rename in the WS handler);

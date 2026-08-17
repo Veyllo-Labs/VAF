@@ -89,6 +89,40 @@ async def get_context_effort(
     return resolve_context_effort(cfg)
 
 
+@router.get("/usage")
+async def get_usage(
+    request: Request,
+    days: int = 30,
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Token and estimated-cost totals per user, newest-heaviest first.
+
+    Admin-only, and that is not a formality: it lists every tenant's line by
+    name, which is exactly what one tenant must not see about another. A
+    non-admin asking about themselves has /usage/me below.
+    """
+    from vaf.core.cost import usage_totals
+
+    return usage_totals(days=days)
+
+
+@router.get("/usage/me")
+async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
+    """The caller's OWN line from the same ledger - no other user's numbers."""
+    from vaf.core.cost import usage_totals
+
+    user = get_current_user_or_local_admin(request)
+    scope = str(user.get("user_scope_id") or "").strip()
+    full = usage_totals(days=days)
+    from vaf.core.cost import _scope_key
+
+    mine = _scope_key(scope or None)
+    rows = [r for r in full.get("users", []) if r.get("scope") == mine]
+    totals = rows[0] if rows else {"input_tokens": 0, "output_tokens": 0, "tokens": 0,
+                                   "usd": 0.0, "calls": 0}
+    return {"days": full.get("days"), "users": rows, "totals": totals}
+
+
 @router.get("/provider-models")
 async def get_provider_models() -> Dict[str, Any]:
     """Static per-provider model metadata (default + fallback list) — the single source

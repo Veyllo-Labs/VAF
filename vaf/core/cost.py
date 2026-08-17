@@ -65,6 +65,12 @@ class CostEstimate:
     usd: float
     cost_known: bool
     model: str = ""
+    # The provider's OWN count for this call, carried so the ledger can total
+    # tokens as well as money. Deliberately not re-derived here: a token count
+    # VAF computes depends on which tokenizer it guessed, while this number is
+    # what the provider billed. Money is the estimate; tokens are the fact.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def as_text(self) -> str:
         return f"~${self.usd:.4f}" + ("" if self.cost_known else " (estimate: unknown model)")
@@ -103,7 +109,11 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
     try:
         prov = str(provider or "").strip().lower()
         if prov in FREE_PROVIDERS:
-            return CostEstimate(0.0, True, str(model or ""))
+            # No money, but the tokens are real and still belong in the ledger:
+            # dropping them here made the estimate lie about the call it
+            # describes, and a usage view would show 0 for work that happened.
+            return CostEstimate(0.0, True, str(model or ""),
+                                max(0, int(input_tokens)), max(0, int(output_tokens)))
         name = str(model or "").strip()
         price = PRICES.get(name)
         if price is None:
@@ -111,8 +121,9 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
             price = PRICES.get(name.rsplit("/", 1)[-1])
         known = price is not None
         pin, pout = price or UNKNOWN_PRICE
-        usd = (max(0, int(input_tokens)) * pin + max(0, int(output_tokens)) * pout) / 1_000_000
-        return CostEstimate(round(usd, 6), known, name)
+        _in, _out = max(0, int(input_tokens)), max(0, int(output_tokens))
+        usd = (_in * pin + _out * pout) / 1_000_000
+        return CostEstimate(round(usd, 6), known, name, _in, _out)
     except Exception:
         return CostEstimate(0.0, False, str(model or ""))
 
@@ -136,6 +147,12 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate) -> float:
         entry = days.get(day) or {"usd": 0.0, "calls": 0, "unknown_model_calls": 0}
         entry["usd"] = round(float(entry.get("usd") or 0.0) + estimate.usd, 6)
         entry["calls"] = int(entry.get("calls") or 0) + 1
+        # Tokens are added beside the money rather than replacing it: the money
+        # is an estimate from a price table that ages, the tokens are what the
+        # provider reported. A ledger written before this existed simply has no
+        # token keys, and the reader treats a missing key as zero.
+        entry["input_tokens"] = int(entry.get("input_tokens") or 0) + max(0, int(estimate.input_tokens))
+        entry["output_tokens"] = int(entry.get("output_tokens") or 0) + max(0, int(estimate.output_tokens))
         if not estimate.cost_known:
             entry["unknown_model_calls"] = int(entry.get("unknown_model_calls") or 0) + 1
         days[day] = entry
@@ -161,6 +178,93 @@ def spent_today(user_scope_id: Optional[str]) -> float:
         return float(((data.get("days") or {}).get(_today()) or {}).get("usd") or 0.0)
     except Exception:
         return 0.0
+
+
+def usage_totals(days: int = 30) -> dict:
+    """What the instance spent, per user, over the last *days* days.
+
+    Tokenizer-independent by construction, and that is the whole point: every
+    number here was reported by the PROVIDER for a call it billed, never
+    counted by a tokenizer of ours. Two providers can disagree about what a
+    token is and this total still matches the invoices, because it is the sum
+    of what each of them said. The money beside it stays an estimate from the
+    price table above, which is why the two are reported separately rather
+    than as one figure.
+
+    Reads every ledger in the spend directory, so it is an ADMIN view: one
+    tenant must never see another's line. Callers enforce that.
+    """
+    from datetime import datetime, timedelta
+
+    out = {"days": max(1, int(days or 1)), "users": [], "totals": {
+        "input_tokens": 0, "output_tokens": 0, "tokens": 0,
+        "usd": 0.0, "calls": 0, "estimated_usd_incomplete": False}}
+    try:
+        base = Platform.data_dir() / "spend"
+        if not base.is_dir():
+            return out
+        cutoff = (datetime.now() - timedelta(days=max(1, int(days or 1)) - 1)).strftime("%Y-%m-%d")
+        rows = []
+        for path in sorted(base.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue  # a corrupt ledger must not hide every other user
+            scope = path.stem
+            agg = {"input_tokens": 0, "output_tokens": 0, "usd": 0.0,
+                   "calls": 0, "unknown_model_calls": 0, "last_active": ""}
+            for day, entry in (data.get("days") or {}).items():
+                if str(day) < cutoff:
+                    continue
+                try:
+                    agg["input_tokens"] += int(entry.get("input_tokens") or 0)
+                    agg["output_tokens"] += int(entry.get("output_tokens") or 0)
+                    agg["usd"] += float(entry.get("usd") or 0.0)
+                    agg["calls"] += int(entry.get("calls") or 0)
+                    agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
+                except Exception:
+                    continue
+                if str(day) > agg["last_active"]:
+                    agg["last_active"] = str(day)
+            if not agg["calls"]:
+                continue
+            agg["tokens"] = agg["input_tokens"] + agg["output_tokens"]
+            agg["usd"] = round(agg["usd"], 4)
+            agg["scope"] = scope
+            agg["username"] = _display_name(scope)
+            # A ledger written before tokens were recorded still has calls and
+            # money. Saying so beats showing a confident 0 tokens.
+            agg["tokens_recorded"] = bool(agg["tokens"])
+            rows.append(agg)
+        rows.sort(key=lambda r: (r["tokens"], r["usd"]), reverse=True)
+        out["users"] = rows
+        for r in rows:
+            out["totals"]["input_tokens"] += r["input_tokens"]
+            out["totals"]["output_tokens"] += r["output_tokens"]
+            out["totals"]["usd"] += r["usd"]
+            out["totals"]["calls"] += r["calls"]
+            if r["unknown_model_calls"]:
+                out["totals"]["estimated_usd_incomplete"] = True
+        out["totals"]["tokens"] = out["totals"]["input_tokens"] + out["totals"]["output_tokens"]
+        out["totals"]["usd"] = round(out["totals"]["usd"], 4)
+    except Exception:
+        pass  # a reporting view must never raise into a request
+    return out
+
+
+def _display_name(scope_key: str) -> str:
+    """Account name for a ledger file name. Falls back to the key itself."""
+    if scope_key == "default":
+        try:
+            from vaf.core.config import get_local_admin_username
+            return str(get_local_admin_username() or "admin")
+        except Exception:
+            return "admin"
+    try:
+        from vaf.core.config import resolve_caller_username
+        return str(resolve_caller_username(None, scope_key, allow_lookup=True) or scope_key)
+    except Exception:
+        return scope_key
 
 
 def budget_exceeded(user_scope_id: Optional[str]) -> Tuple[bool, float, float]:

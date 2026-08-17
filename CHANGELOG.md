@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Settings -> Usage: what was actually consumed, and by whom.** A new tab
+  showing total tokens, request count, an estimated cost, and a table of
+  accounts with the heaviest first. The token numbers do not depend on anyone
+  agreeing about tokenizers: each one is what the provider itself reported for
+  a call it billed, so providers that count differently still add up to the
+  invoice. The cost next to them is the single estimate on the page - it comes
+  from a price list that ages, and a model missing from that list is priced at
+  the expensive end and marked as an upper bound. Everyone can open the tab,
+  but only an admin sees other accounts; everyone else sees their own line.
+  Local models contribute tokens and no cost.
 - **"Context effort": choose what a reply is allowed to cost.** Settings -> AI
   & Model now carries a stepped slider from 8,000 tokens up to whatever the
   configured model's real context window is - seven positions on a 128k model,

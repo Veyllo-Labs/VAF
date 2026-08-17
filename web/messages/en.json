@@ -566,9 +566,24 @@
       "interface": "Interface",
       "connections": "Connections",
       "advanced": "Advanced",
+      "usage": "Usage",
       "automations": "Automations",
       "localNetwork": "Local Network",
       "about": "About"
+    },
+    "usage": {
+      "title": "Token usage",
+      "desc": "What this instance has actually consumed. Every number below was reported by the provider for a call it billed, not counted by a tokenizer here - so it stays correct even when providers count tokens differently. The cost beside it is an estimate from a price list and can drift; the tokens cannot.",
+      "loading": "Loading...",
+      "empty": "Nothing recorded yet. Usage appears here after the first reply from an API provider (local models are free and are not counted).",
+      "totalTokens": "Tokens total",
+      "requests": "Requests",
+      "estimatedCost": "Estimated cost",
+      "user": "User",
+      "inTokens": "Sent",
+      "outTokens": "Received",
+      "note": "Last {days} days, heaviest user first.",
+      "unknownModels": "Some calls used a model that is not in the price list. Those are priced at the expensive end, so the cost estimate is an upper bound."
     },
     "general": {
       "apiKeys": "API Keys",

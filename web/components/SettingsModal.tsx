@@ -47,7 +47,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck
+    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -227,6 +227,9 @@ const CATEGORIES = [
     { id: 'voice', labelKey: 'voice', icon: Volume2 },
     { id: 'interface', labelKey: 'interface', icon: Monitor },
     { id: 'connections', labelKey: 'connections', icon: MessageSquare },
+    // Not adminOnly: the tab shows the caller their OWN consumption, and only an
+    // admin's view lists other accounts (two endpoints, /api/usage vs /usage/me).
+    { id: 'usage', labelKey: 'usage', icon: BarChart3 },
     { id: 'advanced', labelKey: 'advanced', icon: Zap, adminOnly: true },
     { id: 'automations', labelKey: 'automations', icon: Check },
     { id: 'local_network', labelKey: 'localNetwork', icon: Network, adminOnly: true },
@@ -500,6 +503,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const tGeneral = useTranslations('settings.general');
     const tPersona = useTranslations('settings.persona');
     const tAi = useTranslations('settings.ai');
+    const tUsage = useTranslations('settings.usage');
 
     // Per-provider model metadata from the backend's single source (GET /api/provider-models).
     // Falls back to the hardcoded map if the fetch fails (offline / older backend).
@@ -543,6 +547,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [contextEffort, setContextEffort] = useState<{
         current: number; min: number; max: number; steps: number[]; applies: boolean;
     } | null>(null);
+
+    // Usage totals. An admin gets every account's line (/api/usage), everyone
+    // else only their own (/api/usage/me) - the split is the backend's, not a
+    // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
+    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd: number; calls: number };
+    const [usage, setUsage] = useState<{
+        days: number; users: UsageRow[];
+        totals: { tokens: number; input_tokens: number; output_tokens: number; usd: number; calls: number; estimated_usd_incomplete?: boolean };
+    } | null>(null);
     const effortProvider = localConfig.provider || '';
     const effortModel = effortProvider ? (localConfig[`api_model_${effortProvider}`] || '') : '';
     useEffect(() => {
@@ -555,6 +568,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .then(d => { if (d && Array.isArray(d.steps)) setContextEffort(d); })
             .catch(() => {});
     }, [apiBase, effortProvider, effortModel]);
+
+    useEffect(() => {
+        if (activeTab !== 'usage') return;
+        const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+        const path = currentUser?.role === 'admin' ? '/api/usage' : '/api/usage/me';
+        fetch(`${base}${path}`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && d.totals) setUsage(d); })
+            .catch(() => {});
+    }, [activeTab, apiBase, currentUser?.role]);
     // ElevenLabs catalogs, fetched via the admin-only backend proxy
     // (/api/voice/elevenlabs/*; the API key never reaches the browser).
     // Empty arrays = fetch unavailable -> the UI falls back to hardcoded
@@ -3050,6 +3073,66 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </>
                                     )}
                                 </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'usage' && (
+                            <div className="space-y-6">
+                                <Section title={tUsage('title')}>
+                                    <p className="text-xs text-gray-500">{tUsage('desc')}</p>
+                                    {!usage ? (
+                                        <p className="text-xs text-gray-400 mt-4">{tUsage('loading')}</p>
+                                    ) : usage.totals.calls === 0 ? (
+                                        <p className="text-xs text-gray-400 mt-4">{tUsage('empty')}</p>
+                                    ) : (
+                                        <>
+                                            <div className="grid grid-cols-3 gap-4 mt-4 max-md:grid-cols-1">
+                                                <div>
+                                                    <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+                                                        {usage.totals.tokens.toLocaleString()}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">{tUsage('totalTokens')}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+                                                        {usage.totals.calls.toLocaleString()}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">{tUsage('requests')}</div>
+                                                </div>
+                                                <div>
+                                                    <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+                                                        ~${usage.totals.usd.toFixed(2)}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
+                                                </div>
+                                            </div>
+                                            <table className="w-full mt-6 text-sm">
+                                                <thead>
+                                                    <tr className="text-xs text-gray-500 text-left border-b border-gray-200 dark:border-gray-700">
+                                                        <th className="py-2 font-medium">{tUsage('user')}</th>
+                                                        <th className="py-2 font-medium text-right">{tUsage('inTokens')}</th>
+                                                        <th className="py-2 font-medium text-right">{tUsage('outTokens')}</th>
+                                                        <th className="py-2 font-medium text-right">{tUsage('estimatedCost')}</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {usage.users.map((u) => (
+                                                        <tr key={u.scope} className="border-b border-gray-100 dark:border-gray-800">
+                                                            <td className="py-2 text-gray-800 dark:text-gray-200">{u.username}</td>
+                                                            <td className="py-2 text-right tabular-nums">{u.input_tokens.toLocaleString()}</td>
+                                                            <td className="py-2 text-right tabular-nums">{u.output_tokens.toLocaleString()}</td>
+                                                            <td className="py-2 text-right tabular-nums">~${u.usd.toFixed(2)}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            <p className="text-xs text-gray-400 mt-4">{tUsage('note', { days: usage.days })}</p>
+                                            {usage.totals.estimated_usd_incomplete && (
+                                                <p className="text-xs text-amber-600 mt-1">{tUsage('unknownModels')}</p>
+                                            )}
+                                        </>
+                                    )}
+                                </Section>
                             </div>
                         )}
 

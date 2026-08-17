@@ -566,9 +566,24 @@
       "interface": "Oberfläche",
       "connections": "Verbindungen",
       "advanced": "Erweitert",
+      "usage": "Verbrauch",
       "automations": "Automatisierungen",
       "localNetwork": "Lokales Netzwerk",
       "about": "Über"
+    },
+    "usage": {
+      "title": "Token-Verbrauch",
+      "desc": "Was diese Instanz tatsaechlich verbraucht hat. Jede Zahl hier stammt vom Anbieter selbst, fuer einen Aufruf, den er berechnet hat, und wurde nicht hier gezaehlt - sie stimmt also auch dann, wenn Anbieter Tokens unterschiedlich zaehlen. Die Kosten daneben sind eine Schaetzung aus einer Preisliste und koennen abweichen, die Tokens nicht.",
+      "loading": "Wird geladen...",
+      "empty": "Noch nichts erfasst. Der Verbrauch erscheint hier nach der ersten Antwort ueber einen API-Anbieter (lokale Modelle kosten nichts und werden nicht gezaehlt).",
+      "totalTokens": "Tokens gesamt",
+      "requests": "Anfragen",
+      "estimatedCost": "Geschaetzte Kosten",
+      "user": "Nutzer",
+      "inTokens": "Gesendet",
+      "outTokens": "Empfangen",
+      "note": "Letzte {days} Tage, groesster Verbrauch zuerst.",
+      "unknownModels": "Einige Aufrufe nutzten ein Modell, das nicht in der Preisliste steht. Diese werden am oberen Ende bepreist, die Kostenschaetzung ist also eine Obergrenze."
     },
     "general": {
       "apiKeys": "API-Schlüssel",

@@ -624,3 +624,62 @@ def budget_exceeded(user_scope_id: Optional[str]) -> Tuple[bool, float, float]:
         return False, spent_today(user_scope_id), 0.0
     spent = spent_today(user_scope_id)
     return (spent >= budget), spent, budget
+
+
+# Where the daily reference rate is cached. One file, one line of JSON: the ECB
+# publishes once per business day, so fetching per page view would be pointless
+# traffic on somebody else's free server.
+_FX_CACHE = "fx_rates.json"
+# Frankfurter serves the ECB's own reference rates under an MIT licence. The ECB
+# is the SOURCE and is named wherever a converted figure appears - their terms
+# ask for attribution, and a converted number without its origin and date is not
+# checkable anyway.
+_FX_URL = "https://api.frankfurter.dev/v1/latest"
+
+
+def fx_rate(base: str = "EUR", quote: str = "USD", *, max_age_hours: int = 20) -> Optional[dict]:
+    """The ECB reference rate, cached on disk. None when it cannot be had.
+
+    None rather than a stale number on failure: a conversion is only honest if
+    the reader can see WHICH rate produced it and when it was published, so a
+    figure with no rate behind it must not be offered at all. The cached entry
+    carries its own date for exactly that reason, and the caller shows it.
+    """
+    import time
+
+    path = Platform.data_dir() / _FX_CACHE
+    key = f"{base}{quote}".upper()
+    cached = {}
+    try:
+        if path.exists():
+            cached = json.loads(path.read_text(encoding="utf-8")) or {}
+            entry = cached.get(key)
+            if entry and (time.time() - float(entry.get("fetched_at") or 0)) < max_age_hours * 3600:
+                return entry
+    except Exception:
+        cached = {}
+    try:
+        import requests
+
+        resp = requests.get(_FX_URL, params={"base": base, "symbols": quote}, timeout=6)
+        if not resp.ok:
+            return cached.get(key) or None
+        data = resp.json() or {}
+        rate = (data.get("rates") or {}).get(quote.upper())
+        if not rate:
+            return cached.get(key) or None
+        entry = {"base": base.upper(), "quote": quote.upper(), "rate": float(rate),
+                 "date": str(data.get("date") or ""), "source": "European Central Bank",
+                 "fetched_at": time.time()}
+        try:
+            cached[key] = entry
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(cached), encoding="utf-8")
+        except Exception:
+            pass
+        return entry
+    except Exception:
+        # Offline, or the service is down. A previously cached rate is still a
+        # real published rate and carries its own date, so the reader can judge
+        # its age; inventing one would not be.
+        return cached.get(key) or None

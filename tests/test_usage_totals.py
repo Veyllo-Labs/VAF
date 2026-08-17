@@ -679,3 +679,49 @@ def test_nothing_is_lost_when_old_and_new_records_meet(spend_dir):
     assert round(sum(cur.values()), 6) == round(out["totals"]["usd"], 6), (
         "the per-currency amounts must add up to the recorded total"
     )
+
+
+def test_the_rate_is_cached_and_never_invented(tmp_path, monkeypatch):
+    """A converted figure is only honest if the rate behind it can be seen, so a
+    failed fetch returns nothing rather than a guess - and a cached rate carries
+    its own publication date so the reader can judge its age."""
+    import json as _json
+
+    from vaf.core import cost as c
+
+    monkeypatch.setattr(c.Platform, "data_dir", staticmethod(lambda: tmp_path))
+    calls = {"n": 0}
+
+    class _Resp:
+        ok = True
+
+        @staticmethod
+        def json():
+            calls["n"] += 1
+            return {"rates": {"USD": 1.16}, "date": "2026-08-17"}
+
+    import requests
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: _Resp())
+
+    first = c.fx_rate()
+    assert first["rate"] == 1.16 and first["date"] == "2026-08-17"
+    assert first["source"] == "European Central Bank", "the source must be named"
+
+    # Second call inside the window is served from disk: the ECB publishes once
+    # a business day, so asking per page view is traffic on a free service.
+    c.fx_rate()
+    assert calls["n"] == 1
+    assert _json.loads((tmp_path / c._FX_CACHE).read_text())["EURUSD"]["rate"] == 1.16
+
+
+def test_no_rate_means_no_conversion_offered(tmp_path, monkeypatch):
+    from vaf.core import cost as c
+
+    monkeypatch.setattr(c.Platform, "data_dir", staticmethod(lambda: tmp_path))
+
+    import requests
+    def _boom(*a, **kw):
+        raise OSError("offline")
+    monkeypatch.setattr(requests, "get", _boom)
+
+    assert c.fx_rate() is None, "a missing rate must not become a made-up one"

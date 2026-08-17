@@ -663,10 +663,32 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // amount whose currency was never recorded - would be a number that means
     // nothing. Those cases show a dash, and the reason is stated where there is
     // room for it rather than crammed into the value.
+    // Converting is a VIEW, never a stored value: the ledger keeps what each
+    // provider billed, in its own currency. Off by default, because a converted
+    // figure is one step further from the invoice than the recorded one.
+    const [fx, setFx] = useState<{ rate: number; date: string; source: string; base: string; quote: string } | null>(null);
+    const [convertTo, setConvertTo] = useState<'EUR' | 'USD' | null>(null);
+
     const NO_FIGURE = '—';
+    // EUR<->USD at the ECB reference rate, applied only when the reader asked
+    // for it. Amounts with no recorded currency ("?") are never converted -
+    // there is nothing to convert FROM.
+    const toTarget = useCallback((entries: [string, number][]): [string, number][] | null => {
+        if (!convertTo || !fx) return null;
+        if (entries.some(([c]) => c === '?')) return null;
+        let sum = 0;
+        for (const [cur, v] of entries) {
+            if (cur === convertTo) sum += v;
+            else if (cur === 'EUR' && convertTo === 'USD') sum += v * fx.rate;
+            else if (cur === 'USD' && convertTo === 'EUR') sum += v / fx.rate;
+            else return null;   // a currency the rate does not cover
+        }
+        return [[convertTo, sum]];
+    }, [convertTo, fx]);
     const money = useCallback((currencies?: Record<string, number>, legacy?: number) => {
-        const entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        let entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
         if (!entries.length) return `~$${(legacy ?? 0).toFixed(2)}`;
+        entries = toTarget(entries) ?? entries;
         if (entries.length > 1) return NO_FIGURE;      // mixed currencies
         const [cur, v] = entries[0];
         if (cur === '?') return NO_FIGURE;             // currency never recorded
@@ -707,7 +729,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // like a defect ("~10.81 (?) + ~EUR0.03"). Split: the figure shows what has
     // a currency, and the rest is stated underneath in words.
     const moneyParts = useCallback((currencies?: Record<string, number>, legacy?: number) => {
-        const all = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        const raw = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        const all = toTarget(raw) ?? raw;
         const known = all.filter(([c]) => c !== '?');
         const unknown = all.find(([c]) => c === '?')?.[1] ?? 0;
         // Same rule as `money`, with room underneath to say why: one currency and
@@ -716,7 +739,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             ? `~${known[0][0] === 'EUR' ? '€' : '$'}${known[0][1].toFixed(2)}`
             : (all.length ? NO_FIGURE : `~$${(legacy ?? 0).toFixed(2)}`);
         return { head, unknown, mixed: known.length > 1 };
-    }, []);
+    }, [toTarget]);
 
     const [usageLoading, setUsageLoading] = useState(false);
     const loadUsage = useCallback(() => {
@@ -727,6 +750,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             fetch(`${base}${path}`, { credentials: 'include', cache: 'no-store' })
                 .then(r => (r.ok ? r.json() : null))
                 .then(d => { if (d && d.totals) setUsage(d); })
+                .catch(() => {}),
+            fetch(`${base}/api/usage/fx`, { credentials: 'include' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(d => { if (d && d.rate) setFx(d.rate); })
                 .catch(() => {}),
             fetch(`${base}/api/usage/prices`, { credentials: 'include' })
                 .then(r => (r.ok ? r.json() : null))
@@ -3324,6 +3351,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            {fx && usage.costs_visible !== false && (
+                                                <div className="flex items-center gap-2 mt-4 flex-wrap">
+                                                    <span className="text-xs text-gray-400">{tUsage('convertTo')}</span>
+                                                    {(['EUR', 'USD'] as const).map(cur => (
+                                                        <button key={cur} type="button"
+                                                                onClick={() => setConvertTo(convertTo === cur ? null : cur)}
+                                                                className={cn("px-2 py-1 text-xs rounded-lg border transition-colors",
+                                                                    convertTo === cur
+                                                                        ? "border-gray-400 bg-gray-100 text-gray-800 dark:bg-[#2a2a2a] dark:text-gray-100 dark:border-gray-500"
+                                                                        : "border-gray-200 text-gray-500 hover:bg-gray-50 dark:border-[#2a2a2a] dark:hover:bg-[#242424]")}>
+                                                            {cur}
+                                                        </button>
+                                                    ))}
+                                                    {convertTo && (
+                                                        <span className="text-xs text-gray-400">
+                                                            {tUsage('fxBasis', {
+                                                                rate: fx.rate.toFixed(4),
+                                                                date: fx.date,
+                                                                source: fx.source,
+                                                            })}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
                                             <div className="flex items-center justify-between gap-4 mt-4">
                                                 <p className="text-xs text-gray-400">{tUsage('note', { days: usage.days })}</p>
                                                 <button type="button" onClick={loadUsage} disabled={usageLoading}

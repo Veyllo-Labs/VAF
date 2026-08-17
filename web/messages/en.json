@@ -633,7 +633,9 @@
       "byProvider": "By provider and model",
       "byProviderDesc": "Where the work actually ran. Chat, vision, sub-agents, the tool model and the thinker can each use a different provider - or a local model - and the price between them differs by an order of magnitude.",
       "noFigure": "No single figure: part of this period was recorded before the currency was stored.",
-      "mixedCurrencies": "No single figure: this period used providers billing in different currencies. See the breakdown below."
+      "mixedCurrencies": "No single figure: this period used providers billing in different currencies. See the breakdown below.",
+      "convertTo": "Show amounts in:",
+      "fxBasis": "Converted at 1 EUR = {rate} USD, published {date} by the {source}. The recorded amounts are unchanged."
     },
     "general": {
       "apiKeys": "API Keys",

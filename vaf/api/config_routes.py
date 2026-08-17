@@ -195,6 +195,21 @@ async def read_archived_chat(chat_id: str, request: Request) -> Dict[str, Any]:
     raise HTTPException(status_code=404, detail="Not found")
 
 
+@router.get("/usage/fx")
+async def get_fx_rate(request: Request, base: str = "EUR", quote: str = "USD") -> Dict[str, Any]:
+    """The ECB daily reference rate, for converting the usage figures on screen.
+
+    Server-side because the ECB's own endpoint sends no CORS headers, and
+    because one instance should ask once a day rather than once per page view.
+    Returns `{"rate": null}` when no rate is available: the page then offers no
+    conversion at all instead of showing an unfounded number.
+    """
+    from vaf.core.cost import fx_rate
+
+    get_current_user_or_local_admin(request)
+    return {"rate": fx_rate(base=base, quote=quote)}
+
+
 @router.get("/usage/prices")
 async def get_usage_prices(request: Request) -> Dict[str, Any]:
     """Public list prices per provider, for the "what would this cost elsewhere" panel."""

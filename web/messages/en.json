@@ -210,7 +210,12 @@
     "roomNoSelfDescription": "said nothing about what it can do",
     "roomRole_peer": "peer (equal, nobody commands)",
     "roomRole_leader": "leader (gives directives)",
-    "roomRole_worker": "worker (takes directives, reports back)"
+    "roomRole_worker": "worker (takes directives, reports back)",
+    "chatDeleteTitle": "Delete this chat?",
+    "chatDeleteBody": "“{title}” and everything in it are removed from this machine, including any documents attached to it. This cannot be undone.",
+    "chatDeleteDocs": "Attached in this chat ({count}):",
+    "chatDeleteConfirm": "Delete chat",
+    "deleteArmedIn": "Delete in {seconds}s"
   },
   "nav": {
     "settings": "Settings",

@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Deleting a chat asks first.** The trash icon opened no dialog at all: one
+  mis-click removed a conversation and its attachments for good. It now opens
+  the same kind of confirmation the group chats already had, naming the
+  documents that go with it, and the confirm button is disarmed for three
+  seconds with a visible countdown - a destructive button under the cursor is
+  pressed before the sentence above it is read. That delay now guards the
+  group-chat dialog too.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab
   showing total tokens, request count, an estimated cost, and a table of
   accounts with the heaviest first. The token numbers do not depend on anyone

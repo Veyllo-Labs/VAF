@@ -2993,8 +2993,24 @@ function VAFDashboardContent() {
     }, [defaultEditorState]);
 
     // Document Viewer: one state entry per session so switching chats never overwrites or loses data.
+    // Deleting a chat is irreversible and takes its attachments with it, so it
+    // asks first - the same decision the room dialog already guards. The arming
+    // delay is shared by both: a destructive button under the cursor is pressed
+    // before it is read, and three seconds is long enough to read the sentence
+    // above it.
+    const [chatToDelete, setChatToDelete] = useState<{ id: string; title: string; isThinking: boolean } | null>(null);
+    const [deleteArmedIn, setDeleteArmedIn] = useState(0);
     const [sessionViewerState, setSessionViewerState] = useState<Record<string, { isOpen: boolean; documents: DocumentViewerDoc[] }>>({});
     const defaultViewerState = useMemo(() => ({ isOpen: false as const, documents: [] as DocumentViewerDoc[] }), []);
+
+    // One timer for both destructive dialogs: opening either arms it, and it
+    // counts down to zero once. Cleared on close so a reopened dialog waits again.
+    useEffect(() => {
+        if (!chatToDelete && !roomToClose) { setDeleteArmedIn(0); return; }
+        setDeleteArmedIn(3);
+        const t = setInterval(() => setDeleteArmedIn(n => (n <= 1 ? 0 : n - 1)), 1000);
+        return () => clearInterval(t);
+    }, [chatToDelete, roomToClose]);
     const documentViewerState = currentSessionId
         ? (sessionViewerState[currentSessionId] ?? defaultViewerState)
         : defaultViewerState;
@@ -3665,6 +3681,26 @@ function VAFDashboardContent() {
         setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
+    // What the dialog performs once it is confirmed. Unchanged from what the
+    // trash icon used to do inline; only the moment it happens moved.
+    const performChatDelete = useCallback((target: { id: string; isThinking: boolean }) => {
+        wsSocketRef.current?.send(JSON.stringify({
+            type: target.isThinking ? 'hide_session' : 'delete_session', id: target.id,
+        }));
+        if (currentSessionId === target.id) {
+            const remaining = conversationsOnly(sessions).filter(sess => sess.id !== target.id);
+            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
+            if (empty) {
+                handleSessionSwitch(empty.id);
+            } else if (remaining.length > 0) {
+                handleSessionSwitch(remaining[0].id);
+            } else {
+                setTimeout(() => {
+                    wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
+                }, 100);
+            }
+        }
+    }, [currentSessionId, sessions, handleSessionSwitch]);
 
     // Keep the selected chat visible in the sidebar (don't jump to the top)
     useEffect(() => {
@@ -7097,21 +7133,11 @@ function VAFDashboardContent() {
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                         e.stopPropagation();
-                                                        const isThinking = (s as { source?: string }).source === 'thinking';
-                                                        ws?.send(JSON.stringify({ type: isThinking ? 'hide_session' : 'delete_session', id: s.id }));
-                                                        if (currentSessionId === s.id) {
-                                                            const remaining = conversationsOnly(sessions).filter(sess => sess.id !== s.id);
-                                                            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
-                                                            if (empty) {
-                                                                handleSessionSwitch(empty.id);
-                                                            } else if (remaining.length > 0) {
-                                                                handleSessionSwitch(remaining[0].id);
-                                                            } else {
-                                                                setTimeout(() => {
-                                                                    wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
-                                                                }, 100);
-                                                            }
-                                                        }
+                                                        setChatToDelete({
+                                                            id: s.id,
+                                                            title: s.title.replace(".json", ""),
+                                                            isThinking: (s as { source?: string }).source === 'thinking',
+                                                        });
                                                     }} />
                                                 </>
                                             )}
@@ -10149,13 +10175,78 @@ function VAFDashboardContent() {
                                 {tMain('roomCloseCancel')}
                             </button>
                             <button
+                                disabled={deleteArmedIn > 0}
                                 onClick={() => {
                                     ws?.send(JSON.stringify({ type: 'delete_room', room_id: roomToClose.roomId }));
                                     setRoomToClose(null);
                                 }}
-                                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
+                                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
                             >
-                                {tMain('roomCloseConfirm')}
+                                {deleteArmedIn > 0
+                                    ? tMain('deleteArmedIn', { seconds: deleteArmedIn })
+                                    : tMain('roomCloseConfirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Deleting a chat. Same shape as the room dialog above, for the same
+                reason: it cannot be undone, and here it also takes the chat's
+                attachments with it - which the reader cannot be expected to
+                remember, so they are listed rather than summarized. */}
+            {chatToDelete && (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" onClick={() => setChatToDelete(null)} />
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6">
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                                <Trash2 className="w-5 h-5 text-red-500" />
+                            </div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">
+                                {tMain('chatDeleteTitle')}
+                            </div>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-[#8a8a8a] mb-3">
+                            {tMain('chatDeleteBody', { title: chatToDelete.title })}
+                        </p>
+                        {(() => {
+                            // Only chats OPENED in this browser session have their document
+                            // list here (`sidebar_documents_restored` arrives on load), so an
+                            // empty list means "not known", never "none". That is why the
+                            // sentence above already warns about attachments unconditionally
+                            // and this block is extra detail rather than the only mention.
+                            const docs = (sessionViewerState[chatToDelete.id]?.documents || []);
+                            if (!docs.length) return null;
+                            return (
+                                <div className="mb-4 rounded-xl border border-gray-200 dark:border-[#2a2a2a] p-3">
+                                    <div className="text-xs font-medium text-gray-700 dark:text-[#c8c8c8] mb-2">
+                                        {tMain('chatDeleteDocs', { count: docs.length })}
+                                    </div>
+                                    <ul className="space-y-1 max-h-32 overflow-y-auto">
+                                        {docs.map((d, i) => (
+                                            <li key={`${d.name}-${i}`} className="text-xs text-gray-500 dark:text-[#8a8a8a] truncate">
+                                                {d.name}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            );
+                        })()}
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setChatToDelete(null)}
+                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-sm text-gray-700 dark:text-[#c8c8c8] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors"
+                            >
+                                {tMain('roomCloseCancel')}
+                            </button>
+                            <button
+                                disabled={deleteArmedIn > 0}
+                                onClick={() => { performChatDelete(chatToDelete); setChatToDelete(null); }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                            >
+                                {deleteArmedIn > 0
+                                    ? tMain('deleteArmedIn', { seconds: deleteArmedIn })
+                                    : tMain('chatDeleteConfirm')}
                             </button>
                         </div>
                     </div>

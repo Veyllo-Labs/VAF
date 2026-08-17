@@ -210,7 +210,12 @@
     "roomNoSelfDescription": "hat nicht gesagt, was es kann",
     "roomRole_peer": "gleichberechtigt (niemand befiehlt)",
     "roomRole_leader": "Leiter (gibt Anweisungen)",
-    "roomRole_worker": "Worker (nimmt Anweisungen, meldet zurueck)"
+    "roomRole_worker": "Worker (nimmt Anweisungen, meldet zurueck)",
+    "chatDeleteTitle": "Diesen Chat loeschen?",
+    "chatDeleteBody": "„{title}“ und der gesamte Inhalt werden von diesem Rechner entfernt, samt aller angehaengten Dokumente. Das laesst sich nicht rueckgaengig machen.",
+    "chatDeleteDocs": "In diesem Chat angehaengt ({count}):",
+    "chatDeleteConfirm": "Chat loeschen",
+    "deleteArmedIn": "Loeschen in {seconds}s"
   },
   "nav": {
     "settings": "Einstellungen",

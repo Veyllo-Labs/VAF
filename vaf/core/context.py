@@ -29,6 +29,101 @@ from vaf.core.config import Config
 TURN_CONTEXT_PREFIX = "[Context:"
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONTEXT EFFORT - the selectable budgets behind `context_compress_tokens`
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# What the setting buys, stated once so every surface can repeat it: on a
+# pay-per-token provider the WHOLE history is resent and billed on every LLM
+# round-trip, so the budget is the price of one round-trip, not a capacity. The
+# rungs are fixed round numbers rather than a linear range because the choice is
+# a cost tier, not a fine adjustment - and because a slider that can stop on
+# 43_732 tokens invites tuning a number that no one can feel.
+CONTEXT_EFFORT_MIN = 8000
+_CONTEXT_EFFORT_RUNGS = (8000, 16000, 30000, 45000, 64000, 90000, 128000)
+
+
+def context_effort_steps(window_tokens: int) -> List[int]:
+    """The budgets a UI may offer for a model whose real window is *window_tokens*.
+
+    Always starts at CONTEXT_EFFORT_MIN and always ENDS at the real window, so
+    the top rung means "never compress before the model has to" whatever model
+    is configured; the rungs in between are the fixed tiers above, dropped once
+    they reach the window. A 128k window therefore yields the seven rungs the
+    settings slider shows (six steps), a 32 768-token local model yields four,
+    and a 1M window keeps the tiers and tops out at 1M.
+    """
+    window = int(window_tokens or 0)
+    if window <= CONTEXT_EFFORT_MIN:
+        return [window] if window > 0 else [CONTEXT_EFFORT_MIN]
+    steps = [rung for rung in _CONTEXT_EFFORT_RUNGS if rung < window]
+    steps.append(window)
+    return steps
+
+
+def resolve_context_window(config: Optional[Dict[str, Any]] = None) -> int:
+    """The real context window of the CONFIGURED model, without building a backend.
+
+    API providers: the static model table (`APIBackendManager.static_context_window`),
+    which is also what the live agent lands on for every provider but OpenRouter.
+    Local/server: `n_ctx`, the window llama.cpp is actually started with.
+    """
+    def _cfg(key: str, default: Any) -> Any:
+        if isinstance(config, dict):
+            return config.get(key, default)
+        return Config.get(key, default)
+
+    provider = str(_cfg("provider", "local") or "local")
+    if provider == "local":
+        try:
+            return max(int(_cfg("n_ctx", 32768) or 32768), 32768)
+        except Exception:
+            return 32768
+    try:
+        from vaf.core.api_backend import APIBackendManager
+        return APIBackendManager.static_context_window(str(_cfg(f"api_model_{provider}", "") or ""))
+    except Exception:
+        return 128_000
+
+
+def resolve_context_effort(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Everything a settings surface needs to render the context-effort control.
+
+    One primitive for all of them - the web settings, the CLI menu and any
+    embedder building its own - so the ladder, the clamping and the "does this
+    provider bill per token" question are answered in ONE place. `applies` is
+    False for local models: their tokens are free, so the budget is ignored by
+    `Agent._compression_limit` and a UI must not imply otherwise.
+    """
+    def _cfg(key: str, default: Any) -> Any:
+        if isinstance(config, dict):
+            return config.get(key, default)
+        return Config.get(key, default)
+
+    window = resolve_context_window(config)
+    steps = context_effort_steps(window)
+    try:
+        configured = int(_cfg("context_compress_tokens", 45000) or 0)
+    except Exception:
+        configured = 45000
+    # 0 is the documented "window-based only" escape hatch and stays as it is;
+    # anything else is clamped into the ladder, because a budget above the
+    # window never fires and one below the floor would compress every turn.
+    if configured > 0:
+        current = min(max(configured, CONTEXT_EFFORT_MIN), window)
+    else:
+        current = 0
+    return {
+        "current": current,
+        "configured": configured,
+        "min": min(CONTEXT_EFFORT_MIN, window),
+        "max": window,
+        "steps": steps,
+        "provider": str(_cfg("provider", "local") or "local"),
+        "applies": str(_cfg("provider", "local") or "local") != "local",
+    }
+
+
 # Prefixes that mean a tool result is a FAILURE, anchored to the start so
 # "No errors found" is not a false positive. Tools surface failures as
 # "<qualifier> Error: ..." (Tool Error / Security Error), NOT a bare

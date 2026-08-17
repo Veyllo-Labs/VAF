@@ -5518,12 +5518,16 @@ class Agent:
         if not self.api_backend:
             return window_tokens
         try:
-            budget = int(self.config.get("context_compress_tokens", 30000) or 0)
+            budget = int(self.config.get("context_compress_tokens", 45000) or 0)
         except Exception:
             budget = 0
         if budget <= 0:
             return window_tokens
-        return min(window_tokens, budget)
+        # Same floor the settings ladder starts at, applied here too: a
+        # hand-edited config asking for 500 tokens would otherwise compress on
+        # every single turn and never fit a system prompt.
+        from vaf.core.context import CONTEXT_EFFORT_MIN
+        return min(window_tokens, max(budget, min(CONTEXT_EFFORT_MIN, window_tokens)))
 
     def _sync_compression_limit(self, window_tokens: int) -> None:
         """Pin the ONE ContextManager to the effective compression limit.

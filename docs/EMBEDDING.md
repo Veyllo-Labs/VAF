@@ -327,7 +327,7 @@ keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 | `api_key_<provider>` | - | API key, e.g. `api_key_deepseek` |
 | `api_model_<provider>` | - | model per provider, e.g. `api_model_openai` |
 | `n_ctx` | `32768` | context window (min 32768 for tool use) |
-| `context_compress_tokens` | `30000` | API providers: history token budget at which compression fires (`min(window, budget)`); every round-trip resends and bills the whole history, so the window alone is the wrong ceiling. `0` = window-based. Local models ignore it |
+| `context_compress_tokens` | `45000` | API providers: history token budget at which compression fires (`min(window, budget)`, floored at 8000); every round-trip resends and bills the whole history, so the window alone is the wrong ceiling. `0` = window-based. Local models ignore it. For your own settings screen, `vaf.core.context.resolve_context_effort()` returns the rung ladder, the model's real window and whether the budget applies to the configured provider |
 | `temperature` | `0.7` | sampling temperature |
 
 ```python

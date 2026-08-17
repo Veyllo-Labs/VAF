@@ -169,7 +169,7 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
 - **`max_tokens`:** Set when the `ContextManager` is created and moved afterwards ONLY via `set_max_tokens` (re-derives the two values below in place; the instance is never replaced, see section 2).
 - **`trigger_threshold`:** Dynamic, depending on `max_tokens` (small/medium/large windows).
 - **`recent_memory_size`:** Dynamic, depending on `max_tokens` (from small windows up to 200 for very large windows).
-- **`context_compress_tokens`** (config key, default 30000): the pay-per-token budget for API providers; the agent pins the manager to `min(window, budget)`. `0` restores window-based triggering. Local models ignore it.
+- **`context_compress_tokens`** (config key, default 45000, shown as "Context effort"): the pay-per-token budget for API providers; the agent pins the manager to `min(window, budget)`, floored at `CONTEXT_EFFORT_MIN` (8000) so a hand-edited config cannot ask for a budget that compresses every turn. `0` restores window-based triggering. Local models ignore it. Settings surfaces read `resolve_context_effort()` for the rung ladder; admin-only to write.
 - **`preserve_tools`:** The tool list is extended; core tools are retained, and additional tool types are taken into account as well.
 
 ## 7b. Compression on session load

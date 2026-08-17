@@ -1347,8 +1347,19 @@ class APIBackendManager:
             except Exception:
                 pass  # Fall through to static table
 
-        # Static table — substring match
-        for pattern, ctx in APIBackendManager._CTX_TABLE:
+        return APIBackendManager.static_context_window(model_lc)
+
+    @classmethod
+    def static_context_window(cls, model: str) -> int:
+        """Context window from the static table alone - no instance, no network.
+
+        The instance method above owns the live OpenRouter lookup and then lands
+        here, so the table is read in ONE place. Callers that have no backend
+        instance (the settings surfaces that offer a context budget, an embedder
+        sizing its own UI) get the same answer without constructing a backend.
+        """
+        model_lc = (model or "").lower()
+        for pattern, ctx in cls._CTX_TABLE:
             if pattern in model_lc:
                 return ctx
 

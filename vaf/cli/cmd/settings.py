@@ -253,6 +253,50 @@ def download_model_flow(repo_id: str, preselected_filename: str = None):
         UI.error(str(e))
 
 
+def set_context_effort_menu():
+    """Pick the context budget (`context_compress_tokens`) from the shared ladder.
+
+    Same primitive the web settings render, so both surfaces offer the same
+    rungs and the same clamping for the configured model.
+    """
+    from vaf.core.context import resolve_context_effort
+
+    effort = resolve_context_effort()
+    UI.clear()
+    if effort["applies"]:
+        note = ("An API resends the WHOLE history on every round-trip and bills every token,\n"
+                "so this is the price of one round-trip. Lower spends less and remembers\n"
+                "less raw detail; older turns are summarized rather than dropped.")
+    else:
+        note = ("Local model: tokens are free, so this setting is IGNORED and the model's\n"
+                "own window is the limit. It applies as soon as an API provider is active.")
+    UI.panel(f"Current: {effort['current']} tokens\nModel window: {effort['max']} tokens\n\n{note}",
+             title="Context Effort", style="highlight")
+
+    choices = []
+    for step in effort["steps"]:
+        label = f"{step} tokens"
+        if step == effort["steps"][0]:
+            label += " (cheapest)"
+        elif step == effort["max"]:
+            label += " (full window / most expensive)"
+        if step == effort["current"]:
+            label += "  <- current"
+        choices.append((label, step))
+    choices.append(('Window-based only (no budget)', 0))
+    choices.append(('Back', 'back'))
+
+    answers = inquirer.prompt([
+        inquirer.List('effort', message="Select Context Effort", choices=choices),
+    ])
+    if not answers or answers['effort'] == 'back':
+        return
+    Config.set("context_compress_tokens", int(answers['effort']))
+    UI.success(f"Context effort set to {answers['effort']} tokens"
+               if answers['effort'] else "Context effort disabled (window-based only)")
+    UI.console.input("[dim]Press Enter to continue...[/dim]")
+
+
 def set_context_limit_menu():
     current = Config.get("n_ctx", 32768)
     UI.clear()
@@ -266,6 +310,7 @@ def set_context_limit_menu():
                           ('65536 (Large)', 65536),
                           ('131072 (Max)', 131072),
                           ('Custom...', 'custom'),
+                          ('Context effort (cost budget per round-trip)...', 'effort'),
                           ('Back', 'back'),
                       ],
         ),
@@ -274,12 +319,15 @@ def set_context_limit_menu():
     if not answers: return
 
     selection = answers['ctx']
-    
+
     if selection == 'back':
         return
-        
+    if selection == 'effort':
+        set_context_effort_menu()
+        return
+
     final_val = selection
-    
+
     if selection == 'custom':
         while True:
             val = UI.console.input("[bold cyan]Enter custom limit (e.g. 65536): [/bold cyan]")

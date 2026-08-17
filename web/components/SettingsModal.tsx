@@ -535,6 +535,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [appVersion, setAppVersion] = useState<string>('');
     const [activeTab, setActiveTab] = useState('general');
+
+    // Context-effort ladder (GET /api/config/context-effort). Computed by the backend
+    // from the model's REAL window, never rebuilt here: the rungs, the floor and the
+    // "does this provider bill per token" answer live in vaf/core/context.py. Re-asked
+    // when the provider/model selection changes, including before it is saved.
+    const [contextEffort, setContextEffort] = useState<{
+        current: number; min: number; max: number; steps: number[]; applies: boolean;
+    } | null>(null);
+    const effortProvider = localConfig.provider || '';
+    const effortModel = effortProvider ? (localConfig[`api_model_${effortProvider}`] || '') : '';
+    useEffect(() => {
+        const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+        const qs = effortProvider
+            ? `?provider=${encodeURIComponent(effortProvider)}&model=${encodeURIComponent(String(effortModel))}`
+            : '';
+        fetch(`${base}/api/config/context-effort${qs}`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && Array.isArray(d.steps)) setContextEffort(d); })
+            .catch(() => {});
+    }, [apiBase, effortProvider, effortModel]);
     // ElevenLabs catalogs, fetched via the admin-only backend proxy
     // (/api/voice/elevenlabs/*; the API key never reaches the browser).
     // Empty arrays = fetch unavailable -> the UI falls back to hardcoded
@@ -2633,6 +2653,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 type="number"
                                             />
                                         </div>
+
                                         <div className="mt-4">
                                             <Switch
                                                 label={tAi('promptCacheAuto')}
@@ -2715,6 +2736,51 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
                                     );
                                 })}
+
+                                {/* Context effort: the per-reply token budget. Deliberately OUTSIDE the
+                                    local-model section - it is the setting that matters most for a paid
+                                    API, where every reply resends and bills the whole history. */}
+                                {contextEffort && contextEffort.steps.length > 1 && (
+                                    <Section title={tAi('contextEffort')}>
+                                        <p className="text-xs text-gray-500">{tAi('contextEffortDesc')}</p>
+                                        {(() => {
+                                            const steps = contextEffort.steps;
+                                            const saved = Number(localConfig.context_compress_tokens ?? contextEffort.current);
+                                            // Land an out-of-ladder value (0 = window-based, or a hand-edited
+                                            // number) on the nearest rung rather than leaving the handle at an
+                                            // index the ladder has no name for.
+                                            const target = saved > 0 ? saved : contextEffort.max;
+                                            let idx = 0;
+                                            steps.forEach((s, i) => {
+                                                if (Math.abs(s - target) < Math.abs(steps[idx] - target)) idx = i;
+                                            });
+                                            return (
+                                                <>
+                                                    <input
+                                                        type="range"
+                                                        min={0}
+                                                        max={steps.length - 1}
+                                                        step={1}
+                                                        value={idx}
+                                                        onChange={(e) => handleChange('context_compress_tokens', steps[parseInt(e.target.value)])}
+                                                        className="w-full accent-blue-500 mt-3"
+                                                        disabled={!contextEffort.applies}
+                                                    />
+                                                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                                                        <span>{tAi('contextEffortCheapest')}</span>
+                                                        <span className="font-medium text-gray-600 dark:text-gray-300">
+                                                            {tAi('contextEffortValue', { tokens: steps[idx].toLocaleString() })}
+                                                        </span>
+                                                        <span>{tAi('contextEffortFull')}</span>
+                                                    </div>
+                                                    {!contextEffort.applies && (
+                                                        <p className="text-xs text-amber-600 mt-2">{tAi('contextEffortLocal')}</p>
+                                                    )}
+                                                </>
+                                            );
+                                        })()}
+                                    </Section>
+                                )}
 
                                 {/* Vision Model Fallback */}
                                 {(() => {

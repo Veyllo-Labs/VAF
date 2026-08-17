@@ -512,7 +512,7 @@ class Config:
         "file_encryption_enabled": True,
         "prompt_log_full_enabled": False,                          # Log the ENTIRE assembled system prompt (profile, retrieved memories, contacts) to prompt_*.log. Debug only
         "context_archive_max_age_days": 14,                        # Age sweep for pre-compression conversation snapshots (0 = keep forever)
-        "context_compress_tokens": 30000,                          # API providers only: compress the history once it exceeds this token budget, instead of waiting for the model window. Pay-per-token bill grows with EVERY resent token, so the window (128k) is the wrong ceiling. 0 = window-based only
+        "context_compress_tokens": 45000,                          # "Context effort": API providers only: compress the history once it exceeds this token budget, instead of waiting for the model window. Pay-per-token bill grows with EVERY resent token, so the window (128k) is the wrong ceiling. Settings offer it as fixed rungs from 8000 up to the model's real window (vaf/core/context.py). 0 = window-based only
         "cross_chat_hint_enabled": True,                           # Cross Chat Hint: pointers from this user's OTHER chats, below the RAG snippets
         "cross_chat_hint_k": 2,                                    # Max cross-chat hints per turn (0 disables the lane entirely)
         "cross_chat_hint_min_terms": 2,                            # Distinct query terms a chat must match; a single rare term also qualifies
@@ -900,6 +900,11 @@ class Config:
         "a2a_room_ping_minutes",
         # Loop-protection budgets: a limit its own subject can raise is not a limit.
         "max_tool_turns_per_step", "tool_loop_unlimited",
+        # The context budget is the same decision measured in tokens: raising it
+        # makes EVERY later round-trip resend more history on the instance's API
+        # key. There is one config file, so a non-admin write would not even be
+        # "their own" budget - it would move everybody's.
+        "context_compress_tokens",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",

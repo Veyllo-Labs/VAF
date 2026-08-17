@@ -61,6 +61,34 @@ async def get_config(request: Request) -> Dict[str, Any]:
     )
 
 
+@router.get("/config/context-effort")
+async def get_context_effort(
+    request: Request,
+    provider: str = "",
+    model: str = "",
+) -> Dict[str, Any]:
+    """The context-budget ladder for the CONFIGURED model, for the settings control.
+
+    Read-only and computed, which is why it is its own endpoint rather than
+    extra fields on GET /config: the ladder depends on the model's real window,
+    not on a stored value. Writing goes through PATCH /config, where
+    `context_compress_tokens` is admin-only like every other spend knob.
+
+    `provider`/`model` override the saved config so a settings screen can ask
+    what the ladder WOULD be for a provider the user has selected but not saved
+    yet - the alternative was a second copy of the ladder in the browser.
+    """
+    get_current_user_or_local_admin(request)
+    from vaf.core.context import resolve_context_effort
+
+    cfg = Config.load()
+    if provider:
+        cfg = {**cfg, "provider": provider}
+        if model:
+            cfg[f"api_model_{provider}"] = model
+    return resolve_context_effort(cfg)
+
+
 @router.get("/provider-models")
 async def get_provider_models() -> Dict[str, Any]:
     """Static per-provider model metadata (default + fallback list) — the single source

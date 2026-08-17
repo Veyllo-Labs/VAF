@@ -11,6 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **"Context effort": choose what a reply is allowed to cost.** Settings -> AI
+  & Model now carries a stepped slider from 8,000 tokens up to whatever the
+  configured model's real context window is - seven positions on a 128k model,
+  four on a 32k local one, always ending at the model's true maximum. It sets
+  the budget the compression lane triggers on, and the number it shows is the
+  honest one: an API is sent the entire conversation again on every reply and
+  bills every token, so the setting is the price of one reply rather than a
+  capacity. The default moved from 30,000 to 45,000 tokens. Moving it down
+  deletes nothing - older turns are summarized, and the full history stays
+  recoverable with `/restore`. The same ladder is in the terminal under
+  Settings -> Context -> Context effort, and embedders get it from
+  `resolve_context_effort()`. For a local model the slider is disabled with a
+  note, because local tokens are free and the budget is ignored there.
+
 ### Fixed
 - **API costs no longer grow without bound in long chats.** On a pay-per-token
   provider every reply resends the whole conversation, and compression only

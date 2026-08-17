@@ -17,7 +17,8 @@ import pytest
 sys.modules.setdefault("llama_cpp", MagicMock())
 
 from vaf.core import cost as cost_mod
-from vaf.core.cost import CostEstimate, estimate_cost, record_spend, usage_totals
+from vaf.core.cost import (CostEstimate, estimate_cost, price_catalog, record_spend,
+                           usage_totals)
 
 
 @pytest.fixture
@@ -147,17 +148,48 @@ def test_shares_answer_who_used_the_most(spend_dir):
     assert round(sum(u["token_share"] for u in out["users"])) == 100
 
 
-def test_price_catalog_never_shows_a_price_it_cannot_justify():
+def test_price_catalog_quotes_the_same_table_the_ledger_estimates_with():
     from vaf.core.cost import PRICES, price_catalog
 
     catalog = price_catalog()
     assert catalog, "the comparison panel needs at least one priced provider"
     for row in catalog:
-        assert row["model"], "a comparison without its model is not a comparison"
-        price = PRICES.get(row["model"]) or PRICES.get(row["model"].rsplit("/", 1)[-1])
-        assert price == (row["input_per_1m"], row["output_per_1m"]), (
-            "the panel must quote the SAME table the ledger estimates with"
-        )
+        assert row["label"] and row["currency"] in {"EUR", "USD"}
+        assert row["models"], "a provider without models cannot be compared"
+        for m in row["models"]:
+            assert PRICES.get(m["model"]) == (m["input_per_1m"], m["output_per_1m"]), (
+                "the panel must quote the SAME prices the ledger estimates with"
+            )
+
+
+def test_veyllo_leads_the_comparison():
+    """Deliberate order, not alphabetical: this product's own API comes first."""
+    assert price_catalog()[0]["provider"] == "veyllo"
+
+
+def test_currency_is_reported_not_converted():
+    """No exchange rate is carried, so the unit has to travel with the price."""
+    by_provider = {c["provider"]: c for c in price_catalog()}
+    assert by_provider["veyllo"]["currency"] == "EUR"
+    assert by_provider["anthropic"]["currency"] == "USD"
+
+
+def test_legacy_model_names_stay_priced():
+    """Dropping them would reprice history at the unknown rate and flag it as
+    an upper bound. Asserted through cost_known rather than by comparing values:
+    one legacy model happens to cost exactly the unknown rate, so a value
+    comparison would test a coincidence instead of the property."""
+    for legacy in ("gpt-4o", "claude-opus-4-1", "gemini-2.5-pro"):
+        assert estimate_cost("openai", legacy, 1000, 100).cost_known is True, legacy
+
+
+def test_price_catalog_is_imported_by_the_route():
+    from vaf.core.cost import price_catalog as _pc  # noqa: F401
+    import inspect
+
+    from vaf.api import config_routes
+
+    assert "price_catalog" in inspect.getsource(config_routes.get_usage_prices)
 
 
 def test_xml_export_carries_the_numbers_and_how_they_were_measured(spend_dir):

@@ -561,7 +561,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // estimates with), plus one row the reader defines themselves. The custom
     // row only asks for numbers once it is opened - an empty form beside the
     // real providers reads as something that must be filled in.
-    const [prices, setPrices] = useState<Array<{ provider: string; model: string; input_per_1m: number; output_per_1m: number }>>([]);
+    const [prices, setPrices] = useState<Array<{
+        provider: string; label: string; currency: string;
+        models: Array<{ model: string; input_per_1m: number; output_per_1m: number }>;
+    }>>([]);
     const [openPrice, setOpenPrice] = useState<string | null>(null);
     const [customPrice, setCustomPrice] = useState({ label: '', input: '', output: '' });
     const effortProvider = localConfig.provider || '';
@@ -3216,27 +3219,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <p className="text-xs text-gray-500">{tUsage('elsewhereDesc')}</p>
                                         <div className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
                                             {prices.map((p) => {
-                                                const cost = (usage.totals.input_tokens * p.input_per_1m
-                                                    + usage.totals.output_tokens * p.output_per_1m) / 1_000_000;
-                                                const open = openPrice === p.provider;
+                                                // Each provider is quoted at ITS cheapest model for these
+                                                // exact tokens - which model that is depends on the
+                                                // input/output ratio, so it is decided here, not by a
+                                                // fixed "representative model" that could flatter one side.
+                                                const priced = p.models.map(m => ({
+                                                    ...m,
+                                                    cost: (usage.totals.input_tokens * m.input_per_1m
+                                                        + usage.totals.output_tokens * m.output_per_1m) / 1_000_000,
+                                                })).sort((a, b) => a.cost - b.cost);
+                                                const best = priced[0];
                                                 return (
-                                                    <div key={p.provider}>
-                                                        <button type="button"
-                                                                onClick={() => setOpenPrice(open ? null : p.provider)}
-                                                                className="w-full flex justify-between items-center py-2 text-sm text-left">
-                                                            <span className="capitalize text-gray-800 dark:text-gray-200">{p.provider}</span>
-                                                            <span className="tabular-nums text-gray-600 dark:text-gray-300">~${cost.toFixed(2)}</span>
-                                                        </button>
-                                                        {open && (
-                                                            <p className="text-xs text-gray-500 pb-3">
-                                                                {tUsage('priceBasis', {
-                                                                    model: p.model,
-                                                                    input: p.input_per_1m.toFixed(2),
-                                                                    output: p.output_per_1m.toFixed(2),
-                                                                })}
-                                                            </p>
-                                                        )}
-                                                    </div>
+                                                    <button key={p.provider} type="button"
+                                                            onClick={() => setOpenPrice(p.provider)}
+                                                            className="w-full flex justify-between items-center py-2 text-sm text-left">
+                                                        <span className="text-gray-800 dark:text-gray-200">{p.label}</span>
+                                                        <span className="tabular-nums text-gray-600 dark:text-gray-300">
+                                                            ~{p.currency === 'EUR' ? '€' : '$'}{best ? best.cost.toFixed(2) : '0.00'}
+                                                        </span>
+                                                    </button>
                                                 );
                                             })}
                                             <div>
@@ -3263,8 +3264,76 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 )}
                                             </div>
                                         </div>
+                                        <p className="text-xs text-gray-400 mt-3">{tUsage('priceFootnote')}</p>
                                     </Section>
                                 )}
+
+                                {/* Provider detail: the whole model list with what each one would
+                                    have cost for THESE tokens, so the headline figure on the row
+                                    can be checked rather than trusted. */}
+                                {usage && openPrice && openPrice !== '__custom__' && (() => {
+                                    const p = prices.find(x => x.provider === openPrice);
+                                    if (!p) return null;
+                                    const sym = p.currency === 'EUR' ? '€' : '$';
+                                    const priced = p.models.map(m => ({
+                                        ...m,
+                                        cost: (usage.totals.input_tokens * m.input_per_1m
+                                            + usage.totals.output_tokens * m.output_per_1m) / 1_000_000,
+                                    })).sort((a, b) => a.cost - b.cost);
+                                    return (
+                                        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                                             onClick={() => setOpenPrice(null)}>
+                                            <div className="bg-white dark:bg-[#181818] rounded-2xl border border-gray-200 dark:border-gray-700 shadow-xl w-full max-w-lg overflow-hidden"
+                                                 onClick={(e) => e.stopPropagation()}>
+                                                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+                                                    <div>
+                                                        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{p.label}</h3>
+                                                        <p className="text-xs text-gray-500">{tUsage('popupSub', { currency: p.currency })}</p>
+                                                    </div>
+                                                    <button type="button" onClick={() => setOpenPrice(null)}
+                                                            className="text-gray-400 hover:text-gray-600">
+                                                        <X className="w-5 h-5" />
+                                                    </button>
+                                                </div>
+                                                <div className="px-5 py-4">
+                                                    <table className="w-full text-sm">
+                                                        <thead>
+                                                            <tr className="text-xs text-gray-500 text-left">
+                                                                <th className="pb-2 font-medium">{tUsage('popupModel')}</th>
+                                                                <th className="pb-2 font-medium text-right">{tUsage('popupIn')}</th>
+                                                                <th className="pb-2 font-medium text-right">{tUsage('popupOut')}</th>
+                                                                <th className="pb-2 font-medium text-right">{tUsage('popupYourCost')}</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {priced.map((m, i) => (
+                                                                <tr key={m.model} className="border-t border-gray-100 dark:border-gray-800">
+                                                                    <td className="py-2 text-gray-800 dark:text-gray-200">
+                                                                        {m.model}
+                                                                        {i === 0 && (
+                                                                            <span className="ml-2 text-[10px] uppercase tracking-wide text-gray-500">
+                                                                                {tUsage('popupCheapest')}
+                                                                            </span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="py-2 text-right tabular-nums text-gray-600 dark:text-gray-400">{sym}{m.input_per_1m.toFixed(2)}</td>
+                                                                    <td className="py-2 text-right tabular-nums text-gray-600 dark:text-gray-400">{sym}{m.output_per_1m.toFixed(2)}</td>
+                                                                    <td className="py-2 text-right tabular-nums text-gray-800 dark:text-gray-200">~{sym}{m.cost.toFixed(2)}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                    <p className="text-xs text-gray-400 mt-4">
+                                                        {tUsage('popupBasis', {
+                                                            input: usage.totals.input_tokens.toLocaleString(),
+                                                            output: usage.totals.output_tokens.toLocaleString(),
+                                                        })}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
 
                                 {usage && currentUser?.role === 'admin' && (
                                     <Section title={tUsage('export')}>

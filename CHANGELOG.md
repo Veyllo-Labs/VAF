@@ -27,9 +27,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tokens against every provider's public list price - tap one to see which
   model and rates the figure used, or define your own price in the last row -
   and an XML export of the last 30 days that states in prose how each number
-  was measured. Requests recorded before token counting existed are now
+  was measured. The comparison quotes each provider at its cheapest model for
+  the usage in question, opens a dialog with that provider's full model list
+  and per-model figures when tapped, and reports currency rather than
+  converting it (Veyllo publishes EUR, the others USD). Requests recorded before token counting existed are now
   labelled as such instead of showing a bare zero.
 - The Settings window is slightly larger, so the new tab is not cramped.
+
+### Changed
+- **The API price table is current again** (checked 2026-08-17 against the
+  providers' own pricing pages). It had been carrying a previous model
+  generation, which made every cost estimate in the product wrong in both
+  directions. Model names from the older generation keep their prices, so
+  existing ledgers are not silently repriced at the unknown-model rate.
 - **"Context effort": choose what a reply is allowed to cost.** Settings -> AI
   & Model now carries a stepped slider from 8,000 tokens up to whatever the
   configured model's real context window is - seven positions on a 128k model,

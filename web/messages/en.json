@@ -589,7 +589,7 @@
       "peakDay": "Busiest day: {tokens} tokens (dashed line).",
       "shareLine": "{percent}% · {calls} requests · {tokens} tokens",
       "elsewhere": "What this would cost elsewhere",
-      "elsewhereDesc": "The same tokens priced with each provider's public list price. Tap a provider to see which model and price the figure uses.",
+      "elsewhereDesc": "The same tokens priced with each provider's public list price, each quoted at its cheapest model for this usage. Tap a provider for the full model list.",
       "priceBasis": "Based on {model}: ${input} per 1M sent tokens, ${output} per 1M received.",
       "custom": "Custom price",
       "customName": "Name",
@@ -597,7 +597,15 @@
       "customOutput": "$ per 1M received",
       "export": "Export",
       "exportDesc": "The last 30 days as an XML file: per user, API calls, sent and received tokens, and a statement of how each number was measured.",
-      "exportButton": "Export usage as XML"
+      "exportButton": "Export usage as XML",
+      "priceFootnote": "Standard list prices: no cache, batch or off-peak discounts, no long-context surcharge. Veyllo publishes in EUR, the others in USD - not converted here.",
+      "popupSub": "Public list prices per 1M tokens, in {currency}.",
+      "popupModel": "Model",
+      "popupIn": "Sent / 1M",
+      "popupOut": "Received / 1M",
+      "popupYourCost": "Your usage",
+      "popupCheapest": "cheapest",
+      "popupBasis": "Calculated with your {input} sent and {output} received tokens."
     },
     "general": {
       "apiKeys": "API Keys",

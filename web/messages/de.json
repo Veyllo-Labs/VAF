@@ -589,7 +589,7 @@
       "peakDay": "Staerkster Tag: {tokens} Tokens (gestrichelte Linie).",
       "shareLine": "{percent}% · {calls} Anfragen · {tokens} Tokens",
       "elsewhere": "Was das anderswo kosten wuerde",
-      "elsewhereDesc": "Dieselben Tokens, bepreist mit der oeffentlichen Preisliste des jeweiligen Anbieters. Anbieter antippen, um Modell und Preis hinter der Zahl zu sehen.",
+      "elsewhereDesc": "Dieselben Tokens, bepreist mit der oeffentlichen Preisliste des jeweiligen Anbieters, jeweils mit dessen guenstigstem Modell fuer diesen Verbrauch. Anbieter antippen fuer die vollstaendige Modellliste.",
       "priceBasis": "Basis {model}: ${input} pro 1 Mio. gesendete Tokens, ${output} pro 1 Mio. empfangene.",
       "custom": "Eigener Preis",
       "customName": "Bezeichnung",
@@ -597,7 +597,15 @@
       "customOutput": "$ pro 1 Mio. empfangen",
       "export": "Export",
       "exportDesc": "Die letzten 30 Tage als XML-Datei: pro Nutzer, API-Aufrufe, gesendete und empfangene Tokens, und wie jede Zahl ermittelt wurde.",
-      "exportButton": "Verbrauch als XML exportieren"
+      "exportButton": "Verbrauch als XML exportieren",
+      "priceFootnote": "Standard-Listenpreise: ohne Cache-, Batch- oder Off-Peak-Rabatte, ohne Long-Context-Aufschlag. Veyllo weist EUR aus, die anderen USD - hier nicht umgerechnet.",
+      "popupSub": "Oeffentliche Listenpreise pro 1 Mio. Tokens, in {currency}.",
+      "popupModel": "Modell",
+      "popupIn": "Gesendet / 1M",
+      "popupOut": "Empfangen / 1M",
+      "popupYourCost": "Dein Verbrauch",
+      "popupCheapest": "guenstigstes",
+      "popupBasis": "Berechnet mit deinen {input} gesendeten und {output} empfangenen Tokens."
     },
     "general": {
       "apiKeys": "API-Schlüssel",

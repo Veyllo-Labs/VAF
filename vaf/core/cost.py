@@ -37,21 +37,65 @@ SPEND_FORMAT = "spend-1-9c14f7"
 # USD per 1M tokens (input, output). Public list prices, rounded up rather than
 # down - this table decides when a cap trips, so erring low would be the
 # expensive direction.
-PRICES = {
+#
+# PROVIDER_PRICING is the source, PRICES is the flat index derived from it, so a
+# price can never be right in the comparison panel and stale in the estimate.
+# Standard list prices only: no cache hits, no batch/off-peak discount, no
+# long-context surcharge - a comparison built from each provider's best case
+# would flatter whichever one has the most discount programmes. DeepSeek is
+# quoted at PEAK (off-peak is half), OpenAI at short-context.
+#
+# CURRENCY IS NOT CONVERTED. Veyllo publishes EUR, everyone else USD, and this
+# module does not carry an exchange rate it would have to keep current - so the
+# unit is reported per provider and the reader converts, rather than being shown
+# a rate that was true on the day it was typed.
+PROVIDER_PRICING = {
+    # Veyllo first: it is this product's own API, and the panel keeps that order.
+    "veyllo": {"label": "Veyllo", "currency": "EUR", "models": [
+        ("veyllo-chat", 0.90, 1.90),
+        ("veyllo-vision", 3.45, 20.70),
+    ]},
+    "anthropic": {"label": "Anthropic", "currency": "USD", "models": [
+        ("claude-haiku-4-5", 1.00, 5.00),
+        ("claude-sonnet-5", 2.00, 10.00),
+        ("claude-sonnet-4-6", 3.00, 15.00),
+        ("claude-opus-5", 5.00, 25.00),
+        ("claude-opus-4-8", 5.00, 25.00),
+        ("claude-fable-5", 10.00, 50.00),
+        ("claude-mythos-5", 10.00, 50.00),
+    ]},
+    "openai": {"label": "OpenAI", "currency": "USD", "models": [
+        ("gpt-5.6-luna", 0.20, 1.20),
+        ("gpt-5.6-terra", 2.00, 12.00),
+        ("gpt-5.6-sol", 5.00, 30.00),
+    ]},
+    "google": {"label": "Google", "currency": "USD", "models": [
+        ("gemini-3.5-flash-lite", 0.10, 0.40),
+        ("gemini-3.7-flash", 1.50, 7.50),
+        ("gemini-3.5-flash", 1.50, 9.00),
+        ("gemini-3.1-pro", 2.00, 12.00),
+    ]},
+    "deepseek": {"label": "DeepSeek", "currency": "USD", "models": [
+        ("deepseek-v4-flash", 0.44, 1.32),
+        ("deepseek-v4-pro", 1.32, 3.96),
+    ]},
+}
+# USD per 1M tokens (input, output), flattened from the catalog above plus the
+# older model names that still appear in existing ledgers and configs - dropping
+# those would silently reprice history at the unknown-model rate.
+PRICES = {model: (pin, pout)
+          for spec in PROVIDER_PRICING.values()
+          for model, pin, pout in spec["models"]}
+PRICES.update({
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "o3": (2.00, 8.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-1": (15.00, 75.00),
-    "claude-haiku-4-5": (1.00, 5.00),
-    "deepseek-v4-flash": (0.28, 0.42),
-    "deepseek-v4-pro": (0.55, 2.19),
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.5-pro": (1.25, 10.00),
-    "veyllo-chat": (1.00, 3.00),
-}
+})
 # What an unrecognised model costs. Deliberately at the expensive end of the
 # table: an unknown model must not be able to run cheap under a cap.
 UNKNOWN_PRICE = (15.00, 75.00)
@@ -276,31 +320,25 @@ def usage_totals(days: int = 30) -> dict:
 
 
 def price_catalog() -> list:
-    """Public list prices per provider, for "what would this have cost elsewhere".
+    """Every priced model per provider, for "what would this have cost elsewhere".
 
-    One representative model per provider - the one VAF would use by default -
-    named beside its price, because a comparison whose model is hidden is not a
-    comparison. The prices are the same table the ledger estimates with, so the
-    page cannot show one number and bill by another.
+    The whole catalogue rather than one representative model, because the panel
+    quotes each provider at its CHEAPEST model for the usage being compared, and
+    which model that is depends on the input/output ratio - a provider can be
+    cheapest on a read-heavy month and not on a write-heavy one. The caller does
+    that arithmetic with the real token counts; this returns the prices and the
+    unit they are quoted in. Order is deliberate, not alphabetical: Veyllo is
+    this product's own API and stays first.
     """
     catalog = []
-    try:
-        from vaf.core.config import Config
-
-        for provider, meta in (Config.PROVIDER_MODELS or {}).items():
-            model = str((meta or {}).get("default") or "")
-            price = PRICES.get(model) or PRICES.get(model.rsplit("/", 1)[-1])
-            if price is None:
-                continue  # a provider we cannot price honestly is left out
-            catalog.append({
-                "provider": provider,
-                "model": model,
-                "input_per_1m": price[0],
-                "output_per_1m": price[1],
-            })
-    except Exception:
-        pass
-    catalog.sort(key=lambda c: c["provider"])
+    for provider, spec in PROVIDER_PRICING.items():
+        catalog.append({
+            "provider": provider,
+            "label": spec["label"],
+            "currency": spec["currency"],
+            "models": [{"model": m, "input_per_1m": pin, "output_per_1m": pout}
+                       for m, pin, pout in spec["models"]],
+        })
     return catalog
 
 

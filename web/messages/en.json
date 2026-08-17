@@ -589,7 +589,7 @@
       "peakDay": "Busiest day: {tokens} tokens (dashed line).",
       "shareLine": "{percent}% · {calls} requests · {tokens} tokens",
       "elsewhere": "What this would cost elsewhere",
-      "elsewhereDesc": "Your last {days} days of tokens, priced with each provider's public list price and quoted at its cheapest model for this usage. Tap a provider for the full model list.",
+      "elsewhereDesc": "All {total} tokens from the last {days} days - every account together - priced with each provider's public list price and quoted at its cheapest model for this usage. Tap a provider for the full model list.",
       "priceBasis": "Based on {model}: ${input} per 1M sent tokens, ${output} per 1M received.",
       "custom": "Custom price",
       "customName": "Name",
@@ -605,7 +605,7 @@
       "popupOut": "Received / 1M",
       "popupYourCost": "Your usage",
       "popupCheapest": "cheapest",
-      "popupBasis": "Calculated with your {input} sent and {output} received tokens from the last {days} days.",
+      "popupBasis": "Calculated with the instance total of the last {days} days: {input} sent + {output} received = {total} tokens. Sent and received are priced separately, which is why the two rates differ.",
       "asOf": "Prices as of {date}.",
       "refresh": "Refresh"
     },

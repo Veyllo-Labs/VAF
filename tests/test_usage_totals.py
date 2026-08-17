@@ -372,3 +372,27 @@ def test_the_lane_label_survives_a_streaming_call(tmp_path, monkeypatch):
     assert list(streaming_lane()) == ["memory"]
     # And the label is gone again afterwards: a lane must not leak into the turn.
     assert cost_mod.current_lane() == "main"
+
+
+def test_totals_are_the_instance_not_the_heaviest_user(spend_dir):
+    """The comparison panel prices `totals`, and totals must span every account.
+
+    The screenshot that prompted this read as though one user's sent-token count
+    was being priced; it was in fact the instance's, with the received tokens
+    added at the other rate. This pins the property the panel depends on, so a
+    later change that scoped totals to one user would fail here rather than in
+    a bill.
+    """
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
+    record_spend("ab12cd34", estimate_cost("openai", "gpt-4o", 200, 20))
+
+    out = usage_totals(days=30)
+
+    assert out["totals"]["input_tokens"] == 1200, "every account's sent tokens"
+    assert out["totals"]["output_tokens"] == 120, "every account's received tokens"
+    assert out["totals"]["tokens"] == 1320
+    heaviest = out["users"][0]
+    assert heaviest["tokens"] < out["totals"]["tokens"], (
+        "the heaviest user must not be mistaken for the instance total"
+    )
+    assert out["totals"]["tokens"] == sum(u["tokens"] for u in out["users"])

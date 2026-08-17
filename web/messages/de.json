@@ -589,7 +589,7 @@
       "peakDay": "Staerkster Tag: {tokens} Tokens (gestrichelte Linie).",
       "shareLine": "{percent}% · {calls} Anfragen · {tokens} Tokens",
       "elsewhere": "Was das anderswo kosten wuerde",
-      "elsewhereDesc": "Deine Tokens der letzten {days} Tage, bepreist mit der oeffentlichen Preisliste des jeweiligen Anbieters, jeweils mit dessen guenstigstem Modell fuer diesen Verbrauch. Anbieter antippen fuer die vollstaendige Modellliste.",
+      "elsewhereDesc": "Alle {total} Tokens der letzten {days} Tage - alle Konten zusammen - bepreist mit der oeffentlichen Preisliste des jeweiligen Anbieters, jeweils mit dessen guenstigstem Modell fuer diesen Verbrauch. Anbieter antippen fuer die vollstaendige Modellliste.",
       "priceBasis": "Basis {model}: ${input} pro 1 Mio. gesendete Tokens, ${output} pro 1 Mio. empfangene.",
       "custom": "Eigener Preis",
       "customName": "Bezeichnung",
@@ -605,7 +605,7 @@
       "popupOut": "Empfangen / 1M",
       "popupYourCost": "Dein Verbrauch",
       "popupCheapest": "guenstigstes",
-      "popupBasis": "Berechnet mit deinen {input} gesendeten und {output} empfangenen Tokens aus den letzten {days} Tagen.",
+      "popupBasis": "Berechnet mit der Gesamtsumme der letzten {days} Tage: {input} gesendet + {output} empfangen = {total} Tokens. Gesendet und empfangen werden getrennt bepreist, daher die zwei unterschiedlichen Saetze.",
       "asOf": "Preise Stand {date}.",
       "refresh": "Aktualisieren"
     },

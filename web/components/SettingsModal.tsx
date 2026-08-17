@@ -3114,14 +3114,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'usage' && (
                             <div className="space-y-6">
                                 <Section title={tUsage('title')}>
-                                    <div className="flex items-start justify-between gap-4">
-                                        <p className="text-xs text-gray-500">{tUsage('desc')}</p>
-                                        <button type="button" onClick={loadUsage} disabled={usageLoading}
-                                                className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50">
-                                            <RefreshCw className={`w-3.5 h-3.5 ${usageLoading ? 'animate-spin' : ''}`} />
-                                            {tUsage('refresh')}
-                                        </button>
-                                    </div>
+                                    <p className="text-xs text-gray-500">{tUsage('desc')}</p>
                                     {!usage ? (
                                         <p className="text-xs text-gray-400 mt-4">{tUsage('loading')}</p>
                                     ) : usage.totals.calls === 0 ? (
@@ -3168,7 +3161,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     ))}
                                                 </tbody>
                                             </table>
-                                            <p className="text-xs text-gray-400 mt-4">{tUsage('note', { days: usage.days })}</p>
+                                            <div className="flex items-center justify-between gap-4 mt-4">
+                                                <p className="text-xs text-gray-400">{tUsage('note', { days: usage.days })}</p>
+                                                <button type="button" onClick={loadUsage} disabled={usageLoading}
+                                                        className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50">
+                                                    <RefreshCw className={`w-3.5 h-3.5 ${usageLoading ? 'animate-spin' : ''}`} />
+                                                    {tUsage('refresh')}
+                                                </button>
+                                            </div>
                                             {usage.totals.estimated_usd_incomplete && (
                                                 <p className="text-xs text-amber-600 mt-1">{tUsage('unknownModels')}</p>
                                             )}
@@ -3244,7 +3244,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {usage && (
                                     <Section title={tUsage('elsewhere')}>
                                         <p className="text-xs text-gray-500">
-                                            {tUsage('elsewhereDesc', { days: usage.days })}
+                                            {tUsage('elsewhereDesc', {
+                                                days: usage.days,
+                                                total: usage.totals.tokens.toLocaleString(),
+                                            })}
                                         </p>
                                         <div className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
                                             {prices.map((p) => {
@@ -3361,6 +3364,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         {tUsage('popupBasis', {
                                                             input: usage.totals.input_tokens.toLocaleString(),
                                                             output: usage.totals.output_tokens.toLocaleString(),
+                                                            total: usage.totals.tokens.toLocaleString(),
                                                             days: usage.days,
                                                         })}
                                                     </p>

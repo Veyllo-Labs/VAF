@@ -666,7 +666,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             // with no symbol rather than a guessed one: the field it came from
             // was called usd while a Veyllo call in it was euros.
             .map(([cur, v]) => cur === '?'
-                ? `~${v.toFixed(2)} (?)`
+                ? `~${v.toFixed(2)}`
                 : `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
             .join(' + ');
     }, []);
@@ -700,6 +700,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             ))}
         </div>);
     }, [money]);
+
+    // The unattributed amount is real and must not vanish, but inline it read
+    // like a defect ("~10.81 (?) + ~EUR0.03"). Split: the figure shows what has
+    // a currency, and the rest is stated underneath in words.
+    const moneyParts = useCallback((currencies?: Record<string, number>, legacy?: number) => {
+        const all = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        const known = all.filter(([c]) => c !== '?');
+        const unknown = all.find(([c]) => c === '?')?.[1] ?? 0;
+        const head = known.length
+            ? known.map(([cur, v]) => `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`).join(' + ')
+            : (unknown ? `~${unknown.toFixed(2)}` : `~$${(legacy ?? 0).toFixed(2)}`);
+        return { head, unknown: known.length ? unknown : 0 };
+    }, []);
 
     const [usageLoading, setUsageLoading] = useState(false);
     const loadUsage = useCallback(() => {
@@ -3255,10 +3268,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                                 {usage.costs_visible !== false && (
                                                     <div>
-                                                        <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
-                                                            {money(usage.totals.currencies, usage.totals.usd)}
-                                                        </div>
-                                                        <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
+                                                        {(() => {
+                                                            const { head, unknown } = moneyParts(usage.totals.currencies, usage.totals.usd);
+                                                            return (<>
+                                                                <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">{head}</div>
+                                                                <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
+                                                                {unknown > 0 && (
+                                                                    <div className="text-xs text-gray-400 mt-1">
+                                                                        {tUsage('legacyAmount', { amount: unknown.toFixed(2) })}
+                                                                    </div>
+                                                                )}
+                                                            </>);
+                                                        })()}
                                                     </div>
                                                 )}
                                             </div>

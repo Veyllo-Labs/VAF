@@ -631,7 +631,8 @@
       "lane_browser": "Browser",
       "lane_coder": "Coder",
       "byProvider": "By provider and model",
-      "byProviderDesc": "Where the work actually ran. Chat, vision, sub-agents, the tool model and the thinker can each use a different provider - or a local model - and the price between them differs by an order of magnitude."
+      "byProviderDesc": "Where the work actually ran. Chat, vision, sub-agents, the tool model and the thinker can each use a different provider - or a local model - and the price between them differs by an order of magnitude.",
+      "legacyAmount": "plus ~{amount} recorded before the currency was stored"
     },
     "general": {
       "apiKeys": "API Keys",

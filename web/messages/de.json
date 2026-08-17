@@ -631,7 +631,8 @@
       "lane_browser": "Browser",
       "lane_coder": "Coder",
       "byProvider": "Nach Anbieter und Modell",
-      "byProviderDesc": "Wo die Arbeit tatsaechlich lief. Chat, Bild, Sub-Agenten, Tool-Modell und Denker koennen je einen eigenen Anbieter nutzen - oder ein lokales Modell - und der Preis unterscheidet sich dazwischen um eine Groessenordnung."
+      "byProviderDesc": "Wo die Arbeit tatsaechlich lief. Chat, Bild, Sub-Agenten, Tool-Modell und Denker koennen je einen eigenen Anbieter nutzen - oder ein lokales Modell - und der Preis unterscheidet sich dazwischen um eine Groessenordnung.",
+      "legacyAmount": "zzgl. ~{amount} aus der Zeit vor der Waehrungserfassung"
     },
     "general": {
       "apiKeys": "API-Schlüssel",

@@ -658,17 +658,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Veyllo publishes EUR and the others USD, so one number with one symbol
     // would be wrong for whichever provider is not the one the symbol names.
     // Mixed periods print both amounts rather than a sum that means nothing.
+    // A cost is ONE number or it is nothing. Two amounts joined with a plus is
+    // not a figure a reader can act on, and adding euros to dollars - or to an
+    // amount whose currency was never recorded - would be a number that means
+    // nothing. Those cases show a dash, and the reason is stated where there is
+    // room for it rather than crammed into the value.
+    const NO_FIGURE = '—';
     const money = useCallback((currencies?: Record<string, number>, legacy?: number) => {
         const entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
         if (!entries.length) return `~$${(legacy ?? 0).toFixed(2)}`;
-        return entries
-            // "?" is an amount recorded before the currency was stored. Shown
-            // with no symbol rather than a guessed one: the field it came from
-            // was called usd while a Veyllo call in it was euros.
-            .map(([cur, v]) => cur === '?'
-                ? `~${v.toFixed(2)}`
-                : `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
-            .join(' + ');
+        if (entries.length > 1) return NO_FIGURE;      // mixed currencies
+        const [cur, v] = entries[0];
+        if (cur === '?') return NO_FIGURE;             // currency never recorded
+        return `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`;
     }, []);
 
     // One renderer for both breakdowns - by lane (what part of the product) and
@@ -708,10 +710,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const all = Object.entries(currencies || {}).filter(([, v]) => v > 0);
         const known = all.filter(([c]) => c !== '?');
         const unknown = all.find(([c]) => c === '?')?.[1] ?? 0;
-        const head = known.length
-            ? known.map(([cur, v]) => `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`).join(' + ')
-            : (unknown ? `~${unknown.toFixed(2)}` : `~$${(legacy ?? 0).toFixed(2)}`);
-        return { head, unknown: known.length ? unknown : 0 };
+        // Same rule as `money`, with room underneath to say why: one currency and
+        // nothing unattributed gives a figure; anything else gives a dash.
+        const head = (known.length === 1 && !unknown)
+            ? `~${known[0][0] === 'EUR' ? '€' : '$'}${known[0][1].toFixed(2)}`
+            : (all.length ? NO_FIGURE : `~$${(legacy ?? 0).toFixed(2)}`);
+        return { head, unknown, mixed: known.length > 1 };
     }, []);
 
     const [usageLoading, setUsageLoading] = useState(false);
@@ -3269,13 +3273,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 {usage.costs_visible !== false && (
                                                     <div>
                                                         {(() => {
-                                                            const { head, unknown } = moneyParts(usage.totals.currencies, usage.totals.usd);
+                                                            const { head, unknown, mixed } = moneyParts(usage.totals.currencies, usage.totals.usd);
                                                             return (<>
                                                                 <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">{head}</div>
                                                                 <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
-                                                                {unknown > 0 && (
+                                                                {head === NO_FIGURE && (
                                                                     <div className="text-xs text-gray-400 mt-1">
-                                                                        {tUsage('legacyAmount', { amount: unknown.toFixed(2) })}
+                                                                        {mixed ? tUsage('mixedCurrencies') : tUsage('noFigure')}
                                                                     </div>
                                                                 )}
                                                             </>);

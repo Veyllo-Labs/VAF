@@ -632,7 +632,8 @@
       "lane_coder": "Coder",
       "byProvider": "Nach Anbieter und Modell",
       "byProviderDesc": "Wo die Arbeit tatsaechlich lief. Chat, Bild, Sub-Agenten, Tool-Modell und Denker koennen je einen eigenen Anbieter nutzen - oder ein lokales Modell - und der Preis unterscheidet sich dazwischen um eine Groessenordnung.",
-      "legacyAmount": "zzgl. ~{amount} aus der Zeit vor der Waehrungserfassung"
+      "noFigure": "Keine einzelne Zahl: Ein Teil dieses Zeitraums wurde vor der Waehrungserfassung aufgezeichnet.",
+      "mixedCurrencies": "Keine einzelne Zahl: In diesem Zeitraum wurde in verschiedenen Waehrungen abgerechnet. Siehe Aufschluesselung unten."
     },
     "general": {
       "apiKeys": "API-Schlüssel",

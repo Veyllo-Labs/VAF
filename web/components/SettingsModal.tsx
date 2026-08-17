@@ -2763,7 +2763,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         step={1}
                                                         value={idx}
                                                         onChange={(e) => handleChange('context_compress_tokens', steps[parseInt(e.target.value)])}
-                                                        className="w-full accent-blue-500 mt-3"
+                                                        className="w-full accent-gray-900 dark:accent-[#d9d9d9] mt-3"
                                                         disabled={!contextEffort.applies}
                                                     />
                                                     <div className="flex justify-between text-xs text-gray-400 mt-1">

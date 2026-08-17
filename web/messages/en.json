@@ -635,7 +635,8 @@
       "noFigure": "No single figure: part of this period was recorded before the currency was stored.",
       "mixedCurrencies": "No single figure: this period used providers billing in different currencies. See the breakdown below.",
       "convertTo": "Show amounts in:",
-      "fxBasis": "Converted at 1 EUR = {rate} USD, published {date} by the {source}. The recorded amounts are unchanged."
+      "fxBasis": "Converted at 1 EUR = {rate} USD, published {date} by the {source}. The recorded amounts are unchanged.",
+      "footer": "Conversion uses the European Central Bank's current reference rates. All amounts are estimates based on providers' published list prices; no liability is accepted for the figures shown. Providers can change their prices at any time, and updating the price list here can take a while."
     },
     "general": {
       "apiKeys": "API Keys",

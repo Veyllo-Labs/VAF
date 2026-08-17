@@ -635,7 +635,8 @@
       "noFigure": "Keine einzelne Zahl: Ein Teil dieses Zeitraums wurde vor der Waehrungserfassung aufgezeichnet.",
       "mixedCurrencies": "Keine einzelne Zahl: In diesem Zeitraum wurde in verschiedenen Waehrungen abgerechnet. Siehe Aufschluesselung unten.",
       "convertTo": "Betraege anzeigen in:",
-      "fxBasis": "Umgerechnet mit 1 EUR = {rate} USD, veroeffentlicht am {date} von der {source}. Die erfassten Betraege bleiben unveraendert."
+      "fxBasis": "Umgerechnet mit 1 EUR = {rate} USD, veroeffentlicht am {date} von der {source}. Die erfassten Betraege bleiben unveraendert.",
+      "footer": "Die Umrechnung erfolgt mit den aktuellen Referenzkursen der Europaeischen Zentralbank. Alle Betraege sind Schaetzungen auf Basis der veroeffentlichten Listenpreise der Anbieter; fuer die angezeigten Werte wird keine Haftung uebernommen. Anbieter koennen ihre Preise jederzeit aendern, und eine Aktualisierung der Preisliste hier kann dauern."
     },
     "general": {
       "apiKeys": "API-Schlüssel",

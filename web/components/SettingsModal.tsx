@@ -667,7 +667,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // provider billed, in its own currency. Off by default, because a converted
     // figure is one step further from the invoice than the recorded one.
     const [fx, setFx] = useState<{ rate: number; date: string; source: string; base: string; quote: string } | null>(null);
-    const [convertTo, setConvertTo] = useState<'EUR' | 'USD' | null>(null);
+    // The choice is a preference, not a session detail: a reader who works in
+    // one currency should not have to say so again on every visit.
+    const [convertTo, setConvertToState] = useState<'EUR' | 'USD' | null>(null);
+    useEffect(() => {
+        try {
+            const saved = window.localStorage.getItem('vaf.usage.currency');
+            if (saved === 'EUR' || saved === 'USD') setConvertToState(saved);
+        } catch { /* private mode: the default is simply not remembered */ }
+    }, []);
+    const setConvertTo = useCallback((cur: 'EUR' | 'USD' | null) => {
+        setConvertToState(cur);
+        try {
+            if (cur) window.localStorage.setItem('vaf.usage.currency', cur);
+            else window.localStorage.removeItem('vaf.usage.currency');
+        } catch { /* ignore */ }
+    }, []);
 
     const NO_FIGURE = '—';
     // EUR<->USD at the ECB reference rate, applied only when the reader asked
@@ -3279,6 +3294,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'usage' && (
                             <div className="space-y-6">
                                 <Section title={tUsage('title')}>
+                                    {fx && usage?.costs_visible !== false && (
+                                        <div className="flex justify-end -mt-1 mb-2">
+                                            <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2a2a2a] overflow-hidden">
+                                                {(['EUR', 'USD'] as const).map(cur => (
+                                                    <button key={cur} type="button"
+                                                            onClick={() => setConvertTo(convertTo === cur ? null : cur)}
+                                                            className={cn("px-3 transition-colors",
+                                                                convertTo === cur
+                                                                    ? "py-1.5 text-sm font-semibold bg-gray-900 text-white dark:bg-[#d9d9d9] dark:text-gray-900"
+                                                                    : "py-1.5 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200")}>
+                                                        {cur}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                     <p className="text-xs text-gray-500">{tUsage('desc')}</p>
                                     {!usage ? (
                                         <p className="text-xs text-gray-400 mt-4">{tUsage('loading')}</p>
@@ -3353,30 +3384,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     ))}
                                                 </tbody>
                                             </table>
-                                            {fx && usage.costs_visible !== false && (
-                                                <div className="flex items-center gap-2 mt-4 flex-wrap">
-                                                    <span className="text-xs text-gray-400">{tUsage('convertTo')}</span>
-                                                    {(['EUR', 'USD'] as const).map(cur => (
-                                                        <button key={cur} type="button"
-                                                                onClick={() => setConvertTo(convertTo === cur ? null : cur)}
-                                                                className={cn("px-2 py-1 text-xs rounded-lg border transition-colors",
-                                                                    convertTo === cur
-                                                                        ? "border-gray-400 bg-gray-100 text-gray-800 dark:bg-[#2a2a2a] dark:text-gray-100 dark:border-gray-500"
-                                                                        : "border-gray-200 text-gray-500 hover:bg-gray-50 dark:border-[#2a2a2a] dark:hover:bg-[#242424]")}>
-                                                            {cur}
-                                                        </button>
-                                                    ))}
-                                                    {convertTo && (
-                                                        <span className="text-xs text-gray-400">
-                                                            {tUsage('fxBasis', {
-                                                                rate: fx.rate.toFixed(4),
-                                                                date: fx.date,
-                                                                source: fx.source,
-                                                            })}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            )}
                                             <div className="flex items-center justify-between gap-4 mt-4">
                                                 <p className="text-xs text-gray-400">{tUsage('note', { days: usage.days })}</p>
                                                 <button type="button" onClick={loadUsage} disabled={usageLoading}
@@ -3536,10 +3543,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 // exact tokens - which model that is depends on the
                                                 // input/output ratio, so it is decided here, not by a
                                                 // fixed "representative model" that could flatter one side.
+                                                // With a target currency chosen, the whole comparison is
+                                                // quoted in it - otherwise the cheapest row would be picked
+                                                // by comparing euros against dollars.
+                                                const f = convertTo && fx
+                                                    ? (p.currency === convertTo ? 1
+                                                        : p.currency === 'EUR' ? fx.rate : 1 / fx.rate)
+                                                    : 1;
                                                 const priced = p.models.map(m => ({
                                                     ...m,
-                                                    cost: (usage.totals.input_tokens * m.input_per_1m
-                                                        + usage.totals.output_tokens * m.output_per_1m) / 1_000_000,
+                                                    cost: ((usage.totals.input_tokens * m.input_per_1m
+                                                        + usage.totals.output_tokens * m.output_per_1m) / 1_000_000) * f,
                                                 })).sort((a, b) => a.cost - b.cost);
                                                 const best = priced[0];
                                                 return (
@@ -3548,7 +3562,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             className="w-full flex justify-between items-center py-2 text-sm text-left">
                                                         <span className="text-gray-800 dark:text-gray-200">{p.label}</span>
                                                         <span className="tabular-nums text-gray-600 dark:text-gray-300">
-                                                            ~{p.currency === 'EUR' ? '€' : '$'}{best ? best.cost.toFixed(2) : '0.00'}
+                                                            ~{(convertTo || p.currency) === 'EUR' ? '€' : '$'}{best ? best.cost.toFixed(2) : '0.00'}
                                                         </span>
                                                     </button>
                                                 );
@@ -3589,11 +3603,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {usage && openPrice && openPrice !== '__custom__' && (() => {
                                     const p = prices.find(x => x.provider === openPrice);
                                     if (!p) return null;
-                                    const sym = p.currency === 'EUR' ? '€' : '$';
+                                    const f = convertTo && fx
+                                        ? (p.currency === convertTo ? 1
+                                            : p.currency === 'EUR' ? fx.rate : 1 / fx.rate)
+                                        : 1;
+                                    const sym = (convertTo || p.currency) === 'EUR' ? '€' : '$';
                                     const priced = p.models.map(m => ({
                                         ...m,
-                                        cost: (usage.totals.input_tokens * m.input_per_1m
-                                            + usage.totals.output_tokens * m.output_per_1m) / 1_000_000,
+                                        input_per_1m: m.input_per_1m * f,
+                                        output_per_1m: m.output_per_1m * f,
+                                        cost: ((usage.totals.input_tokens * m.input_per_1m
+                                            + usage.totals.output_tokens * m.output_per_1m) / 1_000_000) * f,
                                     })).sort((a, b) => a.cost - b.cost);
                                     return (
                                         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
@@ -3604,7 +3624,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <div>
                                                         <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{p.label}</h3>
                                                         <p className="text-xs text-gray-500">
-                                                            {tUsage('popupSub', { currency: p.currency })}
+                                                            {tUsage('popupSub', { currency: convertTo || p.currency })}
                                                             {asOfLabel ? ` ${tUsage('asOf', { date: asOfLabel })}` : ''}
                                                         </p>
                                                     </div>
@@ -3664,6 +3684,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </a>
                                     </Section>
                                 )}
+
+                                {/* One footer for the whole tab: every figure above is an
+                                    estimate, and where it came from belongs said once, at
+                                    the end, rather than repeated beside each number. */}
+                                <p className="text-xs text-gray-400 text-center px-6 pb-2 leading-relaxed">
+                                    {tUsage('footer')}
+                                </p>
                             </div>
                         )}
 

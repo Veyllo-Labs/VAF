@@ -9272,7 +9272,14 @@ function VAFDashboardContent() {
                                             question actually arises. */}
                                         <button
                                             type="button"
-                                            onClick={() => { setSettingsInitialTab('usage'); setIsSettingsOpen(true); }}
+                                            onClick={() => {
+                                                // Close this one first: it sits above the settings
+                                                // dialog, so opening Usage behind it looked like the
+                                                // button had done nothing.
+                                                setIsContextModalOpen(false);
+                                                setSettingsInitialTab('usage');
+                                                setIsSettingsOpen(true);
+                                            }}
                                             className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 self-center transition-colors"
                                             title={tMain('usageButtonTitle')}
                                         >

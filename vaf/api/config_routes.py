@@ -132,8 +132,10 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
     rows = [_own(r) for r in rows]
     totals = dict(rows[0]) if rows else {"input_tokens": 0, "output_tokens": 0,
                                          "tokens": 0, "calls": 0}
+    # `daily` is present but EMPTY rather than omitted: the page reads its
+    # length, and a missing field would crash the tab instead of hiding a chart.
     return {"days": full.get("days"), "users": rows, "totals": totals,
-            "costs_visible": False}
+            "daily": [], "costs_visible": False}
 
 
 @router.get("/archive/chats")

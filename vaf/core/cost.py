@@ -406,7 +406,7 @@ def usage_totals(days: int = 30) -> dict:
         # Every day in the window, including the ones nobody used: a chart that
         # silently drops quiet days makes a burst look like steady traffic.
         by_day = {(datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d"):
-                  {"tokens": 0, "calls": 0, "usd": 0.0} for n in range(span)}
+                  {"tokens": 0, "calls": 0, "usd": 0.0, "lanes": {}} for n in range(span)}
         rows = []
         for path in sorted(base.glob("*.json")):
             try:
@@ -436,6 +436,17 @@ def usage_totals(days: int = 30) -> dict:
                     slot["tokens"] += _din + _dout
                     slot["calls"] += _dcalls
                     slot["usd"] = round(slot["usd"] + _dusd, 6)
+                    # Per-lane, summed across accounts: the day's bar answers
+                    # "how much", and the only useful follow-up is "on what".
+                    for _lane, _ls in (entry.get("lanes") or {}).items():
+                        _agg = slot["lanes"].setdefault(
+                            str(_lane), {"tokens": 0, "calls": 0, "usd": 0.0})
+                        try:
+                            _agg["tokens"] += int(_ls.get("tokens") or 0)
+                            _agg["calls"] += int(_ls.get("calls") or 0)
+                            _agg["usd"] = round(_agg["usd"] + float(_ls.get("usd") or 0.0), 6)
+                        except Exception:
+                            continue
                 if str(day) > agg["last_active"]:
                     agg["last_active"] = str(day)
             if not agg["calls"]:

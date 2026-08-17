@@ -552,7 +552,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // else only their own (/api/usage/me) - the split is the backend's, not a
     // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
     type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd?: number; calls: number; token_share?: number; call_share?: number };
-    type UsageDay = { day: string; tokens: number; calls: number; usd: number };
+    type UsageLane = { tokens: number; calls: number; usd: number };
+    type UsageDay = { day: string; tokens: number; calls: number; usd: number; lanes?: Record<string, UsageLane> };
+    const [usageDay, setUsageDay] = useState<UsageDay | null>(null);
     const [usage, setUsage] = useState<{
         days: number; users: UsageRow[]; daily: UsageDay[];
         totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; calls: number; estimated_usd_incomplete?: boolean };
@@ -3276,7 +3278,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             return (
                                                                 <rect key={d.day} x={i * (bw + gap)} y={H - h} width={bw} height={h}
                                                                       rx="0.6"
-                                                                      className="fill-gray-400 dark:fill-[#d9d9d9]">
+                                                                      onClick={() => d.tokens && setUsageDay(d)}
+                                                                      className={cn("fill-gray-400 dark:fill-[#d9d9d9]",
+                                                                          d.tokens && "cursor-pointer hover:fill-gray-600 dark:hover:fill-white")}>
                                                                     <title>{`${d.day}: ${d.tokens.toLocaleString()} · ${d.calls}`}</title>
                                                                 </rect>
                                                             );
@@ -3315,6 +3319,53 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             ))}
                                         </div>
                                     </Section>
+                                )}
+
+                                {usageDay && (
+                                    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                                         onClick={() => setUsageDay(null)}>
+                                        <div className="bg-white dark:bg-[#181818] rounded-2xl border border-gray-200 dark:border-gray-700 shadow-xl w-full max-w-md overflow-hidden"
+                                             onClick={(e) => e.stopPropagation()}>
+                                            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+                                                <div>
+                                                    <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{usageDay.day}</h3>
+                                                    <p className="text-xs text-gray-500">
+                                                        {tUsage('dayTotals', {
+                                                            tokens: usageDay.tokens.toLocaleString(),
+                                                            calls: usageDay.calls.toLocaleString(),
+                                                        })}
+                                                    </p>
+                                                </div>
+                                                <button type="button" onClick={() => setUsageDay(null)} className="text-gray-400 hover:text-gray-600">
+                                                    <X className="w-5 h-5" />
+                                                </button>
+                                            </div>
+                                            <div className="px-5 py-4">
+                                                {(() => {
+                                                    const lanes = Object.entries(usageDay.lanes || {})
+                                                        .sort((a, b) => b[1].tokens - a[1].tokens);
+                                                    if (!lanes.length) return (<p className="text-xs text-gray-400">{tUsage('dayNoLanes')}</p>);
+                                                    return (<div className="space-y-3">
+                                                        {lanes.map(([lane, v]) => (
+                                                            <div key={lane}>
+                                                                <div className="flex justify-between text-xs">
+                                                                    <span className="text-gray-700 dark:text-gray-300">{tUsage(`lane_${lane}`) || lane}</span>
+                                                                    <span className="text-gray-500 tabular-nums">
+                                                                        {v.tokens.toLocaleString()} · {v.calls}
+                                                                        {usage?.costs_visible !== false ? ` · ~$${v.usd.toFixed(2)}` : ''}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="h-1.5 mt-1 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                                                    <div className="h-full bg-gray-500 dark:bg-[#d9d9d9]"
+                                                                         style={{ width: `${Math.max(2, (v.tokens / Math.max(1, usageDay.tokens)) * 100)}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>);
+                                                })()}
+                                            </div>
+                                        </div>
+                                    </div>
                                 )}
 
                                 {usage && usage.costs_visible !== false && (

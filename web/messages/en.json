@@ -614,7 +614,21 @@
       "popupCheapest": "cheapest",
       "popupBasis": "Calculated with the instance total of the last {days} days: {input} sent + {output} received = {total} tokens. Sent and received are priced separately, which is why the two rates differ.",
       "asOf": "Prices as of {date}.",
-      "refresh": "Refresh"
+      "refresh": "Refresh",
+      "dayTotals": "{tokens} tokens · {calls} requests",
+      "dayNoLanes": "Recorded before lanes were tracked, so this day has no breakdown.",
+      "lane_main": "Chat",
+      "lane_thinking": "Thinking",
+      "lane_automation": "Automation",
+      "lane_subagent": "Sub-agent",
+      "lane_room": "Group chat",
+      "lane_background": "Background",
+      "lane_memory": "Memory",
+      "lane_vision": "Vision",
+      "lane_voice": "Voice",
+      "lane_librarian": "Librarian",
+      "lane_mail": "Mail",
+      "lane_browser": "Browser"
     },
     "general": {
       "apiKeys": "API Keys",

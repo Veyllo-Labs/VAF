@@ -467,3 +467,35 @@ def test_a_non_admin_never_receives_cost_or_anyone_elses_share(spend_dir):
         request=req, days=30, _admin={"role": "admin"}))
     assert admin["costs_visible"] is True
     assert "usd" in admin["totals"]
+
+
+def test_a_day_carries_its_lane_breakdown(spend_dir):
+    """The bar answers "how much"; the only useful follow-up is "on what"."""
+    from vaf.core import cost as c
+
+    with c.usage_context(lane="coder", scope=None):
+        c.record_call("openai", "gpt-4o", 1000, 100)
+    with c.usage_context(lane="main", scope=None):
+        c.record_call("openai", "gpt-4o", 200, 20)
+
+    today = [d for d in usage_totals(days=7)["daily"] if d["tokens"]][0]
+
+    assert today["tokens"] == 1320
+    assert today["lanes"]["coder"]["tokens"] == 1100
+    assert today["lanes"]["main"]["tokens"] == 220
+    assert sum(v["tokens"] for v in today["lanes"].values()) == today["tokens"]
+
+
+def test_a_non_admin_gets_no_daily_series_at_all(spend_dir):
+    """The series is instance-wide - it would show a tenant when everyone else
+    was busy, which is the same disclosure the shares were withheld for."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from vaf.api import config_routes
+
+    record_spend("ab12cd34", estimate_cost("openai", "gpt-4o", 100, 10))
+    req = SimpleNamespace(state=SimpleNamespace(
+        user={"username": "Bob", "role": "user", "user_scope_id": "ab12cd34"}))
+
+    assert asyncio.run(config_routes.get_usage_me(request=req, days=7))["daily"] == []

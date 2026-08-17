@@ -614,7 +614,21 @@
       "popupCheapest": "guenstigstes",
       "popupBasis": "Berechnet mit der Gesamtsumme der letzten {days} Tage: {input} gesendet + {output} empfangen = {total} Tokens. Gesendet und empfangen werden getrennt bepreist, daher die zwei unterschiedlichen Saetze.",
       "asOf": "Preise Stand {date}.",
-      "refresh": "Aktualisieren"
+      "refresh": "Aktualisieren",
+      "dayTotals": "{tokens} Tokens · {calls} Anfragen",
+      "dayNoLanes": "Vor der Lane-Erfassung aufgezeichnet, daher keine Aufschluesselung.",
+      "lane_main": "Chat",
+      "lane_thinking": "Denken",
+      "lane_automation": "Automatisierung",
+      "lane_subagent": "Sub-Agent",
+      "lane_room": "Gruppenchat",
+      "lane_background": "Hintergrund",
+      "lane_memory": "Gedaechtnis",
+      "lane_vision": "Bild",
+      "lane_voice": "Sprache",
+      "lane_librarian": "Bibliothekar",
+      "lane_mail": "Mail",
+      "lane_browser": "Browser"
     },
     "general": {
       "apiKeys": "API-Schlüssel",

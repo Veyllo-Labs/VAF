@@ -50,7 +50,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   own tokens and requests - no money, no percentage of the total, nothing
   about anyone else - and that is stripped from the response itself rather
   than hidden in the page. The chat's Context Window header now has a Usage
-  button that opens this tab directly.
+  button that opens this tab directly. Clicking a bar in the 7-day chart
+  opens that day's breakdown: which lane spent the tokens - chat, thinking,
+  automation, a sub-agent, the browser - and how much each one used.
   Local models contribute tokens and no cost.
   The tab also carries a 7-day bar chart with the busiest day marked, a share
   bar per account (percentage, requests, tokens), a panel pricing the same

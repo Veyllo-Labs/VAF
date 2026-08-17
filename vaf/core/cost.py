@@ -26,13 +26,20 @@ adjacency (Rule 4.1).
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from vaf.core.platform import Platform
 
 SPEND_FORMAT = "spend-1-9c14f7"
+
+# Distinguishes "caller passed None" from "caller passed nothing" for the two
+# context-carried arguments, where None is itself a meaningful value (the local
+# admin's ledger).
+_UNSET = object()
 
 # USD per 1M tokens (input, output). Public list prices, rounded up rather than
 # down - this table decides when a cap trips, so erring low would be the
@@ -181,7 +188,93 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
         return CostEstimate(0.0, False, str(model or ""))
 
 
-def record_spend(user_scope_id: Optional[str], estimate: CostEstimate) -> float:
+_LANE: "ContextVar[str]" = ContextVar("vaf_usage_lane", default="main")
+_SCOPE: "ContextVar[Optional[str]]" = ContextVar("vaf_usage_scope", default=None)
+
+
+@contextmanager
+def usage_context(lane: Optional[str] = None, scope: Any = _UNSET):
+    """Name the lane (and optionally the account) for the calls made inside.
+
+    Accounting has to happen where the tokens ARRIVE - one place in the backend -
+    but only the caller knows whether this is a chat turn, a coder run or a
+    memory compaction. So the caller labels, the backend records. Nested lanes
+    restore the outer one, and a lane that is never set reads as ``main``.
+    """
+    lane_token = _LANE.set(str(lane)) if lane else None
+    scope_token = None if scope is _UNSET else _SCOPE.set(None if scope is None else str(scope))
+    try:
+        yield
+    finally:
+        if lane_token is not None:
+            _LANE.reset(lane_token)
+        if scope_token is not None:
+            _SCOPE.reset(scope_token)
+
+
+def set_usage_context(lane: Optional[str] = None, scope: Any = _UNSET) -> None:
+    """Set the label without a scope to leave, for a turn that has no block.
+
+    The turn loop cannot wrap itself in a context manager without reindenting
+    the whole of chat_step, and it does not need to: each turn sets the label
+    again before it calls anything, so a stale one is always overwritten rather
+    than read. Lanes that DO nest - a coder run inside a chat turn - use
+    ``usage_context`` so the outer label comes back.
+    """
+    if lane:
+        _LANE.set(str(lane))
+    if scope is not _UNSET:
+        _SCOPE.set(None if scope is None else str(scope))
+
+
+def current_lane() -> str:
+    return _LANE.get()
+
+
+def record_call(provider: str, model: str, input_tokens: int, output_tokens: int,
+                *, lane: Optional[str] = None, user_scope_id: Any = _UNSET,
+                session_id: Optional[str] = None) -> CostEstimate:
+    """Record ONE model call: the ledger entry, the lane total, and a log line.
+
+    THE entry point for accounting. Everything that reaches a model goes through
+    it, so a new lane costs nothing to account for and cannot be forgotten - the
+    reason the per-turn hook that used to live in the agent is gone rather than
+    joined by a tenth copy. Never raises: accounting must not break a call.
+
+    THE LEDGER IS THE RECORD; THE LOG IS A COPY. The per-day, per-user, per-lane
+    totals in the spend files are what every report, the budget cap and the
+    Usage view read. `usage_log` is a per-call trace written beside them for a
+    human reading over the machine's shoulder - which call, which lane, which
+    model - and NOTHING may be built on it. Logs get rotated, swept by the age
+    GC, and deleted by anyone tidying a disk; a total that had to be re-derived
+    from them would lose history the moment that happened. If a future reader
+    needs per-call detail as data, it belongs in the ledger, not in a parser
+    pointed at these lines.
+    """
+    est = estimate_cost(provider, model, input_tokens, output_tokens)
+    lane_name = str(lane or _LANE.get() or "main")
+    scope = _SCOPE.get() if user_scope_id is _UNSET else user_scope_id
+    try:
+        record_spend(scope, est, lane=lane_name)
+    except Exception:
+        pass
+    try:
+        from vaf.core.log_helper import append_usage_log
+
+        append_usage_log((
+            f"lane={lane_name} provider={provider or '?'} model={model or '?'} "
+            f"in={est.input_tokens} out={est.output_tokens} usd={est.usd:.6f}"
+            f"{'' if est.cost_known else ' price=unknown'}"
+            f" scope={_scope_key(scope)}"
+            + (f" session={session_id}" if session_id else "")
+        ))
+    except Exception:
+        pass
+    return est
+
+
+def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
+                 *, lane: Optional[str] = None) -> float:
     """Add an estimate to today's ledger and return the new day total.
 
     Best-effort: a ledger that cannot be written must never break a turn.
@@ -208,6 +301,16 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate) -> float:
         entry["output_tokens"] = int(entry.get("output_tokens") or 0) + max(0, int(estimate.output_tokens))
         if not estimate.cost_known:
             entry["unknown_model_calls"] = int(entry.get("unknown_model_calls") or 0) + 1
+        # Per-lane totals, so the report can say what the coder cost versus the
+        # chat rather than only what the account cost.
+        if lane:
+            lanes = entry.get("lanes") or {}
+            slot = lanes.get(lane) or {"tokens": 0, "calls": 0, "usd": 0.0}
+            slot["tokens"] = int(slot.get("tokens") or 0) + max(0, int(estimate.input_tokens)) + max(0, int(estimate.output_tokens))
+            slot["calls"] = int(slot.get("calls") or 0) + 1
+            slot["usd"] = round(float(slot.get("usd") or 0.0) + estimate.usd, 6)
+            lanes[lane] = slot
+            entry["lanes"] = lanes
         days[day] = entry
         # Keep the last 60 days: enough to answer "who spent what", small enough
         # to stay a file.

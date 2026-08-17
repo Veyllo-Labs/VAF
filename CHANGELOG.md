@@ -38,6 +38,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - The Settings window is slightly larger, so the new tab is not cramped.
 
 ### Changed
+- **Every model call is counted now, not just the chat.** Usage was recorded at
+  the end of a chat turn, so the coder, sub-agents, vision, voice, memory
+  compaction, the mail composer and the browser agent all reached a model by
+  other routes and spent invisibly - the Usage tab and the daily spend cap were
+  both reading a fraction of the real total. Recording moved into the one
+  method every lane passes through, so completeness no longer depends on nine
+  places remembering to ask. Each call is also written to a new
+  `usage_YYYY-MM-DD.log` with its lane, model, tokens and cost, which is the
+  fastest way to see what a single sub-agent or coder run consumed. That log is
+  a copy for reading, never the source: the per-user ledger stays the record,
+  so deleting logs cannot lose history. It is the one log that ignores the
+  debug-logging switch, because a spend record that can be switched off is not
+  a record.
 - **The API price table is current again** (checked 2026-08-17 against the
   providers' own pricing pages). It had been carrying a previous model
   generation, which made every cost estimate in the product wrong in both

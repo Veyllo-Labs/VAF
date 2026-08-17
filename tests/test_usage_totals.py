@@ -229,3 +229,112 @@ def test_prices_carry_the_date_they_were_checked():
     assert "PRICES_AS_OF" in inspect.getsource(config_routes.get_usage_prices), (
         "the date must travel to the client with the prices"
     )
+
+
+def test_every_lane_is_counted_at_the_backend_choke_point(spend_dir):
+    """The promise this round exists for: no lane can spend invisibly.
+
+    Driven through APIBackendManager.chat_completion itself rather than a stub
+    of it, because the point is that recording happens THERE - a test that
+    called record_call directly would pass even if the hook were removed.
+    """
+    from vaf.core import cost as c
+    from vaf.core.api_backend import APIBackendManager
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"api_model_openai": "gpt-4o"}
+    mgr.event_sink = None
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _impl(*a, **kw):
+        # What a provider does: report the call's usage while streaming.
+        mgr.last_request_usage = {"input_tokens": 900, "output_tokens": 100}
+        yield "hello"
+
+    mgr._chat_completion_impl = _impl
+
+    for lane in ("coder", "vision", "memory"):
+        with c.usage_context(lane=lane, scope=None):
+            mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+            list(mgr.chat_completion([{"role": "user", "content": "hi"}]))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["calls"] == 3, "one ledger entry per model call, whatever the lane"
+    assert out["totals"]["tokens"] == 3000
+    lanes = json.loads((spend_dir / "default.json").read_text(encoding="utf-8"))
+    today = lanes["days"][cost_mod._today()]["lanes"]
+    assert set(today) == {"coder", "vision", "memory"}
+    assert today["coder"]["tokens"] == 1000
+
+
+def test_a_failed_call_is_not_billed_twice(spend_dir):
+    """last_request_usage survives a failed call; the snapshot is what stops a re-bill."""
+    from vaf.core.api_backend import APIBackendManager
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"api_model_openai": "gpt-4o"}
+    mgr.event_sink = None
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _ok(*a, **kw):
+        mgr.last_request_usage = {"input_tokens": 500, "output_tokens": 50}
+        yield "x"
+
+    def _boom(*a, **kw):
+        raise RuntimeError("provider exploded")
+        yield  # pragma: no cover
+
+    mgr._chat_completion_impl = _ok
+    list(mgr.chat_completion([]))
+    mgr._chat_completion_impl = _boom
+    with pytest.raises(RuntimeError):
+        list(mgr.chat_completion([]))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["calls"] == 1, "the failed call reported nothing and must not be billed"
+    assert out["totals"]["tokens"] == 550
+
+
+def test_the_usage_log_survives_the_debug_switch(tmp_path, monkeypatch):
+    """A spend record that a settings toggle can silence is not a record."""
+    from vaf.core import log_helper
+
+    monkeypatch.setenv("VAF_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(log_helper, "is_debug_logging_enabled", lambda: False)
+    monkeypatch.setattr(cost_mod.Platform, "data_dir", staticmethod(lambda: tmp_path))
+
+    with cost_mod.usage_context(lane="subagent", scope=None):
+        cost_mod.record_call("openai", "gpt-4o", 700, 70, session_id="ab12cd34")
+
+    written = list(tmp_path.glob("usage_*.log"))
+    assert written, "the per-call usage log must not depend on debug logging"
+    line = written[0].read_text(encoding="utf-8")
+    assert "lane=subagent" in line and "in=700" in line and "out=70" in line
+    assert "model=gpt-4o" in line and "session=ab12cd34" in line
+
+
+def test_the_report_survives_the_logs_being_deleted(tmp_path, monkeypatch):
+    """The ledger is the record; the log is a copy.
+
+    Logs rotate, get swept by the age GC and get deleted by anyone tidying a
+    disk. If a total could only be re-derived from them, that moment would take
+    the history with it - so the report must be complete with no log present at
+    all, and this deletes them to prove it rather than assuming it.
+    """
+    monkeypatch.setenv("VAF_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(cost_mod.Platform, "data_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(cost_mod, "_display_name", lambda scope: "Alice")
+
+    with cost_mod.usage_context(lane="coder", scope=None):
+        cost_mod.record_call("openai", "gpt-4o", 1000, 100)
+
+    for log in (tmp_path / "logs").glob("usage_*.log"):
+        log.unlink()
+    assert not list((tmp_path / "logs").glob("usage_*.log"))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["tokens"] == 1100, "the totals come from the ledger, not the log"
+    assert out["totals"]["calls"] == 1
+    assert out["users"][0]["username"] == "Alice"

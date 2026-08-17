@@ -5478,32 +5478,24 @@ class Agent:
 
         return total_tokens, max_tokens
 
-    def _record_turn_spend(self) -> None:
-        """Best-effort spend recording for the CURRENT user, deduplicated per call.
+    def _set_usage_context(self) -> None:
+        """Label this turn's model calls for the ledger the backend writes.
 
-        Called at the tool-turn boundary AND at the end of chat_step: the
-        boundary alone missed every turn without tool calls - the most common
-        kind - so chat-only usage was systematically unbilled. The (input,
-        output) tuple dedup keeps one LLM call from being billed twice when
-        both sites see the same usage; two CONSECUTIVE calls with identical
-        token counts would be under-counted once, which is acceptable for an
-        estimate and stated here rather than hidden.
+        The counting itself moved down to ``APIBackendManager.chat_completion``,
+        where every lane in the product passes through, so a turn no longer has
+        to remember to bill itself - it only says WHOSE turn it is and which
+        lane. The previous per-turn hook counted the chat lane and nothing else:
+        the coder, sub-agents, vision, voice, memory compaction and the mail
+        composer all spent invisibly.
         """
         try:
-            if self.api_backend is None:
-                return
-            from vaf.core.cost import estimate_cost, record_spend
-            _lru = getattr(self.api_backend, "last_request_usage", None) or {}
-            _in = int(_lru.get("input_tokens") or 0)
-            _out = int(_lru.get("output_tokens") or 0)
-            if (_in or _out) and (_in, _out) != getattr(self, "_last_billed_usage", None):
-                self._last_billed_usage = (_in, _out)
-                _est = estimate_cost(getattr(self, "provider", ""),
-                                     getattr(self, "model_display_name", "")
-                                     or getattr(self, "filename", ""), _in, _out)
-                record_spend(getattr(self, "_current_user_scope_id", None), _est)
+            from vaf.core.cost import set_usage_context
+
+            set_usage_context(
+                lane="thinking" if getattr(self, "_background_run", False) else "main",
+                scope=getattr(self, "_current_user_scope_id", None))
         except Exception:
-            pass  # accounting must never break a turn
+            pass  # labelling must never break a turn
 
     def _compression_limit(self, window_tokens: int) -> int:
         """Effective token limit the compression lanes trigger on.
@@ -8261,6 +8253,8 @@ class Agent:
         # Set at reply pickup when the user answers a tracked background question; consumed once at the
         # end-of-turn return to stash the main agent's own reply onto that request. Reset per turn here.
         self._thinking_reply_pending = None
+        # Whose turn this is, for the spend ledger the backend writes per call.
+        self._set_usage_context()
         # Ask-first invariant: a REAL user message clears the pending-question latch; synthetic
         # background turns (runner drain sets _synthetic_drain_turn) must NOT clear it - that is
         # exactly the window in which new write actions stay blocked until the user answers.
@@ -10888,7 +10882,6 @@ class Agent:
                 try:
                     if self.api_backend is not None:
                         from vaf.core.cost import budget_exceeded
-                        self._record_turn_spend()
                         _over, _spent, _budget = budget_exceeded(
                             getattr(self, "_current_user_scope_id", None))
                         if _over:
@@ -11625,7 +11618,6 @@ class Agent:
 
         # The final LLM call of the turn - and for a turn without tools the
         # ONLY one - is billed here; the boundary block above never runs then.
-        self._record_turn_spend()
 
         # Return CLEANED response for the UI (Answer Box)
         # The raw response is already stored in history, so we don't lose information.

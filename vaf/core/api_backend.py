@@ -1090,16 +1090,20 @@ class APIBackendManager:
         (False = errored OR abandoned before completion) and a best-effort
         usage snapshot (the serving provider's last request; may lag one call
         behind when a failover link served the response)."""
-        if not callable(getattr(self, "event_sink", None)):
-            yield from self._chat_completion_impl(
-                messages, temperature, max_tokens, stream, model, tools, tool_choice
-            )
-            return
         import time as _time
 
-        self._emit_event(
-            {"type": "llm_start", "provider": self.provider_name, "model": model}
-        )
+        _sink = callable(getattr(self, "event_sink", None))
+        if _sink:
+            self._emit_event(
+                {"type": "llm_start", "provider": self.provider_name, "model": model}
+            )
+        # THE accounting point for the whole product. Every lane - chat, coder,
+        # sub-agents, vision, voice, memory compaction, the mail composer, the
+        # browser agent - reaches a model through this method, so recording here
+        # is what makes "every call is counted" true by construction instead of
+        # by nine call sites remembering to. It replaced a per-turn hook in the
+        # agent that counted the chat lane only; everything else was invisible.
+        _before = dict(self.last_request_usage or {})
         _t0 = _time.monotonic()
         _ok = False
         try:
@@ -1108,16 +1112,42 @@ class APIBackendManager:
             )
             _ok = True
         finally:
-            self._emit_event(
-                {
-                    "type": "llm_end",
-                    "provider": self.provider_name,
-                    "model": model,
-                    "duration_ms": int((_time.monotonic() - _t0) * 1000),
-                    "ok": _ok,
-                    "usage": dict(self.last_request_usage or {}),
-                }
-            )
+            self._record_call_usage(_before, model)
+            if _sink:
+                self._emit_event(
+                    {
+                        "type": "llm_end",
+                        "provider": self.provider_name,
+                        "model": model,
+                        "duration_ms": int((_time.monotonic() - _t0) * 1000),
+                        "ok": _ok,
+                        "usage": dict(self.last_request_usage or {}),
+                    }
+                )
+
+    def _record_call_usage(self, before: dict, model: Optional[str]) -> None:
+        """Book what THIS call reported, once, into the spend ledger.
+
+        `last_request_usage` is per request and overwritten by the next one, so
+        a call that reported nothing (an error, or an abandoned generator) leaves
+        the previous call's numbers standing - comparing against the snapshot
+        taken before the call is what keeps that from being billed twice.
+        """
+        try:
+            after = dict(self.last_request_usage or {})
+            if after == before:
+                return  # nothing new was reported: no call to bill
+            _in = int(after.get("input_tokens") or 0)
+            _out = int(after.get("output_tokens") or 0)
+            if not (_in or _out):
+                return
+            from vaf.core.cost import record_call
+
+            record_call(self.provider_name,
+                        str(model or self.config.get(f"api_model_{self.provider_name}", "") or ""),
+                        _in, _out)
+        except Exception:
+            pass  # accounting must never break a call
 
     def _chat_completion_impl(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
         chain = self._build_failover_chain(model)

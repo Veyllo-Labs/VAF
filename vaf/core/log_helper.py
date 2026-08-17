@@ -77,7 +77,7 @@ def redacted_uvicorn_log_config() -> Dict[str, Any]:
 # "tools" is what BaseTool.log() writes to, so a tool - ours or a third party's - never has
 # to pick a domain. An unknown domain is a silent no-op below, which is a fine failure mode
 # for in-tree code that can be grepped and a terrible one for a public method.
-ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach", "tools")
+ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach", "tools", "usage")
 
 
 def is_debug_logging_enabled() -> bool:
@@ -268,6 +268,24 @@ def append_domain_log_always(domain: str, message: str) -> None:
         ts = datetime.now().isoformat()
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
+    except Exception:
+        pass
+
+
+def append_usage_log(message: str) -> None:
+    """Append one line to usage_YYYY-MM-DD.log. NOT gated on debug_logs_enabled.
+
+    The only writer here that ignores that switch, deliberately: this is the
+    per-call record of what the instance spent, and a spend record that can be
+    turned off in a settings dialog is not a record. It is also the only place
+    that shows WHICH lane spent it - a coder run, a sub-agent, a chat turn - so
+    an operator can see where the money went without a database.
+    """
+    try:
+        path = get_dated_log_path("usage", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} {message}\n")
     except Exception:
         pass
 

@@ -96,19 +96,30 @@ def test_the_budget_key_is_admin_write_only():
     assert Config.filter_for_non_admin({"spend_budget_usd_per_day": 999}) == {}
 
 
-def test_a_turn_without_tools_is_billed_too():
-    """The boundary block runs only inside the tool loop; a plain
-    conversational turn - the most common kind - was never recorded. The tail
-    of chat_step must bill the final (often only) LLM call."""
+def test_every_call_is_billed_at_the_backend_not_at_the_turn():
+    """Billing per TURN could only ever see the chat lane.
+
+    A turn-boundary hook counted the main chat and nothing else: the coder,
+    sub-agents, vision, voice, memory compaction, the mail composer and the
+    browser agent all reached a model by other routes and spent invisibly.
+    Recording moved to the one method every lane passes through, and the turn
+    now only says whose turn it is. This pins that the hook did not quietly
+    come back alongside it - two counters would double-bill the chat lane."""
     from pathlib import Path
-    src = Path("vaf/core/agent.py").read_text(encoding="utf-8")
-    i = src.index("chat_step_complete")
-    tail = src[i:i + 400]
-    assert "_record_turn_spend()" in tail, \
-        "the no-tool exit no longer records spend - chat-only usage goes unbilled"
-    # And the helper is ONE implementation with two callers, not a copy.
-    assert src.count("def _record_turn_spend") == 1
-    assert src.count("self._record_turn_spend()") == 2
+    agent_src = Path("vaf/core/agent.py").read_text(encoding="utf-8")
+    backend_src = Path("vaf/core/api_backend.py").read_text(encoding="utf-8")
+
+    assert "_record_turn_spend" not in agent_src, \
+        "the per-turn billing hook is back; it would double-count the chat lane"
+    assert agent_src.count("def _set_usage_context") == 1
+    assert "self._set_usage_context()" in agent_src, \
+        "nothing labels the turn, so every call would land on the default ledger"
+
+    i = backend_src.index("def chat_completion(self, messages")
+    j = backend_src.index("def _record_call_usage")
+    assert "self._record_call_usage(_before, model)" in backend_src[i:j], \
+        "the public entry point no longer records the call it just made"
+    assert backend_src.count("def _record_call_usage") == 1
 
 
 def test_the_turn_boundary_carries_the_stop():
@@ -125,5 +136,6 @@ def test_the_turn_boundary_carries_the_stop():
     # goes nowhere is the failure mode this pin exists for.
     assert "if _over:" in region, "the budget verdict is computed but not acted on"
     assert "return _sp_msg" in region, "reaching the cap no longer ends the turn"
-    assert "self._record_turn_spend()" in region, \
-        "the boundary no longer records spend before checking the cap"
+    # Spend is no longer recorded here (the backend books every call as it
+    # happens), so the boundary only READS the ledger - which is also why the
+    # cap now sees the coder and the sub-agents, not just the chat.

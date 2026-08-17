@@ -553,11 +553,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
     type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd?: number; currencies?: Record<string, number>; calls: number; token_share?: number; call_share?: number };
     type UsageLane = { tokens: number; calls: number; usd: number; currencies?: Record<string, number> };
-    type UsageDay = { day: string; tokens: number; calls: number; usd: number; lanes?: Record<string, UsageLane> };
+    type UsageDay = { day: string; tokens: number; calls: number; usd: number; lanes?: Record<string, UsageLane>; providers?: Record<string, UsageLane> };
     const [usageDay, setUsageDay] = useState<UsageDay | null>(null);
     const [usage, setUsage] = useState<{
         days: number; users: UsageRow[]; daily: UsageDay[];
-        totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; currencies?: Record<string, number>; calls: number; estimated_usd_incomplete?: boolean };
+        totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; currencies?: Record<string, number>; calls: number; providers?: Record<string, UsageLane>; estimated_usd_incomplete?: boolean };
         costs_visible?: boolean;
     } | null>(null);
     // Price comparison: list prices from the backend (same table the ledger
@@ -665,6 +665,36 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .map(([cur, v]) => `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
             .join(' + ');
     }, []);
+
+    // One renderer for both breakdowns - by lane (what part of the product) and
+    // by provider/model (where it ran and at which price). They answer two
+    // halves of the same question, so they look the same on purpose.
+    const breakdownRows = useCallback((
+        entries: Record<string, { tokens: number; calls: number; usd: number; currencies?: Record<string, number> }> | undefined,
+        total: number,
+        showCost: boolean,
+        label: (key: string) => React.ReactNode,
+    ) => {
+        const rows = Object.entries(entries || {}).sort((a, b) => b[1].tokens - a[1].tokens);
+        if (!rows.length) return null;
+        return (<div className="space-y-3">
+            {rows.map(([key, v]) => (
+                <div key={key}>
+                    <div className="flex justify-between text-xs gap-3">
+                        <span className="text-gray-700 dark:text-gray-300 truncate">{label(key)}</span>
+                        <span className="text-gray-500 tabular-nums shrink-0">
+                            {v.tokens.toLocaleString()} · {v.calls}
+                            {showCost ? ` · ${money(v.currencies, v.usd)}` : ''}
+                        </span>
+                    </div>
+                    <div className="h-1.5 mt-1 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                        <div className="h-full bg-gray-500 dark:bg-[#d9d9d9]"
+                             style={{ width: `${Math.max(2, (v.tokens / Math.max(1, total)) * 100)}%` }} />
+                    </div>
+                </div>
+            ))}
+        </div>);
+    }, [money]);
 
     const [usageLoading, setUsageLoading] = useState(false);
     const loadUsage = useCallback(() => {
@@ -3383,9 +3413,32 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         ))}
                                                     </div>);
                                                 })()}
+                                                {Object.keys(usageDay.providers || {}).length > 0 && (
+                                                    <div className="mt-5 pt-4 border-t border-gray-100 dark:border-gray-800">
+                                                        <div className="text-xs font-medium text-gray-500 mb-3">{tUsage('byProvider')}</div>
+                                                        {breakdownRows(usageDay.providers, usageDay.tokens,
+                                                            usage?.costs_visible !== false,
+                                                            (key) => key.replace('/', ' · '))}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
+                                )}
+
+                                {usage && Object.keys(usage.totals.providers || {}).length > 0 && (
+                                    <Section title={tUsage('byProvider')}>
+                                        <p className="text-xs text-gray-500">{tUsage('byProviderDesc')}</p>
+                                        <div className="mt-4">
+                                            {breakdownRows(usage.totals.providers, usage.totals.tokens,
+                                                usage.costs_visible !== false,
+                                                (key) => {
+                                                    const [prov, ...rest] = key.split('/');
+                                                    return (<><span className="capitalize">{prov}</span>
+                                                        <span className="text-gray-400"> · {rest.join('/')}</span></>);
+                                                })}
+                                        </div>
+                                    </Section>
                                 )}
 
                                 {usage && usage.costs_visible !== false && (

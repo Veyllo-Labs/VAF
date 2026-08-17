@@ -312,7 +312,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     lane_name = str(lane or _LANE.get() or "main")
     scope = _SCOPE.get() if user_scope_id is _UNSET else user_scope_id
     try:
-        record_spend(scope, est, lane=lane_name)
+        record_spend(scope, est, lane=lane_name, provider=provider)
     except Exception:
         pass
     try:
@@ -331,7 +331,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
 
 
 def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
-                 *, lane: Optional[str] = None) -> float:
+                 *, lane: Optional[str] = None, provider: Optional[str] = None) -> float:
     """Add an estimate to today's ledger and return the new day total.
 
     Best-effort: a ledger that cannot be written must never break a turn.
@@ -378,6 +378,23 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
             slot["currencies"] = _lc
             lanes[lane] = slot
             entry["lanes"] = lanes
+        # Per provider AND model, because the product runs several at once: the
+        # chat on one, vision on another, sub-agents and the thinker on a third,
+        # any of them local. "What did this cost" is unanswerable without saying
+        # WHERE it ran, and the price differs by an order of magnitude between
+        # them. Keyed provider/model so a provider switch does not hide behind
+        # one row.
+        _pkey = f"{provider or 'unknown'}/{estimate.model or '?'}"
+        _provs = entry.get("providers") or {}
+        _pslot = _provs.get(_pkey) or {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}}
+        _pslot["tokens"] += max(0, int(estimate.input_tokens)) + max(0, int(estimate.output_tokens))
+        _pslot["calls"] = int(_pslot.get("calls") or 0) + 1
+        _pslot["usd"] = round(float(_pslot.get("usd") or 0.0) + estimate.usd, 6)
+        _pc = _pslot.get("currencies") or {}
+        _pc[_cur] = round(float(_pc.get(_cur) or 0.0) + estimate.usd, 6)
+        _pslot["currencies"] = _pc
+        _provs[_pkey] = _pslot
+        entry["providers"] = _provs
         days[day] = entry
         # Keep the last 60 days: enough to answer "who spent what", small enough
         # to stay a file.
@@ -421,7 +438,8 @@ def usage_totals(days: int = 30) -> dict:
 
     out = {"days": max(1, int(days or 1)), "users": [], "daily": [], "totals": {
         "input_tokens": 0, "output_tokens": 0, "tokens": 0,
-        "usd": 0.0, "currencies": {}, "calls": 0, "estimated_usd_incomplete": False}}
+        "usd": 0.0, "currencies": {}, "calls": 0, "providers": {},
+        "estimated_usd_incomplete": False}}
     try:
         base = Platform.data_dir() / "spend"
         if not base.is_dir():
@@ -431,7 +449,7 @@ def usage_totals(days: int = 30) -> dict:
         # Every day in the window, including the ones nobody used: a chart that
         # silently drops quiet days makes a burst look like steady traffic.
         by_day = {(datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d"):
-                  {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}, "lanes": {}}
+                  {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}, "lanes": {}, "providers": {}}
                   for n in range(span)}
         rows = []
         for path in sorted(base.glob("*.json")):
@@ -470,6 +488,18 @@ def usage_totals(days: int = 30) -> dict:
                             float(slot["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
                     # Per-lane, summed across accounts: the day's bar answers
                     # "how much", and the only useful follow-up is "on what".
+                    for _pk, _ps in (entry.get("providers") or {}).items():
+                        _pa = slot["providers"].setdefault(
+                            str(_pk), {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
+                        try:
+                            _pa["tokens"] += int(_ps.get("tokens") or 0)
+                            _pa["calls"] += int(_ps.get("calls") or 0)
+                            _pa["usd"] = round(_pa["usd"] + float(_ps.get("usd") or 0.0), 6)
+                            for _c, _v in (_ps.get("currencies") or {}).items():
+                                _pa["currencies"][_c] = round(
+                                    float(_pa["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
+                        except Exception:
+                            continue
                     for _lane, _ls in (entry.get("lanes") or {}).items():
                         _agg = slot["lanes"].setdefault(
                             str(_lane), {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
@@ -509,6 +539,16 @@ def usage_totals(days: int = 30) -> dict:
         out["totals"]["tokens"] = out["totals"]["input_tokens"] + out["totals"]["output_tokens"]
         out["totals"]["usd"] = round(out["totals"]["usd"], 4)
         out["daily"] = [{"day": d, **by_day[d]} for d in sorted(by_day)]
+        for _d in out["daily"]:
+            for _pk, _ps in (_d.get("providers") or {}).items():
+                _t = out["totals"]["providers"].setdefault(
+                    _pk, {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
+                _t["tokens"] += int(_ps.get("tokens") or 0)
+                _t["calls"] += int(_ps.get("calls") or 0)
+                _t["usd"] = round(_t["usd"] + float(_ps.get("usd") or 0.0), 6)
+                for _c, _v in (_ps.get("currencies") or {}).items():
+                    _t["currencies"][_c] = round(
+                        float(_t["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
         # Share of the instance's tokens per account, so "who used the most" is
         # a number rather than a comparison the reader has to do by eye. Falls
         # back to the call share while a legacy ledger has no token counts.

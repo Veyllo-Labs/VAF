@@ -576,3 +576,29 @@ def test_the_estimate_states_its_own_unit():
     assert estimate_cost("openai", "gpt-4o", 100, 10).currency == "USD"
     assert "€" in estimate_cost("veyllo", "veyllo-chat", 1_000_000, 0).as_text()
     assert "$" in estimate_cost("openai", "gpt-4o", 1_000_000, 0).as_text()
+
+
+def test_the_ledger_says_which_provider_ran_where(spend_dir):
+    """The product runs several at once - chat on one, vision on another,
+    sub-agents and the thinker elsewhere, any of them local. "What did this
+    cost" is unanswerable without saying where it ran."""
+    from vaf.core import cost as c
+
+    with c.usage_context(lane="main", scope=None):
+        c.record_call("veyllo", "veyllo-chat", 1_000_000, 0)
+    with c.usage_context(lane="vision", scope=None):
+        c.record_call("openai", "gpt-4o", 100_000, 0)
+    with c.usage_context(lane="subagent", scope=None):
+        c.record_call("local", "qwen-gguf", 50_000, 0)
+
+    out = usage_totals(days=1)
+    provs = out["totals"]["providers"]
+
+    assert set(provs) == {"veyllo/veyllo-chat", "openai/gpt-4o", "local/qwen-gguf"}
+    assert provs["veyllo/veyllo-chat"]["tokens"] == 1_000_000
+    assert round(provs["veyllo/veyllo-chat"]["currencies"]["EUR"], 2) == 0.90
+    assert round(provs["openai/gpt-4o"]["currencies"]["USD"], 2) == 0.25
+    assert provs["local/qwen-gguf"]["usd"] == 0.0, "local runs cost no API money"
+    # And the same split is on the day, so a bar can be opened on it.
+    day = [d for d in out["daily"] if d["tokens"]][0]
+    assert set(day["providers"]) == set(provs)

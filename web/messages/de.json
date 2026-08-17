@@ -629,7 +629,9 @@
       "lane_librarian": "Bibliothekar",
       "lane_mail": "Mail",
       "lane_browser": "Browser",
-      "lane_coder": "Coder"
+      "lane_coder": "Coder",
+      "byProvider": "Nach Anbieter und Modell",
+      "byProviderDesc": "Wo die Arbeit tatsaechlich lief. Chat, Bild, Sub-Agenten, Tool-Modell und Denker koennen je einen eigenen Anbieter nutzen - oder ein lokales Modell - und der Preis unterscheidet sich dazwischen um eine Groessenordnung."
     },
     "general": {
       "apiKeys": "API-Schlüssel",

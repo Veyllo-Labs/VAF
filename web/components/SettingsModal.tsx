@@ -3262,6 +3262,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     </div>
                                                 )}
                                             </div>
+                                            {Object.keys(usage.totals.providers || {}).length > 0 && (
+                                                <div className="mt-6">
+                                                    <div className="text-xs font-medium text-gray-500 mb-1">{tUsage('byProvider')}</div>
+                                                    <p className="text-xs text-gray-400 mb-3">{tUsage('byProviderDesc')}</p>
+                                                    {breakdownRows(usage.totals.providers, usage.totals.tokens,
+                                                        usage.costs_visible !== false,
+                                                        (key) => {
+                                                            const [prov, ...rest] = key.split('/');
+                                                            return (<><span className="capitalize">{prov}</span>
+                                                                <span className="text-gray-400"> · {rest.join('/')}</span></>);
+                                                        })}
+                                                </div>
+                                            )}
                                             <table className="w-full mt-6 text-sm">
                                                 <thead>
                                                     <tr className="text-xs text-gray-500 text-left border-b border-gray-200 dark:border-gray-700">
@@ -3429,21 +3442,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         </div>
                                     </div>
-                                )}
-
-                                {usage && Object.keys(usage.totals.providers || {}).length > 0 && (
-                                    <Section title={tUsage('byProvider')}>
-                                        <p className="text-xs text-gray-500">{tUsage('byProviderDesc')}</p>
-                                        <div className="mt-4">
-                                            {breakdownRows(usage.totals.providers, usage.totals.tokens,
-                                                usage.costs_visible !== false,
-                                                (key) => {
-                                                    const [prov, ...rest] = key.split('/');
-                                                    return (<><span className="capitalize">{prov}</span>
-                                                        <span className="text-gray-400"> · {rest.join('/')}</span></>);
-                                                })}
-                                        </div>
-                                    </Section>
                                 )}
 
                                 {usage && usage.costs_visible !== false && (

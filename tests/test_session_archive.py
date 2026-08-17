@@ -223,3 +223,20 @@ def test_a_search_box_shows_single_common_words(mgr):
     assert mgr.search_archived("Termin", user_scope_id="ab12cd34"), (
         "one informative word must be enough for a user-typed search"
     )
+
+
+def test_a_hit_names_the_words_it_actually_matched(mgr):
+    """A highlight cannot draw the folded query term: a reader who typed
+    "Pruefung" matched "Prüfung", and marking what they typed would mark
+    nothing - leaving them to guess what the search found."""
+    s = mgr.new(name="Buchhaltung", user_scope_id="ab12cd34")
+    s.add_message("user", "die Prüfung der Reisekostenabrechnung laeuft")
+    mgr.save(s)
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+
+    hits = [h for h in mgr.search_archived("Pruefung Reisekosten", user_scope_id="ab12cd34")
+            if h["index"] >= 0]
+    assert hits, "the folded/compound search must still find it"
+    words = hits[0]["words"]
+    assert "prüfung" in [w.lower() for w in words], words
+    assert any("reisekosten" in w.lower() for w in words), words

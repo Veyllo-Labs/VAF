@@ -576,11 +576,29 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [archiveChats, setArchiveChats] = useState<ArchivedChat[]>([]);
     const [archiveQuery, setArchiveQuery] = useState('');
     const [archiveOpenId, setArchiveOpenId] = useState<string | null>(null);
-    type ArchiveHit = { chat_id: string; name: string; index: number; line: string };
+    type ArchiveHit = { chat_id: string; name: string; index: number; line: string; words?: string[] };
     const [archiveHits, setArchiveHits] = useState<ArchiveHit[]>([]);
     // Jump target inside the opened chat, so a hit lands on its message and the
     // phrase is highlighted there rather than left to be found again.
-    const [archiveJump, setArchiveJump] = useState<{ index: number; term: string } | null>(null);
+    const [archiveJump, setArchiveJump] = useState<{ index: number; words: string[] } | null>(null);
+
+    // One highlighter for the hit list and the message body. It marks the words
+    // the SERVER reported as matched, not what was typed: a search for
+    // "Pruefung" matches "Prüfung", and marking the typed word would mark
+    // nothing - which is what made a hit impossible to read.
+    const markMatches = useCallback((text: string, words: string[] | undefined) => {
+        const list = (words || []).filter(Boolean);
+        if (!list.length) return text;
+        const escaped = list.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const parts = text.split(new RegExp(`(${escaped.join('|')})`, 'gi'));
+        const lower = new Set(list.map(w => w.toLowerCase()));
+        return parts.map((part, k) => (
+            lower.has(part.toLowerCase())
+                ? <mark key={k} className="bg-black text-white dark:bg-yellow-300 dark:text-black rounded px-0.5 font-medium">{part}</mark>
+                : <span key={k}>{part}</span>
+        ));
+    }, []);
+
     const [archiveMsgs, setArchiveMsgs] = useState<ArchivedMsg[]>([]);
     const archiveBase = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
     useEffect(() => {
@@ -6123,19 +6141,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                          m.role === 'user'
                                                              ? "bg-gray-100 dark:bg-[#242424] text-gray-800 dark:text-[#e6e6e6]"
                                                              : "bg-white dark:bg-[#1f1f1f] border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#c8c8c8]")}>
-                                                    {(() => {
-                                                        // Highlight every occurrence of the searched phrase, not
-                                                        // only the one the hit pointed at: scrolling to a message
-                                                        // and marking one of three matches reads as a bug.
-                                                        const term = archiveJump?.term || archiveQuery.trim();
-                                                        if (!term) return m.content;
-                                                        const parts = m.content.split(new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-                                                        return parts.map((part, k) => (
-                                                            part.toLowerCase() === term.toLowerCase()
-                                                                ? <mark key={k} className="bg-yellow-300 !text-gray-900 dark:bg-yellow-400 dark:!text-gray-900 rounded px-0.5 font-medium">{part}</mark>
-                                                                : <span key={k}>{part}</span>
-                                                        ));
-                                                    })()}
+                                                    {markMatches(m.content, archiveJump?.words)}
                                                 </div>
                                             ))}
                                         </div>
@@ -6164,9 +6170,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     ) : archiveHits.map((h, i) => (
                                         <button key={`${h.chat_id}-${h.index}-${i}`} type="button"
                                                 onClick={() => {
-                                                    const term = archiveQuery.trim();
                                                     setArchiveOpenId(h.chat_id);
-                                                    setArchiveJump({ index: h.index, term });
+                                                    setArchiveJump({ index: h.index, words: h.words || [] });
                                                     if (h.index >= 0) {
                                                         setTimeout(() => {
                                                             document.getElementById(`arch-msg-${h.index}`)?.scrollIntoView({ block: 'center' });
@@ -6175,7 +6180,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 }}
                                                 className="w-full text-left p-2 rounded-lg border border-gray-100 dark:border-[#242424] hover:bg-gray-50 dark:hover:bg-[#242424]">
                                             <div className="text-xs font-medium text-gray-700 dark:text-[#c8c8c8] truncate">{h.name}</div>
-                                            <div className="text-xs text-gray-500 line-clamp-2">{h.line}</div>
+                                            <div className="text-xs text-gray-500 line-clamp-2">{markMatches(h.line, h.words)}</div>
                                         </button>
                                     ))}
                                 </div>

@@ -804,7 +804,12 @@ class SessionManager:
                     "name": name,
                     "index": i,
                     "line": _excerpt(content, sorted(matched)) or content[:160],
-                    "terms": sorted(matched),
+                    # The words AS THEY APPEAR in the text, not the folded query
+                    # terms. The viewer highlights these literally, and it has to:
+                    # a reader who typed "Pruefung" gets a hit on "Prüfung", and
+                    # highlighting what they typed would mark nothing at all -
+                    # leaving them to guess what the search actually matched.
+                    "words": _matched_words(terms, content),
                 })
                 if len(hits) >= limit:
                     return hits
@@ -1830,3 +1835,27 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
     rows.sort(key=lambda row: (-row["unread"], row["room_id"]))
     return rows
 
+
+def _matched_words(terms, text) -> List[str]:
+    """The surface forms in `text` that the folded query terms hit.
+
+    Lives next to the search because it answers the same question one step
+    further on: not "does this match" but "which words did", which is what a
+    highlight needs to be able to draw.
+    """
+    import re
+
+    from vaf.core.cross_chat import _term_hits_word, fold
+
+    out: List[str] = []
+    # Over the ORIGINAL text, folding only for the comparison: `tokenize` returns
+    # folded words, and handing "pruefung" to a highlight that has to find
+    # "Prüfung" in the rendered message would mark nothing.
+    for surface in re.findall(r"\w+", text or "", flags=re.UNICODE):
+        folded = fold(surface).lower()
+        if not folded:
+            continue
+        if any(_term_hits_word(term, folded) for term in terms):
+            if surface not in out:
+                out.append(surface)
+    return out[:12]

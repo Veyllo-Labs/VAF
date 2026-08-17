@@ -686,7 +686,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         return [[convertTo, sum]];
     }, [convertTo, fx]);
     const money = useCallback((currencies?: Record<string, number>, legacy?: number) => {
-        let entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        // Below half a cent an amount rounds to 0.00 and is not a figure - a
+        // rounding residue must not turn a clean total into "no single figure".
+        let entries = Object.entries(currencies || {}).filter(([, v]) => v >= 0.005);
         if (!entries.length) return `~$${(legacy ?? 0).toFixed(2)}`;
         entries = toTarget(entries) ?? entries;
         if (entries.length > 1) return NO_FIGURE;      // mixed currencies
@@ -729,7 +731,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // like a defect ("~10.81 (?) + ~EUR0.03"). Split: the figure shows what has
     // a currency, and the rest is stated underneath in words.
     const moneyParts = useCallback((currencies?: Record<string, number>, legacy?: number) => {
-        const raw = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        const raw = Object.entries(currencies || {}).filter(([, v]) => v >= 0.005);
         const all = toTarget(raw) ?? raw;
         const known = all.filter(([c]) => c !== '?');
         const unknown = all.find(([c]) => c === '?')?.[1] ?? 0;

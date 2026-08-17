@@ -683,3 +683,58 @@ def fx_rate(base: str = "EUR", quote: str = "USD", *, max_age_hours: int = 20) -
         # real published rate and carries its own date, so the reader can judge
         # its age; inventing one would not be.
         return cached.get(key) or None
+
+
+def stamp_legacy_currency(currency: str, *, user_scope_id: Optional[str] = None) -> dict:
+    """Attribute amounts recorded before the currency was stored, once.
+
+    The ledger cannot know what those entries were billed in - the field was
+    called `usd` while a Veyllo call inside it was euros - so the software will
+    not guess. The OPERATOR knows which provider they were running, and this is
+    how they say so: an explicit, one-time statement, not an inference.
+
+    Only fills what is missing. An entry that already records its currency is
+    never touched, and neither is the part of a straddling day that does - the
+    remainder between a day's total and its recorded amounts is exactly what is
+    unattributed, and exactly what gets stamped. A backup is written beside the
+    ledger first, because this rewrites the record every report reads.
+    """
+    import shutil
+
+    cur = str(currency or "").strip().upper()
+    if cur not in {"EUR", "USD"}:
+        return {"error": f"unsupported currency: {currency}"}
+    base = Platform.data_dir() / "spend"
+    if not base.is_dir():
+        return {"files": 0, "days": 0, "amount": 0.0, "currency": cur}
+    targets = ([_ledger_path(user_scope_id)] if user_scope_id is not None
+               else sorted(base.glob("*.json")))
+    files = days = 0
+    total = 0.0
+    for path in targets:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        changed = False
+        for _day, entry in (data.get("days") or {}).items():
+            known = entry.get("currencies") or {}
+            rest = round(float(entry.get("usd") or 0.0)
+                         - sum(float(v or 0.0) for v in known.values()), 6)
+            if rest <= 0.000001:
+                continue
+            known[cur] = round(float(known.get(cur) or 0.0) + rest, 6)
+            entry["currencies"] = known
+            total = round(total + rest, 6)
+            days += 1
+            changed = True
+        if changed:
+            try:
+                shutil.copy2(path, path.with_suffix(".json.bak"))
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                files += 1
+            except Exception:
+                continue
+    return {"files": files, "days": days, "amount": total, "currency": cur}

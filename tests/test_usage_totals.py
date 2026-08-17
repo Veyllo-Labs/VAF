@@ -725,3 +725,36 @@ def test_no_rate_means_no_conversion_offered(tmp_path, monkeypatch):
     monkeypatch.setattr(requests, "get", _boom)
 
     assert c.fx_rate() is None, "a missing rate must not become a made-up one"
+
+
+def test_stamping_legacy_amounts_fills_only_what_is_missing(spend_dir):
+    """The operator states the currency; the software never infers it. And it
+    touches only the unattributed part - a day that straddles the change keeps
+    the amounts it already recorded."""
+    spend_dir.mkdir(parents=True, exist_ok=True)
+    (spend_dir / "default.json").write_text(json.dumps({
+        "format": cost_mod.SPEND_FORMAT,
+        "days": {
+            "2001-01-01": {"usd": 4.0, "calls": 10},
+            "2001-01-02": {"usd": 3.0, "calls": 5, "currencies": {"EUR": 1.0}},
+            "2001-01-03": {"usd": 2.0, "calls": 2, "currencies": {"USD": 2.0}},
+        },
+    }), encoding="utf-8")
+
+    res = cost_mod.stamp_legacy_currency("EUR")
+
+    assert res == {"files": 1, "days": 2, "amount": 6.0, "currency": "EUR"}
+    days = json.loads((spend_dir / "default.json").read_text(encoding="utf-8"))["days"]
+    assert days["2001-01-01"]["currencies"] == {"EUR": 4.0}
+    assert days["2001-01-02"]["currencies"] == {"EUR": 3.0}, "1.00 kept + 2.00 stamped"
+    assert days["2001-01-03"]["currencies"] == {"USD": 2.0}, "already attributed: untouched"
+    assert (spend_dir / "default.json.bak").exists(), "the record is backed up first"
+
+    # Running it twice changes nothing more: there is no unattributed part left.
+    assert cost_mod.stamp_legacy_currency("EUR")["days"] == 0
+    out = usage_totals(days=10_000)
+    assert "?" not in out["totals"]["currencies"]
+
+
+def test_stamping_refuses_a_currency_it_cannot_display():
+    assert "error" in cost_mod.stamp_legacy_currency("CHF")

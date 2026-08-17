@@ -177,3 +177,49 @@ def test_remembering_still_stops_at_the_account_boundary(mgr):
     mgr.archive(theirs.id, user_scope_id="ef56ab78")
     seen = [d.get("id") for _, d in mgr.iter_owned_sessions("ab12cd34")]
     assert theirs.id not in seen
+
+
+def test_the_archive_search_matches_exactly_like_the_agent_does(mgr):
+    """One matcher for both, so no phrase is findable by the agent and not by
+    the user in the same archive: folded (umlauts) and reaching into compounds
+    from both sides - the cases cross_chat.py exists for."""
+    s = mgr.new(name="Buchhaltung", user_scope_id="ab12cd34")
+    s.add_message("user", "die Reisekostenabrechnung liegt bei")
+    s.add_message("assistant", "die Prüfung der Rechnung folgt")
+    mgr.save(s)
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+
+    # Compound, from the short side - a substring search would find this too...
+    assert mgr.search_archived("Reisekosten", user_scope_id="ab12cd34")
+    # ...but these two are exactly what a substring search gets WRONG:
+    assert mgr.search_archived("Pruefung", user_scope_id="ab12cd34"), (
+        "folding must find Prüfung when the user types Pruefung"
+    )
+    assert mgr.search_archived("Reisekostenabrechnungen", user_scope_id="ab12cd34"), (
+        "a compound must match from the long side too"
+    )
+
+
+def test_the_archive_search_and_the_hint_lane_share_one_matcher():
+    """Pinned by source: two matchers would drift, and the drift would show up
+    as a phrase the agent can find and the user cannot."""
+    import pathlib
+
+    src = pathlib.Path("vaf/core/session.py").read_text(encoding="utf-8")
+    block = src[src.index("def search_archived"):src.index("def delete(self, session_id")]
+    assert "from vaf.core.cross_chat import _excerpt, _match_text, query_terms" in block
+    assert "in content.lower()" not in block, "the hand-rolled substring search is back"
+
+
+def test_a_search_box_shows_single_common_words(mgr):
+    """The hint lane's selection rules (min terms, min score, filler filter)
+    decide what is worth prompt space. A search box must not inherit them, or a
+    one-word search would answer nothing."""
+    s = mgr.new(name="notes", user_scope_id="ab12cd34")
+    s.add_message("user", "der Termin steht")
+    mgr.save(s)
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+
+    assert mgr.search_archived("Termin", user_scope_id="ab12cd34"), (
+        "one informative word must be enough for a user-typed search"
+    )

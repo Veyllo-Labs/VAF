@@ -30,7 +30,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   on the left and the chats on the right; opening a hit jumps to the message
   it was found in, with every match highlighted. The search runs on the
   server across all your archived chats - it no longer needs you to open the
-  right one first. Archived chats also stay available to the agent's memory:
+  right one first - and it finds things the same way the agent does, so
+  "Reisekosten" finds "Reisekostenabrechnung" and "Pruefung" finds
+  "Prüfung". Matches are highlighted where they were found. Archived chats also stay available to the agent's memory:
   Cross Chat Hints read them like any other chat of yours, which is what the
   "keep a copy" option promises.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab

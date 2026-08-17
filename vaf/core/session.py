@@ -750,20 +750,31 @@ class SessionManager:
                         limit: int = 100) -> List[Dict]:
         """Find a phrase across ALL of this account's archived chats.
 
-        Server-side because the browser only ever holds the chat it has open:
-        a search that needed the reader to open the right chat first is not a
-        search, it is a confirmation. Each hit names its chat, the message
-        INDEX inside it and the matching line, so the viewer can open that chat
-        at that message instead of leaving the sentence to be found again.
+        Server-side because the browser only ever holds the chat it has open: a
+        search that needed the reader to open the right chat first is not a
+        search, it is a confirmation.
 
-        Same isolation as the listing, and for the same reason: the directory
-        is scoped and the owner is re-read from inside every file.
+        MATCHING IS THE CROSS CHAT HINT LANE'S, not a second one - the same
+        `query_terms` / `_match_text` / `_excerpt` the agent uses when it looks
+        into other chats. So this finds `Reisekosten` inside
+        `Reisekostenabrechnung`, and `Pruefung` where the text says `Prüfung`,
+        exactly as the agent does; two matchers would have meant a phrase the
+        agent can find and the user cannot, in the same archive.
+
+        What is deliberately NOT taken from that lane is its selection rules
+        (`cross_chat_hint_min_terms`, `min_score`, the corpus filler filter).
+        Those decide which chats are worth spending prompt space on; a search
+        box has to show what it found, including a single common word.
+
+        Each hit names its chat, the message INDEX inside it and the matching
+        line, so the viewer can open that chat at that message.
         """
         from vaf.core.cost import _scope_key
+        from vaf.core.cross_chat import _excerpt, _match_text, query_terms
 
-        q = str(query or "").strip().lower()
+        terms = query_terms(str(query or ""))
         hits: List[Dict] = []
-        if not q:
+        if not terms:
             return hits
         base = self.archive_dir(user_scope_id)
         if not base.is_dir():
@@ -779,24 +790,21 @@ class SessionManager:
                 continue
             name = str(data.get("name") or path.stem)
             chat_id = str(data.get("id") or path.stem)
-            if q in name.lower():
+            if _match_text(terms, name):
                 hits.append({"chat_id": chat_id, "name": name, "index": -1, "line": name})
             for i, msg in enumerate(data.get("messages") or []):
                 if msg.get("role") not in ("user", "assistant"):
                     continue
                 content = str(msg.get("content") or "")
-                if q not in content.lower():
+                matched = _match_text(terms, content)
+                if not matched:
                     continue
-                # A window around the match, so the hit list shows the phrase in
-                # its sentence rather than the first 120 characters of a message
-                # that matched somewhere near the end.
-                at = content.lower().index(q)
-                start = max(0, at - 60)
                 hits.append({
                     "chat_id": chat_id,
                     "name": name,
                     "index": i,
-                    "line": ("..." if start else "") + content[start:at + len(q) + 100].strip(),
+                    "line": _excerpt(content, sorted(matched)) or content[:160],
+                    "terms": sorted(matched),
                 })
                 if len(hits) >= limit:
                     return hits

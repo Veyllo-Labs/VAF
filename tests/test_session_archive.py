@@ -177,3 +177,56 @@ def test_remembering_still_stops_at_the_account_boundary(mgr):
     mgr.archive(theirs.id, user_scope_id="ef56ab78")
     seen = [d.get("id") for _, d in mgr.iter_owned_sessions("ab12cd34")]
     assert theirs.id not in seen
+
+
+def test_an_archived_chat_is_learned_into_the_rag_snippets(mgr, monkeypatch):
+    """The other half of the promise. Cross Chat Hints read the file directly, so
+    they worked as soon as archives joined that iteration - but the SNIPPET lane
+    is a vector store fed only by compaction, which ran on a live history at a
+    turn interval. Without this, an archived chat reached the hints and never
+    the snippets."""
+    from vaf.memory import rag
+
+    seen = {}
+
+    def fake_compaction(agent, scope, session_id, current_turn_count, *, conversation=None, source=None):
+        seen.update(conversation=conversation, source=source, scope=scope,
+                    turns=current_turn_count)
+
+    monkeypatch.setattr(rag, "run_session_compaction_sync", fake_compaction)
+
+    data = {"id": "ab12cd34", "messages": [
+        {"role": "user", "content": "the invoice numbering scheme"},
+        {"role": "assistant", "content": "we agreed on year-month-counter"},
+        {"role": "system", "content": "bookkeeping noise"},
+    ]}
+    count = rag.ingest_archived_chat(data, agent=object(), user_scope_id="ef56ab78")
+
+    assert count == 2, "system bookkeeping is not conversation"
+    assert "User: the invoice numbering scheme" in seen["conversation"]
+    assert "Assistant: we agreed on year-month-counter" in seen["conversation"]
+    assert "bookkeeping noise" not in seen["conversation"]
+    assert seen["source"] == "archive/ab12cd34", (
+        "the source must name the chat so the facts can be taken back later"
+    )
+    assert seen["scope"] == "ef56ab78"
+    assert seen["turns"] > 10_000, (
+        "an archived chat is finished, so the live turn interval must not gate it"
+    )
+
+
+def test_an_empty_archived_chat_teaches_nothing():
+    from vaf.memory import rag
+    assert rag.ingest_archived_chat({"id": "x", "messages": []}, agent=object()) == 0
+
+
+def test_archiving_hands_the_learning_to_the_process_that_owns_the_agent():
+    """The web server has no Agent; the runner does. A direct call there would
+    have needed a second agent built inside a request handler."""
+    import pathlib
+
+    ws = pathlib.Path("vaf/core/web_server.py").read_text(encoding="utf-8")
+    hr = pathlib.Path("vaf/core/headless_runner.py").read_text(encoding="utf-8")
+    assert "__CMD__:ARCHIVE_INGEST:" in ws, "archiving never asks for the learning"
+    assert 'cmd_type == "ARCHIVE_INGEST"' in hr, "the runner ignores the command"
+    assert "ingest_archived_chat" in hr

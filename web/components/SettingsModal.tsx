@@ -576,11 +576,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [archiveChats, setArchiveChats] = useState<ArchivedChat[]>([]);
     const [archiveQuery, setArchiveQuery] = useState('');
     const [archiveOpenId, setArchiveOpenId] = useState<string | null>(null);
-    type ArchiveHit = { chat_id: string; name: string; index: number; line: string; words?: string[] };
+    type ArchiveHit = { chat_id: string; name: string; index: number; line: string; words?: string[]; span?: [number, number] };
     const [archiveHits, setArchiveHits] = useState<ArchiveHit[]>([]);
     // Jump target inside the opened chat, so a hit lands on its message and the
     // phrase is highlighted there rather than left to be found again.
-    const [archiveJump, setArchiveJump] = useState<{ index: number; words: string[] } | null>(null);
+    const [archiveJump, setArchiveJump] = useState<{ index: number; words: string[]; span?: [number, number] } | null>(null);
 
     // One highlighter for the hit list and the message body. It marks the words
     // the SERVER reported as matched, not what was typed: a search for
@@ -6141,7 +6141,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                          m.role === 'user'
                                                              ? "bg-gray-100 dark:bg-[#242424] text-gray-800 dark:text-[#e6e6e6]"
                                                              : "bg-white dark:bg-[#1f1f1f] border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#c8c8c8]")}>
-                                                    {markMatches(m.content, archiveJump?.words)}
+                                                    {(() => {
+                                                        // The PASSAGE the agent would be handed for this hit,
+                                                        // marked as one block, with the matching words picked
+                                                        // out inside it: the question a reader has is "what
+                                                        // does the model actually see", and a scatter of
+                                                        // single marked words does not answer it.
+                                                        const span = (archiveJump && archiveJump.index === i) ? archiveJump.span : undefined;
+                                                        if (!span) return markMatches(m.content, archiveJump?.words);
+                                                        const [a, b] = span;
+                                                        return (<>
+                                                            {m.content.slice(0, a)}
+                                                            <span className="bg-black/10 dark:bg-yellow-300/25 rounded px-0.5 ring-1 ring-black/20 dark:ring-yellow-300/40">
+                                                                {markMatches(m.content.slice(a, b), archiveJump?.words)}
+                                                            </span>
+                                                            {m.content.slice(b)}
+                                                        </>);
+                                                    })()}
                                                 </div>
                                             ))}
                                         </div>
@@ -6171,7 +6187,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <button key={`${h.chat_id}-${h.index}-${i}`} type="button"
                                                 onClick={() => {
                                                     setArchiveOpenId(h.chat_id);
-                                                    setArchiveJump({ index: h.index, words: h.words || [] });
+                                                    setArchiveJump({ index: h.index, words: h.words || [], span: h.span });
                                                     if (h.index >= 0) {
                                                         setTimeout(() => {
                                                             document.getElementById(`arch-msg-${h.index}`)?.scrollIntoView({ block: 'center' });

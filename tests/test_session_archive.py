@@ -240,3 +240,25 @@ def test_a_hit_names_the_words_it_actually_matched(mgr):
     words = hits[0]["words"]
     assert "prüfung" in [w.lower() for w in words], words
     assert any("reisekosten" in w.lower() for w in words), words
+
+
+def test_a_hit_carries_the_exact_passage_the_agent_would_get(mgr):
+    """The viewer marks what the MODEL sees, so the range has to address the raw
+    message - `_excerpt` computes its window on a collapsed, folded copy, whose
+    offsets point somewhere else entirely."""
+    from vaf.core.cross_chat import _SNIPPET_CHARS
+
+    filler = "x" * 500
+    body = f"{filler} die Prüfung der Rechnung {filler}"
+    s = mgr.new(name="lang", user_scope_id="ab12cd34")
+    s.add_message("user", body)
+    mgr.save(s)
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+
+    hit = [h for h in mgr.search_archived("Pruefung", user_scope_id="ab12cd34")
+           if h["index"] >= 0][0]
+    start, end = hit["span"]
+    passage = body[start:end]
+    assert "Prüfung" in passage, "the passage must contain what matched"
+    assert end - start <= _SNIPPET_CHARS
+    assert len(passage) < len(body), "a passage is a window, not the whole message"

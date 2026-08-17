@@ -33,7 +33,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   right one first - and it finds things the same way the agent does, so
   "Reisekosten" finds "Reisekostenabrechnung" and "Pruefung" finds
   "Prüfung". What matched is highlighted in the result list and in the chat
-  itself, so a hit shows you the words it found rather than only the chat. Archived chats also stay available to the agent's memory:
+  itself, so a hit shows you the words it found rather than only the chat -
+  and it outlines the whole passage the agent would receive for that hit, so
+  you can see exactly what the model gets. Archived chats also stay available to the agent's memory:
   Cross Chat Hints read them like any other chat of yours, which is what the
   "keep a copy" option promises.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab

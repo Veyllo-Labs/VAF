@@ -810,6 +810,10 @@ class SessionManager:
                     # highlighting what they typed would mark nothing at all -
                     # leaving them to guess what the search actually matched.
                     "words": _matched_words(terms, content),
+                    # The exact character range the agent would be handed for
+                    # this hit. The viewer marks THIS, so what is highlighted in
+                    # the chat is the passage the model sees - not a guess at it.
+                    "span": _passage_span(terms, content),
                 })
                 if len(hits) >= limit:
                     return hits
@@ -1859,3 +1863,29 @@ def _matched_words(terms, text) -> List[str]:
             if surface not in out:
                 out.append(surface)
     return out[:12]
+
+
+def _passage_span(terms, content: str) -> List[int]:
+    """`[start, end)` of the window `cross_chat._excerpt` would quote, on the RAW text.
+
+    `_excerpt` builds its window on a whitespace-collapsed, folded copy, so its
+    offsets do not address the original message. The viewer needs offsets that
+    do, because it highlights the passage inside the message as rendered. Same
+    window rule (`_SNIPPET_CHARS`, starting a third of it before the first
+    match), applied to the text the reader is actually looking at.
+    """
+    import re
+
+    from vaf.core.cross_chat import _SNIPPET_CHARS, _term_hits_word, fold
+
+    position = -1
+    for m in re.finditer(r"\w+", content or "", flags=re.UNICODE):
+        folded = fold(m.group(0)).lower()
+        if folded and any(_term_hits_word(term, folded) for term in terms):
+            position = m.start()
+            break
+    if position < 0:
+        return [0, min(len(content or ""), _SNIPPET_CHARS)]
+    start = max(0, position - _SNIPPET_CHARS // 3)
+    start = min(start, max(0, len(content) - _SNIPPET_CHARS))
+    return [start, min(len(content), start + _SNIPPET_CHARS)]

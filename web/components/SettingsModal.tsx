@@ -551,13 +551,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Usage totals. An admin gets every account's line (/api/usage), everyone
     // else only their own (/api/usage/me) - the split is the backend's, not a
     // filter here. Fetched when the tab is opened, so an unused tab costs nothing.
-    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd?: number; calls: number; token_share?: number; call_share?: number };
-    type UsageLane = { tokens: number; calls: number; usd: number };
+    type UsageRow = { scope: string; username: string; input_tokens: number; output_tokens: number; tokens: number; usd?: number; currencies?: Record<string, number>; calls: number; token_share?: number; call_share?: number };
+    type UsageLane = { tokens: number; calls: number; usd: number; currencies?: Record<string, number> };
     type UsageDay = { day: string; tokens: number; calls: number; usd: number; lanes?: Record<string, UsageLane> };
     const [usageDay, setUsageDay] = useState<UsageDay | null>(null);
     const [usage, setUsage] = useState<{
         days: number; users: UsageRow[]; daily: UsageDay[];
-        totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; calls: number; estimated_usd_incomplete?: boolean };
+        totals: { tokens: number; input_tokens: number; output_tokens: number; usd?: number; currencies?: Record<string, number>; calls: number; estimated_usd_incomplete?: boolean };
         costs_visible?: boolean;
     } | null>(null);
     // Price comparison: list prices from the backend (same table the ledger
@@ -654,6 +654,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // One fetch, two callers: opening the tab and the refresh button. The button
     // exists because the ledger keeps being written while this dialog is open -
     // a figure read five minutes ago is not the figure now.
+    // Money is printed from the per-currency map, never from the legacy total:
+    // Veyllo publishes EUR and the others USD, so one number with one symbol
+    // would be wrong for whichever provider is not the one the symbol names.
+    // Mixed periods print both amounts rather than a sum that means nothing.
+    const money = useCallback((currencies?: Record<string, number>, legacy?: number) => {
+        const entries = Object.entries(currencies || {}).filter(([, v]) => v > 0);
+        if (!entries.length) return `~$${(legacy ?? 0).toFixed(2)}`;
+        return entries
+            .map(([cur, v]) => `~${cur === 'EUR' ? '€' : '$'}${v.toFixed(2)}`)
+            .join(' + ');
+    }, []);
+
     const [usageLoading, setUsageLoading] = useState(false);
     const loadUsage = useCallback(() => {
         const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
@@ -3209,7 +3221,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 {usage.costs_visible !== false && (
                                                     <div>
                                                         <div className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
-                                                            ~${(usage.totals.usd ?? 0).toFixed(2)}
+                                                            {money(usage.totals.currencies, usage.totals.usd)}
                                                         </div>
                                                         <div className="text-xs text-gray-500">{tUsage('estimatedCost')}</div>
                                                     </div>
@@ -3233,7 +3245,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             <td className="py-2 text-right tabular-nums">{u.input_tokens.toLocaleString()}</td>
                                                             <td className="py-2 text-right tabular-nums">{u.output_tokens.toLocaleString()}</td>
                                                             {usage.costs_visible !== false && (
-                                                                <td className="py-2 text-right tabular-nums">~${(u.usd ?? 0).toFixed(2)}</td>
+                                                                <td className="py-2 text-right tabular-nums">{money(u.currencies, u.usd)}</td>
                                                             )}
                                                         </tr>
                                                     ))}
@@ -3360,7 +3372,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     </span>
                                                                     <span className="text-gray-500 tabular-nums">
                                                                         {v.tokens.toLocaleString()} · {v.calls}
-                                                                        {usage?.costs_visible !== false ? ` · ~$${v.usd.toFixed(2)}` : ''}
+                                                                        {usage?.costs_visible !== false ? ` · ${money(v.currencies, v.usd)}` : ''}
                                                                     </span>
                                                                 </div>
                                                                 <div className="h-1.5 mt-1 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">

@@ -552,3 +552,27 @@ def test_the_coder_asks_the_stream_for_its_usage():
     src = pathlib.Path("vaf/tools/coder.py").read_text(encoding="utf-8")
     assert '"include_usage": True' in src, "the stream would report no usage at all"
     assert "_record_coder_usage(_peek)" in src, "the usage chunk is requested but never read"
+
+
+def test_amounts_are_kept_per_currency_never_added_across(spend_dir):
+    """Veyllo publishes EUR and everyone else USD. Adding them produces a number
+    that means nothing, and showing euros with a dollar sign is a lie about the
+    unit - so the unit travels with the amount from the call onwards."""
+    record_spend(None, estimate_cost("veyllo", "veyllo-chat", 1_000_000, 0))   # 0.90 EUR
+    record_spend(None, estimate_cost("openai", "gpt-4o", 1_000_000, 0))        # 2.50 USD
+
+    out = usage_totals(days=1)
+    cur = out["totals"]["currencies"]
+
+    assert round(cur["EUR"], 2) == 0.90
+    assert round(cur["USD"], 2) == 2.50
+    assert "EUR" in cur and "USD" in cur, "the two must stay apart"
+    # The legacy field still exists for ledgers and the cap that read it.
+    assert round(out["totals"]["usd"], 2) == 3.40
+
+
+def test_the_estimate_states_its_own_unit():
+    assert estimate_cost("veyllo", "veyllo-chat", 100, 10).currency == "EUR"
+    assert estimate_cost("openai", "gpt-4o", 100, 10).currency == "USD"
+    assert "€" in estimate_cost("veyllo", "veyllo-chat", 1_000_000, 0).as_text()
+    assert "$" in estimate_cost("openai", "gpt-4o", 1_000_000, 0).as_text()

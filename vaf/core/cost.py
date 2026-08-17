@@ -131,9 +131,16 @@ class CostEstimate:
     # what the provider billed. Money is the estimate; tokens are the fact.
     input_tokens: int = 0
     output_tokens: int = 0
+    # The unit the PROVIDER publishes, carried per call because it cannot be
+    # recovered later: Veyllo prices in EUR and everyone else in USD, so a
+    # ledger that stored only a number was showing euros with a dollar sign,
+    # and two providers' amounts could be added into a figure that means
+    # nothing. The field name `usd` stays for ledgers written before this.
+    currency: str = "USD"
 
     def as_text(self) -> str:
-        return f"~${self.usd:.4f}" + ("" if self.cost_known else " (estimate: unknown model)")
+        sym = "€" if self.currency == "EUR" else "$"
+        return f"~{sym}{self.usd:.4f}" + ("" if self.cost_known else " (estimate: unknown model)")
 
 
 def _scope_key(user_scope_id: Optional[str]) -> str:
@@ -163,6 +170,12 @@ def _today() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
 
+def _currency_for(provider: str) -> str:
+    """The unit a provider publishes its list prices in. Unknown -> USD."""
+    spec = PROVIDER_PRICING.get(str(provider or "").strip().lower())
+    return str((spec or {}).get("currency") or "USD")
+
+
 def estimate_cost(provider: str, model: str, input_tokens: int,
                   output_tokens: int) -> CostEstimate:
     """What this call probably cost. Never raises."""
@@ -173,7 +186,8 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
             # dropping them here made the estimate lie about the call it
             # describes, and a usage view would show 0 for work that happened.
             return CostEstimate(0.0, True, str(model or ""),
-                                max(0, int(input_tokens)), max(0, int(output_tokens)))
+                                max(0, int(input_tokens)), max(0, int(output_tokens)),
+                                currency=_currency_for(prov))
         name = str(model or "").strip()
         price = PRICES.get(name)
         if price is None:
@@ -183,7 +197,8 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
         pin, pout = price or UNKNOWN_PRICE
         _in, _out = max(0, int(input_tokens)), max(0, int(output_tokens))
         usd = (_in * pin + _out * pout) / 1_000_000
-        return CostEstimate(round(usd, 6), known, name, _in, _out)
+        return CostEstimate(round(usd, 6), known, name, _in, _out,
+                            currency=_currency_for(prov))
     except Exception:
         return CostEstimate(0.0, False, str(model or ""))
 
@@ -334,6 +349,13 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
         days = data.get("days") or {}
         entry = days.get(day) or {"usd": 0.0, "calls": 0, "unknown_model_calls": 0}
         entry["usd"] = round(float(entry.get("usd") or 0.0) + estimate.usd, 6)
+        # Kept BESIDE `usd`, not instead of it: existing ledgers have no
+        # currencies map, and the daily cap still reads `usd`. Amounts are only
+        # ever summed within one currency here.
+        _cur = getattr(estimate, "currency", "USD") or "USD"
+        _curs = entry.get("currencies") or {}
+        _curs[_cur] = round(float(_curs.get(_cur) or 0.0) + estimate.usd, 6)
+        entry["currencies"] = _curs
         entry["calls"] = int(entry.get("calls") or 0) + 1
         # Tokens are added beside the money rather than replacing it: the money
         # is an estimate from a price table that ages, the tokens are what the
@@ -351,6 +373,9 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
             slot["tokens"] = int(slot.get("tokens") or 0) + max(0, int(estimate.input_tokens)) + max(0, int(estimate.output_tokens))
             slot["calls"] = int(slot.get("calls") or 0) + 1
             slot["usd"] = round(float(slot.get("usd") or 0.0) + estimate.usd, 6)
+            _lc = slot.get("currencies") or {}
+            _lc[_cur] = round(float(_lc.get(_cur) or 0.0) + estimate.usd, 6)
+            slot["currencies"] = _lc
             lanes[lane] = slot
             entry["lanes"] = lanes
         days[day] = entry
@@ -396,7 +421,7 @@ def usage_totals(days: int = 30) -> dict:
 
     out = {"days": max(1, int(days or 1)), "users": [], "daily": [], "totals": {
         "input_tokens": 0, "output_tokens": 0, "tokens": 0,
-        "usd": 0.0, "calls": 0, "estimated_usd_incomplete": False}}
+        "usd": 0.0, "currencies": {}, "calls": 0, "estimated_usd_incomplete": False}}
     try:
         base = Platform.data_dir() / "spend"
         if not base.is_dir():
@@ -406,7 +431,8 @@ def usage_totals(days: int = 30) -> dict:
         # Every day in the window, including the ones nobody used: a chart that
         # silently drops quiet days makes a burst look like steady traffic.
         by_day = {(datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d"):
-                  {"tokens": 0, "calls": 0, "usd": 0.0, "lanes": {}} for n in range(span)}
+                  {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}, "lanes": {}}
+                  for n in range(span)}
         rows = []
         for path in sorted(base.glob("*.json")):
             try:
@@ -414,7 +440,7 @@ def usage_totals(days: int = 30) -> dict:
             except Exception:
                 continue  # a corrupt ledger must not hide every other user
             scope = path.stem
-            agg = {"input_tokens": 0, "output_tokens": 0, "usd": 0.0,
+            agg = {"input_tokens": 0, "output_tokens": 0, "usd": 0.0, "currencies": {},
                    "calls": 0, "unknown_model_calls": 0, "last_active": ""}
             for day, entry in (data.get("days") or {}).items():
                 if str(day) < cutoff:
@@ -427,6 +453,9 @@ def usage_totals(days: int = 30) -> dict:
                     agg["input_tokens"] += _din
                     agg["output_tokens"] += _dout
                     agg["usd"] += _dusd
+                    for _c, _v in (entry.get("currencies") or {}).items():
+                        agg["currencies"][_c] = round(
+                            float(agg["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
                     agg["calls"] += _dcalls
                     agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
                 except Exception:
@@ -436,15 +465,21 @@ def usage_totals(days: int = 30) -> dict:
                     slot["tokens"] += _din + _dout
                     slot["calls"] += _dcalls
                     slot["usd"] = round(slot["usd"] + _dusd, 6)
+                    for _c, _v in (entry.get("currencies") or {}).items():
+                        slot["currencies"][_c] = round(
+                            float(slot["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
                     # Per-lane, summed across accounts: the day's bar answers
                     # "how much", and the only useful follow-up is "on what".
                     for _lane, _ls in (entry.get("lanes") or {}).items():
                         _agg = slot["lanes"].setdefault(
-                            str(_lane), {"tokens": 0, "calls": 0, "usd": 0.0})
+                            str(_lane), {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
                         try:
                             _agg["tokens"] += int(_ls.get("tokens") or 0)
                             _agg["calls"] += int(_ls.get("calls") or 0)
                             _agg["usd"] = round(_agg["usd"] + float(_ls.get("usd") or 0.0), 6)
+                            for _c, _v in (_ls.get("currencies") or {}).items():
+                                _agg["currencies"][_c] = round(
+                                    float(_agg["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
                         except Exception:
                             continue
                 if str(day) > agg["last_active"]:
@@ -465,6 +500,9 @@ def usage_totals(days: int = 30) -> dict:
             out["totals"]["input_tokens"] += r["input_tokens"]
             out["totals"]["output_tokens"] += r["output_tokens"]
             out["totals"]["usd"] += r["usd"]
+            for _c, _v in (r.get("currencies") or {}).items():
+                out["totals"]["currencies"][_c] = round(
+                    float(out["totals"]["currencies"].get(_c) or 0.0) + float(_v or 0.0), 6)
             out["totals"]["calls"] += r["calls"]
             if r["unknown_model_calls"]:
                 out["totals"]["estimated_usd_incomplete"] = True

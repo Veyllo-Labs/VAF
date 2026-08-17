@@ -628,7 +628,8 @@
       "lane_voice": "Sprache",
       "lane_librarian": "Bibliothekar",
       "lane_mail": "Mail",
-      "lane_browser": "Browser"
+      "lane_browser": "Browser",
+      "lane_coder": "Coder"
     },
     "general": {
       "apiKeys": "API-Schlüssel",

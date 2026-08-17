@@ -3349,7 +3349,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         {lanes.map(([lane, v]) => (
                                                             <div key={lane}>
                                                                 <div className="flex justify-between text-xs">
-                                                                    <span className="text-gray-700 dark:text-gray-300">{tUsage(`lane_${lane}`) || lane}</span>
+                                                                    {/* next-intl renders the KEY PATH for a missing
+                                                                        message, so an unlabelled lane showed up as
+                                                                        "settings.usage.lane_coder". A lane name is
+                                                                        data, not a fixed list - the backend can add
+                                                                        one - so the fallback has to be the lane
+                                                                        itself. */}
+                                                                    <span className="text-gray-700 dark:text-gray-300 capitalize">
+                                                                        {tUsage.has?.(`lane_${lane}`) ? tUsage(`lane_${lane}`) : lane}
+                                                                    </span>
                                                                     <span className="text-gray-500 tabular-nums">
                                                                         {v.tokens.toLocaleString()} · {v.calls}
                                                                         {usage?.costs_visible !== false ? ` · ~$${v.usd.toFixed(2)}` : ''}

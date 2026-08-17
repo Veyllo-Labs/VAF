@@ -215,3 +215,17 @@ def test_xml_export_carries_the_numbers_and_how_they_were_measured(spend_dir):
     method = root.find("method")
     assert "provider" in method.find("tokens").text.lower()
     assert "estimat" in method.find("cost").text.lower()
+
+
+def test_prices_carry_the_date_they_were_checked():
+    """A list price without a date is a claim about today, verified some other day."""
+    import datetime as _dt
+    import inspect
+
+    from vaf.api import config_routes
+    from vaf.core.cost import PRICES_AS_OF
+
+    _dt.date.fromisoformat(PRICES_AS_OF)  # raises if the stamp is not a real date
+    assert "PRICES_AS_OF" in inspect.getsource(config_routes.get_usage_prices), (
+        "the date must travel to the client with the prices"
+    )

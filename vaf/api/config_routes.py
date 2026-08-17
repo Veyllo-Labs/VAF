@@ -126,10 +126,12 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
 @router.get("/usage/prices")
 async def get_usage_prices(request: Request) -> Dict[str, Any]:
     """Public list prices per provider, for the "what would this cost elsewhere" panel."""
-    from vaf.core.cost import price_catalog
+    from vaf.core.cost import PRICES_AS_OF, price_catalog
 
     get_current_user_or_local_admin(request)
-    return {"providers": price_catalog()}
+    # The date travels with the prices: a list price shown without one is a
+    # claim about today that was only checked on some other day.
+    return {"providers": price_catalog(), "as_of": PRICES_AS_OF}
 
 
 @router.get("/usage/export")

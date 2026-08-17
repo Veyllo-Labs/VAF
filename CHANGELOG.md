@@ -30,8 +30,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   was measured. The comparison quotes each provider at its cheapest model for
   the usage in question, opens a dialog with that provider's full model list
   and per-model figures when tapped, and reports currency rather than
-  converting it (Veyllo publishes EUR, the others USD). Requests recorded before token counting existed are now
-  labelled as such instead of showing a bare zero.
+  converting it (Veyllo publishes EUR, the others USD). Both dates are stated
+  rather than left to be guessed: which period the compared tokens come from,
+  and when the price list was last checked against the providers' own pages.
+  Requests recorded before token counting existed are now labelled as such
+  instead of showing a bare zero.
 - The Settings window is slightly larger, so the new tab is not cramped.
 
 ### Changed

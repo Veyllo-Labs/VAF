@@ -565,6 +565,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         provider: string; label: string; currency: string;
         models: Array<{ model: string; input_per_1m: number; output_per_1m: number }>;
     }>>([]);
+    // When the price list was last checked. Rendered next to every price, so a
+    // figure is never read as "today's" when it was verified months ago.
+    const [pricesAsOf, setPricesAsOf] = useState<string>('');
+    const asOfLabel = pricesAsOf
+        ? new Date(pricesAsOf).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+        : '';
     const [openPrice, setOpenPrice] = useState<string | null>(null);
     const [customPrice, setCustomPrice] = useState({ label: '', input: '', output: '' });
     const effortProvider = localConfig.provider || '';
@@ -590,7 +596,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .catch(() => {});
         fetch(`${base}/api/usage/prices`, { credentials: 'include' })
             .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (d && Array.isArray(d.providers)) setPrices(d.providers); })
+            .then(d => {
+                if (d && Array.isArray(d.providers)) setPrices(d.providers);
+                if (d && d.as_of) setPricesAsOf(String(d.as_of));
+            })
             .catch(() => {});
     }, [activeTab, apiBase, currentUser?.role]);
     // ElevenLabs catalogs, fetched via the admin-only backend proxy
@@ -3216,7 +3225,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 {usage && (
                                     <Section title={tUsage('elsewhere')}>
-                                        <p className="text-xs text-gray-500">{tUsage('elsewhereDesc')}</p>
+                                        <p className="text-xs text-gray-500">
+                                            {tUsage('elsewhereDesc', { days: usage.days })}
+                                        </p>
                                         <div className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
                                             {prices.map((p) => {
                                                 // Each provider is quoted at ITS cheapest model for these
@@ -3264,7 +3275,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 )}
                                             </div>
                                         </div>
-                                        <p className="text-xs text-gray-400 mt-3">{tUsage('priceFootnote')}</p>
+                                        <p className="text-xs text-gray-400 mt-3">
+                                            {asOfLabel ? `${tUsage('asOf', { date: asOfLabel })} ` : ''}{tUsage('priceFootnote')}
+                                        </p>
                                     </Section>
                                 )}
 
@@ -3288,7 +3301,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
                                                     <div>
                                                         <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{p.label}</h3>
-                                                        <p className="text-xs text-gray-500">{tUsage('popupSub', { currency: p.currency })}</p>
+                                                        <p className="text-xs text-gray-500">
+                                                            {tUsage('popupSub', { currency: p.currency })}
+                                                            {asOfLabel ? ` ${tUsage('asOf', { date: asOfLabel })}` : ''}
+                                                        </p>
                                                     </div>
                                                     <button type="button" onClick={() => setOpenPrice(null)}
                                                             className="text-gray-400 hover:text-gray-600">
@@ -3327,6 +3343,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         {tUsage('popupBasis', {
                                                             input: usage.totals.input_tokens.toLocaleString(),
                                                             output: usage.totals.output_tokens.toLocaleString(),
+                                                            days: usage.days,
                                                         })}
                                                     </p>
                                                 </div>

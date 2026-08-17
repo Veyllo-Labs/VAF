@@ -49,6 +49,15 @@ SPEND_FORMAT = "spend-1-9c14f7"
 # module does not carry an exchange rate it would have to keep current - so the
 # unit is reported per provider and the reader converts, rather than being shown
 # a rate that was true on the day it was typed.
+#
+# When these prices were last checked against the providers' own pricing pages.
+# Shown wherever a price is, because a list price without a date is a claim
+# about today that was true on some other day: providers reprice, and a stale
+# figure presented as current is worse than no comparison. Update this stamp in
+# the SAME change as any price below - the guard test pins the shape, not the
+# value, so nothing stops a price moving while the date stands still except
+# this sentence and the reviewer reading it.
+PRICES_AS_OF = "2026-08-17"
 PROVIDER_PRICING = {
     # Veyllo first: it is this product's own API, and the panel keeps that order.
     "veyllo": {"label": "Veyllo", "currency": "EUR", "models": [

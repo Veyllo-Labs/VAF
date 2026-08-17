@@ -668,6 +668,84 @@ class SessionManager:
             )
             self.save(session, sync_state=False)
 
+    def archive_dir(self, user_scope_id: str = None) -> Path:
+        """Where one account's archived chats live: ``<sessions>/archive/<scope>``.
+
+        Keyed by scope AND holding files that carry their own ``user_scope_id``,
+        so isolation does not depend on the directory alone - a file moved by
+        hand into the wrong folder still names its owner, the way every other
+        per-user store here works.
+        """
+        from vaf.core.cost import _scope_key  # canonical scope -> folder name
+
+        return self.storage_dir / "archive" / _scope_key(user_scope_id)
+
+    def archive(self, session_id: str, user_scope_id: str = None) -> bool:
+        """Keep a chat out of the sidebar but available to the agent's memory.
+
+        Deliberately a MOVE of the session file, not a new export format: the
+        file is already the whole conversation, already encrypted at rest, and
+        already carries the owner in its metadata. Anything that can read a
+        session can read an archived one - which is the point, since the memory
+        lane is meant to retrieve from these later. A second format would have
+        to be taught to every reader and would drift from the first one.
+
+        The caller checks ownership (the web layer does this before delete
+        too); the scope here decides which account's archive it lands in.
+        """
+        target_dir = self.archive_dir(user_scope_id)
+        moved = False
+        for ext in [".json", ".json.gz"]:
+            src = self.storage_dir / f"{session_id}{ext}"
+            if not src.exists():
+                continue
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    target_dir.chmod(0o700)
+                except Exception:
+                    pass  # best effort; Windows has no meaningful mode here
+                src.replace(target_dir / f"{session_id}{ext}")
+                moved = True
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Could not archive session %s", session_id, exc_info=True)
+                return False
+        return moved
+
+    def list_archived(self, user_scope_id: str = None, limit: int = 200) -> List[Dict]:
+        """This account's archived chats, newest first. Never another's.
+
+        Reads only inside that account's archive directory and re-checks the
+        owner recorded IN each file, so a stray file cannot leak by sitting in
+        the wrong folder.
+        """
+        from vaf.core.cost import _scope_key
+
+        rows: List[Dict] = []
+        base = self.archive_dir(user_scope_id)
+        if not base.is_dir():
+            return rows
+        want = _scope_key(user_scope_id)
+        for path in base.glob("*.json*"):
+            try:
+                data = self._read_session_file(path)
+            except Exception:
+                continue
+            meta = data.get("metadata") or {}
+            if _scope_key(meta.get("user_scope_id")) != want:
+                continue
+            msgs = data.get("messages") or []
+            rows.append({
+                "id": data.get("id") or path.stem,
+                "name": data.get("name") or path.stem,
+                "updated_at": data.get("updated_at") or "",
+                "message_count": len(msgs),
+            })
+        rows.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        return rows[:limit]
+
     def delete(self, session_id: str) -> bool:
         """Delete a session.
 

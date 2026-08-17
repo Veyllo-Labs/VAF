@@ -214,7 +214,8 @@
     "chatDeleteTitle": "Diesen Chat loeschen?",
     "chatDeleteBody": "„{title}“ und der gesamte Inhalt werden von diesem Rechner entfernt, samt aller angehaengten Dokumente. Das laesst sich nicht rueckgaengig machen.",
     "chatDeleteDocs": "In diesem Chat angehaengt ({count}):",
-    "chatDeleteConfirm": "Chat loeschen"
+    "chatDeleteConfirm": "Chat loeschen",
+    "chatDeleteArchive": "Eine Kopie im Archiv behalten, damit der Agent sich weiter an dieses Gespraech erinnern kann. Nur du siehst es."
   },
   "nav": {
     "settings": "Einstellungen",

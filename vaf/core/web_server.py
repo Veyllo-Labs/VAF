@@ -4359,7 +4359,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("API", f"Access denied: delete_session {sid} not owned by {user_scope_id}")
                         await websocket.send_json({"type": "error", "message": "Access denied"})
                         continue
-                    session_mgr.delete(sid)
+                    # Archive-then-delete, in that order and never both: archiving
+                    # MOVES the file, so a delete afterwards would have nothing to
+                    # remove - and if the move failed we must still delete rather
+                    # than silently leave a chat the user asked to be gone.
+                    if bool(cmd.get("archive")):
+                        if not session_mgr.archive(sid, user_scope_id=user_scope_id):
+                            session_mgr.delete(sid)
+                    else:
+                        session_mgr.delete(sid)
                     # Broadcast update ONLY to this user's connections
                     web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await manager.broadcast_to_user(user_scope_id, {

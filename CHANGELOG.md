@@ -19,7 +19,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   seconds - a closed padlock and a count, opening to an unlocked one and the
   wording when it is safe to press. A destructive button under the cursor is
   pressed before the sentence above it is read. That delay now guards the
-  group-chat dialog too.
+  group-chat dialog too. The same dialog offers to keep a copy in your archive
+  instead of losing the conversation, ticked by default - the usual regret is a
+  chat deleted for tidiness that the agent later needed. Archived chats stay
+  readable by everything that reads a chat, so the agent's memory can use them,
+  and they are private to your account.
 - **Settings -> Usage: what was actually consumed, and by whom.** A new tab
   showing total tokens, request count, an estimated cost, and a table of
   accounts with the heaviest first. The token numbers do not depend on anyone

@@ -3001,6 +3001,9 @@ function VAFDashboardContent() {
     // above it.
     const [chatToDelete, setChatToDelete] = useState<{ id: string; title: string; isThinking: boolean } | null>(null);
     const [deleteArmedIn, setDeleteArmedIn] = useState(0);
+    // Keeping a copy is the default: the common regret is a chat deleted for
+    // tidiness that the agent later needed, not an archive that grew.
+    const [archiveOnDelete, setArchiveOnDelete] = useState(true);
     const [sessionViewerState, setSessionViewerState] = useState<Record<string, { isOpen: boolean; documents: DocumentViewerDoc[] }>>({});
     const defaultViewerState = useMemo(() => ({ isOpen: false as const, documents: [] as DocumentViewerDoc[] }), []);
 
@@ -3684,9 +3687,10 @@ function VAFDashboardContent() {
     };
     // What the dialog performs once it is confirmed. Unchanged from what the
     // trash icon used to do inline; only the moment it happens moved.
-    const performChatDelete = useCallback((target: { id: string; isThinking: boolean }) => {
+    const performChatDelete = useCallback((target: { id: string; isThinking: boolean; archive?: boolean }) => {
         wsSocketRef.current?.send(JSON.stringify({
             type: target.isThinking ? 'hide_session' : 'delete_session', id: target.id,
+            archive: !!target.archive,
         }));
         if (currentSessionId === target.id) {
             const remaining = conversationsOnly(sessions).filter(sess => sess.id !== target.id);
@@ -10235,6 +10239,17 @@ function VAFDashboardContent() {
                                 </div>
                             );
                         })()}
+                        <label className="flex items-start gap-2 mb-4 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={archiveOnDelete}
+                                onChange={(e) => setArchiveOnDelete(e.target.checked)}
+                                className="mt-0.5 accent-gray-900 dark:accent-[#d9d9d9]"
+                            />
+                            <span className="text-xs text-gray-600 dark:text-[#8a8a8a]">
+                                {tMain('chatDeleteArchive')}
+                            </span>
+                        </label>
                         <div className="flex gap-2">
                             <button
                                 onClick={() => setChatToDelete(null)}
@@ -10244,7 +10259,7 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 disabled={deleteArmedIn > 0}
-                                onClick={() => { performChatDelete(chatToDelete); setChatToDelete(null); }}
+                                onClick={() => { performChatDelete({ ...chatToDelete, archive: archiveOnDelete }); setChatToDelete(null); }}
                                 className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
                             >
                                 <span className="inline-flex items-center justify-center gap-2">

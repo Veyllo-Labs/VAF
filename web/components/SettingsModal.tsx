@@ -684,7 +684,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         } catch { /* ignore */ }
     }, []);
 
-    const NO_FIGURE = '—';
+    const NO_FIGURE = '-';
     // EUR<->USD at the ECB reference rate, applied only when the reader asked
     // for it. Amounts with no recorded currency ("?") are never converted -
     // there is nothing to convert FROM.

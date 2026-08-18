@@ -873,3 +873,29 @@ def test_the_rough_count_counts_words_and_symbols():
     assert estimate_tokens_roughly("hello world") == 2
     assert estimate_tokens_roughly("count these words, please!") == 6   # 4 words + , + !
     assert estimate_tokens_roughly("") == 0
+
+
+def test_the_ledger_maintenance_is_reachable_from_the_cli():
+    """Rule of layers: a maintenance action that rewrites the spend ledger must
+    not require reaching into Python. It was built and RUN that way once, which
+    is exactly the gap this pins - a headless install has no settings tab."""
+    from vaf.cli.cmd import usage as usage_cmd
+
+    names = {c.name for c in usage_cmd.app.registered_commands}
+    assert {"show", "set-currency"} <= names, names
+
+    import vaf.main as main_mod
+    src = __import__("pathlib").Path(main_mod.__file__).read_text(encoding="utf-8")
+    assert 'app.add_typer(usage.app, name="usage"' in src, "the group is never mounted"
+
+
+def test_the_cli_prints_one_amount_or_a_dash():
+    """Same rule as the tab: euros and dollars are not added, and an amount with
+    no recorded currency is not folded into one."""
+    from vaf.cli.cmd.usage import _fmt
+
+    assert _fmt({"EUR": 1.5}, 1.5) == "~€1.50"
+    assert _fmt({"USD": 2.0}, 2.0) == "~$2.00"
+    assert _fmt({"EUR": 1.0, "USD": 2.0}, 3.0) == "-"
+    assert _fmt({"?": 4.0}, 4.0) == "-"
+    assert _fmt({"EUR": 0.0001}, 0.0) == "~$0.00", "a sub-cent residue is not a currency"

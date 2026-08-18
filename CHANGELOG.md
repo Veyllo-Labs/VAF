@@ -77,7 +77,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   no rate is available. The choice is remembered, and it applies to the price
   comparison as well, so the whole tab can be read in one currency. Spending recorded before currencies were stored can
   be attributed once, by stating which currency it was - the software will
-  not guess, and it backs the ledger up before touching it. And a new breakdown shows which provider and model
+  not guess, and it backs the ledger up before touching it. Both live in a
+  new `vaf usage` command as well (`show`, `set-currency`), so an install
+  without a browser can read the same figures and run the same action. And a new breakdown shows which provider and model
   did the work - chat, vision, sub-agents, the tool model and the thinker can
   each run somewhere else, or locally, and their prices differ by an order of
   magnitude, so the total alone said very little. The XML export carries all

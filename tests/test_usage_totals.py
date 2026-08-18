@@ -297,17 +297,20 @@ def test_every_lane_is_counted_at_the_backend_choke_point(spend_dir):
     mgr.config = {"api_model_openai": "gpt-4o"}
     mgr.event_sink = None
     mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def _impl(*a, **kw):
-        # What a provider does: report the call's usage while streaming.
+        # What a provider does: report the call's usage and add it to the
+        # running session total, which is what the recorder measures.
         mgr.last_request_usage = {"input_tokens": 900, "output_tokens": 100}
+        mgr.session_usage["input_tokens"] += 900
+        mgr.session_usage["output_tokens"] += 100
         yield "hello"
 
     mgr._chat_completion_impl = _impl
 
     for lane in ("coder", "vision", "memory"):
         with c.usage_context(lane=lane, scope=None):
-            mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
             list(mgr.chat_completion([{"role": "user", "content": "hi"}]))
 
     out = usage_totals(days=1)
@@ -328,9 +331,12 @@ def test_a_failed_call_is_not_billed_twice(spend_dir):
     mgr.config = {"api_model_openai": "gpt-4o"}
     mgr.event_sink = None
     mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def _ok(*a, **kw):
         mgr.last_request_usage = {"input_tokens": 500, "output_tokens": 50}
+        mgr.session_usage["input_tokens"] += 500
+        mgr.session_usage["output_tokens"] += 50
         yield "x"
 
     def _boom(*a, **kw):
@@ -758,3 +764,34 @@ def test_stamping_legacy_amounts_fills_only_what_is_missing(spend_dir):
 
 def test_stamping_refuses_a_currency_it_cannot_display():
     assert "error" in cost_mod.stamp_legacy_currency("CHF")
+
+
+def test_two_identical_calls_are_both_counted(spend_dir):
+    """Measured against a provider's dashboard: VAF was reporting fewer tokens
+    than were billed. The recorder compared the last request's numbers against a
+    snapshot, so a call whose counts matched the previous one exactly looked
+    like "nothing new" and was dropped - and the utility lanes send near-
+    identical prompts back to back, so it was not rare."""
+    from vaf.core.api_backend import APIBackendManager
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"api_model_openai": "gpt-4o"}
+    mgr.event_sink = None
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _same(*a, **kw):
+        # The SAME counts every time, which is exactly the case that vanished.
+        mgr.last_request_usage = {"input_tokens": 700, "output_tokens": 70}
+        mgr.session_usage["input_tokens"] += 700
+        mgr.session_usage["output_tokens"] += 70
+        yield "x"
+
+    mgr._chat_completion_impl = _same
+    for _ in range(3):
+        list(mgr.chat_completion([]))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["calls"] == 3, "every call must be booked, identical or not"
+    assert out["totals"]["tokens"] == 3 * 770

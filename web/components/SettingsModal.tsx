@@ -3295,14 +3295,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <Section title={tUsage('title')}>
                                     {fx && usage?.costs_visible !== false && (
-                                        <div className="flex justify-end -mt-1 mb-2">
+                                        // Pulled up level with the section heading: it belongs to
+                                        // the panel as a whole, not to the paragraph under it.
+                                        <div className="flex justify-end -mt-9 mb-3 relative z-10">
                                             <div className="inline-flex rounded-lg border border-gray-200 dark:border-[#2a2a2a] overflow-hidden">
                                                 {(['EUR', 'USD'] as const).map(cur => (
                                                     <button key={cur} type="button"
                                                             onClick={() => setConvertTo(convertTo === cur ? null : cur)}
                                                             className={cn("px-3 transition-colors",
                                                                 convertTo === cur
-                                                                    ? "py-1.5 text-sm font-semibold bg-gray-900 text-white dark:bg-[#d9d9d9] dark:text-gray-900"
+                                                                    ? "py-1.5 text-sm font-semibold bg-gray-200 text-black dark:bg-[#d9d9d9] dark:text-black"
                                                                     : "py-1.5 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200")}>
                                                         {cur}
                                                     </button>

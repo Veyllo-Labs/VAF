@@ -1103,7 +1103,7 @@ class APIBackendManager:
         # is what makes "every call is counted" true by construction instead of
         # by nine call sites remembering to. It replaced a per-turn hook in the
         # agent that counted the chat lane only; everything else was invisible.
-        _before = dict(self.last_request_usage or {})
+        _before = dict(self.session_usage or {})
         _t0 = _time.monotonic()
         _ok = False
         try:
@@ -1126,19 +1126,28 @@ class APIBackendManager:
                 )
 
     def _record_call_usage(self, before: dict, model: Optional[str]) -> None:
-        """Book what THIS call reported, once, into the spend ledger.
+        """Book what THIS call added, once, into the spend ledger.
 
-        `last_request_usage` is per request and overwritten by the next one, so
-        a call that reported nothing (an error, or an abandoned generator) leaves
-        the previous call's numbers standing - comparing against the snapshot
-        taken before the call is what keeps that from being billed twice.
+        Measured as the DELTA of the running session total, not by comparing
+        `last_request_usage` against a snapshot. That comparison looked
+        equivalent and silently dropped every call whose token counts happened
+        to match the previous one exactly - which is not rare at all, since the
+        utility lanes send near-identical prompts back to back. Measured against
+        a provider's own dashboard it was a percent-scale undercount.
+
+        The running total only ever grows, so an identical repeat still moves it,
+        while a call that reported nothing (an error, an abandoned generator)
+        moves it by zero and is correctly not billed.
         """
         try:
-            after = dict(self.last_request_usage or {})
-            if after == before:
-                return  # nothing new was reported: no call to bill
-            _in = int(after.get("input_tokens") or 0)
-            _out = int(after.get("output_tokens") or 0)
+            after = dict(self.session_usage or {})
+            _in = int(after.get("input_tokens") or 0) - int(before.get("input_tokens") or 0)
+            _out = int(after.get("output_tokens") or 0) - int(before.get("output_tokens") or 0)
+            if _in < 0 or _out < 0:
+                # The counter was reset under us (a provider swap). Fall back to
+                # what the last request reported rather than booking a negative.
+                _lr = dict(self.last_request_usage or {})
+                _in, _out = int(_lr.get("input_tokens") or 0), int(_lr.get("output_tokens") or 0)
             if not (_in or _out):
                 return
             from vaf.core.cost import record_call

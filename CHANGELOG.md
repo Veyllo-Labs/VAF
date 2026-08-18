@@ -53,6 +53,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   button that opens this tab directly. Clicking a bar in the 7-day chart
   opens that day's breakdown: which lane spent the tokens - chat, thinking,
   automation, a sub-agent, the browser - and how much each one used.
+  Token counts were also running low against the providers' own dashboards:
+  a call whose token counts happened to match the previous one exactly was
+  treated as "nothing new" and dropped, and the utility lanes send nearly
+  identical prompts back to back. Calls are now measured as the growth of
+  the running total, so identical repeats count.
   Coverage is complete now: individual tools bill under their own name, the
   coder's own connection is counted, and local model calls are counted too -
   they cost nothing, but leaving them out meant the page could not answer

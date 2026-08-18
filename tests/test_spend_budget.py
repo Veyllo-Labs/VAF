@@ -117,7 +117,11 @@ def test_every_call_is_billed_at_the_backend_not_at_the_turn():
 
     i = backend_src.index("def chat_completion(self, messages")
     j = backend_src.index("def _record_call_usage")
-    assert "self._record_call_usage(_before, model)" in backend_src[i:j], \
+    # Matched on the CALL, not its argument list: the recorder has grown
+    # parameters (the messages and streamed size a fallback estimate needs) and
+    # a guard pinned to one spelling fails on every future one while proving
+    # nothing about the property it exists for.
+    assert "self._record_call_usage(_before, model" in backend_src[i:j], \
         "the public entry point no longer records the call it just made"
     assert backend_src.count("def _record_call_usage") == 1
 

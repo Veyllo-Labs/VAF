@@ -57,7 +57,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a call whose token counts happened to match the previous one exactly was
   treated as "nothing new" and dropped, and the utility lanes send nearly
   identical prompts back to back. Calls are now measured as the growth of
-  the running total, so identical repeats count.
+  the running total, so identical repeats count. A call the provider never
+  reports usage for - an aborted or failed stream - is no longer silently
+  missing either: it is counted, sized by a rough word count, and marked as
+  an estimate, so the part of the total that was estimated can be seen and
+  subtracted.
   Coverage is complete now: individual tools bill under their own name, the
   coder's own connection is counted, and local model calls are counted too -
   they cost nothing, but leaving them out meant the page could not answer

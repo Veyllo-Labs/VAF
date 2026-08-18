@@ -26,6 +26,7 @@ adjacency (Rule 4.1).
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -288,9 +289,26 @@ def current_lane() -> str:
     return _LANE.get()
 
 
+
+# Word/symbol count as a stand-in for a tokenizer. Deliberately crude: a real
+# tokenizer would have to be loaded per provider and run on every call, for a
+# number that is only ever used when the provider told us nothing. Words plus
+# punctuation lands within a small factor of the truth for prose, which is what
+# a fallback needs - it is not trying to be right, it is trying to stop a hole.
+_WORDISH = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+
+
+def estimate_tokens_roughly(text: str) -> int:
+    """Approximate token count for text, when nobody reported a real one."""
+    if not text:
+        return 0
+    return len(_WORDISH.findall(str(text)))
+
+
 def record_call(provider: str, model: str, input_tokens: int, output_tokens: int,
                 *, lane: Optional[str] = None, user_scope_id: Any = _UNSET,
-                session_id: Optional[str] = None) -> CostEstimate:
+                session_id: Optional[str] = None, reported: bool = True,
+                estimated: bool = False) -> CostEstimate:
     """Record ONE model call: the ledger entry, the lane total, and a log line.
 
     THE entry point for accounting. Everything that reaches a model goes through
@@ -312,7 +330,8 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     lane_name = str(lane or _LANE.get() or "main")
     scope = _SCOPE.get() if user_scope_id is _UNSET else user_scope_id
     try:
-        record_spend(scope, est, lane=lane_name, provider=provider)
+        record_spend(scope, est, lane=lane_name, provider=provider,
+                     reported=reported, estimated=estimated)
     except Exception:
         pass
     try:
@@ -321,6 +340,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
         append_usage_log((
             f"lane={lane_name} provider={provider or '?'} model={model or '?'} "
             f"in={est.input_tokens} out={est.output_tokens} usd={est.usd:.6f}"
+            f"{'' if reported else (' usage=estimated' if estimated else ' usage=none')}"
             f"{'' if est.cost_known else ' price=unknown'}"
             f" scope={_scope_key(scope)}"
             + (f" session={session_id}" if session_id else "")
@@ -331,7 +351,8 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
 
 
 def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
-                 *, lane: Optional[str] = None, provider: Optional[str] = None) -> float:
+                 *, lane: Optional[str] = None, provider: Optional[str] = None,
+                 reported: bool = True, estimated: bool = False) -> float:
     """Add an estimate to today's ledger and return the new day total.
 
     Best-effort: a ledger that cannot be written must never break a turn.
@@ -357,6 +378,18 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
         _curs[_cur] = round(float(_curs.get(_cur) or 0.0) + estimate.usd, 6)
         entry["currencies"] = _curs
         entry["calls"] = int(entry.get("calls") or 0) + 1
+        # A call the provider never reported usage for. Counted rather than
+        # estimated: the gap against an invoice is then a number the reader can
+        # see and locate, instead of a percentage somebody added to be safe.
+        if not reported:
+            entry["no_usage_calls"] = int(entry.get("no_usage_calls") or 0) + 1
+            if estimated:
+                # The tokens are in the total so the figure is not short, and
+                # counted here as well so the total can say how much of itself
+                # was estimated. A number that hides its own provenance is the
+                # thing this whole lane exists not to produce.
+                entry["estimated_tokens"] = int(entry.get("estimated_tokens") or 0) \
+                    + max(0, int(estimate.input_tokens)) + max(0, int(estimate.output_tokens))
         # Tokens are added beside the money rather than replacing it: the money
         # is an estimate from a price table that ages, the tokens are what the
         # provider reported. A ledger written before this existed simply has no
@@ -464,7 +497,7 @@ def usage_totals(days: int = 30) -> dict:
     out = {"days": max(1, int(days or 1)), "users": [], "daily": [], "totals": {
         "input_tokens": 0, "output_tokens": 0, "tokens": 0,
         "usd": 0.0, "currencies": {}, "calls": 0, "providers": {},
-        "estimated_usd_incomplete": False}}
+        "no_usage_calls": 0, "estimated_tokens": 0, "estimated_usd_incomplete": False}}
     try:
         base = Platform.data_dir() / "spend"
         if not base.is_dir():
@@ -484,7 +517,8 @@ def usage_totals(days: int = 30) -> dict:
                 continue  # a corrupt ledger must not hide every other user
             scope = path.stem
             agg = {"input_tokens": 0, "output_tokens": 0, "usd": 0.0, "currencies": {},
-                   "calls": 0, "unknown_model_calls": 0, "last_active": ""}
+                   "calls": 0, "unknown_model_calls": 0, "no_usage_calls": 0,
+                   "estimated_tokens": 0, "last_active": ""}
             for day, entry in (data.get("days") or {}).items():
                 if str(day) < cutoff:
                     continue
@@ -499,6 +533,8 @@ def usage_totals(days: int = 30) -> dict:
                     _merge_currencies(agg["currencies"], entry)
                     agg["calls"] += _dcalls
                     agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
+                    agg["no_usage_calls"] += int(entry.get("no_usage_calls") or 0)
+                    agg["estimated_tokens"] += int(entry.get("estimated_tokens") or 0)
                 except Exception:
                     continue
                 if str(day) in by_day:
@@ -549,6 +585,8 @@ def usage_totals(days: int = 30) -> dict:
             out["totals"]["usd"] += r["usd"]
             _merge_currencies(out["totals"]["currencies"], r)
             out["totals"]["calls"] += r["calls"]
+            out["totals"]["no_usage_calls"] += int(r.get("no_usage_calls") or 0)
+            out["totals"]["estimated_tokens"] += int(r.get("estimated_tokens") or 0)
             if r["unknown_model_calls"]:
                 out["totals"]["estimated_usd_incomplete"] = True
         out["totals"]["tokens"] = out["totals"]["input_tokens"] + out["totals"]["output_tokens"]

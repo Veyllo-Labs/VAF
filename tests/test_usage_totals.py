@@ -350,8 +350,11 @@ def test_a_failed_call_is_not_billed_twice(spend_dir):
         list(mgr.chat_completion([]))
 
     out = usage_totals(days=1)
-    assert out["totals"]["calls"] == 1, "the failed call reported nothing and must not be billed"
-    assert out["totals"]["tokens"] == 550
+    # Counted as an attempt, billed for nothing: the failure is visible without
+    # inventing tokens for it, and without re-billing the previous call's.
+    assert out["totals"]["tokens"] == 550, "a failed call must not inherit the last one's tokens"
+    assert out["totals"]["calls"] == 2
+    assert out["totals"]["no_usage_calls"] == 1
 
 
 def test_the_usage_log_survives_the_debug_switch(tmp_path, monkeypatch):
@@ -795,3 +798,78 @@ def test_two_identical_calls_are_both_counted(spend_dir):
     out = usage_totals(days=1)
     assert out["totals"]["calls"] == 3, "every call must be booked, identical or not"
     assert out["totals"]["tokens"] == 3 * 770
+
+
+def test_a_call_the_provider_never_reported_is_counted_as_such(spend_dir):
+    """We always know WHO called - lane, provider and model are decided before
+    the request goes out. What an aborted stream withholds is the provider's own
+    usage report. Counting the call with zero tokens turns the gap against an
+    invoice into a number the reader can see and locate, which is the honest
+    alternative to adding a safety margin nobody could verify."""
+    from vaf.core.api_backend import APIBackendManager
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"api_model_openai": "gpt-4o"}
+    mgr.event_sink = None
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def _ok(*a, **kw):
+        mgr.session_usage["input_tokens"] += 400
+        mgr.session_usage["output_tokens"] += 40
+        yield "x"
+
+    def _silent(*a, **kw):
+        yield "x"          # a stream that ends without ever reporting usage
+
+    mgr._chat_completion_impl = _ok
+    list(mgr.chat_completion([]))
+    mgr._chat_completion_impl = _silent
+    list(mgr.chat_completion([]))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["calls"] == 2, "both attempts are calls"
+    assert out["totals"]["no_usage_calls"] == 1, "the silent one is named, not hidden"
+    # The silent call is sized by the fallback rather than left at zero, and the
+    # part that came from it is counted separately - so a reader can subtract it
+    # and get back to the figures the provider actually reported.
+    assert out["totals"]["estimated_tokens"] > 0
+    assert out["totals"]["tokens"] - out["totals"]["estimated_tokens"] == 440
+
+
+def test_a_silent_call_falls_back_to_a_marked_estimate(spend_dir, tmp_path, monkeypatch):
+    """When the provider reports nothing, the call is still sized - roughly, from
+    words and symbols - so the total is not short. What makes that acceptable is
+    that it says so: the log line, the ledger and the total all record how much
+    of the figure was estimated rather than reported."""
+    monkeypatch.setenv("VAF_LOG_DIR", str(tmp_path))
+    from vaf.core.api_backend import APIBackendManager
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {"api_model_openai": "gpt-4o"}
+    mgr.event_sink = None
+    mgr.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr._chat_completion_impl = lambda *a, **kw: iter(["hello there ", "friend"])
+
+    list(mgr.chat_completion([{"role": "user", "content": "count these words, please!"}]))
+
+    out = usage_totals(days=1)
+    assert out["totals"]["calls"] == 1
+    assert out["totals"]["no_usage_calls"] == 1
+    assert out["totals"]["tokens"] > 0, "a silent call must not leave a hole"
+    assert out["totals"]["estimated_tokens"] == out["totals"]["tokens"], (
+        "all of it came from the fallback, and the total must say so"
+    )
+    line = list(tmp_path.glob("usage_*.log"))[0].read_text(encoding="utf-8")
+    assert "usage=estimated" in line, "the log must name the fallback where it fired"
+
+
+def test_the_rough_count_counts_words_and_symbols():
+    from vaf.core.cost import estimate_tokens_roughly
+
+    assert estimate_tokens_roughly("hello world") == 2
+    assert estimate_tokens_roughly("count these words, please!") == 6   # 4 words + , + !
+    assert estimate_tokens_roughly("") == 0

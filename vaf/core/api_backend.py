@@ -1106,13 +1106,20 @@ class APIBackendManager:
         _before = dict(self.session_usage or {})
         _t0 = _time.monotonic()
         _ok = False
+        # Kept as a running COUNT, never as accumulated text: this exists only
+        # to size a fallback, and holding a whole response in memory to do it
+        # would cost more than the number is worth.
+        _out_units = 0
         try:
-            yield from self._chat_completion_impl(
+            for _chunk in self._chat_completion_impl(
                 messages, temperature, max_tokens, stream, model, tools, tool_choice
-            )
+            ):
+                if isinstance(_chunk, str) and _chunk:
+                    _out_units += _chunk.count(" ") + 1
+                yield _chunk
             _ok = True
         finally:
-            self._record_call_usage(_before, model)
+            self._record_call_usage(_before, model, messages=messages, out_units=_out_units)
             if _sink:
                 self._emit_event(
                     {
@@ -1125,7 +1132,8 @@ class APIBackendManager:
                     }
                 )
 
-    def _record_call_usage(self, before: dict, model: Optional[str]) -> None:
+    def _record_call_usage(self, before: dict, model: Optional[str],
+                           *, messages=None, out_units: int = 0) -> None:
         """Book what THIS call added, once, into the spend ledger.
 
         Measured as the DELTA of the running session total, not by comparing
@@ -1148,13 +1156,37 @@ class APIBackendManager:
                 # what the last request reported rather than booking a negative.
                 _lr = dict(self.last_request_usage or {})
                 _in, _out = int(_lr.get("input_tokens") or 0), int(_lr.get("output_tokens") or 0)
-            if not (_in or _out):
-                return
             from vaf.core.cost import record_call
 
-            record_call(self.provider_name,
-                        str(model or self.config.get(f"api_model_{self.provider_name}", "") or ""),
-                        _in, _out)
+            _model = str(model or self.config.get(f"api_model_{self.provider_name}", "") or "")
+            if not (_in or _out):
+                # The call happened - we know the lane, the provider and the
+                # model, because those are decided before it goes out. What is
+                # missing is the provider's own report, which an aborted or
+                # failed stream never sends. Counted with zero tokens so the
+                # difference against an invoice is a visible number rather than
+                # a silent gap somebody would later paper over with a margin.
+                # We know WHO called and WHERE it went - those are decided
+                # before the request leaves. Only the provider's own count is
+                # missing, so a rough one is put in its place and marked as
+                # such, everywhere: in the log line, in the ledger, and in the
+                # share of the total that is estimated. Better a stated
+                # approximation than a hole nobody can size.
+                from vaf.core.cost import estimate_tokens_roughly
+
+                _in_est = 0
+                for _m in (messages or []):
+                    try:
+                        _in_est += estimate_tokens_roughly(str((_m or {}).get("content") or ""))
+                    except Exception:
+                        continue
+                if _in_est or out_units:
+                    record_call(self.provider_name, _model, _in_est, int(out_units),
+                                reported=False, estimated=True)
+                else:
+                    record_call(self.provider_name, _model, 0, 0, reported=False)
+                return
+            record_call(self.provider_name, _model, _in, _out)
         except Exception:
             pass  # accounting must never break a call
 

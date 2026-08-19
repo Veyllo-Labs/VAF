@@ -69,10 +69,19 @@ def patched(monkeypatch, tmp_path):
 
     bc = tmp_path / "last_update.json"
     monkeypatch.setattr(uc, "last_update_breadcrumb_path", lambda: bc)
+    rp = tmp_path / "update_result.json"
+    monkeypatch.setattr(uc, "update_result_path", lambda: rp)
     monkeypatch.setattr(uc, "resolve_latest_release", lambda pre=None: ({
         "tag": "v9.9.9", "version": "9.9.9", "html_url": "u", "body": "", "prerelease": False
     }, None))
-    return types.SimpleNamespace(git=fg, events=events, state=state, breadcrumb=bc)
+    return types.SimpleNamespace(git=fg, events=events, state=state, breadcrumb=bc, result=rp)
+
+
+def _result(patched):
+    """The recorded outcome file, parsed (None when no run wrote one)."""
+    if not patched.result.exists():
+        return None
+    return json.loads(patched.result.read_text())
 
 
 def test_apply_happy_path(patched):
@@ -81,6 +90,9 @@ def test_apply_happy_path(patched):
     assert "fetch" in seq and "checkout" in seq
     assert patched.events["stopped"] == 1 and patched.events["started"] == 1
     assert not patched.breadcrumb.exists()  # cleared on success
+    # The run's outcome is recorded: this is what the waiting dialog reads.
+    r = _result(patched)
+    assert r and r["outcome"] == "succeeded" and r["target_version"] == "9.9.9"
 
 
 def test_apply_non_git_converts_and_resets(patched, monkeypatch):
@@ -115,6 +127,11 @@ def test_apply_dirty_tree_aborts_without_touching_service(patched):
     assert ei.value.exit_code == 1
     assert patched.events["stopped"] == 0
     assert not patched.breadcrumb.exists()
+    # An abort BEFORE anything was mutated: recorded as failed, so a
+    # web-started run does not leave the dialog spinning against a server
+    # that never went away.
+    r = _result(patched)
+    assert r and r["outcome"] == "failed" and "local changes" in (r["error"] or "")
 
 
 def test_apply_checkout_failure_rolls_back(patched):
@@ -126,6 +143,10 @@ def test_apply_checkout_failure_rolls_back(patched):
     assert len(checkouts) >= 2  # failed target checkout + rollback checkout
     assert patched.events["started"] >= 1
     assert not patched.breadcrumb.exists()
+    # Rolled back and restarted on the old version: without this record the
+    # outside world cannot tell the failure from "nothing ever happened".
+    r = _result(patched)
+    assert r and r["outcome"] == "rolled_back" and r["error"]
 
 
 def test_apply_verify_failure_rolls_back(patched):
@@ -146,14 +167,22 @@ def test_apply_dry_run_changes_nothing(patched):
     assert "fetch" not in seq and "checkout" not in seq
     assert patched.events["stopped"] == 0
     assert not patched.breadcrumb.exists()
+    assert _result(patched) is None   # a dry run records no outcome
 
 
 def test_recover_with_breadcrumb_rolls_back(patched):
-    patched.breadcrumb.write_text(json.dumps({"recorded_head": "deadbeef", "branch": "main"}))
+    patched.breadcrumb.write_text(json.dumps({
+        "recorded_head": "deadbeef", "branch": "main",
+        "from_version": "1.0.0", "target_tag": "v9.9.9",
+    }))
     upd._recover()
     checkouts = [c for c in patched.git.calls if c[0] == "checkout"]
     assert checkouts and checkouts[0][1] == "deadbeef"
     assert not patched.breadcrumb.exists()
+    # The interrupted update's final outcome, versions taken from the breadcrumb.
+    r = _result(patched)
+    assert r and r["outcome"] == "rolled_back"
+    assert r["from_version"] == "1.0.0" and r["target_version"] == "9.9.9"
 
 
 # ── _verify: exact version match, not substring (the alpha->stable false-pass) ──────────────────
@@ -194,6 +223,8 @@ def test_apply_failed_rollback_keeps_breadcrumb(patched):
     assert ei.value.exit_code == 1
     assert patched.breadcrumb.exists()      # kept for `vaf update --recover`
     assert patched.events["started"] == 0   # no false restart on a failed rollback
+    r = _result(patched)
+    assert r and r["outcome"] == "recover_needed"
 
 
 def test_recover_failed_checkout_keeps_breadcrumb(patched):

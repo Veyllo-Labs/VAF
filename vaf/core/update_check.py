@@ -20,6 +20,14 @@ CLI updater long before this module existed:
 - `~/.vaf/last_update.json` - a breadcrumb written before an update mutates
   anything and cleared when it finishes. Present afterwards means an update
   did not complete, and `vaf update --recover` is the way out.
+- `~/.vaf/update_result.json` - how the last update run ENDED. The breadcrumb
+  only distinguishes "running" from "not running"; a failed update that rolled
+  itself back clears the breadcrumb and restarts the OLD version, which from
+  the outside is indistinguishable from "nothing ever happened". This file is
+  the missing outcome: the updater clears it when a run starts and writes
+  exactly one at every exit, so a client that finds the old version answering
+  again can tell "the updater has not stopped the service yet" (no result)
+  from "it failed and rolled back" (a fresh result says so).
 """
 from __future__ import annotations
 
@@ -277,6 +285,66 @@ def read_last_update() -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+# ── the outcome: how did the last update run end? ────────────────────────────
+
+# The four ways an update run can end. "failed" is an abort BEFORE anything was
+# mutated (nothing to roll back); "rolled_back" is a failure after mutation with
+# a successful restore; "recover_needed" means the restore itself failed and the
+# breadcrumb was kept for `vaf update --recover`.
+UPDATE_OUTCOMES = ("succeeded", "rolled_back", "recover_needed", "failed")
+
+
+def update_result_path() -> Path:
+    return Path.home() / ".vaf" / "update_result.json"
+
+
+def write_update_result(outcome: str, from_version: str, target_version: str,
+                        error: Optional[str] = None) -> None:
+    """Record how an update run ended. Exactly one write per run, at its exit.
+
+    Plain status file like the cache and the breadcrumb above: tolerant reader,
+    no schema tag. The NEW version reads a result the OLD version wrote (and
+    vice versa after a rollback), so unknown fields must never be an error.
+    """
+    if outcome not in UPDATE_OUTCOMES:
+        raise ValueError(f"unknown update outcome: {outcome!r}")
+    p = update_result_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "outcome": outcome,
+            "from_version": from_version,
+            "target_version": target_version,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            # Cap the stored text: the updater's real log is update_web.log,
+            # this is the one-line reason a UI can show.
+            "error": (str(error)[:500] if error else None),
+        }, indent=2))
+    except Exception:
+        pass    # the outcome file is best-effort; the update itself must not fail on it
+
+
+def clear_update_result() -> None:
+    update_result_path().unlink(missing_ok=True)
+
+
+def read_update_result() -> Optional[Dict[str, Any]]:
+    """The last run's outcome, or None (no run recorded yet, or unreadable)."""
+    try:
+        data = json.loads(update_result_path().read_text())
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("outcome") not in UPDATE_OUTCOMES:
+        return None
+    return {
+        "outcome": str(data.get("outcome")),
+        "from_version": str(data.get("from_version") or ""),
+        "target_version": str(data.get("target_version") or ""),
+        "finished_at": str(data.get("finished_at") or ""),
+        "error": (str(data["error"]) if data.get("error") else None),
+    }
 
 
 # ── starting an update from outside a terminal ───────────────────────────────

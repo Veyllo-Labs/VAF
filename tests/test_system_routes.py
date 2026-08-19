@@ -113,18 +113,38 @@ def test_update_state_reads_disk_and_never_the_network(client, monkeypatch):
                         lambda: {"checked_at": "2026-08-01T00:00:00+00:00",
                                  "latest_version": "9.9.9", "relevant": True})
     monkeypatch.setattr(sr, "read_last_update", lambda: None)
+    monkeypatch.setattr(sr, "read_update_result", lambda: None)
     monkeypatch.setattr(sr, "describe_update_ability", lambda: (True, ""))
     body = client.get("/api/system/update").json()
     assert body["cache"]["latest_version"] == "9.9.9"
     assert body["can_apply"] is True
     assert body["current"]
+    assert body["last_result"] is None
 
 
 def test_update_state_surfaces_an_unfinished_update(client, monkeypatch):
     monkeypatch.setattr(sr, "read_update_cache", lambda: None)
     monkeypatch.setattr(sr, "read_last_update", lambda: {"target_tag": "v9.9.9"})
+    monkeypatch.setattr(sr, "read_update_result", lambda: None)
     monkeypatch.setattr(sr, "describe_update_ability", lambda: (True, ""))
     assert client.get("/api/system/update").json()["last_update"]["target_tag"] == "v9.9.9"
+
+
+def test_update_state_carries_the_last_runs_outcome(client, monkeypatch):
+    """A rollback restarts the OLD version, which from outside looks exactly
+    like "nothing happened". The recorded outcome is how the waiting dialog
+    tells the difference, so the state endpoint must pass it through."""
+    monkeypatch.setattr(sr, "read_update_cache", lambda: None)
+    monkeypatch.setattr(sr, "read_last_update", lambda: None)
+    monkeypatch.setattr(sr, "read_update_result",
+                        lambda: {"outcome": "rolled_back", "from_version": "1.0.0",
+                                 "target_version": "9.9.9",
+                                 "finished_at": "2026-08-01T00:00:00+00:00",
+                                 "error": "pip exploded"})
+    monkeypatch.setattr(sr, "describe_update_ability", lambda: (True, ""))
+    body = client.get("/api/system/update").json()
+    assert body["last_result"]["outcome"] == "rolled_back"
+    assert body["last_result"]["error"] == "pip exploded"
 
 
 def test_the_check_button_is_the_only_thing_that_asks_github(client, monkeypatch):
@@ -160,6 +180,9 @@ def test_apply_spawns_the_updater_and_answers_at_once(client, appliable):
     assert body["started"] is True
     assert body["poll"] == "/api/version"
     assert body["pid"] == 99
+    # Server clock, same clock the updater stamps its outcome file with: the
+    # client keeps it to accept only THIS run's outcome later.
+    assert body["started_at"]
 
 
 def test_a_second_apply_is_refused_so_two_updaters_never_share_a_checkout(client, appliable):

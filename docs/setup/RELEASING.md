@@ -21,6 +21,17 @@ git checkout is refused there and sent to a terminal, because adopting it means
 a `git reset --hard` and `vaf update` asks about that in a prompt an unattended
 run would answer by itself.
 
+Because the spawned updater outlives the server that started it, every run also
+records how it ENDED in `~/.vaf/update_result.json` (outcome `succeeded`,
+`rolled_back`, `recover_needed`, or `failed` for aborts that changed nothing,
+plus versions, a finish timestamp and a one-line error). A rollback restarts
+the OLD version and clears the in-progress breadcrumb, which from the outside
+is indistinguishable from "nothing ever happened" - the result file is what
+lets the Web UI (via `last_result` on `GET /api/system/update`) report the
+failure instead of waiting forever. The file is cleared when a run goes live
+and written exactly once at its exit; readers must stay tolerant, since the new
+version reads a result the old version wrote (and vice versa).
+
 ## Versioning
 
 - Single source of truth: `vaf/version.py` (`__version__`).

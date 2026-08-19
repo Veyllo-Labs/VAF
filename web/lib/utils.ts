@@ -28,6 +28,23 @@ export function getWsBase(): string {
   return "ws://localhost:8001";
 }
 
+/**
+ * Direct backend origin for the rare fetch that must BYPASS the Next.js proxy,
+ * or null when same-origin already IS the backend. Same port derivation as
+ * getWsBase (3000 -> 8001; any other port means a proxy fronts both).
+ *
+ * Only useful for unauthenticated endpoints (/api/version): the auth cookie is
+ * SameSite=Lax, so a cross-origin fetch carries no session. The update dialog
+ * uses this while the Next server is down for its post-update rebuild - the
+ * backend is up and answering minutes before the proxy is.
+ */
+export function getApiDirectBase(): string | null {
+  if (typeof window === "undefined") return null;
+  if (window.location.port !== "3000") return null;
+  const protocol = window.location.protocol === "https:" ? "https" : "http";
+  return `${protocol}://${window.location.hostname}:8001`;
+}
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }

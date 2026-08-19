@@ -11,6 +11,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The update dialog now knows how the update ended.** Updating from
+  Settings -> Update and Repair used to show a spinner for as long as ten
+  minutes with no verdict: the dialog watched the version only through the web
+  interface, which is down for its own rebuild for minutes after the backend
+  is already back, and a failed update that rolled itself back looked exactly
+  like nothing ever happened. Now every `vaf update` run records how it ended
+  (`~/.vaf/update_result.json`), the dialog reads that verdict and shows a real
+  failure screen (rolled back, recovery needed, or aborted before anything
+  changed) with the error and the log path - and while the interface is still
+  rebuilding it asks the backend directly, so a successful update says "server
+  updated, interface rebuilding" instead of spinning blind.
+
 ### Added
 - **A file in the room can be named, not just described.** A message may now
   carry `files` - the names of files in the room's shared folder it is about -

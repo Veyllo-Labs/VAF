@@ -119,6 +119,43 @@ def test_the_breadcrumb_says_an_update_did_not_finish(breadcrumb):
     assert uc.read_last_update() is None
 
 
+# ── the outcome of the last run ──────────────────────────────────────────────
+
+@pytest.fixture
+def result_file(tmp_path, monkeypatch):
+    path = tmp_path / "update_result.json"
+    monkeypatch.setattr(uc, "update_result_path", lambda: path)
+    return path
+
+
+def test_the_result_records_how_a_run_ended(result_file):
+    assert uc.read_update_result() is None
+    uc.write_update_result("rolled_back", "1.0.0", "2.0.0", error="pip exploded")
+    r = uc.read_update_result()
+    assert r["outcome"] == "rolled_back"
+    assert r["from_version"] == "1.0.0" and r["target_version"] == "2.0.0"
+    assert r["error"] == "pip exploded"
+    assert r["finished_at"]     # stamped with the server clock
+    uc.clear_update_result()
+    assert uc.read_update_result() is None
+
+
+def test_a_broken_or_foreign_result_reads_as_no_answer(result_file):
+    """The NEW version reads a result the OLD version wrote (and vice versa
+    after a rollback), so anything unexpected must be None, never a crash."""
+    result_file.write_text("{half a json")
+    assert uc.read_update_result() is None
+    result_file.write_text(json.dumps({"outcome": "exploded_sideways"}))
+    assert uc.read_update_result() is None
+    result_file.write_text(json.dumps({"outcome": "succeeded", "unknown_field": 1}))
+    assert uc.read_update_result()["outcome"] == "succeeded"
+
+
+def test_an_unknown_outcome_is_refused_at_the_write(result_file):
+    with pytest.raises(ValueError):
+        uc.write_update_result("shrug", "1.0.0", "2.0.0")
+
+
 # ── starting the updater ─────────────────────────────────────────────────────
 
 @pytest.fixture

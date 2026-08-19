@@ -11,7 +11,7 @@ import { useTranslations } from 'next-intl';
 import { Background, Controls, Position, useEdgesState, useNodesState } from 'reactflow';
 import 'reactflow/dist/style.css';
 
-import { getApiBase } from '@/lib/utils';
+import { getApiBase, getApiDirectBase } from '@/lib/utils';
 import { compareVersions, formatVersion } from '@/lib/version';
 import { useThemeStore } from '@/lib/themeStore';
 
@@ -52,8 +52,24 @@ interface RepairStep {
     message?: string;
 }
 
+/** How the last update run ended, as `GET /api/system/update` reports it
+ *  (written by the updater at every exit; see vaf/core/update_check.py). */
+interface UpdateResult {
+    outcome: 'succeeded' | 'rolled_back' | 'recover_needed' | 'failed';
+    from_version?: string;
+    target_version?: string;
+    finished_at?: string;
+    error?: string | null;
+}
+
 /** Where the update side of the dialog is. The waiting state is the interesting
- *  one: the server it is talking to is gone on purpose while it holds. */
+ *  one: the server it is talking to is gone on purpose while it holds.
+ *
+ *  `backendUp` is what the DIRECT backend poll saw while the Next proxy is
+ *  still down for its post-update rebuild: 'new' = the update itself is done
+ *  and only the interface is still building; 'old' = the previous version is
+ *  answering again after being down, which smells like a rollback (the failed
+ *  phase needs the authenticated outcome and can only follow via same-origin). */
 type UpdatePhase =
     | { kind: 'idle' }
     | { kind: 'checking' }
@@ -61,9 +77,10 @@ type UpdatePhase =
     | { kind: 'available'; latest: string; releaseUrl?: string }
     | { kind: 'confirm'; latest: string; releaseUrl?: string }
     | { kind: 'applying'; latest: string }
-    | { kind: 'waiting'; from: string; to: string; startedAt: number }
+    | { kind: 'waiting'; from: string; to: string; startedAt: number; serverStartedAt?: string | null; freshAfterMs?: number; backendUp?: 'new' | 'old' }
     | { kind: 'done'; to: string }
-    | { kind: 'timeout'; from: string; to: string };
+    | { kind: 'failed'; from: string; to: string; outcome: UpdateResult['outcome']; error?: string | null }
+    | { kind: 'timeout'; from: string; to: string; serverStartedAt?: string | null; freshAfterMs?: number; backendUp?: 'new' | 'old' };
 
 export interface UpdateRepairModalProps {
     currentUser?: { role?: string } | null;
@@ -316,12 +333,20 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 setPhase({ kind: 'available', latest });
                 return;
             }
-            setPhase({ kind: 'waiting', from, to: latest, startedAt: Date.now() });
+            // The server's own clock for this run: the updater stamps its
+            // outcome file with the same clock, so this is what separates THIS
+            // run's outcome from a stale one, with no client clock involved.
+            const d = await res.json().catch(() => null);
+            const serverStartedAt = d?.started_at ? String(d.started_at) : null;
+            const now = Date.now();
+            writeSession(SESSION_PENDING, { from, to: latest, startedAt: now, serverStartedAt });
+            setPhase({ kind: 'waiting', from, to: latest, startedAt: now, serverStartedAt, freshAfterMs: now });
         } catch {
             // A network-level failure here is ambiguous and the safe reading is
             // "it started": the update stops this very server, so the answer can
             // legitimately never arrive. Waiting shows the truth either way.
-            setPhase({ kind: 'waiting', from, to: latest, startedAt: Date.now() });
+            const now = Date.now();
+            setPhase({ kind: 'waiting', from, to: latest, startedAt: now, serverStartedAt: null, freshAfterMs: now });
         }
     }, [version]);
 
@@ -356,11 +381,14 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                     clearSession(SESSION_PENDING);
                     setPhase({ kind: 'done', to: current });
                 } else {
+                    const resumedStartedAt = Number(pending.startedAt) || Date.now();
                     setPhase({
                         kind: 'waiting',
                         from,
                         to: String(pending.to),
-                        startedAt: Number(pending.startedAt) || Date.now(),
+                        startedAt: resumedStartedAt,
+                        serverStartedAt: pending.serverStartedAt ? String(pending.serverStartedAt) : null,
+                        freshAfterMs: resumedStartedAt,
                     });
                 }
             }
@@ -374,7 +402,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
         // screen, and a ten second tick would make it jump in tens.
         const id = setInterval(() => {
             const kind = phaseRef.current.kind;
-            if (kind === 'applying' || kind === 'waiting' || kind === 'done' || kind === 'timeout') return;
+            if (kind === 'applying' || kind === 'waiting' || kind === 'done' || kind === 'failed' || kind === 'timeout') return;
             if (repairBusy) return;
             loadServices();
         }, servicesStarting ? 3000 : 10000);
@@ -383,8 +411,57 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
 
     useEffect(() => {
         if (phase.kind !== 'waiting') return;
-        const { from, to, startedAt } = phase;
+        const { from, to, startedAt, serverStartedAt, backendUp } = phase;
+        // The client-clock reference for "is this outcome from OUR run": the
+        // FIRST click's time, carried across a timeout's "keep waiting" (which
+        // restarts startedAt so the ten-minute window begins again).
+        const freshAfterMs = phase.freshAfterMs ?? startedAt;
         let stopped = false;
+        // The Next proxy this page came from is down for its own post-update
+        // rebuild, usually for minutes after the backend is already back. The
+        // direct backend origin is the only voice during that window; it can
+        // answer /api/version (unauthenticated), nothing more.
+        const directBase = getApiDirectBase();
+        let directDownStreak = 0;
+        // "Down at least twice in a row, earlier": only then is the OLD version
+        // answering a signal (the restart happened and landed on `from`, i.e. a
+        // rollback) rather than the updater simply not having stopped us yet.
+        let directWasDown = false;
+        let resultTick = 0;
+
+        const fetchVersion = async (base: string, withCredentials: boolean): Promise<string | null> => {
+            const controller = new AbortController();
+            const abort = setTimeout(() => controller.abort(), 2000);
+            try {
+                const res = await fetch(`${base}/api/version`, {
+                    ...(withCredentials ? { credentials: 'include' as const } : {}),
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (!res.ok) return null;
+                const v = String((await res.json()).version ?? '');
+                return v || null;
+            } catch {
+                return null;    /* expected while the server is down */
+            } finally {
+                clearTimeout(abort);
+            }
+        };
+
+        // Accept an outcome only when it is from THIS run. Both timestamps are
+        // the server's clock (POST /update/apply returned started_at); without
+        // it, fall back to the client clock with a generous skew allowance.
+        const isFreshResult = (r: any): r is UpdateResult => {
+            if (!r?.outcome || !r?.finished_at) return false;
+            const fin = Date.parse(String(r.finished_at));
+            if (!Number.isFinite(fin)) return false;
+            if (serverStartedAt) {
+                const started = Date.parse(serverStartedAt);
+                if (Number.isFinite(started)) return fin >= started - 10_000;
+            }
+            return fin >= freshAfterMs - 60_000;
+        };
+
         const tick = async () => {
             if (stopped) return;
             setElapsed(Math.floor((Date.now() - startedAt) / 1000));
@@ -394,39 +471,70 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 // dialog would show this timeout screen - and hide the repair half
                 // behind its overlay - for the rest of the browser session.
                 clearSession(SESSION_PENDING);
-                setPhase({ kind: 'timeout', from, to });
+                setPhase({ kind: 'timeout', from, to, serverStartedAt, freshAfterMs, backendUp });
                 return;
             }
-            const controller = new AbortController();
-            const abort = setTimeout(() => controller.abort(), 2000);
-            try {
-                const res = await fetch(api('/api/version'), {
-                    credentials: 'include',
-                    cache: 'no-store',
-                    signal: controller.signal,
-                });
-                if (res.ok) {
-                    const now = String((await res.json()).version ?? '');
-                    // Any version other than the one we left is the new one: a
-                    // rollback lands back on `from` and keeps us waiting, which
-                    // the timeout screen then explains.
-                    if (now && from && compareVersions(now, from) > 0) {
-                        clearSession(SESSION_PENDING);
-                        writeSession(SESSION_DONE, { to: now });
-                        setPhase({ kind: 'done', to: now });
-                        return;
+
+            const sameOrigin = await fetchVersion(api(''), true);
+            if (stopped) return;
+            if (sameOrigin) {
+                // Any version above the one we left is the new one: finished.
+                if (from && compareVersions(sameOrigin, from) > 0) {
+                    clearSession(SESSION_PENDING);
+                    writeSession(SESSION_DONE, { to: sameOrigin });
+                    setPhase({ kind: 'done', to: sameOrigin });
+                    return;
+                }
+                // The OLD version is answering through the proxy, so the outcome
+                // file is readable now (authenticated, hence same-origin only).
+                // A fresh non-success outcome is the failure this dialog used to
+                // sit out until the timeout; no fresh outcome means the updater
+                // has not stopped the service yet - keep waiting.
+                resultTick += 1;
+                if (resultTick % 2 === 1) {
+                    try {
+                        const res = await fetch(api('/api/system/update'), {
+                            credentials: 'include',
+                            cache: 'no-store',
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            const r = data?.last_result;
+                            if (!stopped && isFreshResult(r) && r.outcome !== 'succeeded') {
+                                clearSession(SESSION_PENDING);
+                                setPhase({ kind: 'failed', from, to, outcome: r.outcome, error: r.error ?? null });
+                                loadUpdateState();
+                                return;
+                            }
+                        }
+                    } catch {
+                        /* the proxy may drop again mid-restart; keep waiting */
                     }
                 }
-            } catch {
-                /* expected while the server is down */
-            } finally {
-                clearTimeout(abort);
+                return;
+            }
+
+            if (!directBase) return;
+            const direct = await fetchVersion(directBase, false);
+            if (stopped) return;
+            if (direct === null) {
+                directDownStreak += 1;
+                if (directDownStreak >= 2) directWasDown = true;
+                return;
+            }
+            directDownStreak = 0;
+            if (from && compareVersions(direct, from) > 0) {
+                if (backendUp !== 'new') {
+                    setPhase({ kind: 'waiting', from, to, startedAt, serverStartedAt, freshAfterMs, backendUp: 'new' });
+                }
+            } else if (directWasDown && !backendUp) {
+                setPhase({ kind: 'waiting', from, to, startedAt, serverStartedAt, freshAfterMs, backendUp: 'old' });
             }
         };
         const id = setInterval(tick, 2500);
         tick();
         return () => { stopped = true; clearInterval(id); };
-    }, [phase]);
+    }, [phase, loadUpdateState]);
 
     useEffect(() => {
         if (phase.kind !== 'done') return;
@@ -542,7 +650,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
 
     // ─── render ──────────────────────────────────────────────────────────────
 
-    const overlayActive = ['applying', 'waiting', 'done', 'timeout'].includes(phase.kind);
+    const overlayActive = ['applying', 'waiting', 'done', 'failed', 'timeout'].includes(phase.kind);
     const versionInfo = formatVersion(version);
 
     return (
@@ -854,7 +962,16 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                                 to: formatVersion(phase.to).display || phase.to,
                                             })}
                                         </h3>
-                                        <p className="text-sm text-gray-600 max-w-md">{tM('waitingBody')}</p>
+                                        <p className="text-sm text-gray-600 max-w-md">
+                                            {phase.backendUp === 'new' ? tM('waitingRebuilding')
+                                                : phase.backendUp === 'old' ? tM('waitingBackOld')
+                                                    : tM('waitingBody')}
+                                        </p>
+                                        {phase.backendUp === 'new' && (
+                                            <p className="text-xs text-green-600 flex items-center gap-1">
+                                                <Check size={13} /> {tM('waitingBackendDone')}
+                                            </p>
+                                        )}
                                         <p className="text-xs text-gray-400 font-mono">{tM('waitingElapsed', { time: mmss(elapsed) })}</p>
                                         <p className="text-xs text-gray-400">{tM('waitingKeepOpen')}</p>
                                     </>
@@ -874,14 +991,50 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                         </button>
                                     </>
                                 )}
+                                {phase.kind === 'failed' && (
+                                    <>
+                                        <XCircle size={30} className="text-red-500" />
+                                        <h3 className="text-lg font-semibold text-gray-800">{tM('failedTitle')}</h3>
+                                        <p className="text-sm text-gray-600 max-w-md">
+                                            {phase.outcome === 'rolled_back'
+                                                ? tM('failedRolledBack', {
+                                                    from: formatVersion(phase.from).display || phase.from,
+                                                    to: formatVersion(phase.to).display || phase.to,
+                                                })
+                                                : phase.outcome === 'recover_needed'
+                                                    ? tM('failedRecover', { to: formatVersion(phase.to).display || phase.to })
+                                                    : tM('failedNotStarted')}
+                                        </p>
+                                        {phase.error && (
+                                            <p className="text-xs text-gray-500 font-mono max-w-md break-words">{phase.error}</p>
+                                        )}
+                                        <p className="text-xs text-gray-400">{tM('failedLogHint')}</p>
+                                        <button
+                                            onClick={() => { setPhase({ kind: 'idle' }); loadUpdateState(); loadServices(); }}
+                                            className="h-10 px-5 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium"
+                                        >
+                                            {tCommon('close')}
+                                        </button>
+                                    </>
+                                )}
                                 {phase.kind === 'timeout' && (
                                     <>
                                         <AlertTriangle size={30} className="text-amber-500" />
                                         <h3 className="text-lg font-semibold text-gray-800">{tM('timeoutTitle')}</h3>
-                                        <p className="text-sm text-gray-600 max-w-md">{tM('timeoutBody')}</p>
+                                        <p className="text-sm text-gray-600 max-w-md">
+                                            {phase.backendUp === 'new' ? tM('timeoutRebuildBody') : tM('timeoutBody')}
+                                        </p>
                                         <div className="flex items-center gap-2">
                                             <button
-                                                onClick={() => setPhase({ kind: 'waiting', from: phase.from, to: phase.to, startedAt: Date.now() })}
+                                                onClick={() => setPhase({
+                                                    kind: 'waiting',
+                                                    from: phase.from,
+                                                    to: phase.to,
+                                                    startedAt: Date.now(),
+                                                    serverStartedAt: phase.serverStartedAt ?? null,
+                                                    freshAfterMs: phase.freshAfterMs,
+                                                    backendUp: phase.backendUp,
+                                                })}
                                                 className="h-10 px-4 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm text-gray-700"
                                             >
                                                 {tM('keepWaiting')}

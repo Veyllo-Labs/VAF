@@ -38,6 +38,7 @@ from vaf.core.update_check import (
     describe_update_ability,
     read_last_update,
     read_update_cache,
+    read_update_result,
     spawn_update_process,
 )
 
@@ -124,6 +125,11 @@ def update_state(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
         "current": __version__,
         "cache": read_update_cache(),
         "last_update": read_last_update(),
+        # How the LAST update run ended (succeeded/rolled_back/recover_needed/
+        # failed). The waiting dialog reads this to tell a rollback (the old
+        # version answering again WITH a fresh result) from an updater that
+        # simply has not stopped the service yet (old version, no result).
+        "last_result": read_update_result(),
         "can_apply": can_apply,
         "reason": reason,
     }
@@ -193,7 +199,11 @@ def update_apply(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
             _update_started_at = None
         raise HTTPException(status_code=500, detail=f"Could not start the updater: {e}")
 
-    return {"started": True, "poll": "/api/version", "current": __version__, **spawned}
+    # started_at is SERVER clock: the updater stamps the result file with the
+    # same clock, so the client can accept only results from THIS run without
+    # comparing across machines.
+    return {"started": True, "poll": "/api/version", "current": __version__,
+            "started_at": _update_started_at, **spawned}
 
 
 def _restart_blocker() -> Optional[str]:

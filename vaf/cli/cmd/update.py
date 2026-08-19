@@ -354,11 +354,21 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
     else:
         rel, why = update_check.resolve_latest_release(include_prereleases)
         if not rel or not rel.get("tag"):
-            UI.error(f"Could not determine the latest release: {update_check.resolve_failure_message(why)}")
+            msg = update_check.resolve_failure_message(why)
+            UI.error(f"Could not determine the latest release: {msg}")
+            if not dry_run:
+                update_check.write_update_result("failed", __version__, "", error=msg)
             raise typer.Exit(1)
         target, target_version, notes_url = rel["tag"], rel["version"], rel.get("html_url", "")
         if update_check.compare_versions(__version__, target_version) >= 0:
             UI.event("Update", f"Already up to date ({__version__}).")
+            # A web-started run can land here in a race (the release was
+            # replaced between check and apply). Recording it as "failed" with
+            # this sentence is what lets the waiting dialog stop instead of
+            # spinning against a server that will never change version.
+            if not dry_run:
+                update_check.write_update_result("failed", __version__, target_version,
+                                                 error=f"Already up to date ({__version__}).")
             raise typer.Exit(0)
 
     if non_git:
@@ -369,6 +379,9 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         code, dirty, _ = _git(root, "status", "--porcelain", "--untracked-files=no")
         if code != 0:
             UI.error("git status failed; cannot update safely.")
+            if not dry_run:
+                update_check.write_update_result("failed", __version__, target_version,
+                                                 error="git status failed; cannot update safely.")
             raise typer.Exit(1)
         # Self-heal the updater's own churn instead of deadlocking on it:
         # npm rewrote web/package-lock.json, and this very check then
@@ -422,6 +435,10 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         for line in dirty.splitlines()[:20]:
             UI.print(f"  {line}")
         UI.print("Commit or `git stash` them, then re-run `vaf update`.")
+        update_check.write_update_result(
+            "failed", __version__, target_version,
+            error="The VAF checkout has local changes to tracked files; commit or stash them, "
+                  "then run `vaf update` again.")
         raise typer.Exit(1)
 
     if non_git:
@@ -441,6 +458,9 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         "target_tag": target,
         "started_at": datetime.now(timezone.utc).isoformat(),
     })
+    # From here the run is live: no result means "still running" (the breadcrumb
+    # says so); every exit below writes exactly one.
+    update_check.clear_update_result()
 
     try:
         UI.info("Stopping VAF service...")
@@ -486,6 +506,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         _verify(target_version)
 
         update_check.clear_breadcrumb()
+        update_check.write_update_result("succeeded", __version__, target_version)
         UI.success(f"VAF updated to {target_version}.")
         if notes_url:
             UI.print(f"Release notes: {notes_url}")
@@ -498,11 +519,14 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             UI.error("The install was being converted to a git checkout when this failed; it is now a "
                      "git checkout, so re-run `vaf update` to retry.")
             update_check.clear_breadcrumb()
+            update_check.write_update_result("failed", __version__, target_version, error=str(e))
         elif _rollback(root, cur_sha or cur_branch or "HEAD"):
             update_check.clear_breadcrumb()
+            update_check.write_update_result("rolled_back", __version__, target_version, error=str(e))
         else:
             UI.error("Automatic rollback did not complete — the update breadcrumb is kept. "
                      "Resolve the issue, then run `vaf update --recover`.")
+            update_check.write_update_result("recover_needed", __version__, target_version, error=str(e))
         raise typer.Exit(1)
 
 
@@ -525,13 +549,20 @@ def _recover() -> None:
         UI.print("(The update breadcrumb is kept for the real checkout.)")
         raise typer.Exit(1)
     anchor = data.get("recorded_head") or data.get("branch") or "main"
+    from_version = str(data.get("from_version") or "")
+    target_tag = str(data.get("target_tag") or "")
+    target_version = target_tag[1:] if target_tag.startswith("v") else target_tag
     UI.info(f"Recovering an interrupted update — restoring {str(anchor)[:12]}...")
     if not _rollback(root, anchor):
         # Keep the breadcrumb so `--recover` can be retried after the user resolves the conflict.
         UI.error("Recovery did not complete; the update breadcrumb is kept. "
                  "Resolve the issue and re-run `vaf update --recover`.")
+        update_check.write_update_result("recover_needed", from_version, target_version,
+                                         error="Recovery did not complete; re-run `vaf update --recover`.")
         raise typer.Exit(1)
     update_check.clear_breadcrumb()
+    # The interrupted update's final outcome: it ended rolled back (via recover).
+    update_check.write_update_result("rolled_back", from_version, target_version)
     UI.success("Recovered to the previous version.")
 
 

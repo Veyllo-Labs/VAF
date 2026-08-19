@@ -6411,7 +6411,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         {/* The way back out, and the way to end it for good.
                                             Both need to be readable: the back link was grey on
                                             near-black, which is a control you have to hunt for. */}
-                                        <div className="flex items-center justify-between gap-4 mb-5">
+                                        {/* Pinned while the conversation scrolls: the way out and the
+                                            way to end it are needed most in a LONG chat, and that is
+                                            exactly where they used to scroll off the top. The negative
+                                            margins let it span the container's padding, so text passes
+                                            underneath it rather than beside it. */}
+                                        <div className="sticky top-0 z-10 -mx-6 -mt-6 px-6 pt-6 pb-4 mb-1 bg-white dark:bg-[#181818] flex items-center justify-between gap-4">
                                             <button type="button" onClick={() => { setArchiveOpenId(null); setArchiveJump(null); }}
                                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#e6e6e6] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
                                                 <ArrowLeft className="w-4 h-4" /> {tPersona('archiveBack')}

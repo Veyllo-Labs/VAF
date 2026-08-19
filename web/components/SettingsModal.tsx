@@ -6377,19 +6377,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <div className="grid grid-cols-3 gap-4 max-md:grid-cols-2">
                                             {archiveChats.map(c => (
                                                 <button key={c.id} type="button" onClick={() => setArchiveOpenId(c.id)}
-                                                        className="group/box text-left p-4 rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] transition-transform duration-200 ease-out hover:-translate-y-1 hover:scale-[1.03] hover:border-gray-300 dark:hover:border-[#3a3a3a] hover:shadow-lg">
-                                                    <svg viewBox="0 0 64 46" className="w-full h-16 mb-3" aria-hidden="true">
-                                                        {/* Lid: rotated about its back edge, so it swings up
-                                                            like a real one instead of sliding off. */}
-                                                        <g className="origin-[8px_14px] transition-transform duration-300 ease-out group-hover/box:-rotate-[18deg]">
-                                                            <rect x="6" y="8" width="52" height="10" rx="2"
+                                                        className="group/box text-left p-4 rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] transition-[transform,border-color,box-shadow] duration-200 ease-out hover:-translate-y-1 hover:scale-[1.03] hover:border-gray-300 dark:hover:border-yellow-400/70 hover:shadow-lg dark:hover:shadow-yellow-400/5">
+                                                    {/* Sized and centred rather than stretched: a full-width
+                                                        drawing over left-aligned text below reads as off-centre
+                                                        even when its viewBox is not. */}
+                                                    <svg viewBox="0 0 64 52" className="w-24 h-16 mx-auto translate-x-1 mb-3" aria-hidden="true">
+                                                        {/* The lid lifts STRAIGHT up and stays level - the way one
+                                                            comes off a document box - instead of hinging at the
+                                                            back. Kept in the group so the whole card's hover
+                                                            drives it. */}
+                                                        <g className="transition-transform duration-300 ease-out group-hover/box:-translate-y-[7px]">
+                                                            <rect x="6" y="10" width="52" height="10" rx="2"
                                                                   className="fill-gray-300 dark:fill-[#4a4a4a]" />
-                                                            <rect x="26" y="11" width="12" height="4" rx="1"
+                                                            <rect x="26" y="13" width="12" height="4" rx="1"
                                                                   className="fill-gray-400 dark:fill-[#5e5e5e]" />
                                                         </g>
-                                                        <path d="M8 18 h48 l-3 22 a2 2 0 0 1 -2 2 h-38 a2 2 0 0 1 -2 -2 z"
+                                                        <path d="M8 22 h48 l-3 24 a2 2 0 0 1 -2 2 h-38 a2 2 0 0 1 -2 -2 z"
                                                               className="fill-gray-200 dark:fill-[#333]" />
-                                                        <rect x="20" y="26" width="24" height="3" rx="1.5"
+                                                        <rect x="20" y="31" width="24" height="3" rx="1.5"
                                                               className="fill-gray-400/70 dark:fill-[#555]" />
                                                     </svg>
                                                     <div className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate">{c.name}</div>

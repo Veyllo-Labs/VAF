@@ -711,7 +711,12 @@
       "archiveNoHits": "No matches.",
       "archiveEmpty": "Nothing archived yet. When you delete a chat, you can keep a copy here.",
       "archiveMeta": "{count} messages · {date}",
-      "archiveBack": "← All archived chats"
+      "archiveBack": "All archived chats",
+      "archiveDelete": "Delete from archive",
+      "archiveDeleteTitle": "Delete this archived chat?",
+      "archiveDeleteBody": "This is the last copy of “{title}”. It is removed for good, and the agent can no longer recall it in later conversations.",
+      "archiveDeleteCancel": "Cancel",
+      "archiveDeleteConfirm": "Delete for good"
     },
     "ai": {
       "provider": "Provider",

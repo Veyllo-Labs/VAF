@@ -262,3 +262,49 @@ def test_a_hit_carries_the_exact_passage_the_agent_would_get(mgr):
     assert "Prüfung" in passage, "the passage must contain what matched"
     assert end - start <= _SNIPPET_CHARS
     assert len(passage) < len(body), "a passage is a window, not the whole message"
+
+
+def test_deleting_an_archived_chat_removes_the_last_copy(mgr):
+    """The end of the line: it leaves the archive AND the memory lane that reads
+    the archive, which is why the dialog in front of it has to say so."""
+    s = _make(mgr, "kept", "ab12cd34")
+    mgr.archive(s.id, user_scope_id="ab12cd34")
+    assert mgr.list_archived(user_scope_id="ab12cd34")
+
+    assert mgr.delete_archived(s.id, user_scope_id="ab12cd34") is True
+
+    assert mgr.list_archived(user_scope_id="ab12cd34") == []
+    assert [d.get("id") for _, d in mgr.iter_owned_sessions("ab12cd34")] == [], (
+        "the agent must stop being able to recall it"
+    )
+    assert mgr.delete_archived(s.id, user_scope_id="ab12cd34") is False, "gone stays gone"
+
+
+def test_deleting_never_reaches_another_accounts_archive(mgr):
+    """The owner is re-read from INSIDE the file before the unlink. A deleter
+    that trusted the path could remove what list_archived refuses to show."""
+    theirs = _make(mgr, "theirs", "ef56ab78")
+    mgr.archive(theirs.id, user_scope_id="ef56ab78")
+
+    # A stray copy sitting in the wrong folder: invisible to the listing, and
+    # it must be undeletable through it too.
+    stray = mgr.archive_dir("ef56ab78") / f"{theirs.id}.json"
+    mine = mgr.archive_dir("ab12cd34")
+    mine.mkdir(parents=True, exist_ok=True)
+    (mine / stray.name).write_bytes(stray.read_bytes())
+
+    assert mgr.delete_archived(theirs.id, user_scope_id="ab12cd34") is False
+    assert (mine / stray.name).exists(), "a foreign file must not be unlinked"
+    assert mgr.list_archived(user_scope_id="ef56ab78"), "the owner still has theirs"
+
+
+def test_the_delete_route_answers_404_for_absent_and_for_foreign():
+    """Same answer either way, so a guessed id cannot be probed for existence."""
+    import inspect
+
+    from vaf.api import config_routes
+
+    src = inspect.getsource(config_routes.delete_archived_chat)
+    assert "get_current_user_or_local_admin(request)" in src, "scope must come from the caller"
+    assert "list_archived(user_scope_id=scope)" in src, "membership is checked before deleting"
+    assert src.count("404") >= 2, "absent and foreign must be indistinguishable"

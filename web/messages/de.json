@@ -711,7 +711,12 @@
       "archiveNoHits": "Keine Treffer.",
       "archiveEmpty": "Noch nichts archiviert. Beim Loeschen eines Chats kannst du hier eine Kopie behalten.",
       "archiveMeta": "{count} Nachrichten · {date}",
-      "archiveBack": "← Alle archivierten Chats"
+      "archiveBack": "Alle archivierten Chats",
+      "archiveDelete": "Aus dem Archiv loeschen",
+      "archiveDeleteTitle": "Diesen archivierten Chat loeschen?",
+      "archiveDeleteBody": "Das ist die letzte Kopie von „{title}“. Sie wird endgueltig entfernt, und der Agent kann sich in spaeteren Gespraechen nicht mehr darauf beziehen.",
+      "archiveDeleteCancel": "Abbrechen",
+      "archiveDeleteConfirm": "Endgueltig loeschen"
     },
     "ai": {
       "provider": "Anbieter",

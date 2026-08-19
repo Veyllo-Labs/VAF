@@ -819,6 +819,41 @@ class SessionManager:
                     return hits
         return hits
 
+    def delete_archived(self, session_id: str, user_scope_id: str = None) -> bool:
+        """Remove an archived chat for good. Returns True when a file was removed.
+
+        The end of the line for that conversation: it leaves the archive view,
+        and with it the memory lane, because `iter_owned_sessions` reads the
+        archive - so the agent stops being able to recall it. Nothing else in
+        the product removes an archived chat, which is why the confirmation in
+        front of this one has to say that plainly.
+
+        The owner is re-read from INSIDE the file before unlinking, not trusted
+        from the path: `list_archived` refuses to show a stray file that carries
+        another account's scope, and a deleter that skipped the same check would
+        let a caller remove what it is not allowed to see.
+        """
+        from vaf.core.cost import _scope_key
+
+        want = _scope_key(user_scope_id)
+        removed = False
+        for ext in (".json", ".json.gz"):
+            path = self.archive_dir(user_scope_id) / f"{session_id}{ext}"
+            if not path.exists():
+                continue
+            try:
+                data = self._read_session_file(path)
+                if _scope_key((data.get("metadata") or {}).get("user_scope_id")) != want:
+                    continue
+                path.unlink()
+                removed = True
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Could not delete archived session %s", session_id, exc_info=True)
+                return False
+        return removed
+
     def delete(self, session_id: str) -> bool:
         """Delete a session.
 

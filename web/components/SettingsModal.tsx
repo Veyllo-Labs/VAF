@@ -47,7 +47,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3, Folder
+    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3, Folder, ArrowLeft, Unlock
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -584,6 +584,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Jump target inside the opened chat, so a hit lands on its message and the
     // phrase is highlighted there rather than left to be found again.
     const [archiveJump, setArchiveJump] = useState<{ index: number; words: string[]; span?: [number, number] } | null>(null);
+    // Removing an archived chat is the end of the line - it is the last copy,
+    // and the memory lane reads the archive, so the agent stops being able to
+    // recall it. Same arming delay as the other destructive dialogs: a red
+    // button under the cursor gets pressed before the sentence above it is read.
+    const [archiveToDelete, setArchiveToDelete] = useState<ArchivedChat | null>(null);
+    const [archiveArmedIn, setArchiveArmedIn] = useState(0);
+    useEffect(() => {
+        if (!archiveToDelete) { setArchiveArmedIn(0); return; }
+        setArchiveArmedIn(3);
+        const t = setInterval(() => setArchiveArmedIn(n => (n <= 1 ? 0 : n - 1)), 1000);
+        return () => clearInterval(t);
+    }, [archiveToDelete]);
 
     // One highlighter for the hit list and the message body. It marks the words
     // the SERVER reported as matched, not what was typed: a search for
@@ -6357,24 +6369,54 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     archiveChats.length === 0 ? (
                                         <p className="text-sm text-gray-400">{tPersona('archiveEmpty')}</p>
                                     ) : (
-                                        <div className="space-y-2">
+                                        // A grid of archive boxes rather than a list of rows: the
+                                        // panel is a place things were PUT AWAY, and a row reads like
+                                        // a menu entry. Hovering lifts the box and swings its lid open
+                                        // - the affordance says "there is something inside" without a
+                                        // caption saying it.
+                                        <div className="grid grid-cols-3 gap-4 max-md:grid-cols-2">
                                             {archiveChats.map(c => (
                                                 <button key={c.id} type="button" onClick={() => setArchiveOpenId(c.id)}
-                                                        className="w-full flex items-center justify-between gap-4 p-3 rounded-xl border border-gray-200 dark:border-[#2a2a2a] hover:bg-gray-50 dark:hover:bg-[#242424] text-left">
-                                                    <span className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate">{c.name}</span>
-                                                    <span className="text-xs text-gray-400 shrink-0">
+                                                        className="group/box text-left p-4 rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] transition-transform duration-200 ease-out hover:-translate-y-1 hover:scale-[1.03] hover:border-gray-300 dark:hover:border-[#3a3a3a] hover:shadow-lg">
+                                                    <svg viewBox="0 0 64 46" className="w-full h-16 mb-3" aria-hidden="true">
+                                                        {/* Lid: rotated about its back edge, so it swings up
+                                                            like a real one instead of sliding off. */}
+                                                        <g className="origin-[8px_14px] transition-transform duration-300 ease-out group-hover/box:-rotate-[18deg]">
+                                                            <rect x="6" y="8" width="52" height="10" rx="2"
+                                                                  className="fill-gray-300 dark:fill-[#4a4a4a]" />
+                                                            <rect x="26" y="11" width="12" height="4" rx="1"
+                                                                  className="fill-gray-400 dark:fill-[#5e5e5e]" />
+                                                        </g>
+                                                        <path d="M8 18 h48 l-3 22 a2 2 0 0 1 -2 2 h-38 a2 2 0 0 1 -2 -2 z"
+                                                              className="fill-gray-200 dark:fill-[#333]" />
+                                                        <rect x="20" y="26" width="24" height="3" rx="1.5"
+                                                              className="fill-gray-400/70 dark:fill-[#555]" />
+                                                    </svg>
+                                                    <div className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate">{c.name}</div>
+                                                    <div className="text-xs text-gray-400 mt-0.5">
                                                         {tPersona('archiveMeta', { count: c.message_count, date: (c.updated_at || '').slice(0, 10) })}
-                                                    </span>
+                                                    </div>
                                                 </button>
                                             ))}
                                         </div>
                                     )
                                 ) : (
                                     <>
-                                        <button type="button" onClick={() => { setArchiveOpenId(null); setArchiveJump(null); }}
-                                                className="text-xs text-gray-500 hover:text-gray-700 mb-4">
-                                            {tPersona('archiveBack')}
-                                        </button>
+                                        {/* The way back out, and the way to end it for good.
+                                            Both need to be readable: the back link was grey on
+                                            near-black, which is a control you have to hunt for. */}
+                                        <div className="flex items-center justify-between gap-4 mb-5">
+                                            <button type="button" onClick={() => { setArchiveOpenId(null); setArchiveJump(null); }}
+                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#e6e6e6] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
+                                                <ArrowLeft className="w-4 h-4" /> {tPersona('archiveBack')}
+                                            </button>
+                                            <button type="button"
+                                                    onClick={() => setArchiveToDelete(
+                                                        archiveChats.find(c => c.id === archiveOpenId) || null)}
+                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors">
+                                                <Trash2 className="w-4 h-4" /> {tPersona('archiveDelete')}
+                                            </button>
+                                        </div>
                                         <div className="space-y-3 max-w-3xl">
                                             {archiveMsgs.map((m, i) => (
                                                 <div key={i} id={`arch-msg-${i}`}
@@ -6442,6 +6484,58 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     ))}
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Deleting an archived chat. Same shape and same arming delay as the
+                other destructive dialogs - what differs is what it has to say:
+                this is the last copy, and the agent's memory loses it too. */}
+            {archiveToDelete && (
+                <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                     onClick={() => setArchiveToDelete(null)}>
+                    <div className="relative bg-white dark:bg-[#181818] rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 dark:border-[#2a2a2a] p-6"
+                         onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                                <Trash2 className="w-5 h-5 text-red-500" />
+                            </div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">
+                                {tPersona('archiveDeleteTitle')}
+                            </div>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-[#8a8a8a] mb-5">
+                            {tPersona('archiveDeleteBody', { title: archiveToDelete.name })}
+                        </p>
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => setArchiveToDelete(null)}
+                                    className="flex-1 px-4 py-2 rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-sm text-gray-700 dark:text-[#c8c8c8] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
+                                {tPersona('archiveDeleteCancel')}
+                            </button>
+                            <button type="button"
+                                    disabled={archiveArmedIn > 0}
+                                    onClick={() => {
+                                        const id = archiveToDelete.id;
+                                        fetch(`${archiveBase}/api/archive/chats/${encodeURIComponent(id)}`,
+                                              { method: 'DELETE', credentials: 'include' })
+                                            .then(r => {
+                                                if (!r.ok) return;
+                                                setArchiveChats(list => list.filter(c => c.id !== id));
+                                                setArchiveOpenId(null);
+                                                setArchiveJump(null);
+                                                setArchiveHits(h => h.filter(x => x.chat_id !== id));
+                                            })
+                                            .catch(() => {})
+                                            .finally(() => setArchiveToDelete(null));
+                                    }}
+                                    className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors">
+                                <span className="inline-flex items-center justify-center gap-2">
+                                    {archiveArmedIn > 0
+                                        ? (<><Lock className="w-4 h-4" />{archiveArmedIn}</>)
+                                        : (<><Unlock className="w-4 h-4" />{tPersona('archiveDeleteConfirm')}</>)}
+                                </span>
+                            </button>
                         </div>
                     </div>
                 </div>

@@ -236,7 +236,7 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `memory_hybrid_enabled` | `True` | Hybrid vector + lexical retrieval. |
 | `memory_hybrid_lexical_k` | `20` | Lexical candidates. |
 | `memory_hybrid_lexical_min_score` | `0.05` | Min lexical score. |
-| `memory_hybrid_lexical_scan_limit` | `400` | Lexical scan cap. |
+| `memory_hybrid_lexical_scan_limit` | `2000` | Lexical scan cap (clamped to 2000). Rows are scanned unordered, so a store larger than this cap gets an arbitrary partial lexical lane; the cap is a per-query decrypt+score cost ceiling. |
 | `memory_hybrid_rrf_k` | `60` | Reciprocal-rank-fusion constant. |
 | `memory_compaction_enabled` | `True` | Compact long histories. |
 | `memory_compaction_interval` | `15` | Turns between compaction checks. |

@@ -441,13 +441,24 @@ class RagPipeline:
             return []
         filters.append(Memory.user_scope_id == user_scope_id)
 
+        # Candidate depth: with hybrid fusion on, the vector lane must feed
+        # RRF the SAME depth as the lexical lane (max(k*4, 20), the lexical_k
+        # default below). It fed only k=5 while lexical fed 20, so a correct
+        # chunk at vector rank 6-15 never even reached the fusion. Measured
+        # 2026-08-19 (26 golden questions, offline replay of this pipeline):
+        # symmetric 20/20 lifts multilingual-e5-small from hit@1 12/26 to
+        # 18/26 together with the scan-cap lift - e5 ranks tight fact
+        # clusters within a narrow similarity band, so the damage
+        # concentrated there.
+        hybrid_enabled = bool(Config.get("memory_hybrid_enabled"))
+        vector_fetch = max(k * 4, 20) if hybrid_enabled else k
         stmt = select(
             Chunk,
             Chunk.embedding.cosine_distance(query_embedding).label("distance"),
             Memory
         ).join(Memory, Chunk.memory_id == Memory.id).where(
             and_(*filters)
-        ).order_by("distance").limit(k)
+        ).order_by("distance").limit(vector_fetch)
         
         result = await self.db.execute(stmt)
         rows = result.all()
@@ -494,7 +505,7 @@ class RagPipeline:
 
         # Optional hybrid retrieval for long-term RAG:
         # combine vector ranking with lexical ranking on the same Chunk store via RRF.
-        hybrid_enabled = bool(Config.get("memory_hybrid_enabled"))
+        # (hybrid_enabled was decided above - it also widened the vector fetch.)
         if not hybrid_enabled:
             return sources
 

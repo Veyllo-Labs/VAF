@@ -521,7 +521,13 @@ class Config:
         "memory_hybrid_enabled": True,                             # Long-term RAG: enable vector+lexical hybrid fusion (RRF)
         "memory_hybrid_rrf_k": 60,                                 # RRF denominator constant (typical default: 60)
         "memory_hybrid_lexical_k": 20,                             # Max lexical candidates retained before fusion
-        "memory_hybrid_lexical_scan_limit": 400,                   # Max lexical rows scanned for hybrid retrieval
+        # Max lexical rows scanned for hybrid retrieval. Rows come UNORDERED,
+        # so a store larger than this cap gets an arbitrary partial lexical
+        # lane: measured 2026-08-19 on a 1017-chunk store, the old cap of 400
+        # cost 6 of 26 golden questions (hit@1 12->18 when lifted). 2000 is
+        # the clamp ceiling in rag.py; per-query cost is decrypt+score, a few
+        # ms per thousand rows.
+        "memory_hybrid_lexical_scan_limit": 2000,
         "memory_hybrid_lexical_min_score": 0.05,                   # Min lexical score (0.0-1.0) before fusion; 0.05 filters zero-overlap noise conservatively
         "memory_auto_capture": False,                               # DISABLED: Auto-capture causes memory spikes (investigating)
         "memory_compaction_enabled": True,                          # Session compaction: prompt to store durable memories every N turns

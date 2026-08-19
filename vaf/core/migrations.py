@@ -16,17 +16,33 @@ Rules for a migration function ``fn(config: dict) -> dict``:
     ignores keys it does not know, so adding is always safe; removing/renaming is not.
   - **pure and idempotent**: running it twice must be a no-op the second time.
 
-v1 ships with no migrations — this is the seam, ready for the first format change.
 """
 from typing import Callable, List, Tuple
 
-CONFIG_FORMAT_VERSION = 1
+CONFIG_FORMAT_VERSION = 2
+
+
+def _v2_lift_lexical_scan_cap(cfg: dict) -> dict:
+    """Lift memory_hybrid_lexical_scan_limit from the old default 400 to 2000.
+
+    The old cap predates chunk-at-rest encryption: lexical rows are scanned
+    UNORDERED, so on any store larger than the cap the lexical lane saw an
+    arbitrary subset (measured 2026-08-19 on a 1017-chunk store: 6 of 26
+    golden questions lost, hit@1 12 -> 18 with the cap lifted). Full-config
+    saves wrote the old default out explicitly, so a DEFAULTS change alone
+    never reaches existing installs. Only the old default is rewritten; a
+    deliberate custom value stays. Idempotent: after the rewrite the value
+    is no longer 400.
+    """
+    if cfg.get("memory_hybrid_lexical_scan_limit") == 400:
+        cfg["memory_hybrid_lexical_scan_limit"] = 2000
+    return cfg
+
 
 # Applied in order to any config whose stored version is below the target.
-# Example for a future change:
-#   def _v1_to_v2(cfg): cfg.setdefault("new_key", "default"); return cfg
-#   CONFIG_MIGRATIONS = [(2, _v1_to_v2)]
-CONFIG_MIGRATIONS: List[Tuple[int, Callable[[dict], dict]]] = []
+CONFIG_MIGRATIONS: List[Tuple[int, Callable[[dict], dict]]] = [
+    (2, _v2_lift_lexical_scan_cap),
+]
 
 
 def run_config_migrations(config: dict, stored_version: int):

@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Memory search stopped throwing away most of its own candidates.** Two
+  retrieval defects capped answer quality regardless of the embedding model.
+  The vector lane handed the rank fusion only its top 5 candidates while the
+  keyword lane handed 20, so a correct memory ranked sixth by the vector side
+  never even reached the fusion; both lanes now feed the same depth. And the
+  keyword lane scanned only the first 400 stored chunks in no particular
+  order, silently ignoring the rest of a larger store; the cap is now 2000,
+  and existing installations that carry the old value in their config are
+  lifted by a config migration (a deliberately customized value is kept). On
+  the golden-question set this took first-hit accuracy from 12/26 to 18/26.
 - **Memory search knows which model wrote each vector.** Every stored memory
   and chunk now records the embedding model that produced its vector. Two
   models can emit same-sized vectors that are mutually meaningless, and until

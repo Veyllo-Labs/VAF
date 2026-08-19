@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Loading shows the shape of what is coming.** While a chat's history or a
+  clicked group chat's transcript loads, the message area shows skeleton
+  bubbles under a thin progress bar that races to two thirds and then creeps -
+  both vanish the moment real messages arrive, instead of a spinner over a
+  blank area. A message sent into a group chat appears immediately as a
+  visibly pending bubble ("wird gesendet…") and is reconciled against the
+  room's store, which alone decides the order of a room with many writers.
+
 ### Fixed
 - **Tool results that ARE the deliverable are no longer cut mid-artifact.** The
   dispatch funnel caps every tool result at 2000 characters to protect the

@@ -1053,34 +1053,44 @@ const SetupLine = ({ message }: { message: string }) => {
     );
 };
 
-// Chat-history loading indicator. The agent "works in the background" (Working: morphing eye + a white
-// orbiting satellite) while the step-boxes cycle to its right — same box sequence as SetupLine (one
-// stable element so the loop never restarts), but for the load phase instead of the setup phase.
-const ChatLoadingLine = () => {
-    const [active, setActive] = useState(0);
-    const [filled, setFilled] = useState(true);
-    useEffect(() => {
-        const t = setInterval(() => { setActive(a => (a + 1) % 3); setFilled(Math.random() >= 0.45); }, 800);
-        return () => clearInterval(t);
-    }, []);
-    return (
-        <div className="flex gap-4 items-center">
-            <div className="w-9 shrink-0 flex justify-center">
-                <AgentAvatar mode="working" />
-            </div>
-            <div className="flex items-center gap-3 min-w-0">
-                <span className="flex items-center gap-[3px] text-[#2a3142] shrink-0" aria-hidden="true">
-                    <PlanBox active={active === 0} filled={filled} />
-                    <span className="planlnk" />
-                    <PlanBox active={active === 1} filled={filled} />
-                    <span className="planlnk" />
-                    <PlanBox active={active === 2} filled={filled} />
-                </span>
-                <span className="text-sm text-gray-400">Chat wird geladen…</span>
-            </div>
+// Loading illusion for a conversation that is on its way - chat and room alike:
+// a crawling progress bar that races to two thirds and then creeps (finishing is
+// the content's job; it vanishes with the skeleton when real messages arrive),
+// over skeleton bubbles in the rhythm of the view they stand in for. A chat
+// alternates sides the way user and agent do; a room stacks left with a name
+// line, the way its transcript does. Widths are fixed per row, never random -
+// a skeleton that reshuffles on every render flickers. Opacity and transform
+// only (the repaint rule in globals.css).
+const LoadingIllusion = ({ kind, label }: { kind: 'chat' | 'room'; label?: string }) => (
+    <div className="pt-2" aria-hidden="true">
+        <div className="h-[3px] rounded-full overflow-hidden bg-gray-200 dark:bg-[#2a2a2a] mb-6">
+            <div className="h-full w-full origin-left rounded-full bg-gray-500 dark:bg-[#8a8a8a]"
+                style={{ animation: 'loadCrawl 9s cubic-bezier(0.2, 0.8, 0.3, 1) forwards' }} />
         </div>
-    );
-};
+        {label && (
+            <div className="text-sm font-medium text-gray-500 dark:text-[#8a8a8a] mb-4 truncate">{label}</div>
+        )}
+        {(kind === 'room' ? [72, 46, 64, 38, 58] : [44, 68, 36, 74, 52]).map((w, i) => {
+            const right = kind === 'chat' && i % 2 === 0;
+            return (
+                <div key={i} className={cn('flex gap-3 py-2', right && 'flex-row-reverse')}
+                    style={{ animation: 'skelPulse 1.6s ease-in-out infinite', animationDelay: `${i * 0.18}s` }}>
+                    <div className="w-8 h-8 rounded-full shrink-0 bg-gray-200 dark:bg-[#2a2a2a]" />
+                    <div className={cn('min-w-0 flex-1 flex flex-col gap-2 pt-1', right && 'items-end')}>
+                        {kind === 'room' && (
+                            <div className="h-3 rounded bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: '18%' }} />
+                        )}
+                        <div className="h-4 rounded-lg bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: `${w}%` }} />
+                        {i % 2 === 1 && (
+                            <div className="h-4 rounded-lg bg-gray-200 dark:bg-[#2a2a2a]"
+                                style={{ width: `${Math.max(18, w - 22)}%` }} />
+                        )}
+                    </div>
+                </div>
+            );
+        })}
+    </div>
+);
 
 /**
  * A room's transcript, placed where a conversation's messages are placed.
@@ -1516,11 +1526,17 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
         </div>
     );
 }
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
     membersTitle: string;
+    /** The person's own says that are on their way to the store: shown at once,
+     *  visibly PENDING, and dropped the moment the transcript carries them. The
+     *  room still never trusts a local echo for ORDER - only the store knows
+     *  where N writers landed - this is presence, not position. */
+    pending?: Array<{ key: number; text: string }>;
+    pendingNote?: string;
     timeFormat?: '24h' | '12h';
     /** Open the sub-agent window for a live worker - the mobile preview-pill
      *  gesture, applied to the room's worker cards. */
@@ -1919,6 +1935,26 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                     </Fragment>
                 );
             })}
+            {/* The person's own words, already on screen while they travel to the
+                store. Dimmed and labeled as sending, never given a position among
+                the real messages - they sit BELOW the transcript until the store
+                answers, because only the store knows where N writers landed. */}
+            {(pending || []).map(p => (
+                <div key={p.key} className="flex gap-3 py-2 room-msg-enter opacity-60">
+                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]">…</div>
+                    <div className="min-w-0 flex-1">
+                        {pendingNote && (
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-[10px] text-gray-400"
+                                    style={{ animation: 'skelPulse 1.6s ease-in-out infinite' }}>{pendingNote}</span>
+                            </div>
+                        )}
+                        <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
+                            {p.text}
+                        </div>
+                    </div>
+                </div>
+            ))}
             {hasWorkerCards && !lastAgentMsgId && workerCards}
             {/* Who is composing. The same bouncing dots the chat shows while our
                 agent generates, one row per busy member, each behind its own
@@ -2268,6 +2304,20 @@ function VAFDashboardContent() {
     // into the room they just left (measured live: every switch bounced back
     // within seconds while the server answered slowly).
     const pendingRoomOpenRef = useRef<string | null>(null);
+    // The click already happened; the transcript has not arrived. The skeleton
+    // stands in the message area meanwhile (name from the sidebar row, which is
+    // all the click knows), and a timeout clears it so a dead server leaves the
+    // person in their chat instead of under an eternal skeleton.
+    const [roomOpening, setRoomOpening] = useState<{ roomId: string; name: string } | null>(null);
+    useEffect(() => {
+        if (!roomOpening) return;
+        const t = setTimeout(() => setRoomOpening(null), 15000);
+        return () => clearTimeout(t);
+    }, [roomOpening]);
+    // The person's own room messages between send and store: shown at once as
+    // visibly pending, dropped when the transcript carries them (or after 30s).
+    const [pendingRoomSays, setPendingRoomSays] = useState<Array<{
+        key: number; roomId: string; text: string; ts: number }>>([]);
     const [roomToRename, setRoomToRename] = useState<Session | null>(null);
     const [roomTitleDraft, setRoomTitleDraft] = useState('');
     const [roomMembersOpen, setRoomMembersOpen] = useState(false);
@@ -3644,6 +3694,8 @@ function VAFDashboardContent() {
         // pending mark goes with it, or an unanswered room click would still adopt
         // a transcript that arrives after this switch.
         pendingRoomOpenRef.current = null;
+        setRoomOpening(null);
+        setPendingRoomSays([]);
         setRoomView(null);
         setRoomMembersOpen(false);
         if (currentSessionId === id) return;
@@ -4567,14 +4619,22 @@ function VAFDashboardContent() {
                     // let the poll's last in-flight answer re-open the room seconds
                     // AFTER the person had switched to a chat - on a slow server,
                     // every attempt to leave the room bounced straight back.
-                    setRoomView(prev => {
+                    {
                         const rid = data.room?.roomId;
-                        const wanted = (prev && prev.room.roomId === rid)
+                        const wanted = (roomViewRef.current && roomViewRef.current.room.roomId === rid)
                             || pendingRoomOpenRef.current === rid;
-                        if (!wanted) return prev;
-                        if (pendingRoomOpenRef.current === rid) pendingRoomOpenRef.current = null;
-                        return { room: data.room, messages: data.messages || [] };
-                    });
+                        if (wanted) {
+                            if (pendingRoomOpenRef.current === rid) pendingRoomOpenRef.current = null;
+                            setRoomOpening(null);
+                            setRoomView({ room: data.room, messages: data.messages || [] });
+                            // A pending say has arrived when the transcript carries the
+                            // person's text; expired ones go too, so a send the room
+                            // never answered does not sit as "sending" forever.
+                            const texts = new Set((data.messages || []).map((m: RoomMessage) => m.text || ''));
+                            setPendingRoomSays(prev => prev.filter(p =>
+                                p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text)));
+                        }
+                    }
                 }
                 else if (data.type === 'room_task_history') {
                     // The record, answered once per click. Kept apart from roomView so
@@ -6082,6 +6142,12 @@ function VAFDashboardContent() {
             ws.send(JSON.stringify({
                 type: 'room_say', room_id: roomView.room.roomId, text: textToSend,
             }));
+            // On screen at once, visibly pending, reconciled against the next
+            // transcript - the wait for the 3s poll made a sent message look lost.
+            setPendingRoomSays(prev => [...prev, {
+                key: Date.now() + Math.random(), roomId: roomView.room.roomId,
+                text: textToSend, ts: Date.now(),
+            }]);
             setInput('');
             return;
         }
@@ -7084,6 +7150,11 @@ function VAFDashboardContent() {
                                     onClick={() => {
                                         setDrawerOpen(false);
                                         pendingRoomOpenRef.current = s.roomId ?? null;
+                                        // The skeleton stands in immediately; the transcript
+                                        // replaces it when it arrives.
+                                        if (roomView?.room.roomId !== s.roomId) {
+                                            setRoomOpening({ roomId: s.roomId ?? '', name: s.title || '' });
+                                        }
                                         ws?.send(JSON.stringify({ type: 'open_room', room_id: s.roomId }));
                                     }}
                                     className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative",
@@ -7399,7 +7470,11 @@ function VAFDashboardContent() {
                                         timeFormat={userTimeFormat}
                                         onOpenWorker={() => { subAgentUserClosedRef.current = false; setSubAgentState(prev => ({ ...prev, isOpen: true })); }}
                                         liveWorker={roomLiveWorker}
-                                        connected={isConnected} />
+                                        connected={isConnected}
+                                        pending={pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
+                                        pendingNote={tMain('roomSending')} />
+                                ) : roomOpening ? (
+                                    <LoadingIllusion kind="room" label={roomOpening.name} />
                                 ) : (<>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -7408,12 +7483,10 @@ function VAFDashboardContent() {
                                         <span>Verbindung wird wiederhergestellt…</span>
                                     </div>
                                 )}
-                                {/* Chat history is being fetched and nothing is cached yet → the working
-                                    avatar + step-boxes (Option A) instead of a blank area */}
+                                {/* Chat history is being fetched and nothing is cached yet → the
+                                    skeleton of the conversation that is coming, not a blank area */}
                                 {historyLoading && messages.length === 0 && (
-                                    <div className="min-h-[55vh] flex items-center justify-center">
-                                        <ChatLoadingLine />
-                                    </div>
+                                    <LoadingIllusion kind="chat" />
                                 )}
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                                 {/* Empty state welcome is shown in the centered input block below */}

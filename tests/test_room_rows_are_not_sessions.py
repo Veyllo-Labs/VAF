@@ -1840,10 +1840,10 @@ def test_a_stale_transcript_cannot_reopen_a_room_the_person_left():
     mark.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    handler = source.split("data.type === 'room_transcript'")[1][:1600]
-    assert "setRoomView(prev =>" in handler, \
-        "the transcript handler must decide against the OPEN view, not overwrite it"
-    assert "pendingRoomOpenRef" in handler
+    handler = source.split("data.type === 'room_transcript'")[1][:2200]
+    adopt = handler.index("setRoomView({ room: data.room")
+    assert "roomViewRef.current" in handler[:adopt] and "pendingRoomOpenRef" in handler[:adopt], \
+        "the transcript handler must decide against the OPEN view before adopting"
     switch = source.split("const handleSessionSwitch")[1][:800]
     assert "pendingRoomOpenRef.current = null" in switch, \
         "switching away must clear the pending mark"
@@ -1862,3 +1862,26 @@ def test_a_room_message_is_not_swallowed_by_a_closing_socket():
     room_branch = source.split("type: 'room_say'")[0][-900:]
     assert "ws.readyState !== WebSocket.OPEN" in room_branch, \
         "the room send must refuse a socket that cannot carry it"
+
+
+def test_loading_shows_the_shape_of_what_is_coming_in_both_lanes():
+    """MUTATION: drop the skeleton branch of either lane, or the pending echo.
+
+    Three loading illusions, asked for together and wired together: skeleton
+    bubbles while a chat's history or a room's transcript is on its way, a
+    progress bar that races to two thirds and then creeps (finishing is the
+    content's job), and the person's own room message on screen at once -
+    visibly pending, reconciled against the store, never given a position
+    among the real messages, because the room trusts only the store for order.
+    """
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert page.count("<LoadingIllusion kind=") == 2, "both lanes share ONE component"
+    assert '<LoadingIllusion kind="chat" />' in page
+    assert '<LoadingIllusion kind="room" label={roomOpening.name} />' in page
+    css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
+    assert "@keyframes loadCrawl" in css and "@keyframes skelPulse" in css
+    assert "scaleX" in css.split("@keyframes loadCrawl")[1][:200], \
+        "the bar animates transform only - the repaint rule"
+    assert "setPendingRoomSays" in page
+    assert "Date.now() - p.ts < 30000" in page, \
+        "a pending echo must expire instead of accumulating"

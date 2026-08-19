@@ -488,12 +488,28 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   from { opacity: 0; transform: translate3d(-2rem, 0, 0) scale(.97) }
   to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1) }
 }
+/* Loading illusions. The skeleton pulses OPACITY and the bar animates TRANSFORM
+   only - the two properties that stay off the repaint path, per the rule above.
+   The crawl is deliberately dishonest about its pace: fast to two thirds, then
+   a creep it never finishes, because finishing is the content's job - the bar
+   vanishes with the skeleton the moment real messages arrive. */
+@keyframes skelPulse { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
+@keyframes loadCrawl {
+  0% { transform: scaleX(0) }
+  12% { transform: scaleX(.55) }
+  35% { transform: scaleX(.78) }
+  100% { transform: scaleX(.94) }
+}
 .room-msg-enter { animation: roomMessageEnter .75s cubic-bezier(.16,.84,.44,1) both }
 @media (prefers-reduced-motion: reduce) {
   /* A person who asked the system for less motion still gets a message that
      arrives - it fades without travelling, rather than not animating at all. */
   @keyframes roomMessageEnter { from { opacity: 0 } to { opacity: 1 } }
   .room-msg-enter { animation: roomMessageEnter .2s linear both }
+  /* The loading illusions hold still: a steady dim skeleton and a bar parked
+     near the end say "loading" without motion. */
+  @keyframes skelPulse { 0%, 100% { opacity: .75 } 50% { opacity: .75 } }
+  @keyframes loadCrawl { 0%, 100% { transform: scaleX(.9) } }
 }
 /* The vote panel docking above the message box, and leaving the same way.
    Both directions, because a vote here ENDS by itself - the last ballot lands or

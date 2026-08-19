@@ -118,6 +118,19 @@ many frames have not been read.
   Days and times read exactly like the chat's: the same DaySeparator between
   calendar days and the same clock per message (today shows the time, older
   messages name the day), off the frame's own timestamp.
+  Loading shows the SHAPE of what is coming, in both lanes: while a chat's
+  history or a clicked room's transcript is on its way, skeleton bubbles stand
+  in the message area (one shared `LoadingIllusion` component - a chat
+  alternates sides, a room stacks left with a name line) under a thin progress
+  bar that races to two thirds and then creeps, because finishing is the
+  content's job; both vanish the moment real messages arrive, and a room
+  skeleton clears itself after 15 seconds so a dead server does not trap the
+  person under it. The person's own room message appears at once as a visibly
+  PENDING bubble below the transcript ("wird gesendet…"), reconciled against
+  the next store answer and expired after 30 seconds - the room still trusts
+  only the store for ORDER, so a pending line never takes a position among the
+  real messages. Animations are opacity and transform only, per the repaint
+  rule in globals.css.
   The sidebar badge counts what the PERSON has not seen - from their own reading
   position (the cli lane the browser shares with the terminal), never from the
   agent's backlog, whose cursor only moves when its turn runs. Looking at the

@@ -165,6 +165,7 @@
     "roomCloseBody": "Der Raum und sein Verlauf werden von diesem Rechner entfernt, und alle darin verlieren den Zugang. Das laesst sich nicht rueckgaengig machen - vorher mit `vaf a2a export` sichern, wenn du ihn behalten willst.",
     "roomCloseConfirm": "Raum loeschen",
     "roomCloseCancel": "Abbrechen",
+    "roomSending": "wird gesendet…",
     "roomClosedNote": "Dieser Raum ist geschlossen. Hier kann nichts mehr geschrieben werden.",
     "roomWritePlaceholder": "In den Raum schreiben...",
     "roomMembersTitle": "Wer in diesem Raum ist",

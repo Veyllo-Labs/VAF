@@ -165,6 +165,7 @@
     "roomCloseBody": "The room and its conversation are removed from this machine, and everyone in it loses access. This cannot be undone - export it first with `vaf a2a export` if you want to keep it.",
     "roomCloseConfirm": "Delete room",
     "roomCloseCancel": "Cancel",
+    "roomSending": "sending…",
     "roomClosedNote": "This room is closed. Nothing more can be written here.",
     "roomWritePlaceholder": "Write to the room...",
     "roomMembersTitle": "Who is in this room",

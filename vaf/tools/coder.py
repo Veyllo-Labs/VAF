@@ -478,7 +478,14 @@ def _extract_xml_tool_call(content: str) -> Optional[Dict[str, Any]]:
     """Recover a tool call emitted as XML/DSML content (see Format 0d in the stream loop).
 
     Thin wrapper over the shared parser so the coder and the main agent share one
-    implementation. See vaf.core.tool_call_recovery.extract_xml_tool_call.
+    implementation. See vaf.core.tool_call_recovery.extract_xml_tool_calls.
+
+    NAMED BOUNDARY - the FIRST call only, deliberately, unlike the main agent which
+    takes the whole batch. This loop dispatches one call per iteration by
+    construction (the wire-JSON recovery beside it takes ``[0]`` for the same
+    reason), and it re-prompts after every result, so a batched leak is asked for
+    again rather than lost. The main agent's fallback had no such second chance:
+    its turn ended, which is why the dropped calls there were work never done.
     """
     from vaf.core.tool_call_recovery import extract_xml_tool_call
     return extract_xml_tool_call(content)

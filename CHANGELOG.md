@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **A model that asks for four files now gets four, not one.** When a model
+  writes its tool calls as text instead of using the structured field - which
+  DeepSeek does intermittently, emitting several calls inside one wrapper - VAF
+  recovered only the first and then removed the rest from the visible text while
+  cleaning up. The result was a reply that read normally, one file actually
+  read, three quietly skipped, and nothing anywhere saying so. All calls in such
+  a batch are recovered now. A batch entry naming a tool that does not exist is
+  skipped on its own rather than cancelling the real calls beside it.
+
 ### Added
 - **Deleting a chat asks first.** The trash icon opened no dialog at all: one
   mis-click removed a conversation and its attachments for good. It now opens

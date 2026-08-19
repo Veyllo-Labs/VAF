@@ -2550,7 +2550,7 @@ home: {self.home}
                             # leak "works in chat but hangs the librarian".
                             from vaf.core.tool_call_recovery import (
                                 extract_wire_json_tool_calls,
-                                extract_xml_tool_call,
+                                extract_xml_tool_calls,
                                 strip_tool_call_markup,
                             )
                             _names = {t.get("function", {}).get("name")
@@ -2558,8 +2558,11 @@ home: {self.home}
                             _names.discard(None)
                             _leaked = extract_wire_json_tool_calls(full_content, _names)
                             if not _leaked:
-                                _one = extract_xml_tool_call(full_content, _names)
-                                _leaked = [_one] if _one else []
+                                # The whole batch, like the main lane: this file's
+                                # own comment above says every recovery lane knows
+                                # every dialect, and taking one call out of four
+                                # is the same leak going half-unhandled.
+                                _leaked = extract_xml_tool_calls(full_content, _names)
                             if _leaked:
                                 response_msg["tool_calls"] = _leaked
                                 response_msg["content"] = strip_tool_call_markup(full_content)

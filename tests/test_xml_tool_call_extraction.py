@@ -146,3 +146,77 @@ def test_strip_tool_call_markup_removes_tool_use():
     content = 'Working on it. <tool_use name="write_to_file"><path>a.js</path></tool_use>'
     out = strip_tool_call_markup(content)
     assert out == "Working on it."
+
+
+def test_a_batched_dsml_leak_recovers_every_call():
+    """The live incident this exists for: DeepSeek emitted FOUR read_file calls
+    inside one ``<｜｜DSML｜｜tool_calls>`` wrapper as content. The recovery took
+    the first and strip_tool_call_markup then erased the other three from the
+    text - so the user saw a sentence, one file was read, three were not, and
+    nothing anywhere said so. Doing a quarter of the work silently is worse than
+    showing raw markup.
+    """
+    from vaf.core.tool_call_recovery import extract_xml_tool_calls
+
+    def _inv(path, start, end):
+        return (f'<｜｜DSML｜｜invoke name="read_file"> '
+                f'<｜｜DSML｜｜parameter name="path" string="true">{path}</｜｜DSML｜｜parameter> '
+                f'<｜｜DSML｜｜parameter name="start_line" string="false">{start}</｜｜DSML｜｜parameter> '
+                f'<｜｜DSML｜｜parameter name="end_line" string="false">{end}</｜｜DSML｜｜parameter> '
+                f'</｜｜DSML｜｜invoke>')
+
+    content = ("Ich lese die restlichen Abschnitte:\n\n<｜｜DSML｜｜tool_calls> "
+               + _inv("/home/user/a.txt", 85, 156)
+               + " " + _inv("/home/user/b.txt", 130, 159)
+               + " " + _inv("/home/user/b.txt", 55, 85)
+               + " " + _inv("/home/user/c.txt", 60, 137)
+               + " </｜｜DSML｜｜tool_calls>")
+
+    calls = extract_xml_tool_calls(content, {"read_file"})
+
+    assert len(calls) == 4, "every call in the batch, not just the first"
+    spans = [(json.loads(c["function"]["arguments"])["path"],
+              json.loads(c["function"]["arguments"])["start_line"]) for c in calls]
+    assert spans == [("/home/user/a.txt", 85), ("/home/user/b.txt", 130),
+                     ("/home/user/b.txt", 55), ("/home/user/c.txt", 60)], "order is preserved"
+    assert len({c["id"] for c in calls}) == 4, "ids must not collide within one batch"
+
+
+def test_an_unknown_name_in_a_batch_does_not_refuse_the_known_ones():
+    """Sibling blocks are independent, so one hallucinated name must not cancel
+    the real calls beside it - that would be the same silently-dropped work.
+    (The wire-JSON recovery refuses its whole object on purpose: that format is
+    ONE structure, so a foreign name makes all of it suspect.)"""
+    from vaf.core.tool_call_recovery import extract_xml_tool_calls
+
+    content = ('<invoke name="read_file"><parameter name="path">/a.txt</parameter></invoke>'
+               '<invoke name="not_a_real_tool"><parameter name="x">1</parameter></invoke>'
+               '<invoke name="read_file"><parameter name="path">/b.txt</parameter></invoke>')
+
+    calls = extract_xml_tool_calls(content, {"read_file"})
+
+    assert [json.loads(c["function"]["arguments"])["path"] for c in calls] == ["/a.txt", "/b.txt"]
+
+
+def test_the_singular_helper_still_answers_with_the_first():
+    """Kept for callers that genuinely want one - the coder dispatches one call
+    per loop iteration and re-prompts, so a batch is asked for again there."""
+    content = ('<invoke name="read_file"><parameter name="path">/a.txt</parameter></invoke>'
+               '<invoke name="read_file"><parameter name="path">/b.txt</parameter></invoke>')
+    one = extract_xml_tool_call(content, {"read_file"})
+    assert json.loads(one["function"]["arguments"])["path"] == "/a.txt"
+
+
+def test_the_main_agent_takes_the_whole_batch():
+    """Pinned by source: the agent's turn ENDS after its fallback, so a call it
+    drops is work never done - it has no second chance the way the coder loop has."""
+    import pathlib
+
+    src = pathlib.Path("vaf/core/agent.py").read_text(encoding="utf-8")
+    assert "extract_xml_tool_calls" in src, "the agent fell back to the single-call helper"
+    assert "for _xml_tc in extract_xml_tool_calls(" in src
+
+    lib = pathlib.Path("vaf/tools/librarian.py").read_text(encoding="utf-8")
+    assert "extract_xml_tool_calls(full_content, _names)" in lib, (
+        "every recovery lane knows every dialect - and recovers the same amount of it"
+    )

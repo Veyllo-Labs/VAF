@@ -112,11 +112,44 @@ grep the symbol names to find them.
 | 4 | Tool router | `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
+| 6b | Recover tool calls leaked as TEXT | `vaf/core/tool_call_recovery.py` - see below |
 | 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text based on chat_step's reasoning-stripped return value |
 | 8 | Tool dispatch | `execute_tool`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation | `_validate_final_answer` |
 | 10 | Pending-task auto-continue | `_reply_needs_user`, `_task_stuck_step` |
 | 11 | Finalize (compress / append / TTS / clean) | `summarize_tool_turn`, `_clean_reasoning` |
+
+### Step 6b - tool calls the model wrote as text
+
+A model does not always put a tool call in the structured `tool_calls` field. It may write
+it into its own content, in whatever dialect it was trained on, and the call then never runs
+while the raw markup is shown to the user. **The agent is not made to prefer one format** -
+the fallback chain reads the dialects that actually turn up, in this order, each tried only
+once nothing above it matched:
+
+| # | Dialect | Parser |
+|---|---|---|
+| 1-4 | streamed / paren / Qwen-Hermes / Gemma | `_parse_paren_tool_calls`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` (`agent.py`) |
+| 5 | Anthropic `<invoke name>` + `<parameter name>`, including DeepSeek's `<｜｜DSML｜｜invoke …>` token-wrapped form; Morph `<tool_use name>`; tool-as-tag `<write_to_file>…` | `extract_xml_tool_calls` |
+| 6 | Bare OpenAI wire JSON `{"tool_calls": [...]}` leaked as content | `extract_wire_json_tool_calls` |
+
+Whatever is recovered is dispatched, and `strip_tool_call_markup` removes the raw markup from
+what is displayed and persisted.
+
+**The batch is taken whole.** DeepSeek emits several `<invoke>` blocks inside one
+`<｜｜DSML｜｜tool_calls>` wrapper; recovering only the first left the rest to be erased by
+`strip_tool_call_markup`, so one of four files was read and nothing said the other three were
+not (live incident). Sibling blocks are independent, so an entry naming an unknown tool is
+skipped while its neighbours still run - unlike the wire-JSON lane, which refuses its whole
+object for one foreign name because that format is a SINGLE structure and a bad name makes
+all of it suspect.
+
+**Every lane knows every dialect.** The main agent, the librarian and the coder each parse
+model content on their own fallback path; a dialect only one of them knows means the same
+leak "works in chat but hangs the coder". The coder is the one deliberate difference: it
+dispatches one call per loop iteration and re-prompts after each result, so a batched leak is
+asked for again rather than lost - the main agent's turn ends after its fallback, which is why
+it takes everything.
 
 Host-speaker TTS (final answer, thinking fillers, answer chime) only fires for agents
 constructed with `host_audio=True`, which is exclusively the interactive CLI

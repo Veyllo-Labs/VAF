@@ -61,10 +61,10 @@ def _mk(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def extract_xml_tool_call(content: str, valid_names=None) -> Optional[Dict[str, Any]]:
-    """Recover a single tool call that a model emitted as XML/text (not structured tool_calls).
+def extract_xml_tool_calls(content: str, valid_names=None) -> list:
+    """Recover EVERY tool call a model emitted as XML/text (not structured tool_calls).
 
-    Handles three dialects, in order:
+    Handles three dialects:
       1. Anthropic/Claude   ``<invoke name="X"><parameter name="P">V</parameter></invoke>``
          (and DeepSeek's ``<｜｜DSML｜｜invoke …>`` token-wrapped variant).
       2. Morph ``<tool_use``  ``<tool_use name="X" id="…"><path>V</path><content>V</content></tool_use>``
@@ -72,39 +72,69 @@ def extract_xml_tool_call(content: str, valid_names=None) -> Optional[Dict[str, 
          name IS the tag - only tried when ``valid_names`` is given (needed to tell a tool tag
          from ordinary markup in file content).
 
-    Returns an OpenAI-style tool_call dict, or None. When ``valid_names`` is provided the
-    recovered name must be one of them. Parameter values are coerced from text: an Anthropic
-    ``string="true"`` attribute forces a string, otherwise values are JSON-parsed with a string
-    fallback.
+    ALL matches, not the first. A model that batches - four ``<invoke>`` blocks inside one
+    ``<｜｜DSML｜｜tool_calls>`` wrapper is what DeepSeek actually emits - used to have three of
+    them dropped, and `strip_tool_call_markup` then erased the evidence from the text. The user
+    saw a sentence, one file was read, three were not, and nothing anywhere said so. Silently
+    doing a quarter of the work is worse than showing raw markup.
+
+    An entry whose name is not in ``valid_names`` is SKIPPED, and the rest still run. This
+    differs from the wire-JSON recovery on purpose: that format is one object, so a foreign
+    name makes the whole object suspect, while these are independent sibling blocks and
+    refusing all of them for one bad neighbour would drop real work - the very defect above.
+
+    Returns a list of OpenAI-style tool_call dicts (empty when nothing matched). Parameter
+    values are coerced from text: an Anthropic ``string="true"`` attribute forces a string,
+    otherwise values are JSON-parsed with a string fallback.
     """
     if not content:
-        return None
+        return []
     # Strip any special-token wrapper (｜｜DSML｜｜ / |DSML| / stray fullwidth pipes) -> plain XML.
     norm = _DSML_TOKEN_RE.sub("", content).replace("｜", "")
 
     def _ok(name: str) -> bool:
         return bool(name) and (valid_names is None or name in valid_names)
 
+    out: list = []
+
     # 1. Anthropic <invoke name>/<parameter name>
-    inv = _INVOKE_RE.search(norm)
-    if inv and _ok(inv.group(1).strip()):
+    for inv in _INVOKE_RE.finditer(norm):
+        name = inv.group(1).strip()
+        if not _ok(name):
+            continue
         args: Dict[str, Any] = {}
         for pm in _PARAM_RE.finditer(inv.group(2)):
             args[pm.group(1).strip()] = _coerce(pm.group(3), 'string="true"' in pm.group(2))
-        return _mk(inv.group(1).strip(), args)
+        out.append(_mk(name, args))
 
     # 2. Morph <tool_use name="X" ...> with tag-named params
-    tu = _TOOL_USE_RE.search(norm)
-    if tu and _ok(tu.group(1).strip()):
-        return _mk(tu.group(1).strip(), _child_params(tu.group(2)))
+    for tu in _TOOL_USE_RE.finditer(norm):
+        name = tu.group(1).strip()
+        if _ok(name):
+            out.append(_mk(name, _child_params(tu.group(2))))
+
+    if out:
+        return out
 
     # 3. Morph tool-as-tag <TOOLNAME>...</TOOLNAME> - only with a known-tools allowlist.
+    # Last, and only when the named dialects found nothing: a bare tool-named tag is the
+    # shape most easily confused with ordinary markup inside file content.
     if valid_names:
         for tool in valid_names:
-            m = re.search(rf"<{re.escape(tool)}\b[^>]*>(.*?)</{re.escape(tool)}>", norm, re.DOTALL)
-            if m:
-                return _mk(tool, _child_params(m.group(1)))
-    return None
+            for m in re.finditer(rf"<{re.escape(tool)}\b[^>]*>(.*?)</{re.escape(tool)}>",
+                                 norm, re.DOTALL):
+                out.append(_mk(tool, _child_params(m.group(1))))
+    return out
+
+
+def extract_xml_tool_call(content: str, valid_names=None) -> Optional[Dict[str, Any]]:
+    """First recovered XML tool call, or None. See :func:`extract_xml_tool_calls`.
+
+    Kept for callers that genuinely want one call. New code should use the plural
+    form: a model that batched four calls means all four.
+    """
+    calls = extract_xml_tool_calls(content, valid_names)
+    return calls[0] if calls else None
 
 
 def _wire_json_span(content: str):

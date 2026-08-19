@@ -10210,9 +10210,11 @@ class Agent:
                 # intermittently emits a real call as content instead of structured tool_calls;
                 # filtered to known tools, so it is safe to try once nothing above matched.
                 if not tool_calls_detected:
-                    from vaf.core.tool_call_recovery import extract_xml_tool_call
-                    _xml_tc = extract_xml_tool_call(text_to_search, self.tools)
-                    if _xml_tc:
+                    from vaf.core.tool_call_recovery import extract_xml_tool_calls
+                    # ALL of them: a model that leaks a batch leaks it whole, and
+                    # taking only the first left the rest to be erased from the
+                    # text by strip_tool_call_markup - work silently not done.
+                    for _xml_tc in extract_xml_tool_calls(text_to_search, self.tools):
                         tool_calls_detected.append(_xml_tc)
 
                 # 7. Bare OpenAI-wire JSON leaked as content:

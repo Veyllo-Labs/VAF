@@ -329,7 +329,9 @@ def test_the_agent_fallback_chain_consults_the_wire_dialect():
     import vaf.core.agent as agent_mod
 
     src = inspect.getsource(agent_mod)
-    i = src.index("extract_xml_tool_call(text_to_search")
+    # Anchored on the PLURAL: the agent recovers whole batches, because its turn
+    # ends after this fallback and a dropped call is work never done.
+    i = src.index("extract_xml_tool_calls(text_to_search")
     window = src[i:i + 1600]
     j = window.find("extract_wire_json_tool_calls(text_to_search")
     assert j != -1, \

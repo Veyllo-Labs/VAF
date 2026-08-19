@@ -211,6 +211,10 @@ def test_join_redeems_the_ticket_and_keeps_the_seat(peer, server, capsys):
     summary = _join(peer, server, capsys)
     assert summary["peer"] == "p-guest1"
     assert summary["room"] == ROOM
+    record = json.loads(
+        (Path.home() / ".vaf-a2a-guest" / f"{ROOM}.json").read_text(encoding="utf-8"))
+    assert record["welcome"] == {"members": [{"peer": "p-owner1", "display": "VAF"}]}, \
+        "the welcome kept at join time is what howto reprints later"
     assert summary["history"] == len(BACKLOG)
     record = peer.load_record(ROOM)
     assert record["seat"] == SEAT
@@ -384,3 +388,249 @@ def test_wait_renews_between_slices_and_respects_an_old_host(peer):
     wait = source.split("def cmd_wait")[1][:2400]
     assert "connection.renew()" in wait
     assert '!= "renewed"' in wait and "renew_spoken = False" in wait
+
+
+# ── the MCP door: the same verbs, served over stdio ────────────────────────
+
+def _mcp(peer, method, request_id=1, **params):
+    request = {"jsonrpc": "2.0", "method": method}
+    if request_id is not None:
+        request["id"] = request_id
+    if params:
+        request["params"] = params
+    return peer.handle_mcp_request(request)
+
+
+def _call(peer, tool, **arguments):
+    reply = _mcp(peer, "tools/call", name=tool, arguments=arguments)
+    result = reply["result"]
+    return result["content"][0]["text"], bool(result.get("isError"))
+
+
+def test_mcp_initialize_answers_the_version_and_tools(peer):
+    """MUTATION: answer another protocol revision, or drop capabilities.tools.
+
+    The revision and the capability flag are what a host checks before it asks
+    anything else; VAF's own client pins exactly this pair.
+    """
+    reply = _mcp(peer, "initialize", protocolVersion="2024-11-05")
+    assert reply["id"] == 1
+    assert reply["result"]["protocolVersion"] == "2024-11-05"
+    assert "tools" in reply["result"]["capabilities"]
+    assert reply["result"]["serverInfo"]["name"]
+
+
+def test_mcp_notifications_get_no_answer(peer):
+    """MUTATION: reply to a notification - strict hosts drop the connection."""
+    assert peer.handle_mcp_request(
+        {"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
+
+
+def test_mcp_tools_list_names_every_room_verb(peer):
+    """MUTATION: drop a tool from the registry, or a required key from its
+    properties - a host renders exactly what this answer carries."""
+    reply = _mcp(peer, "tools/list")
+    tools = reply["result"]["tools"]
+    assert {t["name"] for t in tools} == {
+        "a2a_join", "a2a_rooms", "a2a_read", "a2a_wait", "a2a_say",
+        "a2a_answer", "a2a_report", "a2a_leave", "a2a_howto",
+        "a2a_files", "a2a_fetch", "a2a_push"}
+    for tool in tools:
+        assert tool["description"].strip()
+        schema = tool["inputSchema"]
+        assert schema["type"] == "object"
+        for required in schema.get("required", []):
+            assert required in schema["properties"], (tool["name"], required)
+
+
+def test_mcp_unknown_method_is_an_error_not_a_crash(peer):
+    reply = _mcp(peer, "resources/list")
+    assert reply["error"]["code"] == -32601
+    assert peer.handle_mcp_request(
+        {"jsonrpc": "2.0", "method": "resources/list"}) is None
+
+
+def test_mcp_call_say_commits_a_frame_on_the_real_wire(peer, server, capsys):
+    """MUTATION: fabricate an ack without submitting - the server's submissions
+    list is the truth this asserts against."""
+    _join(peer, server, capsys)
+    before = len(server["state"]["submissions"])
+    text, failed = _call(peer, "a2a_say", room=ROOM, text="ueber die MCP-Tuer")
+    assert not failed, text
+    assert json.loads(text.splitlines()[-1])["status"] == "committed"
+    sent = server["state"]["submissions"][before:]
+    assert {"kind": "say", "body": {"text": "ueber die MCP-Tuer"}} in sent
+
+
+def test_mcp_refusals_are_results_not_protocol_errors(peer):
+    """MUTATION: route refusals into JSON-RPC errors - the host would declare
+    the server broken instead of showing the model the refusal.
+
+    Three nets shape a refusal into an isError result (_drive, the tools/call
+    Refused catch, the generic Exception catch); removing any one degrades
+    gracefully into the next, so only the deliberate protocol-error rewrite
+    this docstring names goes red here. That layering is the point.
+    """
+    reply = _mcp(peer, "tools/call", name="a2a_read",
+                 arguments={"room": "room-nowhere1"})
+    assert "error" not in reply
+    result = reply["result"]
+    assert result["isError"] is True
+    assert "no seat" in result["content"][0]["text"]
+
+
+def test_mcp_call_with_a_missing_argument_names_the_gap(peer, server):
+    before = len(server["state"]["submissions"])
+    text, failed = _call(peer, "a2a_say", room=ROOM)
+    assert failed and "'text'" in text
+    assert len(server["state"]["submissions"]) == before, \
+        "nothing may reach the room for a call the schema already refuses"
+
+
+def test_mcp_unknown_tool_is_refused_by_name(peer):
+    reply = _mcp(peer, "tools/call", name="a2a_nuke", arguments={})
+    assert reply["error"]["code"] == -32602
+    assert "a2a_nuke" in reply["error"]["message"]
+    assert "a2a_say" in reply["error"]["message"]
+
+
+def test_mcp_wait_times_out_as_an_error_result(peer, server, capsys):
+    """MUTATION: map the wait timeout to a protocol error or a success."""
+    _join(peer, server, capsys)
+    text, failed = _call(peer, "a2a_wait", room=ROOM, timeout=1)
+    assert failed
+    assert "nothing was said in time" in text
+
+
+def test_mcp_stdio_pump_answers_parse_errors_and_keeps_serving(peer):
+    """MUTATION: let json.loads raise through the pump - one garbage line from
+    a host would kill the whole bridge."""
+    lines = "\n".join([
+        "this is not json",
+        json.dumps({"jsonrpc": "2.0", "id": 7, "method": "initialize"}),
+    ]) + "\n"
+    proc = subprocess.run([sys.executable, str(WIRE), "mcp"], input=lines,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    replies = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[0]["id"] is None
+    assert replies[1]["id"] == 7 and "result" in replies[1], \
+        "the pump must survive garbage and keep serving"
+
+
+def test_vafs_own_mcp_client_drives_the_guest_bridge(peer, server, capsys):
+    """MUTATION: any drift from the subset VAF's client speaks - a wrong id
+    echo, a reply to the initialized notification, multi-line JSON, a missing
+    result.content - goes red here. VAF consuming its own bridge is the proof
+    that any MCP host can.
+    """
+    if " " in sys.executable or " " in str(WIRE):
+        pytest.skip("the MCP client splits its server command on spaces")
+    from vaf.tools.mcp_client import MCPClientTool
+
+    _join(peer, server, capsys)
+    command = f"{sys.executable} {WIRE} mcp"
+    tool = MCPClientTool()
+    try:
+        names = {t["name"] for t in tool.list_server_tools(command)}
+        assert "a2a_say" in names and len(names) == 12, names
+        before = len(server["state"]["submissions"])
+        answer = tool.run(server_command=command, tool_name="a2a_say",
+                          arguments={"room": ROOM, "text": "vaf drives its bridge"})
+        assert "committed" in answer, answer
+        sent = server["state"]["submissions"][before:]
+        assert {"kind": "say", "body": {"text": "vaf drives its bridge"}} in sent
+    finally:
+        for process in tool._server_processes.values():
+            process.terminate()
+
+
+def test_rooms_lists_the_seats_without_the_secrets(peer, server, capsys):
+    """MUTATION: print the seat credential - a bearer secret straight into a
+    terminal scrollback or a model's context."""
+    _join(peer, server, capsys)
+    peer.main(["rooms"])
+    out = capsys.readouterr().out
+    row = json.loads(out.strip().splitlines()[-1])
+    assert row["room"] == ROOM and row["peer"] == "p-guest1"
+    assert SEAT not in out and "ca_pem" not in out
+    text, failed = _call(peer, "a2a_rooms")
+    assert not failed and SEAT not in text
+
+
+def test_howto_reprints_the_room_and_how_to_behave(peer, server, capsys, tmp_path, monkeypatch):
+    """MUTATION: raise on a missing seat, or drop the stored welcome packet."""
+    _join(peer, server, capsys)
+    peer.main(["howto", ROOM])
+    out = capsys.readouterr().out
+    assert "as_of: join" in out
+    assert "p-owner1" in out, "the welcome kept at join time must reprint"
+    assert "REQUEST TO ACT" in out
+    assert "A2A_PROTOCOL.md" in out
+
+    monkeypatch.setenv("HOME", str(tmp_path / "fresh"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "fresh"))
+    peer.main(["howto", ROOM])
+    fresh = capsys.readouterr().out
+    assert "instructions still hold" in fresh and "REQUEST TO ACT" in fresh
+
+
+def test_every_mcp_tool_is_named_in_the_protocol_doc(peer):
+    """The registry/doc copy pair, guarded (rule 2 pattern): a tool a host can
+    call that the protocol document does not name is an undocumented surface."""
+    doc = (ROOT / "docs" / "agents" / "A2A_PROTOCOL.md").read_text(encoding="utf-8")
+    for tool in peer.MCP_TOOLS:
+        assert f"`{tool['name']}`" in doc, tool["name"]
+
+
+# ── the shared folder verbs, driven through the _http seam ─────────────────
+
+def _seam(peer, monkeypatch, answers):
+    calls = []
+
+    def fake(record, method, path_and_query, body=b""):
+        calls.append({"method": method, "path": path_and_query, "body": body})
+        return answers.pop(0)
+
+    monkeypatch.setattr(peer, "_http", fake)
+    return calls
+
+
+def test_fetch_inlines_small_text_and_never_binary(peer, server, capsys, monkeypatch, tmp_path):
+    """MUTATION: inline binary bytes - undecodable noise straight into a model's
+    context, where the local path was the whole point."""
+    _join(peer, server, capsys)
+    _seam(peer, monkeypatch, [(200, "kleiner text".encode("utf-8")),
+                              (200, b"\x00\xff\x01binary")])
+    peer.main(["fetch", ROOM, "brief.txt", "--out", str(tmp_path)])
+    small = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert small["text"] == "kleiner text"
+    assert (tmp_path / "brief.txt").read_text(encoding="utf-8") == "kleiner text"
+
+    peer.main(["fetch", ROOM, "blob.bin", "--out", str(tmp_path)])
+    blob = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert "text" not in blob
+    assert (tmp_path / "blob.bin").read_bytes() == b"\x00\xff\x01binary"
+
+
+def test_push_carries_the_bytes_and_files_lists_the_answer(peer, server, capsys, monkeypatch, tmp_path):
+    """MUTATION: drop the body from the push request, or the seat from the query."""
+    _join(peer, server, capsys)
+    capsys.readouterr()
+    source = tmp_path / "wording.html"
+    source.write_bytes(b"<h1>Entwurf</h1>")
+    calls = _seam(peer, monkeypatch, [
+        (200, json.dumps({"room": ROOM, "path": "wording.html", "size": 16}).encode()),
+        (200, json.dumps({"room": ROOM, "files": [
+            {"path": "wording.html", "size": 16, "mtime": 0}]}).encode()),
+    ])
+    peer.main(["push", ROOM, str(source)])
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["body"] == b"<h1>Entwurf</h1>"
+    assert "seat=" in calls[0]["path"] and "path=wording.html" in calls[0]["path"]
+
+    peer.main(["files", ROOM])
+    rows = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()
+            if l.startswith("{")]
+    assert {"path": "wording.html", "size": 16, "mtime": 0} in rows

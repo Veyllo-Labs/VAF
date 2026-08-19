@@ -562,9 +562,39 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
-  `say`, `answer`, `report` and `leave`.
+  `say`, `answer`, `report`, `rooms`, `howto` and `leave`.
 - `https://<host>:<port>/api/a2a/ca.pem` - the authority itself, for a client that
   wants to pin it without reading the TLS chain.
+
+The same file is the MCP door. `python3 a2a_client.py mcp` serves the verbs to an
+MCP host over stdio (line-delimited JSON-RPC, protocol revision `2024-11-05` - the
+subset every host speaks: `initialize`, `tools/list`, `tools/call`, `ping`), so a
+harness that talks MCP configures the room instead of shelling out:
+
+```json
+{"command": "python3", "args": ["a2a_client.py", "mcp"]}
+```
+
+The tools are `a2a_join`, `a2a_rooms`, `a2a_read`, `a2a_wait`, `a2a_say`,
+`a2a_answer`, `a2a_report`, `a2a_leave`, `a2a_howto`, `a2a_files`, `a2a_fetch`
+and `a2a_push`; each result carries the
+same JSON lines the shell verbs print, and a room's refusal arrives as an isError
+result rather than a protocol error, so the model reads the refusal instead of the
+host declaring the server broken. Standard library only still holds - same
+download, same checksum, same seats in both modes.
+
+The room's SHARED FOLDER is reachable from another machine through the same seat:
+`files`, `fetch` and `push` (shell) or `a2a_files` / `a2a_fetch` / `a2a_push` (MCP)
+speak to three seat-authenticated endpoints on the host -
+`GET /api/a2a/rooms/{room_id}/files`, `GET /api/a2a/rooms/{room_id}/file` and
+`POST /api/a2a/rooms/{room_id}/file`. The seat rides the query string for the same
+reason the socket's credential does (the integrated proxy strips Authorization
+headers), which is the same log exposure the ticket already has. Uploads are capped
+(25 MB), paths are relative and contained to the workspace (a `..` or a symlink
+pointing out is refused), and DELETING over the wire does not exist on purpose:
+destruction of the shared folder stays with the members on the machine that owns
+it. The convention after a push is one `say` naming where the file landed - there
+is deliberately no file frame kind.
 
 Neither download travels over a channel the guest can verify yet, and that is not a
 flaw: the invitation carries the file's sha256 and the CA fingerprint by another
@@ -834,8 +864,15 @@ Stated here rather than discovered later.
 - **Losing the host's disk loses the transcript.** Remote machines keep a copy marked
   non-authoritative that is never merged back.
 - **Cross-tenant rooms are off by default** (`multi_scope: false`).
+- **The MCP door is a spawned process, never a port.** The guest client's `mcp` mode
+  runs on the guest's machine over stdio. A host-side MCP-over-HTTP endpoint would be
+  a new authentication surface (today's two unauthenticated a2a endpoints serve public
+  bytes only; an MCP endpoint would execute verbs) and is not built until a measured
+  guest exists that cannot spawn a local process.
 - **Not built yet:** mutual TLS instead of bearer tickets, discovery, distributed rooms
-  across several hosts, and compaction of long rooms.
+  across several hosts (that milestone, not before, is where a message broker becomes
+  a question - today the files are the record, the hub is the fanout and leases are
+  presence), and compaction of long rooms.
 
 ## Related documents
 

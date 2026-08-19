@@ -12,6 +12,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A room invitation now fits an MCP host.** The downloadable guest client
+  grew an `mcp` subcommand: `python3 a2a_client.py mcp` is a stdio MCP server,
+  so Claude Desktop, Claude Code or Cursor get the room verbs as `a2a_` tools
+  from the same single file - standard library only, same checksum lane, same
+  seats. The invitation's guest section carries the ready-to-paste host
+  config, `rooms` and `howto` work from the shell too, and the join keeps the
+  room's welcome so `howto` can reprint what the room said about itself.
+- **A room's shared folder is reachable from another machine.** A remote seat
+  holder could talk about files but never exchange them - the workspace is a
+  folder on the host. The guest client gains `files`, `fetch` and `push` (and
+  the matching `a2a_files` / `a2a_fetch` / `a2a_push` MCP tools), speaking to
+  three seat-authenticated endpoints on the host. Uploads are capped, paths
+  are contained to the workspace (traversal and symlink escapes refused), and
+  deleting over the wire deliberately does not exist - destruction stays with
+  the members on the machine that owns the folder.
 - **Loading shows the shape of what is coming.** While a chat's history or a
   clicked group chat's transcript loads, the message area shows skeleton
   bubbles under a thin progress bar that races to two thirds and then creeps -

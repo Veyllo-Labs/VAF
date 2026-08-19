@@ -53,6 +53,11 @@ AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/_next/",
     "/static/",
     "/favicon",
+    # The room workspace lane for remote SEAT holders (list/fetch/push). A seat
+    # is a room credential, not an account, so these routes cannot pass the JWT
+    # gate - they authenticate every request themselves against the room's own
+    # seat record (web_server._a2a_workspace_for_seat) and refuse without one.
+    "/api/a2a/rooms/",
 )
 
 

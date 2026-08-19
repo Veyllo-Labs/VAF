@@ -8172,6 +8172,133 @@ async def a2a_guest_ca():
     return _Response(content=path.read_bytes(), media_type="application/x-pem-file")
 
 
+# ── the room workspace over the wire: list, fetch, push ─────────────────────
+#
+# The workspace is a folder on THIS machine; local members reach it through the
+# browser's workspace lane. A remote seat holder had no way to it at all - a
+# room collaborating on files could talk about them but never exchange them.
+# These three endpoints are SEAT-authenticated: the seat travels as a query
+# parameter for the same documented reason the socket's credential does (the
+# integrated proxy strips Authorization headers), which means the same log
+# exposure the ticket already has. Read and write only - DELETING over the
+# wire does not exist on purpose: destruction of the shared folder stays with
+# the members on the machine that owns it.
+
+_A2A_WORKSPACE_LIST_CAP = 500
+_A2A_WORKSPACE_UPLOAD_CAP = 25 * 1024 * 1024
+
+
+def _a2a_workspace_for_seat(room_id: str, seat: str, request: Request):
+    """(room, workspace_dir) for a valid seat, or an HTTPException.
+
+    Only a SEAT opens this door. A ticket is single-use and redeeming it here
+    would burn the join a guest still needs; an account token has the whole
+    authenticated API. Refusals mirror the socket door: one neutral message,
+    no room-existence oracle, one security event.
+    """
+    from vaf.core.a2a.room import Room
+    from vaf.core.a2a.store import StoreError, UnsafeName
+
+    ip = getattr(getattr(request, "client", None), "host", "") or ""
+
+    def _refuse():
+        _emit_sec_ws(f"a2a workspace room={room_id}: seat refused", ip=ip)
+        return HTTPException(status_code=403,
+                             detail="no seat for that room on this credential")
+
+    seat = str(seat or "").strip()
+    if not seat.startswith(Room.SEAT_PREFIX):
+        raise _refuse()
+    try:
+        room = Room.open(room_id)
+    except (StoreError, UnsafeName):
+        raise _refuse() from None
+    try:
+        room.redeem_seat(seat)
+    except Exception:
+        raise _refuse() from None
+    workspace = room.workspace_dir(create=True)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="this room has no workspace")
+    return room, workspace
+
+
+def _a2a_workspace_member_path(workspace, relative: str):
+    """The absolute path a relative name may touch, or an HTTPException.
+
+    Relative, no leading slash, no `..`, and the RESOLVED path must stay under
+    the resolved workspace - which also catches a symlink pointing out.
+    """
+    relative = str(relative or "").strip()
+    if (not relative or relative.startswith(("/", "\\"))
+            or ".." in relative.replace("\\", "/").split("/")):
+        raise HTTPException(status_code=400, detail="path must be relative, without ..")
+    root = workspace.resolve()
+    target = (workspace / relative).resolve()
+    if root != target and root not in target.parents:
+        raise HTTPException(status_code=400, detail="path must stay inside the workspace")
+    return target
+
+
+@app.get("/api/a2a/rooms/{room_id}/files")
+async def a2a_workspace_list(room_id: str, request: Request,
+                             seat: str = Query("")):
+    """Every file in the room's shared folder, for a remote seat holder."""
+    def _list():
+        _room, workspace = _a2a_workspace_for_seat(room_id, seat, request)
+        rows = []
+        for path in sorted(workspace.rglob("*")):
+            if not path.is_file():
+                continue
+            rows.append({"path": str(path.relative_to(workspace)),
+                         "size": path.stat().st_size,
+                         "mtime": path.stat().st_mtime})
+            if len(rows) >= _A2A_WORKSPACE_LIST_CAP:
+                break
+        return {"room": room_id, "files": rows,
+                "capped": len(rows) >= _A2A_WORKSPACE_LIST_CAP}
+
+    return await asyncio.to_thread(_list)
+
+
+@app.get("/api/a2a/rooms/{room_id}/file")
+async def a2a_workspace_fetch(room_id: str, request: Request,
+                              seat: str = Query(""), path: str = Query("")):
+    """One file's bytes, for a remote seat holder."""
+    from fastapi.responses import Response as _Response
+
+    def _fetch():
+        _room, workspace = _a2a_workspace_for_seat(room_id, seat, request)
+        target = _a2a_workspace_member_path(workspace, path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="no such file in this workspace")
+        return target.read_bytes(), target.name
+
+    content, name = await asyncio.to_thread(_fetch)
+    return _Response(content=content, media_type="application/octet-stream",
+                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/a2a/rooms/{room_id}/file")
+async def a2a_workspace_push(room_id: str, request: Request,
+                             seat: str = Query(""), path: str = Query("")):
+    """Put one file into the room's shared folder, for a remote seat holder."""
+    body = await request.body()
+    if len(body) > _A2A_WORKSPACE_UPLOAD_CAP:
+        raise HTTPException(status_code=413, detail=(
+            f"the upload cap is {_A2A_WORKSPACE_UPLOAD_CAP} bytes"))
+
+    def _push():
+        _room, workspace = _a2a_workspace_for_seat(room_id, seat, request)
+        target = _a2a_workspace_member_path(workspace, path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body)
+        return {"room": room_id, "path": str(target.relative_to(workspace.resolve())),
+                "size": len(body)}
+
+    return await asyncio.to_thread(_push)
+
+
 @app.websocket("/ws/a2a/{room_id}")
 async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
                             token: Optional[str] = Query(None)):

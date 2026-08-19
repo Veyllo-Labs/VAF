@@ -136,3 +136,134 @@ def test_the_ca_download_is_honest_about_a_missing_authority(client, monkeypatch
     response = client.get("/api/a2a/ca.pem")
     assert response.status_code == 200
     assert response.content == pem.read_bytes()
+
+
+def test_the_briefing_offers_the_mcp_door_beside_the_shell(circle, monkeypatch):
+    """MUTATION: drop the MCP lines from `_guest_block`, or move them outside
+    the endpoint guard.
+
+    An MCP-speaking harness should learn from the SAME briefing that the file
+    it just fetched is also an MCP server - a second document to find would be
+    a door most guests never open.
+    """
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint",
+                        lambda room_id: {"origin": "wss://h:8443",
+                                         "url": f"wss://h:8443/ws/a2a/{room_id}",
+                                         "ca_fingerprint": "cd" * 32})
+    room, owner = circle
+    row = invitation(room, owner)
+
+    assert '"command": "python3"' in row["briefing"]
+    assert '"a2a_client.py", "mcp"' in row["briefing"]
+    assert "a2a_join" in row["briefing"]
+
+
+def test_without_an_endpoint_the_mcp_offer_stays_away_too(circle, monkeypatch):
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint", lambda room_id: {})
+    room, owner = circle
+    row = invitation(room, owner)
+
+    assert '"mcp"' not in row["briefing"]
+
+
+def test_the_protocol_pointer_is_the_same_in_both_files():
+    """MUTATION: let the guest file's PROTOCOL_DOC constant drift from the
+    canonical URL the invitation prints."""
+    from vaf.core.a2a.invite import PROTOCOL_DOC_URL
+
+    assert PROTOCOL_DOC_URL in WIRE_PEER.read_text(encoding="utf-8")
+
+
+# ── the shared folder over the wire: seat-authenticated list/fetch/push ────
+
+@pytest.fixture()
+def seated(tmp_path, monkeypatch):
+    """A hosted room, a member with a SEAT, and its workspace on disk."""
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-seatfs", topic="Files over the wire")
+    member = room.join(display="Opus", scope_id=None, peer_id="p-far1")
+    seat = room.issue_seat(member)
+    workspace = room.workspace_dir(create=True)
+    (workspace / "notes.txt").write_text("hallo raum", encoding="utf-8")
+    return {"room": room, "seat": seat, "workspace": workspace}
+
+
+def test_a_wrong_seat_is_refused_without_an_existence_oracle(client, seated):
+    """MUTATION: drop the seat check, or answer differently for a room that
+    does not exist - either leaks what the seat must prove."""
+    refused = client.get("/api/a2a/rooms/room-seatfs/files",
+                         params={"seat": "s-p-far1-wrong"})
+    missing = client.get("/api/a2a/rooms/room-nowhere1/files",
+                         params={"seat": "s-p-far1-wrong"})
+    assert refused.status_code == 403
+    assert missing.status_code == 403
+    assert refused.json()["detail"] == missing.json()["detail"], \
+        "a wrong seat must learn nothing about which rooms exist"
+    naked = client.get("/api/a2a/rooms/room-seatfs/files")
+    assert naked.status_code == 403
+
+
+def test_path_traversal_never_leaves_the_workspace(client, seated, tmp_path):
+    """MUTATION: drop the resolve containment - a push writes outside the room."""
+    outside = tmp_path / "escape.txt"
+    for bad in ("../escape.txt", "/etc/escape.txt", "a/../../escape.txt"):
+        answer = client.post(f"/api/a2a/rooms/room-seatfs/file",
+                             params={"seat": seated["seat"], "path": bad},
+                             content=b"boom")
+        assert answer.status_code == 400, bad
+    assert not outside.exists()
+    fetched = client.get(f"/api/a2a/rooms/room-seatfs/file",
+                         params={"seat": seated["seat"], "path": "../room.json"})
+    assert fetched.status_code == 400
+
+    # The resolve containment is what catches a path with no `..` in it that
+    # still leaves: a symlink inside the workspace pointing outside.
+    escape_dir = tmp_path / "outside-dir"
+    escape_dir.mkdir()
+    (seated["workspace"] / "link").symlink_to(escape_dir)
+    through = client.post("/api/a2a/rooms/room-seatfs/file",
+                          params={"seat": seated["seat"], "path": "link/escape.txt"},
+                          content=b"boom")
+    assert through.status_code == 400
+    assert not (escape_dir / "escape.txt").exists(), \
+        "a symlink must not carry a write out of the workspace"
+
+
+def test_an_upload_over_the_cap_is_refused_with_the_limit_named(client, seated, monkeypatch):
+    """MUTATION: drop the cap - a guest could fill the host's disk."""
+    import vaf.core.web_server as ws
+
+    monkeypatch.setattr(ws, "_A2A_WORKSPACE_UPLOAD_CAP", 8)
+    answer = client.post("/api/a2a/rooms/room-seatfs/file",
+                         params={"seat": seated["seat"], "path": "big.bin"},
+                         content=b"123456789")
+    assert answer.status_code == 413
+    assert "8" in answer.json()["detail"]
+
+
+def test_push_list_fetch_round_trip_byte_identical(client, seated):
+    """MUTATION: mangle the bytes anywhere on the path."""
+    payload = "ein Umlaut-Test: äöü".encode("utf-8") + b"\x00\xff"
+    pushed = client.post("/api/a2a/rooms/room-seatfs/file",
+                         params={"seat": seated["seat"], "path": "sub/roundtrip.bin"},
+                         content=payload)
+    assert pushed.status_code == 200
+    listed = client.get("/api/a2a/rooms/room-seatfs/files",
+                        params={"seat": seated["seat"]})
+    names = {row["path"] for row in listed.json()["files"]}
+    assert {"notes.txt", "sub/roundtrip.bin"} <= names
+    fetched = client.get("/api/a2a/rooms/room-seatfs/file",
+                         params={"seat": seated["seat"], "path": "sub/roundtrip.bin"})
+    assert fetched.status_code == 200
+    assert fetched.content == payload
+
+
+def test_the_wire_has_no_delete(client):
+    """Source pin on the named boundary: destruction of the shared folder stays
+    with the members on the machine that owns it."""
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    lane = source.split("the room workspace over the wire")[1][:9000]
+    assert "@app.delete" not in lane
+    assert "DELETING over the" in lane and "stays with" in lane

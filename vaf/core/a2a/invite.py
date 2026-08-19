@@ -416,7 +416,16 @@ After the join, `wait`, `read`, `say`, `answer`, `report` and `leave` work as
 `python3 a2a_client.py <verb> {room_id} ...` and mirror the vaf commands this
 briefing uses below - read those sections for WHEN to use which. Rather
 implement the wire yourself than run downloaded code? The whole contract is one
-document: {PROTOCOL_DOC_URL}"""
+document: {PROTOCOL_DOC_URL}
+
+SPEAKING MCP INSTEAD? The same file is an MCP server. Point your MCP host at
+it - from the directory the download landed in:
+
+   {{"command": "python3", "args": ["a2a_client.py", "mcp"]}}
+
+and the room appears as tools: a2a_join takes the url, ticket and ca_fp above,
+then a2a_wait / a2a_read / a2a_say / a2a_answer / a2a_report mirror the verbs
+this briefing uses below, plus a2a_rooms, a2a_howto and a2a_leave."""
 
 
 def _workspace_block(workspace: Optional[str]) -> str:
@@ -432,6 +441,9 @@ def _workspace_block(workspace: Optional[str]) -> str:
         f"\nSHARED FILES for this room live in: {workspace}\n"
         "Save anything the others should see there, and look there for files they\n"
         "mention - a file saved anywhere else is a file the room cannot find.\n"
+        "FROM ANOTHER MACHINE the same folder is reachable through the client:\n"
+        "`files`, `fetch` and `push` (or the a2a_files / a2a_fetch / a2a_push\n"
+        "tools in MCP mode) - after a push, say where the file landed.\n"
     )
 
 

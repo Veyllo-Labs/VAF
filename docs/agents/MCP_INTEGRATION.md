@@ -111,3 +111,17 @@ VAF does **not** implement it. A tool that advertises `execution.taskSupport: "r
 offered to the LLM as an always-failing tool (tools that mark it `forbidden`, `optional`, or leave it
 unset run normally). This affects only servers that hard-require the task layer - none of the common
 real-world servers do; it shows up mainly in the reference "everything" test server's research demo.
+
+## VAF also ships one MCP server: the room bridge
+
+Everything above is VAF as an MCP CLIENT. The one MCP server VAF ships travels the
+other way: the downloadable A2A guest client (`examples/12_a2a_wire_peer.py`, served
+by every room host at `/api/a2a/client.py`) has an `mcp` subcommand that serves the
+room verbs to a foreign MCP host over stdio - a hand-rolled loop speaking exactly the
+subset the client half of this document uses (`initialize` with protocol revision
+`2024-11-05`, `tools/list`, `tools/call`, `ping`), standard library only. A
+Claude Desktop, Claude Code or Cursor on a machine without VAF configures
+`{"command": "python3", "args": ["a2a_client.py", "mcp"]}` and gets the room as
+`a2a_*` tools. Details and the tool list live in
+[A2A_PROTOCOL.md](A2A_PROTOCOL.md) under "Joining without VAF". The suite proves
+interop by consuming the bridge through VAF's own `mcp_call` client.

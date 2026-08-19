@@ -155,6 +155,37 @@ def _note_claims_unearned_outcome(texts) -> "str | None":
     return None
 
 
+def _final_answer_probe(full_content: str) -> str:
+    """What is left of a model response once everything that is not an ANSWER goes.
+
+    The empty-response check runs on this: closed <think> blocks, leftover tags,
+    code fences, punctuation and filler words are all stripped, and whatever
+    survives is what the user would actually be given. Length >= 2 counts as an
+    answer so that "Hi" and "Ok" pass.
+
+    An UNCLOSED <think> is thinking too, stripped to the end of the text: a model
+    that opens a think block and never returns from it produced no answer after
+    that point. Live incident 2026-08-19: a model fell out of an open think block
+    into leaked tool-call markup; the block's prose survived the closed-pair strip,
+    counted as the answer, and the empty-response retry that would have replaced
+    the junk with a fresh attempt never fired - the user saw raw markup and a
+    three-character reply.
+
+    Pure, module-level, and called from exactly one place in chat_step - the
+    wiring test pins that, because a probe with a private copy in the loop would
+    drift the first time one of them learned a new pattern.
+    """
+    clean = re.sub(r'<think>.*?</think>', '', (full_content or ""), flags=re.DOTALL)
+    clean = re.sub(r'<think>.*$', '', clean, flags=re.DOTALL)
+    clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
+    clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
+    clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
+    probe = clean.lower()
+    for pattern in ("answer", "antwort", "response", "here", "hier", "ok", "okay"):
+        probe = probe.replace(pattern, "")
+    return probe.strip()
+
+
 # Pure lookups whose EXACT-argument repetition within one turn cannot yield new
 # information (unless a mutating tool succeeded in between - the windowed
 # redundant check verifies exactly that before blocking). Extends the
@@ -11033,17 +11064,9 @@ class Agent:
             # 2. Handle Empty / Think-Only Responses
             # CRITICAL: We must detect whether we received an ANSWER for the user, not just thinking.
             # Some models output long reasoning (full_reasoning) but no final answer (full_content).
-            # Empty = no meaningful final answer – we do NOT count reasoning as the answer.
-            # Fix: First strip complete <think> blocks (content included), THEN strip other tags
-            clean_final = re.sub(r'<think>.*?</think>', '', (full_content or ""), flags=re.DOTALL)
-            clean_final = re.sub(r'<[^>]*>', '', clean_final)  # Remove remaining XML (e.g. <tool_call>)
-            clean_final = re.sub(r'```[\s\S]*?```', '', clean_final)  # Remove code blocks
-            clean_final = clean_final.replace(".", "").replace("\n", "").replace(":", "").strip()
-            empty_patterns = ["answer", "antwort", "response", "here", "hier", "ok", "okay"]
-            temp_final = clean_final.lower()
-            for pattern in empty_patterns:
-                temp_final = temp_final.replace(pattern, "")
-            temp_final = temp_final.strip()
+            # Empty = no meaningful final answer – we do NOT count reasoning as the answer, and an
+            # UNCLOSED think block does not count either (see _final_answer_probe).
+            temp_final = _final_answer_probe(full_content)
             # Has final answer = user-facing content (full_content only), not just thinking
             # Use >= 2 so short replies like "Hi" or "Ok" are accepted (CoT/first prompt)
             has_final_answer = len(temp_final) >= 2
@@ -11574,14 +11597,14 @@ class Agent:
              # No TTS for generic fallback either (avoid "...")
              return "..."
         
-        # Final empty check - same logic as above
-        clean_final = re.sub(r'<[^>]*>', '', full_response)
-        clean_final = re.sub(r'```[\s\S]*?```', '', clean_final)
-        clean_final = clean_final.replace(".", "").replace("\n", "").replace(":", "").strip()
-        temp_final = clean_final.lower()
-        for pattern in ["answer", "antwort", "response", "here", "hier", "ok", "okay"]:
-            temp_final = temp_final.replace(pattern, "")
-        is_final_empty = len(temp_final.strip()) < 3
+        # Final empty check - the same probe the in-loop check asks. This was a
+        # hand copy of the strip chain that never stripped think PROSE (only the
+        # tags), so a think-only response passed as an answer here even after the
+        # in-loop check learned better - the exact drift the probe's wiring test
+        # pins against. Own threshold kept: < 3 was always stricter than the
+        # in-loop >= 2.
+        temp_final = _final_answer_probe(full_response)
+        is_final_empty = len(temp_final) < 3
 
         # Skip final empty check during compaction (short NO_REPLY/MEMORY: replies are expected)
         if is_final_empty and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):

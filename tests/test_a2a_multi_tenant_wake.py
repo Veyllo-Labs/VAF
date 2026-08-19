@@ -176,11 +176,7 @@ def test_no_account_s_person_is_ever_checked_in_on(rooms, monkeypatch):
     monkeypatch.setattr("vaf.core.config.Config.get",
                         lambda key, default=None: 60 if key == "a2a_room_ping_minutes" else default)
     monkeypatch.setattr("vaf.core.config.get_local_admin_scope_id", lambda: "tenant-a")
-    runner._PING_SENT.clear()
-    try:
-        runner._room_ping_sweep()
-    finally:
-        runner._PING_SENT.clear()
+    runner._room_ping_sweep()
 
     asked = [f["to"].get("peer") for f in room.transcript() if f["kind"] == "ping"]
     assert asked == [stranger.peer_id], (

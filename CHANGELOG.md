@@ -12,6 +12,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Tool results that ARE the deliverable are no longer cut mid-artifact.** The
+  dispatch funnel caps every tool result at 2000 characters to protect the
+  model's context - a good default with one measured failure mode: a loaded
+  skill body was cut mid-instruction, and a room invitation briefing was cut
+  inside the very block the result orders the agent to pass on "unchanged and
+  complete". The agent then correctly refused to hand over the torn half and
+  spent a whole turn hunting the rest in encrypted stores and capped logs,
+  until the model collapsed into raw markup. Tools can now declare
+  `result_is_deliverable` and reach the model whole; `use_skill`, `read_skill`
+  and `room_invite` do, each keeping its own output bounded in exchange.
+- **A group chat no longer shows phantom notifications.** The sidebar's unread
+  badge counted the room's own check-in pings, which the transcript view
+  deliberately never shows - so the dot lit up, the room had nothing new, and
+  the dot came back with the next check-in. The badge now counts exactly what
+  the view would show. The check-in interval itself is also derived from the
+  room's log now instead of process memory, so restarting the app no longer
+  re-asks every idle member within seconds (on a day of live restarts, a
+  quarter of a busy room's frames had become check-ins).
+- **A reply that is only an unclosed thinking block counts as empty again.**
+  When a model opens a `<think>` block and never returns from it, the block's
+  prose used to pass the empty-response check as if it were the answer - so the
+  retry that replaces a dead generation never fired and the user saw leaked
+  markup where a reply should be. Thinking now counts as thinking whether the
+  model closed the block or not, in both empty checks (which share one probe
+  now instead of two hand copies).
 - **Memory search stopped throwing away most of its own candidates.** Two
   retrieval defects capped answer quality regardless of the embedding model.
   The vector lane handed the rank fusion only its top 5 candidates while the

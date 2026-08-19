@@ -111,14 +111,21 @@ def _room_ping_sweep() -> None:
             _sweep_quiet_work(room, host, human_peers, now)
             if quiet_for <= 0:
                 continue
+            # Once per interval, DERIVED from the store the way the vote and task
+            # once-rules already are - the check-in is itself a frame. This lived
+            # in a process-local dict first, and the docstring called a restart
+            # re-ask "the harmless direction"; a day of live restarts measured it
+            # otherwise: every restart re-pinged every idle member within seconds,
+            # until a quarter of a busy room's frames were check-ins - each one
+            # lighting the person's unread badge for a frame no view shows.
+            checked = room.check_ins()
             for peer in room.idle_peers(quiet_for_s=quiet_for, now=now):
                 if peer == host.peer_id or peer in human_peers:
                     continue          # the host is asking; a person is not an agent
-                if _pinged_recently(room_id, peer, now, quiet_for):
-                    continue
+                if (now - checked.get(peer, 0.0)) < quiet_for:
+                    continue          # asked inside this interval, maybe by an earlier process
                 try:
                     room.ping(host, peer)
-                    _remember_ping(room_id, peer, now)
                 except Exception:
                     continue
         except Exception:
@@ -186,30 +193,6 @@ def _sweep_votes(room, host, human_peers, now: float) -> None:
             room.remind_vote(host, peer, entry)
         except Exception:
             continue
-
-
-_PING_SENT: dict = {}
-
-
-def _pinged_recently(room_id: str, peer: str, now: float, quiet_for: float) -> bool:
-    """Whether this peer was already asked inside the current interval.
-
-    In memory on purpose: the answer only has to hold for as long as this process
-    runs, and a peer that stays idle across a restart is asked once more - which is
-    the harmless direction. Writing it down would put a per-peer timestamp into a
-    store whose whole design is write-once frames.
-    """
-    last = _PING_SENT.get(f"{room_id}/{peer}", 0.0)
-    return bool(last) and (now - last) < quiet_for
-
-
-def _remember_ping(room_id: str, peer: str, now: float) -> None:
-    _PING_SENT[f"{room_id}/{peer}"] = now
-    if len(_PING_SENT) > 500:
-        # A bound, so a long-lived process with many rooms cannot grow this
-        # without limit. The oldest entries are the ones least likely to matter.
-        for key in sorted(_PING_SENT, key=_PING_SENT.get)[:200]:
-            _PING_SENT.pop(key, None)
 
 
 def _apply_channel_history_window(agent, source: str) -> None:

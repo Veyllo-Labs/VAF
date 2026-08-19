@@ -63,6 +63,16 @@ class BaseTool(ABC):
     # Useful for: file operations, shell commands, code-specific tools
     coder_only: bool = False
 
+    # Set to True when the tool's result IS the deliverable - a briefing to hand
+    # over, a loaded skill body to follow. The dispatch funnel then returns it to
+    # the model WHOLE instead of applying its result cap: a cut artifact is not a
+    # shorter artifact but a broken one (a truncated invitation briefing, under an
+    # instruction to pass it on "unchanged and complete", once sent an agent on a
+    # turn-long hunt for the missing half). The flag is a promise in return: the
+    # tool keeps its own output bounded. Observation stays capped regardless -
+    # the event stream applies its own limit independently of this.
+    result_is_deliverable: bool = False
+
     # JSON Schema for parameters (optional but recommended).
     # Validated at dispatch: common weak-model shape mistakes are repaired before
     # run() is called; `content` / `code` fields are passed through verbatim.

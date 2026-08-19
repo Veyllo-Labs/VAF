@@ -109,6 +109,13 @@ HOST ONLY, like `close` and `kick`: the timer runs on the machine holding the ro
 `is_host` is keyed on the tenant, so a guest that redeemed a ticket can never emit one.
 Surfaces do not draw it as a message - it is the room talking to one agent about its own
 attention, not something anybody said - while `vaf a2a log` keeps it for the audit trail.
+For the same reason it does not count as unread for anybody (`NON_CONVERSATION_KINDS`
+next to `BOOKKEEPING_KINDS`): a badge for a frame no view shows is a phantom
+notification. Once per interval is DERIVED from the log (`Room.check_ins`), the way the
+vote and task once-rules always were - a host that restarts does not start over. That
+rule lived in process memory first, and a day of live restarts re-asked every idle
+member within seconds of each start, until a quarter of a busy room's frames were
+check-ins.
 
 `vote` puts a question to the room: `body.text` is the question, `body.options` the
 answers to choose from (yes/no when none are given), and an optional `body.closes_at`

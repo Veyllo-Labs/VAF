@@ -74,6 +74,7 @@ def test_basetool_ships_the_documented_declaration_defaults():
     assert BaseTool.identity_kwargs == ()
     assert BaseTool.file_access is None
     assert BaseTool.input_examples == []
+    assert BaseTool.result_is_deliverable is False
     assert isinstance(BaseTool.parameters, dict)
 
 

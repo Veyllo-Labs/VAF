@@ -16,6 +16,10 @@ from vaf.tools.base import BaseTool
 class ReadSkillTool(BaseTool):
     name = "read_skill"
     identity_kwargs = ("user_scope_id", "username")
+    # The source IS the deliverable - the caller inspects it before editing, and a
+    # funnel-cut source shows a frontmatter with half a body. Bounded below by the
+    # same budget use_skill applies to the same document.
+    result_is_deliverable = True
     description = (
         "Show the raw SKILL.md source of a Skill you can see — its YAML frontmatter "
         "(name, description) plus the full instruction body. Use this to inspect a skill "
@@ -46,5 +50,14 @@ class ReadSkillTool(BaseTool):
         src = skills_registry.get_skill_md_source(sid)
         if src is None:
             return f"error: skill '{sid}' has no SKILL.md."
+        # The flag above exempts this result from the funnel cap, so the bound has
+        # to live here: nothing limits a skill's size at creation, and an unbounded
+        # source would ride the exemption straight into the model's context.
+        from vaf.tools.use_skill import SKILL_BODY_BUDGET_CHARS
+        if len(src) > SKILL_BODY_BUDGET_CHARS:
+            src = src[:SKILL_BODY_BUDGET_CHARS] + (
+                "\n\n... (source truncated at the skill body budget - update_skill "
+                "still replaces the full file)"
+            )
         editable = skills_registry.can_user_edit_skill(sid, user_scope_id)
         return f"[SKILL SOURCE: {sid} — editable: {'yes' if editable else 'no'}]\n\n{src}"

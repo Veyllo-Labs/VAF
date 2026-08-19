@@ -1826,15 +1826,18 @@ def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
         everything, because the agent's cursor only moves when its turn runs.
         The person's cursor is the cli lane's - the browser and the terminal
         share it on purpose - and it needs no membership: a reading position is
-        the reader's own file. Bookkeeping frames and the person's own words are
-        not news.
+        the reader's own file. Bookkeeping frames, the room's own check-in lane
+        and the person's own words are not news: the badge may only count what
+        the room view would actually show as new. It counted `ping` frames once,
+        which the view deliberately hides - so the dot lit up, the person opened
+        the room, and nothing new was there.
         """
         try:
-            from vaf.core.a2a.room import BOOKKEEPING_KINDS, derive_peer_id
+            from vaf.core.a2a.room import NON_CONVERSATION_KINDS, derive_peer_id
             human = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
             position = room.store.cursor(human)
             return len([f for f in room.store.read_since(position)
-                        if f.kind not in BOOKKEEPING_KINDS and f.sender != human])
+                        if f.kind not in NON_CONVERSATION_KINDS and f.sender != human])
         except Exception:
             return 0
 

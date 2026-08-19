@@ -123,7 +123,11 @@ many frames have not been read.
   agent's backlog, whose cursor only moves when its turn runs. Looking at the
   room IS reading it: the transcript builder advances that position after the
   transcript went out (never before - a send that failed was not read), so the
-  badge goes out the moment the room has been seen.
+  badge goes out the moment the room has been seen. And it may only count what
+  the view would actually show as new (`NON_CONVERSATION_KINDS`): the room's own
+  check-in pings are hidden from the transcript on purpose, and a badge that
+  counted them lit the sidebar for frames no view shows - the person opened the
+  room, found nothing, and the dot came back with the next check-in.
   Below the messages, a member that is composing gets the same bouncing-dots bubble
   the chat shows, behind its own avatar and name - in a group chat "somebody is
   typing" without a name is a question, not an answer. Composing means exactly two

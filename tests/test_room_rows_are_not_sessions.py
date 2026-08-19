@@ -66,6 +66,22 @@ def test_a_joined_room_appears_with_what_a_surface_needs(rooms):
     assert row["closed"] is False
 
 
+def test_the_badge_counts_only_what_the_view_would_show(rooms):
+    """MUTATION: filter the badge on BOOKKEEPING_KINDS instead of NON_CONVERSATION_KINDS.
+
+    The browser's room projection deliberately hides `ping` frames - a check-in is
+    the room talking to ONE member about its own attention, not something anybody
+    said. A badge that counts them lights the sidebar for a frame no view shows:
+    the person opens the room, finds nothing new, and the dot comes back with the
+    next check-in. Measured live on a day of app restarts, that was a phantom
+    notification every few minutes.
+    """
+    host = rooms.identity_for(participant_key("agent", SCOPE))
+    rooms.ping(host, "p-codex")
+
+    assert _room_rows(SCOPE)[0]["unread"] == 1, "the say counts, the check-in must not"
+
+
 def test_both_local_lanes_are_looked_up_but_a_room_is_listed_once(tmp_path, monkeypatch):
     """A person does not think of "my agent's rooms" and "the rooms I joined from a
     terminal" as two lists, even though they are two participants by design."""

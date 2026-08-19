@@ -812,7 +812,10 @@ class ToolCaller:
         - a schema error is about THIS call while the duplicate-guard message is about
           another one already running, so the schema error wins;
         - the result is truncated LAST, after any hook has had its say, because
-          ``search_tools`` caps itself just under this limit.
+          ``search_tools`` caps itself just under this limit - and a tool that
+          declared ``result_is_deliverable`` is not truncated at all, because its
+          result is a hand-over artifact that is broken rather than shortened by
+          a cut (the tool promises to keep itself bounded in return).
         """
         import time
 
@@ -884,6 +887,12 @@ class ToolCaller:
         })
         if callable(self.hooks.after_emit):
             self.hooks.after_emit(name, result)
+        if getattr(tool, "result_is_deliverable", False):
+            # A declared hand-over artifact reaches the model whole; the tool has
+            # promised to keep itself bounded (the flag's contract on BaseTool).
+            # The event stream above stays capped either way - `event_result`
+            # applies its own limit, so observation never inherits the exemption.
+            return result
         return self._truncate(result)
 
     # ── stages ───────────────────────────────────────────────────────────────

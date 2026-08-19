@@ -245,14 +245,14 @@ def _room_corpus(user_scope_id: Optional[str], *,
     if not user_scope_id:
         return out
     try:
-        from vaf.core.a2a.room import (BOOKKEEPING_KINDS, joined_rooms,
+        from vaf.core.a2a.room import (NON_CONVERSATION_KINDS, joined_rooms,
                                        participant_key)
     except Exception:
         return out
     import time as _time
     from datetime import datetime as _dt
     cutoff = (_time.time() - max_age_days * 86400.0) if max_age_days else None
-    skip_kinds = set(BOOKKEEPING_KINDS) | {"ping"}
+    skip_kinds = NON_CONVERSATION_KINDS
     seen: Set[str] = set()
     for lane in ("agent", "cli"):
         try:

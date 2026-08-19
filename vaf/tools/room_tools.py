@@ -549,6 +549,12 @@ class RoomInviteTool(BaseTool):
     )
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
+    # The briefing IS the deliverable, and the result text below orders the model
+    # to pass it on "unchanged and complete". The funnel's default cap cut it mid
+    # block anyway (live incident: the agent refused to hand over the torn half
+    # and spent the turn hunting the rest in encrypted stores and capped logs).
+    # Bounded by construction: one briefing, assembled once in invite.invitation.
+    result_is_deliverable = True
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

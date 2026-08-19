@@ -25,9 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def rooms(tmp_path, monkeypatch):
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path)
-    runner._PING_SENT.clear()
     yield tmp_path
-    runner._PING_SENT.clear()
 
 
 def _host_room(base, scope="scope-host", room_id="room-sweep"):
@@ -86,6 +84,63 @@ def test_a_peer_is_asked_at_most_once_per_interval(rooms, monkeypatch):
         runner._room_ping_sweep()
 
     assert len([f for f in room.transcript() if f["kind"] == "ping"]) == 1
+
+
+def test_the_interval_survives_a_restart(rooms, monkeypatch):
+    """MUTATION: keep the once-per-interval memory in the process instead of the log.
+
+    The check-in was remembered in a module dict once, and the comment called a
+    restart re-ask "the harmless direction". A day of live restarts measured it
+    otherwise: every restart re-pinged every idle member within seconds, until a
+    quarter of a busy room's frames were check-ins - each one lighting the
+    person's unread badge for a frame no view shows. The once-rule is derived
+    from the store now, like the vote and task once-rules always were, so this
+    test IS the restart: a check-in already in the log, and a sweep that starts
+    with no process memory at all.
+    """
+    room, host = _host_room(rooms, room_id="room-restart")
+    room.join(display="Quiet", scope_id=None, peer_id="p-quiet")
+    room.say(host, "hello")
+
+    later = time.time() + 7200
+    monkeypatch.setattr(runner.time, "time", lambda: later)
+    monkeypatch.setattr("vaf.core.config.Config.get",
+                        lambda key, default=None: 60 if key == "a2a_room_ping_minutes" else default)
+
+    room.ping(host, "p-quiet")    # what an earlier process sent before it died
+    runner._room_ping_sweep()     # the fresh process knows nothing but the store
+
+    assert len([f for f in room.transcript() if f["kind"] == "ping"]) == 1
+
+
+def test_a_vote_reminder_is_not_a_check_in(rooms, monkeypatch):
+    """MUTATION: count every ping as a check-in in `Room.check_ins`.
+
+    Vote reminders and task nudges ride the same frame kind, but each is about a
+    ballot or a task and keeps its own once-rule. If they reset the idle clock, a
+    room with a vote in flight would never check in on a drifted member at all.
+    """
+    room, host = _host_room(rooms, room_id="room-vote-ping")
+    room.join(display="Quiet", scope_id=None, peer_id="p-quiet")
+    room.say(host, "hello")
+
+    later = time.time() + 7200
+    monkeypatch.setattr(runner.time, "time", lambda: later)
+    monkeypatch.setattr("vaf.core.config.Config.get",
+                        lambda key, default=None: 60 if key == "a2a_room_ping_minutes" else default)
+
+    room.remind_vote(host, "p-quiet", {
+        "id": "vote-1", "question": "ship it?", "options": ["yes", "no"],
+        "deadline": later + 600, "voted": {}, "waiting_for": ["Quiet"],
+    })
+    assert room.check_ins() == {}, "a vote reminder must not read as a check-in"
+
+    runner._room_ping_sweep()
+
+    pings = [f for f in room.transcript() if f["kind"] == "ping"]
+    assert len(pings) == 2, "the reminder must not suppress the idle check-in"
+    assert [f for f in pings if not (f.get("body") or {}).get("vote")], \
+        "one of the two is the check-in itself"
 
 
 def test_zero_minutes_turns_the_whole_thing_off(rooms, monkeypatch):

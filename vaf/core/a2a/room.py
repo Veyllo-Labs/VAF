@@ -205,7 +205,7 @@ def transcript(frames: List[Frame], *, labels: Dict[str, str],
     room talking about itself, not about the world. Oldest lines are dropped first when
     the budget runs out, so the tail that survives is the part still being talked about.
     """
-    skip = set(BOOKKEEPING_KINDS) | {"ping"}
+    skip = NON_CONVERSATION_KINDS
     lines: List[str] = []
     total = 0
     for frame in reversed(list(frames or [])):
@@ -1194,6 +1194,34 @@ class Room:
                 out.append(peer)
         return out
 
+    def check_ins(self) -> Dict[str, float]:
+        """When the room last checked in on each member, from the log itself.
+
+        {peer: epoch of the newest idle check-in addressed to it}.
+
+        Derived rather than remembered, the way `vote_reminders` and `task_nudges`
+        already derive their once-rules: the check-in IS a frame, so a host that
+        restarts does not start over. This was the one interval rule kept in
+        process memory instead, and every restart of the app re-asked every idle
+        member within seconds - measured on a day of live restarts, a quarter of a
+        busy room's frames were check-ins.
+
+        Vote reminders and task nudges ride the same frame kind but are about a
+        ballot or a task, not about the member's attention, and each keeps its own
+        once-rule - so they neither reset nor suppress this clock.
+        """
+        out: Dict[str, float] = {}
+        for frame in self.store.frames():
+            if frame.kind != "ping":
+                continue
+            body = frame.body or {}
+            if body.get("vote") or body.get("task"):
+                continue
+            to = (frame.to or {}).get("peer") if isinstance(frame.to, dict) else ""
+            if to:
+                out[str(to)] = max(out.get(str(to), 0.0), float(frame.ts or 0.0))
+        return out
+
     def ping_body(self, peer_id: str) -> Dict[str, Any]:
         """What the room tells ONE peer when it checks in on it.
 
@@ -2093,6 +2121,16 @@ def joined_rooms(key: str, *, base: Optional[Path] = None) -> List[Tuple[Room, I
 # and who is present is answered by members() whenever it does read. An unknown kind is
 # deliberately absent from this set, so a newer peer's message still wakes an older one.
 BOOKKEEPING_KINDS = frozenset({"join", "leave", "ack", "role"})
+
+# What counts as NOTHING WAS SAID on a surface built for people: the bookkeeping above
+# plus the room's own check-in lane (`ping` carries idle check-ins, vote reminders and
+# task nudges - the room talking to one member about its own attention). Three surfaces
+# ask this same question and must answer it the same way: the learning transcript, the
+# cross-chat corpus, and the sidebar's unread badge. The badge answering it differently
+# is how a person got a notification for a frame no view would ever show them.
+# Deliberately NOT folded into BOOKKEEPING_KINDS itself: the wake computation reads
+# that one, and a ping MUST keep waking the member it is addressed to.
+NON_CONVERSATION_KINDS = frozenset(BOOKKEEPING_KINDS | {"ping"})
 
 
 def local_room_tenants(*, base: Optional[Path] = None) -> List[str]:

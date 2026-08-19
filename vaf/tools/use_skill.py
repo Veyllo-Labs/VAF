@@ -19,12 +19,18 @@ from vaf.tools.base import BaseTool
 logger = logging.getLogger(__name__)
 
 # Mirror read_file's truncation budget; encourages bundled references over fat bodies.
-_MAX_BODY_CHARS = 14000
+# Shared with read_skill: both hand over the same document, so one budget decides.
+SKILL_BODY_BUDGET_CHARS = 14000
 
 
 class UseSkillTool(BaseTool):
     name = "use_skill"
     identity_kwargs = ("user_scope_id",)
+    # The loaded body IS the deliverable: the agent is meant to FOLLOW it, and the
+    # funnel's default cap sits well under the body budget above - it cut every
+    # real skill mid-instruction and sent agents hunting the file on disk, where
+    # a builtin skill's source is deliberately not readable.
+    result_is_deliverable = True
     description = (
         "Load the full instructions for a named Skill. Skills are reusable expert "
         "procedures contributed by the user. You only see each skill's short "
@@ -83,8 +89,8 @@ class UseSkillTool(BaseTool):
             return f"error: skill '{skill_id}' is invalid: {parsed.get('error')}"
 
         body = parsed.get("body", "") or "(this skill has no instruction body)"
-        if len(body) > _MAX_BODY_CHARS:
-            body = body[:_MAX_BODY_CHARS] + (
+        if len(body) > SKILL_BODY_BUDGET_CHARS:
+            body = body[:SKILL_BODY_BUDGET_CHARS] + (
                 f"\n\n... (truncated - read the full file at {folder / 'SKILL.md'})"
             )
 

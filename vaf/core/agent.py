@@ -1809,6 +1809,7 @@ class Agent:
         except Exception:
             return None
         try:
+            from vaf.core.a2a.room import attached_files as _attached_files
             from vaf.core.a2a.room import derive_peer_id, participant_key
             candidates = [str(x) for x in (scopes or [])] or [
                 getattr(self, "_current_user_scope_id", None)]
@@ -1962,6 +1963,12 @@ class Agent:
                     target = str((frame.to or {}).get("peer") or "")
                     named = (members.get(target) or {}).get("display") or target or "someone else"
                     label += f" -> {named}, NOT you: read along, do not answer"
+                # What was left in the shared folder with this message. Named in
+                # the prompt because the agent cannot see the folder from here,
+                # and a file nobody mentions is a file nobody opens.
+                _shared = ", ".join(f["path"] for f in _attached_files(frame.body))
+                if _shared:
+                    text = f"{text} [shared file(s): {_shared}]".strip()
                 lines.append(f"{label}: {text}".rstrip())
             # Open votes this agent has not answered. Carried in EVERY room wake,
             # because a vote scrolls out of a transcript exactly like anything else

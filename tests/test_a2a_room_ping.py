@@ -205,7 +205,7 @@ def test_a_check_in_is_not_drawn_as_a_message():
     would do so once an hour, forever.
     """
     src = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
-    block = src.split('"messages": [', 1)[1][:800]
+    block = src.split('"messages": [', 1)[1][:1400]
     assert 'if e["kind"] != "ping"' in block, (
         "the room transcript draws check-ins as messages")
 

@@ -118,6 +118,11 @@ many frames have not been read.
   Days and times read exactly like the chat's: the same DaySeparator between
   calendar days and the same clock per message (today shows the time, older
   messages name the day), off the frame's own timestamp.
+  A message that names files in the room's shared folder draws them as chips under
+  the text (`body.files`, forwarded explicitly by the transcript projection - the
+  handler rebuilds each row field by field, so an unforwarded field never reaches
+  the browser). A chip, because a filename inside a sentence is something a reader
+  has to find, and a chip is something they can see.
   Loading shows the SHAPE of what is coming, in both lanes: while a chat's
   history or a clicked room's transcript is on its way, skeleton bubbles stand
   in the message area (one shared `LoadingIllusion` component - a chat

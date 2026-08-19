@@ -232,7 +232,7 @@ def _remote_fail(e) -> None:
 
 def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
                  to_peer: str = "", reply_to: str = "", status: str = "",
-                 progress: dict = None) -> None:
+                 progress: dict = None, files: list = None) -> None:
     from vaf.core.a2a.client import RemoteRefused, RemoteRoom
     from vaf.core.a2a.trust import TrustRefused
 
@@ -241,6 +241,8 @@ def _remote_send(record: dict, room_id: str, kind: str, text: str, *,
         body["status"] = status
     if progress:
         body["progress"] = progress
+    if files:
+        body["files"] = files
     payload = {"kind": kind, "body": body}
     if to_peer:
         payload["to"] = {"peer": to_peer}
@@ -536,21 +538,25 @@ def _emit(row: dict) -> None:
 
 def _send(room_id: str, kind: str, text: str, *, to_peer: str = "",
           reply_to: str = "", status: str = "", as_peer: str = "",
-          progress: dict = None) -> None:
-    from vaf.core.a2a.room import RoomError
+          progress: dict = None, files: tuple = ()) -> None:
+    from vaf.core.a2a.room import RoomError, attached_files
     room = _open_local(room_id)
+    named = attached_files({"files": list(files or ())})
     if room is None:
         record = _remote_record(room_id)
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
         return _remote_send(record, room_id, kind, text, to_peer=to_peer,
-                            reply_to=reply_to, status=status, progress=progress)
+                            reply_to=reply_to, status=status, progress=progress,
+                            files=named)
     identity = _me(room, as_peer=as_peer)
     body = {"text": text}
     if status:
         body["status"] = status
     if progress:
         body["progress"] = progress
+    if named:
+        body["files"] = named
     payload = {"kind": kind, "body": body}
     if to_peer:
         payload["to"] = {"peer": to_peer}
@@ -825,9 +831,11 @@ def trust(
 @app.command()
 def say(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
         to_peer: str = typer.Option("", "--to", help="Address one peer (others still read it)."),
+        file: List[str] = typer.Option(None, "--file",
+                                       help="Name a file in the room's shared folder this message is about. Repeatable."),
         as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Say something in a room."""
-    _send(room_id, "say", text, to_peer=to_peer, as_peer=as_peer)
+    _send(room_id, "say", text, to_peer=to_peer, as_peer=as_peer, files=tuple(file or ()))
 
 
 @app.command()
@@ -841,9 +849,13 @@ def ask(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
 @app.command()
 def answer(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
            reply_to: str = typer.Option("", "--reply-to", help="Id of the message you answer."),
+           file: List[str] = typer.Option(None, "--file",
+                                          help="Name a file in the room's shared folder "
+                                               "this answer is about. Repeatable."),
            as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Answer a question."""
-    _send(room_id, "answer", text, reply_to=reply_to, as_peer=as_peer)
+    _send(room_id, "answer", text, reply_to=reply_to, as_peer=as_peer,
+          files=tuple(file or ()))
 
 
 @app.command()
@@ -861,11 +873,14 @@ def report(room_id: str = typer.Argument(...), text: str = typer.Argument(...),
                                              "tell a long run from a hung one."),
            step: str = typer.Option("", "--step",
                                     help="What you are doing right now, in a few words."),
+           file: List[str] = typer.Option(None, "--file",
+                                          help="Name a file in the room's shared folder "
+                                               "this report is about. Repeatable."),
            as_peer: str = typer.Option("", "--as", help="Act as this peer (a guest's own handle; or export VAF_A2A_PEER)."),) -> None:
     """Report how a task stands."""
     payload = _parse_progress(progress, step)
     _send(room_id, "report", text, status=status, reply_to=reply_to,
-          as_peer=as_peer, progress=payload)
+          as_peer=as_peer, progress=payload, files=tuple(file or ()))
 
 
 def _parse_progress(progress: str, step: str) -> Optional[dict]:

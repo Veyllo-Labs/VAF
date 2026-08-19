@@ -479,10 +479,16 @@ def sort_key(frame: dict):
             int(frame.get("seq") or 0))
 
 
-def fold_new(frames: list, record: dict, *, show_all: bool = False) -> list:
+def fold_new(frames: list, record: dict, *, show_all: bool = False,
+             advance: bool = True) -> list:
     """Deduped on id, in canonical order, past the cursor, own echo skipped.
     Advances the cursor over everything SEEN, shown or not - a skipped frame
-    must never come back as news."""
+    must never come back as news.
+
+    `advance=False` asks the same question without answering it: what WOULD be
+    new. That is how the unread hint counts without consuming, and it is a
+    parameter rather than a second function so the two can never disagree
+    about what counts as news."""
     cursor = tuple(record.get("cursor") or (0, "", 0))
     seen, out = set(), []
     top = cursor
@@ -504,7 +510,8 @@ def fold_new(frames: list, record: dict, *, show_all: bool = False) -> list:
             if str(frame.get("from") or "") == str(record.get("peer") or ""):
                 continue
         out.append(frame)
-    record["cursor"] = list(top)
+    if advance:
+        record["cursor"] = list(top)
     return out
 
 
@@ -638,11 +645,30 @@ def cmd_wait(args) -> None:
         _print_frame(frame)
 
 
+def _clean_files(names) -> list:
+    """Shared-folder names a frame may point at, cleaned. Mirrors the host's own
+    reader (`attached_files`), so this side cannot put a shape on the wire the
+    room would refuse from a stranger: no absolute path, no traversal, capped."""
+    out = []
+    for raw in (names or []):
+        path = str(raw or "").strip().replace("\\", "/")
+        if (not path or path.startswith("/") or path.startswith("~")
+                or ".." in path.split("/") or len(path) > 300):
+            continue
+        out.append({"path": path})
+        if len(out) >= 20:
+            break
+    return out
+
+
 def _send(args, kind: str) -> None:
     record = load_record(args.room)
     body = {"text": args.text}
     if getattr(args, "status", ""):
         body["status"] = args.status
+    named = _clean_files(getattr(args, "file", None))
+    if named:
+        body["files"] = named
     payload = {"kind": kind, "body": body}
     if getattr(args, "reply_to", ""):
         payload["reply_to"] = args.reply_to
@@ -829,6 +855,12 @@ class RoomLine:
         with self._cv:
             mirror = list(self._frames)
         return fold_new(mirror, record, show_all=show_all)
+
+    def pending(self, record: dict) -> int:
+        """How much this record has NOT seen, without consuming any of it."""
+        with self._cv:
+            mirror = list(self._frames)
+        return len(fold_new(mirror, record, advance=False))
 
     def wait_new(self, record: dict, timeout: float) -> list:
         """Block until the room says something, or the budget runs out."""
@@ -1100,8 +1132,10 @@ def cmd_push(args) -> None:
     if status != 200:
         raise Refused(f"the host refused the upload ({status}): "
                       f"{body.decode('utf-8', 'replace')[:200]}")
-    _print_frame(json.loads(body))
-    print("now say where it landed, so the room knows", file=sys.stderr)
+    answer = json.loads(body)
+    _print_frame(answer)
+    print(f"now announce it: say {args.room} \"...\" --file "
+          f"{answer.get('path') or name}", file=sys.stderr)
 
 
 # ── the MCP door: the same verbs, served to an MCP host over stdio ──────────
@@ -1196,8 +1230,12 @@ MCP_TOOLS = [
          "text": {"type": "string", "description": "what to say"},
          "reply_to": {"type": "string", "description": "frame id this answers (optional)"},
          "to": {"type": "string", "description": "peer id to address (optional)"},
+         "files": {"type": "array", "items": {"type": "string"},
+                   "description": ("names of files in the room's shared folder this "
+                                   "message is about, e.g. after a2a_push (optional)")},
      }, "required": ["room", "text"], "additionalProperties": False},
      "run": lambda a: _drive(lambda ns: _send(ns, "say"), room=_arg(a, "room"),
+                             file=list((a or {}).get("files") or []),
                              text=_arg(a, "text"), reply_to=_arg(a, "reply_to"),
                              to=_arg(a, "to"), status="")},
     {"name": "a2a_answer",
@@ -1207,8 +1245,12 @@ MCP_TOOLS = [
          "text": {"type": "string", "description": "the answer"},
          "reply_to": {"type": "string", "description": "frame id being answered"},
          "to": {"type": "string", "description": "peer id to address (optional)"},
+         "files": {"type": "array", "items": {"type": "string"},
+                   "description": ("names of files in the room's shared folder this "
+                                   "message is about, e.g. after a2a_push (optional)")},
      }, "required": ["room", "text"], "additionalProperties": False},
      "run": lambda a: _drive(lambda ns: _send(ns, "answer"), room=_arg(a, "room"),
+                             file=list((a or {}).get("files") or []),
                              text=_arg(a, "text"), reply_to=_arg(a, "reply_to"),
                              to=_arg(a, "to"), status="")},
     {"name": "a2a_report",
@@ -1222,8 +1264,12 @@ MCP_TOOLS = [
                                                       "completed | failed | rejected | canceled")},
          "reply_to": {"type": "string", "description": "the task's frame id (optional)"},
          "to": {"type": "string", "description": "peer id to address (optional)"},
+         "files": {"type": "array", "items": {"type": "string"},
+                   "description": ("names of files in the room's shared folder this "
+                                   "message is about, e.g. after a2a_push (optional)")},
      }, "required": ["room", "text"], "additionalProperties": False},
      "run": lambda a: _drive(lambda ns: _send(ns, "report"), room=_arg(a, "room"),
+                             file=list((a or {}).get("files") or []),
                              text=_arg(a, "text"), status=_arg(a, "status"),
                              reply_to=_arg(a, "reply_to"), to=_arg(a, "to"))},
     {"name": "a2a_leave",
@@ -1267,6 +1313,34 @@ MCP_TOOLS = [
      "run": lambda a: _drive(cmd_push, room=_arg(a, "room"),
                              file=_arg(a, "file"), name=_arg(a, "name"))},
 ]
+
+
+def _news_line() -> str:
+    """What is waiting in the held rooms, as one JSON line, or "".
+
+    The closest thing to a push that a question-and-answer world allows: no
+    harness wakes an idle model, but a model that calls ANY tool can be told,
+    in the answer it is already reading, that a room is waiting for it. It
+    costs nothing (the mirror is already here, and counting does not consume),
+    it needs no support from the host, and it rides on every tool - so news
+    from one room reaches an agent busy with another.
+    """
+    waiting = {}
+    for room_id, line in sorted(_LINES.items()):
+        if not line.alive():
+            continue
+        try:
+            record = load_record(room_id)
+        except Refused:
+            continue
+        count = line.pending(record)
+        if count:
+            waiting[room_id] = count
+    if not waiting:
+        return ""
+    return json.dumps({"news": waiting,
+                       "note": "unread room messages are waiting; a2a_read shows them"},
+                      ensure_ascii=False)
 
 
 def _mcp_result(request_id, payload):
@@ -1321,6 +1395,13 @@ def handle_mcp_request(request):
             text, failed = f"error: {refusal}", True
         except Exception as e:            # noqa: BLE001 - a fault is an answer here
             text, failed = f"error: {type(e).__name__}: {e}", True
+        # Every answer carries what the rooms are holding, including this one:
+        # an agent that just did something unrelated still learns that somebody
+        # is waiting for it. Computed AFTER the call, so a read that just
+        # consumed its room reports the room as quiet, truthfully.
+        news = _news_line()
+        if news:
+            text = f"{text}\n{news}"
         return _mcp_result(request_id, {
             "content": [{"type": "text", "text": text}], "isError": bool(failed)})
     return _mcp_error(request_id, -32601, f"unknown method {method!r}")
@@ -1400,6 +1481,9 @@ def main(argv=None) -> None:
         sub.add_argument("--reply-to", dest="reply_to", default="",
                          help="the id of the message this responds to")
         sub.add_argument("--to", default="", help="address one member by peer id")
+        sub.add_argument("--file", action="append", default=[],
+                         help="name a file in the room's shared folder this message "
+                              "is about (repeatable)")
         if kind == "report":
             sub.add_argument("--status", default="working",
                              help="submitted, working, input_required, completed, "

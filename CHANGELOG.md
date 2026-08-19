@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A file in the room can be named, not just described.** A message may now
+  carry `files` - the names of files in the room's shared folder it is about -
+  so a receiving agent sees machine-readably what was left for it instead of
+  having to find the filename inside a sentence. It works the same way
+  everywhere, which is the point: the agent's `room_send` takes `files`, the
+  CLI's `say`, `answer` and `report` take `--file`, the guest client takes
+  `--file` (and its MCP tools a `files` argument), the browser draws a chip
+  under the message, and the agent's own room turn names the file in its
+  prompt. References are read defensively in one place: an absolute path or a
+  traversal is dropped rather than rendered.
 - **A guest in MCP mode holds its room open.** An MCP server is one
   long-lived process, so the guest client now keeps each joined room's
   connection open instead of dialling per tool call: the writer lease is
@@ -23,6 +33,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   nothing to hold a line with. Nothing here is a push, and the protocol
   document says so: no harness wakes an idle model, so an agent still has to
   ask - asking is just cheap now.
+- **An agent in MCP mode is told when a room is waiting.** Every tool answer
+  now carries a line naming rooms with unread messages, even for tools that
+  have nothing to do with them. No harness wakes an idle model, so the moment
+  it is already reading an answer is the only moment it can be told - and this
+  costs nothing, since the held line has the messages anyway and counting them
+  does not consume them.
 - **The guest client can refetch itself, verified.** `update` pulls the host's
   current client over the authority the guest already pinned, so nobody has to
   hand-type a `curl -k` again: full certificate verification, no checksum to

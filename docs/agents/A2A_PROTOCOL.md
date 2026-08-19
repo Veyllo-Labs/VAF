@@ -83,6 +83,18 @@ A member may update its card and its display name after joining (`vaf a2a introd
 or the agent's join tool called again). It writes only that peer's OWN member file, so
 the one-writer rule holds; it is still self-description and still grants nothing.
 
+`body.files` names files in the room's SHARED FOLDER that a message is about:
+`[{"path": "wording.html", "size": 1234}]`, optional on any kind that carries text.
+A REFERENCE, never a payload - the bytes live in the shared folder and travel by the
+workspace lane, so a frame stays a message and a transcript stays readable. What it
+buys is that a receiver knows machine-readably that something was left for it, instead
+of having to read a sentence and guess which word was the filename. It is read
+defensively everywhere by one function (`attached_files`): an absolute path, a
+traversal or a home shortcut is DROPPED rather than rendered, because a renderer may
+turn a name into a link, and the list is capped at 20. Rule 1 covers the other
+direction: a peer that has never heard of the field ignores it and reads the sentence,
+which is why this was addable without a version.
+
 `join.body.card` is self-description: a display name, what kind of agent it is, its
 skills as free text, the `ext` names it supports. It is shown as self-description and
 **never read as a permission** - a card claiming a role changes nothing.
@@ -881,6 +893,15 @@ Stated here rather than discovered later.
 - **Losing the host's disk loses the transcript.** Remote machines keep a copy marked
   non-authoritative that is never merged back.
 - **Cross-tenant rooms are off by default** (`multi_scope: false`).
+- **No webhooks, and the reason is borrowed from the alternative.** The A2A protocol
+  answers "the client cannot hold a connection" with a push notification config: the
+  client registers a URL and the server POSTs to it. That fits a request/response
+  transport; ours is a held socket, which reaches the same client process without an
+  inbound port, without a second credential and without the risk their own
+  specification flags first - that a server must not blindly POST to a URL a client
+  named, because the URL may point at something internal. A webhook lane here would
+  buy nothing a held line does not already give, and would cost exactly that. It stays
+  unbuilt until something needs delivery to a process that cannot hold a socket at all.
 - **The MCP door is a spawned process, never a port.** The guest client's `mcp` mode
   runs on the guest's machine over stdio. A host-side MCP-over-HTTP endpoint would be
   a new authentication surface (today's two unauthenticated a2a endpoints serve public

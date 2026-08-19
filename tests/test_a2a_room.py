@@ -2011,3 +2011,99 @@ def test_agent_display_name_reads_the_persona_and_never_raises(monkeypatch):
 
     monkeypatch.setattr(ws_mod, "get_user_workspace", lambda u: _Boom())
     assert ws_mod.agent_display_name("alice") == ""
+
+
+# ── a file left in the shared folder, named in the message ─────────────────
+
+def test_a_named_file_survives_from_the_frame_to_every_reader(tmp_path, monkeypatch):
+    """MUTATION: drop `files` from the transcript row, or from the web
+    projection, or from `describe`.
+
+    The reference is written once and read by four surfaces (the browser, the
+    CLI log, the terminal app, the agent's own room turn). Each of them rebuilds
+    its row field by field, so a field nobody forwards is a field that vanishes
+    silently - this repo has paid for that shape twice already. One test walks
+    the whole way, because the halves passing separately is exactly what let it
+    happen before.
+    """
+    import vaf.core.a2a.store as store_mod
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    from vaf.core.a2a.room import describe
+
+    room = Room.create(kind="round", owner_scope=None, base=tmp_path,
+                       room_id="room-files1")
+    peer = room.join(display="Opus", scope_id=None, peer_id="p-far1")
+    room.ingest({"kind": "say", "body": {
+        "text": "der Entwurf liegt im Ordner",
+        "files": [{"path": "wording.html", "size": 16}]}}, identity=peer)
+
+    row = [r for r in room.transcript() if r["kind"] == "say"][-1]
+    assert row["files"] == [{"path": "wording.html", "size": 16}]
+    assert "wording.html" in describe(row), "the one wording must name it too"
+
+    # And the learning excerpt keeps it: a file somebody left is a fact about
+    # the work, not decoration on a sentence.
+    from vaf.core.a2a.room import transcript as learning_excerpt
+    excerpt = learning_excerpt(room.store.frames(), labels={"p-far1": "Opus"})
+    assert "wording.html" in excerpt
+
+
+def test_a_reference_that_could_escape_is_dropped_not_rendered(tmp_path, monkeypatch):
+    """MUTATION: pass `body.files` through unread.
+
+    A frame is written by a peer nobody here controls, and a renderer may turn
+    a name into a link or a fetch. An absolute path, a traversal or a home
+    shortcut is dropped rather than shown: a reference that points nowhere is a
+    name nobody can follow, which is the harmless end of the two.
+    """
+    from vaf.core.a2a.room import FILE_REFS_CAP, attached_files
+
+    assert attached_files({"files": ["../../etc/passwd", "/etc/passwd",
+                                     "~/.ssh/id_rsa", "a/../../out.txt"]}) == []
+    assert attached_files({"files": ["sub/ok.txt"]}) == [{"path": "sub/ok.txt"}]
+    assert attached_files({"files": ["plain.txt"]}) == [{"path": "plain.txt"}]
+    assert attached_files({"files": [{"path": "x.txt", "size": "not a number"}]}) \
+        == [{"path": "x.txt"}]
+    assert attached_files({"files": "not a list"}) == []
+    assert attached_files(None) == []
+    assert len(attached_files({"files": [f"f{i}.txt" for i in range(50)]})) == FILE_REFS_CAP
+
+
+def test_the_agent_tool_and_the_browser_both_carry_the_reference(tmp_path, monkeypatch):
+    """MUTATION: drop the files parameter from room_send, or stop forwarding it
+    in the browser projection."""
+    import vaf.core.a2a.store as store_mod
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    from vaf.core.a2a.room import derive_peer_id, participant_key
+    from vaf.tools.room_tools import RoomSendTool
+
+    room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                       room_id="room-files2")
+    room.join(display="Nobel", scope_id="scope-a",
+              peer_id=derive_peer_id(participant_key("agent", "scope-a"), "room-files2"))
+
+    out = RoomSendTool().run(room_id="room-files2", text="hier ist der Entwurf",
+                             files=["draft.md", "../escape.md"],
+                             user_scope_id="scope-a")
+    assert "error" not in out.lower(), out
+    row = [r for r in room.transcript() if r["kind"] == "say"][-1]
+    assert row["files"] == [{"path": "draft.md"}], "the escape must not ride along"
+
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    projection = source.split('"messages": [', 1)[1][:1400]
+    assert '"files": e.get("files")' in projection, \
+        "the browser rebuilds each row field by field; an unforwarded field is dropped"
+
+
+def test_the_room_turn_tells_the_agent_what_was_left_for_it():
+    """MUTATION: drop the shared-file line from the room wake.
+
+    The agent cannot see the shared folder from inside its turn, so a file
+    nobody names in the prompt is a file it never opens.
+    """
+    source = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
+    wake = source.split("waking_ids = {f.id for f in frames}", 1)[1][:2400]
+    assert "_attached_files(frame.body)" in wake
+    assert "shared file" in wake

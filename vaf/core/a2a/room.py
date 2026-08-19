@@ -215,7 +215,13 @@ def transcript(frames: List[Frame], *, labels: Dict[str, str],
         if not text:
             continue
         who = labels.get(frame.sender) or frame.sender
+        shared = ", ".join(f["path"] for f in attached_files(frame.body))
         line = f"{who}: {text}".replace("\n", " ").strip()
+        if shared:
+            # A file somebody left in the room is a fact about the work, and a
+            # memory that dropped it would remember the sentence and lose the
+            # thing the sentence was about.
+            line = f"{line} [shared: {shared}]"
         if total + len(line) + 2 > max_chars:
             break
         lines.append(line)
@@ -1921,6 +1927,10 @@ class Room:
                 "role": frame.role,
                 "kind": frame.kind,
                 "text": str((frame.body or {}).get("text") or ""),
+                # Cleaned here rather than in each renderer: four surfaces draw
+                # this transcript, and a reference a peer wrote is untrusted
+                # input to every one of them.
+                "files": attached_files(frame.body),
                 "body": frame.body,
                 "lamport": frame.lamport,
                 "ts": frame.ts,
@@ -1956,6 +1966,54 @@ def frame_clock(ts: Any) -> str:
         return ""
 
 
+# How many files one frame may point at. A message names what it is about; a
+# frame listing a hundred files is a directory listing wearing a message's
+# clothes, and every renderer would have to invent its own cut-off.
+FILE_REFS_CAP = 20
+
+
+def attached_files(body: Any) -> List[Dict[str, Any]]:
+    """The shared-folder files a frame points at, cleaned. Never raises.
+
+    A REFERENCE, never a payload: the bytes live in the room's shared folder
+    and travel by the workspace lane, so a frame stays a message and a
+    transcript stays readable. What rides in the frame is the name, so a
+    receiver knows machine-readably that something was left for it instead of
+    having to read a sentence and guess which word was the filename.
+
+    Read defensively in BOTH directions, which is why one function serves the
+    writing tools and the reading surfaces alike: a frame is written by a peer
+    nobody here controls, and a renderer may turn a name into a link. An
+    absolute path or a traversal is dropped rather than shown, and the list is
+    capped - a cleaned reference that points nowhere is a name nobody can
+    follow, which is the harmless outcome.
+    """
+    raw = (body or {}).get("files") if isinstance(body, dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, str):
+            item = {"path": item}
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        if (not path or path.startswith("/") or path.startswith("~")
+                or ".." in path.split("/") or len(path) > 300):
+            continue
+        row: Dict[str, Any] = {"path": path}
+        try:
+            size = int(item.get("size"))
+            if size >= 0:
+                row["size"] = size
+        except (TypeError, ValueError):
+            pass
+        out.append(row)
+        if len(out) >= FILE_REFS_CAP:
+            break
+    return out
+
+
 def describe(entry: Dict[str, Any]) -> str:
     """A transcript row as a line a human reads.
 
@@ -1968,6 +2026,11 @@ def describe(entry: Dict[str, Any]) -> str:
     kind = str(entry.get("kind") or "")
     body = entry.get("body") or {}
     text = str(entry.get("text") or "")
+    shared = ", ".join(f["path"] for f in attached_files(body))
+    if shared and kind in ("say", "ask", "answer", "report", "directive"):
+        # Said once here, so the CLI log, the terminal app and both web lanes
+        # agree on how a shared file reads.
+        text = f"{text} [shared: {shared}]".strip()
     if kind == "join":
         card = body.get("card") or {}
         skills = str(card.get("skills") or "").strip()

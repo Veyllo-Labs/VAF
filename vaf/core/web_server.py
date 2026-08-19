@@ -520,6 +520,11 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
             {"id": e["id"], "peer": e["peer"], "label": e["label"],
              "role": e["role"], "kind": e["kind"],
              "text": describe(e), "ts": e["ts"],
+             # Forwarded EXPLICITLY, like every field this projection carries:
+             # the handler rebuilds the row field by field, so anything not
+             # named here is silently dropped on its way to the browser - the
+             # shape that has cost this file two features already.
+             "files": e.get("files") or [],
              "lamport": e["lamport"], "to": e.get("to") or {}}
             for e in entries
             # A check-in is the room talking to ONE agent about its own attention,

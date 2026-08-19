@@ -261,10 +261,20 @@ class RoomSendTool(BaseTool):
                                 "set to the vote's id, and put your choice here. "
                                 "Voting again replaces your earlier ballot."),
             },
+            "files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": ("Files in the room's SHARED FOLDER this message is "
+                                "about, by name (e.g. 'wording.html'). Save the file "
+                                "there first; this names it, so the others see what "
+                                "you left instead of having to read it out of your "
+                                "sentence."),
+            },
         },
         "required": ["room_id", "text"],
     }
-    input_aliases = {"room_id": ["room", "id"], "text": ["message", "content"]}
+    input_aliases = {"room_id": ["room", "id"], "text": ["message", "content"],
+                     "files": ["file", "attachments", "attach"]}
 
     def run(self, **kwargs) -> str:
         from vaf.core.a2a.frame import KINDS
@@ -313,6 +323,13 @@ class RoomSendTool(BaseTool):
             progress = read_progress({"progress": raw}) if raw else None
             if progress:
                 body["progress"] = progress
+        # Cleaned by the room's own reader, so this tool cannot put a shape on
+        # the wire that the room would refuse from a stranger - the same
+        # function every surface reads such a reference with.
+        from vaf.core.a2a.room import attached_files
+        named = attached_files({"files": kwargs.get("files")})
+        if named:
+            body["files"] = named
         payload: Dict[str, Any] = {"kind": kind, "body": body}
         if kwargs.get("to_peer"):
             payload["to"] = {"peer": str(kwargs["to_peer"])}

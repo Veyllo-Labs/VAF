@@ -157,6 +157,9 @@ type RoomMessage = {
     id: string; peer: string; label: string; role: string;
     kind: string; text: string; ts?: number; lamport?: number;
     to?: { peer?: string; role?: string; room?: boolean };
+    /** Files in the room's shared folder this message points at. A reference,
+     *  never the bytes - the folder holds those, and the chip opens it. */
+    files?: Array<{ path: string; size?: number }>;
 };
 
 type RoomView = {
@@ -1909,6 +1912,22 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
                                 {m.text}
                             </div>
+                            {/* What was left in the room's shared folder with this
+                                message. A chip per file, because a filename inside a
+                                sentence is something a reader has to find; a chip is
+                                something they can see. */}
+                            {(m.files || []).length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                    {(m.files || []).map(f => (
+                                        <span key={f.path}
+                                            title={typeof f.size === 'number' ? `${f.size} bytes` : undefined}
+                                            className="inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded-lg text-[11px] border border-gray-200 bg-gray-50 text-gray-600 dark:border-[#3a3a3a] dark:bg-[#202020] dark:text-[#c8c8c8]">
+                                            <Paperclip size={11} className="shrink-0" />
+                                            <span className="truncate">{f.path}</span>
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                             {/* Read receipts: the stack of everyone who has read
                                 UP TO here, overlapping circles, capped at 20 with
                                 the remainder as a number - a stack under a message

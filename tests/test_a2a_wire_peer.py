@@ -758,3 +758,47 @@ def test_update_verifies_before_it_replaces_and_never_bricks_the_client(
     assert row["sha256"] == hashlib.sha256(fresh).hexdigest()
     assert "restart" in row["note"]
     assert not target.with_suffix(".part").exists()
+
+
+def test_every_answer_says_what_the_rooms_are_holding(peer, server, capsys, held):
+    """MUTATION: drop the news line from the tools/call answer.
+
+    Nothing wakes an idle model, in any harness - so the one moment an agent
+    can be told is while it is already reading an answer. The line rides on
+    EVERY tool, including tools that have nothing to do with the room that is
+    waiting, which is the whole point: an agent busy elsewhere still finds out.
+    """
+    _join(peer, server, capsys)
+    line = peer._line_for(ROOM, peer.load_record(ROOM))
+    assert line is not None
+    # The room replayed a backlog on connect; this seat has not read it.
+    record = peer.load_record(ROOM)
+    record["cursor"] = [0, "", 0]
+    peer.save_record(record)
+
+    text, _failed = _call(peer, "a2a_rooms")           # an unrelated tool
+    news = json.loads(text.strip().splitlines()[-1])
+    assert news["news"][ROOM] >= 1
+    assert "a2a_read" in news["note"]
+
+    read_text, _ = _call(peer, "a2a_read", room=ROOM)  # consume it
+    assert "news" not in read_text.splitlines()[-1]
+    after, _ = _call(peer, "a2a_rooms")
+    assert "news" not in after, "a room that was just read is not still waiting"
+
+
+def test_counting_the_unread_never_consumes_it(peer, server, capsys, held):
+    """MUTATION: let `pending` advance the cursor.
+
+    The hint would then EAT the messages it announces: an agent told about two
+    new lines would read the room and find it empty.
+    """
+    _join(peer, server, capsys)
+    line = peer._line_for(ROOM, peer.load_record(ROOM))
+    record = dict(peer.load_record(ROOM), cursor=[0, "", 0])
+
+    first = line.pending(record)
+    assert first >= 1
+    assert line.pending(record) == first, "counting moved the cursor"
+    assert record["cursor"] == [0, "", 0]
+    assert len(line.take_new(record)) == first, "the announced messages were gone"

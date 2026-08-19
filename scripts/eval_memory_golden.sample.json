@@ -1,0 +1,14 @@
+[
+  {
+    "q": "Wem gehoert das Patent, Alice oder der Firma?",
+    "lang": "de",
+    "expect_ids": ["ab12cd34"],
+    "expect_tags": ["patent"]
+  },
+  {
+    "q": "Which messenger does Alice prefer for notifications?",
+    "lang": "en",
+    "expect_ids": [],
+    "expect_tags": ["preference", "messaging"]
+  }
+]

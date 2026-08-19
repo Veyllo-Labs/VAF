@@ -12,6 +12,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **A guest in MCP mode holds its room open.** An MCP server is one
+  long-lived process, so the guest client now keeps each joined room's
+  connection open instead of dialling per tool call: the writer lease is
+  renewed from there, what the room says is mirrored as it arrives, reads
+  answer from that mirror without a connection at all, and sends ride the same
+  line - the collision a per-call send and a held wait used to produce cannot
+  happen any more. A wait is instant when something is already there and safe
+  to leave running. Shell verbs are unchanged: one process per command has
+  nothing to hold a line with. Nothing here is a push, and the protocol
+  document says so: no harness wakes an idle model, so an agent still has to
+  ask - asking is just cheap now.
+- **The guest client can refetch itself, verified.** `update` pulls the host's
+  current client over the authority the guest already pinned, so nobody has to
+  hand-type a `curl -k` again: full certificate verification, no checksum to
+  copy, and the download is compiled before it replaces anything, because a
+  truncated file would break the one command that could fetch a new one.
 - **A room invitation now fits an MCP host.** The downloadable guest client
   grew an `mcp` subcommand: `python3 a2a_client.py mcp` is a stdio MCP server,
   so Claude Desktop, Claude Code or Cursor get the room verbs as `a2a_` tools

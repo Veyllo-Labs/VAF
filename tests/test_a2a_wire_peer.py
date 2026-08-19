@@ -15,6 +15,7 @@ way a guest would (--ca-file plus the fingerprint), and a wrong fingerprint
 must refuse before anything is spoken.
 """
 import datetime
+import hashlib
 import importlib.util
 import ipaddress
 import json
@@ -156,9 +157,10 @@ def server(tmp_path_factory):
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(pki["leaf"], pki["key"])
-    state = {"submissions": [], "pongs": []}
+    state = {"submissions": [], "pongs": [], "connections": 0}
 
     def handler(connection):
+        state["connections"] += 1
         parts = urlsplit(connection.request.path)
         token = (parse_qs(parts.query).get("token") or [""])[0]
         room = parts.path.rsplit("/", 1)[-1]
@@ -634,3 +636,125 @@ def test_push_carries_the_bytes_and_files_lists_the_answer(peer, server, capsys,
     rows = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines()
             if l.startswith("{")]
     assert {"path": "wording.html", "size": 16, "mtime": 0} in rows
+
+
+# ── the held line: one connection serving many calls ───────────────────────
+
+@pytest.fixture()
+def held(peer):
+    """MCP mode without the pump: held mode on, lines torn down afterwards."""
+    peer._HELD_MODE = True
+    try:
+        yield peer
+    finally:
+        peer._HELD_MODE = False
+        peer._stop_lines()
+
+
+def test_a_held_line_serves_many_calls_on_one_connection(peer, server, capsys, held):
+    """MUTATION: drop the `_line_for` branch from any verb, so it opens its own
+    connection again.
+
+    Per call, this is what the guest lane cost: a handshake, a backlog replay
+    and a race against its own writer lease - the shape that had a remote agent
+    locked out of its own room for a whole evening. A held line pays that once.
+    The connection counter on the test server is the proof, and it is why this
+    test asserts a NUMBER rather than that things merely worked.
+    """
+    _join(peer, server, capsys)
+    after_join = server["state"]["connections"]
+
+    said, failed = _call(peer, "a2a_say", room=ROOM, text="auf der gehaltenen Leitung")
+    assert not failed, said
+    assert json.loads(said.splitlines()[-1])["status"] == "committed"
+    read_text, read_failed = _call(peer, "a2a_read", room=ROOM)
+    assert not read_failed, read_text
+    again, again_failed = _call(peer, "a2a_say", room=ROOM, text="und noch einmal")
+    assert not again_failed, again
+
+    assert server["state"]["connections"] == after_join + 1, (
+        "three calls opened more than the one line that was already held")
+    sent = [s for s in server["state"]["submissions"] if s.get("kind") == "say"]
+    assert {"kind": "say", "body": {"text": "und noch einmal"}} in sent
+
+
+def test_a_held_wait_answers_from_the_mirror_without_dialling(peer, server, capsys, held):
+    """MUTATION: let the held wait open its own connection.
+
+    A wait is where the old shape hurt most: it had to hold a line of its own,
+    which is exactly the line a send then could not have. Here the reader is
+    already listening, so the wait reads a mirror and the send never queues
+    behind it.
+    """
+    _join(peer, server, capsys)
+    line = peer._line_for(ROOM, peer.load_record(ROOM))
+    assert line is not None and line.alive()
+    before = server["state"]["connections"]
+
+    # The backlog the room replayed on connect is already in the mirror, so a
+    # fresh record finds it without a single new connection.
+    record = dict(peer.load_record(ROOM), cursor=[0, "", 0])
+    rows = line.wait_new(record, timeout=5.0)
+    assert rows, "the mirror held nothing the record had not seen"
+    assert server["state"]["connections"] == before
+
+
+def test_a_held_wait_gives_up_honestly_when_nothing_is_said(peer, server, capsys, held):
+    _join(peer, server, capsys)
+    text, failed = _call(peer, "a2a_wait", room=ROOM, timeout=1)
+    assert failed and "nothing was said in time" in text
+
+
+def test_the_shell_never_holds_a_line(peer, server, capsys):
+    """MUTATION: hold lines outside MCP mode.
+
+    One process per command has nothing to hold a line with, and a line built
+    for one command would be dropped seconds later with its lease still warm -
+    the exact shape that locks the next command out.
+    """
+    _join(peer, server, capsys)
+    assert peer._line_for(ROOM, peer.load_record(ROOM)) is None
+    assert peer._LINES == {}
+
+
+def test_a_dead_line_is_rebuilt_rather_than_reused(peer, server, capsys, held):
+    """MUTATION: keep handing out a line whose thread has ended - every later
+    call would answer from a mirror nothing writes to any more."""
+    _join(peer, server, capsys)
+    first = peer._line_for(ROOM, peer.load_record(ROOM))
+    assert first is not None
+    first._fail("the host went away")
+    assert not first.alive()
+
+    second = peer._line_for(ROOM, peer.load_record(ROOM))
+    assert second is not None and second is not first
+    assert second.alive()
+
+
+def test_update_verifies_before_it_replaces_and_never_bricks_the_client(
+        peer, server, capsys, monkeypatch, tmp_path):
+    """MUTATION: write the download before compiling it.
+
+    A truncated or refused download that lands on disk anyway leaves a guest
+    with no client at all - and the one command that could fetch a new one is
+    the one it just broke.
+    """
+    _join(peer, server, capsys)
+    target = tmp_path / "a2a_client.py"
+    target.write_text("# the old client\n", encoding="utf-8")
+
+    _seam(peer, monkeypatch, [(200, b"def broken(:\n")])
+    with pytest.raises(SystemExit) as stop:
+        peer.main(["update", ROOM, "--out", str(target)])
+    assert stop.value.code != 0
+    assert "not a usable client" in capsys.readouterr().err
+    assert target.read_text(encoding="utf-8") == "# the old client\n"
+
+    fresh = b"# a newer client\nprint('hi')\n"
+    _seam(peer, monkeypatch, [(200, fresh)])
+    peer.main(["update", ROOM, "--out", str(target)])
+    row = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert target.read_bytes() == fresh
+    assert row["sha256"] == hashlib.sha256(fresh).hexdigest()
+    assert "restart" in row["note"]
+    assert not target.with_suffix(".part").exists()

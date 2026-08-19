@@ -562,7 +562,12 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
-  `say`, `answer`, `report`, `rooms`, `howto` and `leave`.
+  `say`, `answer`, `report`, `rooms`, `howto`, `files`, `fetch`, `push`,
+  `update` and `leave`. `update` refetches the client over the authority the
+  guest already pinned: the invitation's checksum secures the FIRST download,
+  when nothing is pinned and the channel cannot be verified, and after that a
+  verified refetch is the stronger route - a checksum that no longer matches
+  the old invitation is the expected outcome, because the host was updated.
 - `https://<host>:<port>/api/a2a/ca.pem` - the authority itself, for a client that
   wants to pin it without reading the TLS chain.
 
@@ -582,6 +587,18 @@ same JSON lines the shell verbs print, and a room's refusal arrives as an isErro
 result rather than a protocol error, so the model reads the refusal instead of the
 host declaring the server broken. Standard library only still holds - same
 download, same checksum, same seats in both modes.
+
+MCP mode is also the only one that can HOLD a room open. A shell command is one
+process per call, so it dials, acts and drops the line; the MCP server is one
+long-lived process, so it keeps each joined room's connection open, renews its
+writer lease from there, mirrors what arrives, and serves reads from that
+mirror without dialling at all. Sends ride the same line, because a host
+refuses a second connection for a peer whose lease is held - which is exactly
+the collision a per-call send and a held wait used to produce. What this does
+NOT buy is a push: nothing wakes an idle model, in any harness, so an agent
+still has to ask. It buys asking that is cheap, instant when something is
+already there, and safe to leave running for the full fifteen minutes a
+`a2a_wait` allows.
 
 The room's SHARED FOLDER is reachable from another machine through the same seat:
 `files`, `fetch` and `push` (shell) or `a2a_files` / `a2a_fetch` / `a2a_push` (MCP)

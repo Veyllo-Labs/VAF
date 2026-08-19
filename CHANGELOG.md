@@ -51,6 +51,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   until the migration finishes, search keeps working on the previous model.
 
 ### Added
+- **Archived chats look like an archive.** They are shown as boxes in a grid
+  instead of list rows; hovering lifts a box and opens its lid. Opening one now
+  has a readable way back - the old link was grey on near-black - and a Delete
+  from archive action next to it. Deleting there is final and the dialog says
+  what that means: it is the last copy, and the agent can no longer recall the
+  conversation afterwards.
 - **The memory store can move to a new embedding model without losing anyone's
   data.** `vaf memory reembed` re-embeds every stored memory and chunk whose
   vector was written by another model - resumable, idempotent, nothing is

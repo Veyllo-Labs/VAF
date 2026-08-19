@@ -672,7 +672,9 @@ def test_the_record_is_a_place_of_its_own_and_is_fetched_when_asked_for():
     assert "type: 'room_task_history'" in page, "nothing ever asks for it"
     assert "setRoomHistory(Array.isArray(data.tasks)" in page, "the answer is dropped"
     # Kept apart from the polled view on purpose.
-    assert "roomHistory" in page and "setRoomView({ room: data.room" in page
+    # The transcript adoption is guarded now (a stale poll answer must not
+    # re-open a left room), so the pin follows the guarded updater form.
+    assert "roomHistory" in page and "return { room: data.room, messages: data.messages || [] };" in page
 
     # The way IN is a figure among the room's other facts, not a third tab: how much
     # this room has done is a fact about it, and a tab would have put it beside "who is

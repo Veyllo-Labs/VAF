@@ -2261,6 +2261,13 @@ function VAFDashboardContent() {
     // Cheap on purpose: it is one read of one room, only while somebody is looking at
     // it, and it stops the moment the view closes.
     const roomPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // The one room the person DELIBERATELY opened and whose transcript answer is
+    // still on its way. A room_transcript may only open the view when it answers
+    // this click or refreshes the room already on screen - the 3s poll's last
+    // answer otherwise lands AFTER a switch to a chat and yanks the person back
+    // into the room they just left (measured live: every switch bounced back
+    // within seconds while the server answered slowly).
+    const pendingRoomOpenRef = useRef<string | null>(null);
     const [roomToRename, setRoomToRename] = useState<Session | null>(null);
     const [roomTitleDraft, setRoomTitleDraft] = useState('');
     const [roomMembersOpen, setRoomMembersOpen] = useState(false);
@@ -3633,7 +3640,10 @@ function VAFDashboardContent() {
     const handleSessionSwitch = (id: string) => {
         // A room is shown in the same place a conversation is, so picking a
         // conversation has to put it away. Without this, clicking a chat while a room
-        // is open would load that chat underneath and keep showing the room.
+        // is open would load that chat underneath and keep showing the room. The
+        // pending mark goes with it, or an unanswered room click would still adopt
+        // a transcript that arrives after this switch.
+        pendingRoomOpenRef.current = null;
         setRoomView(null);
         setRoomMembersOpen(false);
         if (currentSessionId === id) return;
@@ -4551,7 +4561,20 @@ function VAFDashboardContent() {
                     // (lamport, sender, seq) so that every surface shows the same
                     // sequence. Re-sorting here by timestamp would undo that, because
                     // wall clocks differ between the machines in a room.
-                    setRoomView({ room: data.room, messages: data.messages || [] });
+                    //
+                    // Adopted only when it answers the click the person just made or
+                    // refreshes the room already on screen. Unconditional adoption
+                    // let the poll's last in-flight answer re-open the room seconds
+                    // AFTER the person had switched to a chat - on a slow server,
+                    // every attempt to leave the room bounced straight back.
+                    setRoomView(prev => {
+                        const rid = data.room?.roomId;
+                        const wanted = (prev && prev.room.roomId === rid)
+                            || pendingRoomOpenRef.current === rid;
+                        if (!wanted) return prev;
+                        if (pendingRoomOpenRef.current === rid) pendingRoomOpenRef.current = null;
+                        return { room: data.room, messages: data.messages || [] };
+                    });
                 }
                 else if (data.type === 'room_task_history') {
                     // The record, answered once per click. Kept apart from roomView so
@@ -6049,6 +6072,13 @@ function VAFDashboardContent() {
             // refusal is the one that counts - this only spares the user watching
             // their sentence disappear into an error.
             if (roomView.room.closed) return;
+            // The chat path checks this further down; this branch returns before it
+            // reaches that check. On a CLOSING socket the browser drops the frame
+            // with nothing but a console warning - so the message vanished while
+            // the input cleared, and the person believed it was sent (measured
+            // live: a room message arrived minutes late, after retyping). Keeping
+            // the text in the box is the honest failure.
+            if (ws.readyState !== WebSocket.OPEN) return;
             ws.send(JSON.stringify({
                 type: 'room_say', room_id: roomView.room.roomId, text: textToSend,
             }));
@@ -7053,6 +7083,7 @@ function VAFDashboardContent() {
                                 <div key={s.id} data-room-id={s.roomId}
                                     onClick={() => {
                                         setDrawerOpen(false);
+                                        pendingRoomOpenRef.current = s.roomId ?? null;
                                         ws?.send(JSON.stringify({ type: 'open_room', room_id: s.roomId }));
                                     }}
                                     className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative",

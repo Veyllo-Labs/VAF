@@ -210,7 +210,13 @@ Key rules:
 
 ### Server → Client
 
-- `room_transcript`: answers `open_room`. Payload: `{ room, messages }`, where `room`
+- `room_transcript`: answers `open_room`. The frontend adopts it into the view ONLY
+  when it answers the room click the person just made (a pending mark set at the
+  click, cleared on any session switch) or refreshes the room already on screen -
+  the 3-second poll's last in-flight answer otherwise lands AFTER a switch to a
+  chat and re-opens the room the person just left (measured live: on a slow server
+  every attempt to leave the room bounced back within seconds).
+  Payload: `{ room, messages }`, where `room`
   carries `{ id, roomId, title, topic, mission, roomKind, role, closed, createdAt,
   members, members_list, me, agentPeer, agentMode, agentWorkers, canManage, typing,
   readPositions, tasks, votes }` and each message

@@ -8194,8 +8194,12 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
         credential = websocket.cookies.get(VAF_TOKEN_COOKIE)
 
     try:
-        room = open_room(room_id)
-        identity, seat = admit(room, credential or "")
+        # In a thread, like every store touch on this route: the handshake reads
+        # the room and may redeem a ticket (crypto plus store writes), and this
+        # loop is the one every socket shares - a remote client's connect storm
+        # must not stall the WebUI beside it.
+        room = await asyncio.to_thread(open_room, room_id)
+        identity, seat = await asyncio.to_thread(admit, room, credential or "")
     except HandshakeRefused as refusal:
         # Mirrored into the security log exactly like a refused WebUI handshake. A room
         # is the one door a stranger can knock on from another machine, so a refusal
@@ -8216,43 +8220,53 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
     _A2A_OUTBOXES.setdefault(room.room_id, {})[identity.peer_id] = outbox
 
     try:
-        lease = hub.attach(identity)
+        # The attach scans the store for the backlog - in a thread, so a large
+        # room cannot stall the shared event loop while a peer connects.
+        lease = await asyncio.to_thread(hub.attach, identity)
     except Exception as e:
         _A2A_OUTBOXES.get(room.room_id, {}).pop(identity.peer_id, None)
         log("API", f"A2A refused {identity.peer_id} in {room.room_id}: {e}")
         await websocket.close(code=4009, reason=str(e))
         return
 
-    await websocket.accept()
-    log("API", f"A2A joined: {identity.peer_id} in {room.room_id} from {client_ip}")
-    welcome = {
-        "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,
-        "role": identity.role, "protocol": "vaf-a2a", "v": 1,
-    }
-    # The room's half of the handshake, for a peer that arrived over the wire -
-    # the same packet a local join answers with. An ADDED key, which rule 1 makes
-    # free: an older client keeps reading the four fields it knows and ignores
-    # this one. Without it the remote lane would be the poorer implementation of
-    # our own protocol, which is the drift this file has paid for elsewhere.
+    # From the moment the lease exists, EVERY exit runs the finally below. The
+    # accept and the welcome used to sit outside this protection: a client that
+    # vanished between attach and the welcome (a timed-out dialer hanging up)
+    # skipped the detach, and its dead lease refused its own reconnects for the
+    # full 90 second TTL - each half-successful retry re-arming another dead
+    # lease. Measured live as a room gone permanently mute behind "another
+    # connection is writing".
+    pump = None
     try:
-        welcome["welcome"] = room.welcome(identity)
-    except Exception:
-        pass
-    if seat:
-        # Handed over exactly once, on the connection that redeemed the ticket. It
-        # never appears again: the server keeps only the hash, so a client that
-        # drops it has to be invited again - which is the honest outcome for a
-        # bearer credential nobody wrote down.
-        welcome["seat"] = seat
-    await websocket.send_text(_json.dumps(welcome))
+        await websocket.accept()
+        log("API", f"A2A joined: {identity.peer_id} in {room.room_id} from {client_ip}")
+        welcome = {
+            "kind": "welcome", "room": room.room_id, "peer": identity.peer_id,
+            "role": identity.role, "protocol": "vaf-a2a", "v": 1,
+        }
+        # The room's half of the handshake, for a peer that arrived over the wire -
+        # the same packet a local join answers with. An ADDED key, which rule 1 makes
+        # free: an older client keeps reading the four fields it knows and ignores
+        # this one. Without it the remote lane would be the poorer implementation of
+        # our own protocol, which is the drift this file has paid for elsewhere.
+        try:
+            welcome["welcome"] = await asyncio.to_thread(room.welcome, identity)
+        except Exception:
+            pass
+        if seat:
+            # Handed over exactly once, on the connection that redeemed the ticket. It
+            # never appears again: the server keeps only the hash, so a client that
+            # drops it has to be invited again - which is the honest outcome for a
+            # bearer credential nobody wrote down.
+            welcome["seat"] = seat
+        await websocket.send_text(_json.dumps(welcome))
 
-    async def _pump() -> None:
-        while True:
-            message = await outbox.get()
-            await websocket.send_text(_json.dumps(message, ensure_ascii=False))
+        async def _pump() -> None:
+            while True:
+                message = await outbox.get()
+                await websocket.send_text(_json.dumps(message, ensure_ascii=False))
 
-    pump = asyncio.create_task(_pump())
-    try:
+        pump = asyncio.create_task(_pump())
         while True:
             raw = await websocket.receive_text()
             try:
@@ -8265,6 +8279,24 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
                 await websocket.send_text(_json.dumps(
                     {"kind": "ack", "status": "malformed", "reason": "not an object"}))
                 continue
+            if str(payload.get("kind") or "") == "renew":
+                # Transport, never a frame - it does not touch the store. This is
+                # the server half of protocol contract C9 ("leases are renewed
+                # while attached"): the hub renews only on successful submits, so
+                # a held line that read and thought for longer than the lease TTL
+                # lost its write right while connected and receiving - measured
+                # by the first foreign agent to hold a session against this
+                # endpoint. A LAPSED lease is not silently re-taken: the client
+                # is told not_writer and reconnects, so its own cursor decides
+                # the backlog and nothing is skipped in between.
+                from vaf.core.a2a.hub import NotWriter as _NotWriter
+                try:
+                    await asyncio.to_thread(hub.renew, identity, lease)
+                    ack = {"kind": "ack", "status": "renewed"}
+                except _NotWriter as e:
+                    ack = {"kind": "ack", "status": "not_writer", "reason": str(e)}
+                await websocket.send_text(_json.dumps(ack, ensure_ascii=False))
+                continue
             ack = await asyncio.to_thread(hub.submit, identity, lease, payload)
             await websocket.send_text(_json.dumps(ack, ensure_ascii=False))
     except WebSocketDisconnect:
@@ -8272,7 +8304,8 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
     except Exception as e:
         log("API", f"A2A socket error for {identity.peer_id}: {e}")
     finally:
-        pump.cancel()
+        if pump is not None:
+            pump.cancel()
         _A2A_OUTBOXES.get(room.room_id, {}).pop(identity.peer_id, None)
         try:
             hub.detach(identity, lease)

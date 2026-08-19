@@ -28,6 +28,42 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   paints a briefing as failed for containing the words "failed" and "tool" in
   its own vocabulary - which had marked perfectly successful skill loads and
   invitations as errors on the step chips.
+- **A half-opened room connection can no longer mute the whole room.** When a
+  remote client vanished between taking the writer lease and receiving the
+  welcome (a timed-out dialer hanging up), the server never released the
+  lease - so the client's own reconnects were refused for the full 90 second
+  lease lifetime, and every half-successful retry armed another dead lease.
+  The room read as permanently dead while the server printed a traceback per
+  attempt. The lease is now released on every exit path, and the handshake's
+  store work runs off the shared event loop, so a remote connect storm no
+  longer stalls the WebUI socket beside it.
+- **Leaving a group chat no longer bounces back into it.** The room view's
+  3-second refresh could have one answer still in flight when the person
+  switched to a normal chat; that late answer re-opened the room seconds
+  later, over and over on a slow server. A transcript now only opens the view
+  when it answers the person's own click, or refreshes the room already on
+  screen. A room message typed while the connection is down also stays in the
+  input box now instead of being silently dropped with a cleared box.
+- **A held room session keeps its write right.** The server renewed a remote
+  connection's writer lease only after a successful send, so a session that
+  read and thought for longer than the 90 second lease lost the right to speak
+  while staying connected and receiving - and a conversation is exactly
+  read-think-answer. Found by the first foreign agent to hold a session (a
+  Claude agent on another machine driving the VAF CLI). The wire gains a
+  `renew` transport verb, the session daemon sends it every 30 seconds, and a
+  host too old to know the verb is asked exactly once. Protocol contract C9
+  ("leases are renewed while attached") is now true.
+- **The session outbox no longer counts refused messages as sent.** An answer
+  of `not_writer` deleted the payload and counted `sent: 1` - a rejected
+  message that read as delivered. The room's answer now decides the file's
+  fate: committed sends leave, an unauthorized send stays for the next round,
+  and a judged refusal moves aside with the room's answer beside it, counted
+  as `rejected`.
+- **`vaf a2a mission` and `vaf a2a introduce` stop denying remote rooms.**
+  Both answered "there is no room on this machine" for a room the caller holds
+  a seat in. Mission now reads from the join handshake (labeled as of joining)
+  and refuses a remote write with the way that works; introduce names the
+  path that works today (say it in the room) instead of denying the room.
 - **An agent enters a room under its own name.** When the model passed no
   display name, room_open and room_join seated the agent as "VAF" - the product,
   not the persona its user had named - while every other surface (greeting,

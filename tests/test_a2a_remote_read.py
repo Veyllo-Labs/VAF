@@ -162,3 +162,56 @@ def test_an_unknown_room_still_fails_honestly(monkeypatch):
         assert result.exit_code != 0
         err = (getattr(result, "stderr", "") or "").lower()
         assert "no room" in err
+
+
+def test_mission_reads_from_the_join_handshake_for_a_remote_room(far_room, monkeypatch):
+    """MUTATION: route mission through the local-only opener again.
+
+    A member holding a seat was told "there is no room on this machine" -
+    factually wrong, and the same wrong answer read/members/log had before
+    this file existed. The join handshake carries the mission, so reading
+    answers from there, honestly labeled as of that moment.
+    """
+    far_room["record"]["welcome"] = {
+        "mission": "improve the site wording", "topic": "wording",
+        "leaders": ["Nobel"],
+    }
+    monkeypatch.setattr(a2a, "_remote_record",
+                        lambda room_id: dict(far_room["record"])
+                        if room_id == "room-far" else None)
+    result = CliRunner().invoke(a2a.app, ["mission", "room-far"])
+    assert result.exit_code == 0
+    row = json.loads(result.stdout.strip().splitlines()[-1])
+    assert row["mission"] == "improve the site wording"
+    assert row["as_of"] == "join"
+
+
+def test_mission_refuses_a_remote_write_with_the_way_that_works(far_room):
+    result = CliRunner().invoke(a2a.app, ["mission", "room-far", "new mission text"])
+    assert result.exit_code != 0
+    assert "host" in result.output
+    assert "no room" not in result.output.lower()
+
+
+def test_introduce_names_what_works_instead_of_denying_the_room(far_room):
+    """MUTATION: route introduce through the local-only opener again.
+
+    The member record lives on the host and the wire carries messages only, so
+    the verb cannot travel yet - but "there is no room on this machine" told a
+    seated member a falsehood. The refusal now names the room that exists and
+    the path that works (say it in the room).
+    """
+    result = CliRunner().invoke(a2a.app, ["introduce", "room-far",
+                                          "--skills", "reads logs"])
+    assert result.exit_code != 0
+    assert "say" in result.output
+    assert "no room" not in result.output.lower()
+
+
+def test_an_unknown_room_still_says_so_for_both_verbs(monkeypatch, tmp_path):
+    monkeypatch.setattr(a2a, "_open_local", lambda room_id: None)
+    monkeypatch.setattr(a2a, "_remote_record", lambda room_id: None)
+    for verb in (["mission", "room-none"], ["introduce", "room-none"]):
+        result = CliRunner().invoke(a2a.app, verb)
+        assert result.exit_code != 0
+        assert "no room" in result.output.lower()

@@ -1014,7 +1014,29 @@ def mission(room_id: str = typer.Argument(...),
     said, so it never appears in the transcript as a message.
     """
     from vaf.core.a2a.room import RoomError
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        # Remote seat. Reading answers from the join handshake, honestly labeled
+        # as of that moment - the mission is manifest, not a frame, so no later
+        # change ever reaches this side as a message. Writing is refused with
+        # the way that works: the manifest lives on the host, and the wire
+        # carries messages, not manifest edits. (First field use got "no room
+        # on this machine" here - factually wrong for a member holding a seat.)
+        record = _remote_record(room_id)
+        if record is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        if str(text or "").strip():
+            _fail("The mission lives on the room's host machine, and the wire "
+                  "carries messages, not manifest edits. Ask a leader in the "
+                  "room (vaf a2a say) or set it on the host.", EXIT_REFUSED)
+        packet = record.get("welcome") or {}
+        _emit({"ok": True, "room": room_id,
+               "mission": str(packet.get("mission") or ""),
+               "topic": str(packet.get("topic") or ""),
+               "leaders": list(packet.get("leaders") or []),
+               "as_of": "join",
+               "note": "read from the join handshake; the live value is on the host"})
+        return
     if not str(text or "").strip():
         _emit({"ok": True, "room": room_id,
                "mission": str(room.manifest.get("mission") or ""),
@@ -1171,7 +1193,18 @@ def introduce(room_id: str = typer.Argument(...),
     Everyone in the room sees it. It is self-description: it grants nothing.
     """
     from vaf.core.a2a.room import RoomError
-    room = _room(room_id)
+    room = _open_local(room_id)
+    if room is None:
+        # Remote seat: the member record lives on the host, and the wire
+        # carries messages only - so this verb cannot travel yet. The refusal
+        # names what works instead of claiming there is no room (which is what
+        # a member holding a seat was told in the first field use).
+        if _remote_record(room_id) is None:
+            _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
+        _fail("A remote seat cannot edit its member record yet: the record "
+              "lives on the host, and the wire carries messages only. Your "
+              "display name is the one the invitation carried; to tell the "
+              "room what you can do, say it (vaf a2a say).", EXIT_REFUSED)
     identity = _me(room, as_peer=as_peer)
     try:
         record = room.introduce(identity, display=display,

@@ -421,3 +421,48 @@ def test_a_refused_room_handshake_reaches_the_security_log():
     body = _route_source()
     assert "_emit_sec_ws(" in body, "a refused room handshake is not a security event"
     assert body.count("_emit_sec_ws(") >= 2, "only one of the two refusal paths reports"
+
+
+def test_the_route_answers_a_renew_before_the_store():
+    """MUTATION: let a `renew` fall through into hub.submit.
+
+    `renew` is transport, never a frame: fallen through, the frame screen would
+    refuse it as malformed - which is exactly what a host too old to know the
+    verb does, and what left a held session with no way to keep its lease. The
+    intercept must sit BEFORE the submit so the verb never touches the store,
+    and a lapsed lease answers not_writer instead of being silently re-taken.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    start = source.index('@app.websocket("/ws/a2a/{room_id}")')
+    route = source[start:start + 12000]
+    assert '== "renew"' in route and "hub.renew" in route
+    assert '"status": "renewed"' in route
+    assert route.index('== "renew"') < route.index("hub.submit"), \
+        "the renew intercept must come before the store"
+
+
+def test_the_route_cannot_leak_a_lease_between_attach_and_the_loop():
+    """MUTATION: move the accept or the welcome send back above the protective try.
+
+    A client that vanished between attach and the welcome (a timed-out dialer
+    hanging up) skipped the detach, and its dead lease refused its own
+    reconnects for the full 90 second TTL - each half-successful retry
+    re-arming another dead lease. Measured live as a room gone permanently
+    mute behind "another connection is writing", while the endpoint printed an
+    unhandled traceback for every one of them.
+    """
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    start = source.index('@app.websocket("/ws/a2a/{room_id}")')
+    route = source[start:start + 14000]
+    attach_at = route.index("hub.attach")
+    accept_at = route.index("websocket.accept()")
+    detach_at = route.index("hub.detach")
+    guard_try = route.rindex("try:", attach_at, accept_at)
+    assert attach_at < guard_try < accept_at < detach_at, \
+        "accept and welcome must sit inside the try whose finally detaches"
+    # And the handshake's store work stays off the shared event loop: a remote
+    # client's connect storm froze the WebUI socket beside it.
+    assert "to_thread(open_room" in route
+    assert "to_thread(admit" in route
+    assert "to_thread(hub.attach" in route
+    assert "to_thread(room.welcome" in route

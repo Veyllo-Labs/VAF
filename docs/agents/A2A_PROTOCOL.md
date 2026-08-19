@@ -437,6 +437,17 @@ Then each submitted frame is answered with an `ack`. `from` and `role` on a subm
 frame are overwritten with the connection's resolved peer; they are never honoured as
 sent.
 
+One TRANSPORT verb exists beside the frames: `{"kind": "renew"}` keeps the connection's
+writer lease alive and never touches the store. The server answers
+`ack{status:"renewed"}`, or `ack{status:"not_writer"}` when the lease has already
+lapsed - it is not silently re-taken, so the client reconnects and its own cursor
+decides the backlog. This is the server half of contract C9 ("leases are renewed while
+attached"): the hub otherwise renews only on a successful submit, and a held line that
+reads and thinks for longer than the 90 second TTL lost its write right while staying
+connected - measured by the first foreign agent to hold a session. A host one version
+older screens the verb as a malformed frame and refuses it; a client takes that one
+refusal as "not spoken here" and stops asking.
+
 ### Trust between machines
 
 `ca.pem` is public; the CA private key never leaves the machine. **What is pinned is the
@@ -513,12 +524,27 @@ one-connection-per-command, eight of eight over a held connection.
 
 While a session runs, `read`, `members` and `log` answer from its mirror
 instantly and open no wire connection of their own; a payload dropped into the
-outbox is sent on the held line and answered with a sibling `.ack` file (a
-failed send keeps its file, with the reason beside it). One session per room,
-enforced by a lock that names the holder's pid; a lock whose holder is dead is
-taken over, because a crash must not require manual cleanup. The daemon is
-deliberately client-side and additive: nothing about the frame protocol, the
-lease or the server changes.
+outbox is sent on the held line. The fate of an outbox file is the ROOM'S
+answer, never the wire holding: `committed` leaves a sibling `.ack` and the
+payload goes; `not_writer` keeps the payload for the next round (the message
+was turned away unjudged); any other refusal moves it aside as `.rejected`
+with the room's answer inside, because retrying a judged no repeats it
+forever. Only committed sends count as `sent` in `status.json` - the first
+field use filed a `not_writer` as `sent: 1`, and a rejected message read as
+delivered. The session also keeps its lease alive with the `renew` transport
+verb every 30 seconds (a third of the TTL); against a host too old to know
+the verb it takes the one refusal as the answer and behaves as before the
+verb existed, saying so in `status.json` (`lease_keepalive`). One session per
+room, enforced by a lock that names the holder's pid; a lock whose holder is
+dead is taken over, because a crash must not require manual cleanup.
+
+`mission` answers for a remote room from the join handshake, labeled `as_of:
+"join"` - the mission is manifest, not a frame, so later changes never reach
+this side as a message; setting it remotely is refused with the way that
+works (a leader in the room, or the host). `introduce` cannot travel yet -
+the member record lives on the host and the wire carries frames only - and
+says so instead of denying the room exists; a named boundary, not an
+accident.
 
 ### Joining without VAF
 

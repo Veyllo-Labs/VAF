@@ -351,5 +351,7 @@ def test_the_server_answers_a_wire_join_with_the_same_packet():
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core"
            / "web_server.py").read_text(encoding="utf-8")
     block = src.split('"kind": "welcome"', 1)[1][:900]
-    assert 'welcome["welcome"] = room.welcome(identity)' in block, (
+    # In a thread since the lease-leak fix: the welcome scans the store, and the
+    # event loop is the one every socket shares.
+    assert 'welcome["welcome"] = await asyncio.to_thread(room.welcome, identity)' in block, (
         "a peer joining over the wire is told less than one joining locally")

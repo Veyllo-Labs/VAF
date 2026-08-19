@@ -347,7 +347,7 @@ def test_choosing_a_conversation_puts_the_room_away():
     is a user clicking a conversation and getting no conversation.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    body = source.split("const handleSessionSwitch = (id: string) => {")[1][:400]
+    body = source.split("const handleSessionSwitch = (id: string) => {")[1][:800]
 
     assert "setRoomView(null)" in body
 
@@ -441,7 +441,7 @@ def test_the_composer_writes_into_the_room_it_is_showing():
     behaviours - worse than refusing, because nothing tells the user it happened.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    body = source.split("const sendMessage = async (")[1][:2500]
+    body = source.split("const sendMessage = async (")[1][:3400]
 
     assert "if (roomView) {" in body
     assert "type: 'room_say'" in body
@@ -1827,3 +1827,38 @@ def test_a_room_turn_reports_to_the_account_that_is_running_it(monkeypatch):
     asyncio.run(ws_mod.receive_subagent_stream(ws_mod.SubAgentStreamUpdate(
         type="coder_state", status="Editing", roomId="room-live-x")))
     assert watcher.received and watcher.received[-1]["type"] == "coder_state"
+
+
+def test_a_stale_transcript_cannot_reopen_a_room_the_person_left():
+    """MUTATION: adopt every room_transcript into the view again.
+
+    The 3s poll's last answer lands AFTER a switch to a chat, and unconditional
+    adoption yanked the person straight back into the room - on a slow server,
+    every attempt to leave bounced back within seconds. A transcript may only
+    open the view when it answers the click the person just made (the pending
+    mark) or refreshes the room already on screen; switching away clears the
+    mark.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    handler = source.split("data.type === 'room_transcript'")[1][:1600]
+    assert "setRoomView(prev =>" in handler, \
+        "the transcript handler must decide against the OPEN view, not overwrite it"
+    assert "pendingRoomOpenRef" in handler
+    switch = source.split("const handleSessionSwitch")[1][:800]
+    assert "pendingRoomOpenRef.current = null" in switch, \
+        "switching away must clear the pending mark"
+
+
+def test_a_room_message_is_not_swallowed_by_a_closing_socket():
+    """MUTATION: send into the room branch without the readyState check.
+
+    On a CLOSING socket the browser drops the frame with nothing but a console
+    warning, so the message vanished while the input cleared - the person
+    believed it was sent and it arrived minutes late, after retyping. The chat
+    branch has this check further down; the room branch returns before ever
+    reaching it, so it needs its own.
+    """
+    source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    room_branch = source.split("type: 'room_say'")[0][-900:]
+    assert "ws.readyState !== WebSocket.OPEN" in room_branch, \
+        "the room send must refuse a socket that cannot carry it"

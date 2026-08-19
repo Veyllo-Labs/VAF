@@ -168,3 +168,123 @@ def test_a_lease_refusal_waits_then_gives_up_honestly(paths, monkeypatch):
     status = sess.read_status("room-test")
     assert status["connected"] is False
     assert "gave up" in status["last_error"]
+
+
+def test_a_room_refusal_is_never_counted_as_sent(paths):
+    """MUTATION: file any ack as success in drain_outbox.
+
+    First field use, a foreign agent holding a session: the ack said
+    not_writer, the payload was deleted, status.json said sent: 1 - a rejected
+    message that read as delivered to everyone watching. The fate of a payload
+    is the ROOM'S answer, not the wire holding.
+    """
+    (paths.outbox / "001.json").write_text(json.dumps(
+        {"kind": "say", "body": {"text": "keep me"}}), encoding="utf-8")
+
+    class NotWriter(ScriptedRoom):
+        def submit(self, payload, timeout=None):
+            self.submitted.append(payload)
+            return {"kind": "ack", "status": "not_writer", "reason": "lease lapsed"}
+
+    room = NotWriter([[{"kind": "sync"}]])
+    sess.run_session("room-test", {"url": "wss://x", "seat": "s"},
+                     connect=lambda: room, once=True, idle_s=0)
+    assert (paths.outbox / "001.json").exists(), \
+        "an unauthorized send was turned away unjudged - the payload must stay"
+    assert "not_writer" in (paths.outbox / "001.error").read_text()
+    status = json.loads(paths.status.read_text())
+    assert status["sent"] == 0, "a refused message must never count as sent"
+
+
+def test_a_judged_refusal_moves_aside_instead_of_retrying_forever(paths):
+    """The room said no on the merits; the next round would hear the same no."""
+    (paths.outbox / "001.json").write_text(json.dumps(
+        {"kind": "directive", "body": {"text": "no orders in a round"}}),
+        encoding="utf-8")
+
+    class Refused(ScriptedRoom):
+        def submit(self, payload, timeout=None):
+            self.submitted.append(payload)
+            return {"kind": "ack", "status": "refused", "reason": "round has no orders"}
+
+    room = Refused([[{"kind": "sync"}]])
+    sess.run_session("room-test", {"url": "wss://x", "seat": "s"},
+                     connect=lambda: room, once=True, idle_s=0)
+    assert not (paths.outbox / "001.json").exists()
+    assert "round has no orders" in (paths.outbox / "001.rejected").read_text()
+    status = json.loads(paths.status.read_text())
+    assert status["sent"] == 0 and status["rejected"] == 1
+
+
+def _jumping_clock(step=31.0):
+    state = {"t": 0.0}
+
+    def clk():
+        state["t"] += step
+        return state["t"]
+
+    return clk
+
+
+def test_a_held_line_renews_its_lease(paths):
+    """MUTATION: drop the renew block from run_session.
+
+    Contract C9 says leases are renewed while attached; the host renews only on
+    successful submits, and a conversation is read-think-answer - thinking
+    outlasts the 90s TTL. Without the keepalive a quiet session stayed
+    connected, kept receiving, and lost its write right in the middle of
+    ordinary use.
+    """
+    class Renewing(ScriptedRoom):
+        def submit(self, payload, timeout=None):
+            self.submitted.append(payload)
+            if payload.get("kind") == "renew":
+                return {"kind": "ack", "status": "renewed"}
+            return {"kind": "ack", "status": "committed"}
+
+    room = Renewing([[{"kind": "sync"}]])
+    sess.run_session("room-test", {"url": "wss://x", "seat": "s"},
+                     connect=lambda: room, once=True, idle_s=0,
+                     clock=_jumping_clock())
+    assert {"kind": "renew"} in room.submitted
+    status = json.loads(paths.status.read_text())
+    assert "lease_keepalive" not in status
+
+
+def test_a_lost_lease_ends_the_session_instead_of_limping(paths):
+    """Connected-but-mute is exactly the state the keepalive exists to end; a
+    restart re-attaches cleanly and its own cursor decides the backlog."""
+    class Lost(ScriptedRoom):
+        def submit(self, payload, timeout=None):
+            return {"kind": "ack", "status": "not_writer", "reason": "expired"}
+
+    room = Lost([[{"kind": "sync"}]])
+    code = sess.run_session("room-test", {"url": "wss://x", "seat": "s"},
+                            connect=lambda: room, once=True, idle_s=0,
+                            clock=_jumping_clock())
+    assert code == 1
+    status = json.loads(paths.status.read_text())
+    assert status["connected"] is False
+    assert "lease lost" in str(status.get("last_error") or "")
+
+
+def test_an_old_host_is_asked_once_and_then_left_in_peace(paths):
+    """A host that predates the verb refuses it; asking again every 30 seconds
+    would be a question with a known answer. The session says so in its status
+    and behaves as before the verb existed."""
+    class OldHost(ScriptedRoom):
+        def submit(self, payload, timeout=None):
+            self.submitted.append(payload)
+            return {"kind": "ack", "status": "malformed", "reason": "unknown kind"}
+
+    # First round carries a frame, so `once` does not end the session before a
+    # SECOND round has had the chance to ask again - which is exactly what the
+    # fallback must prevent.
+    room = OldHost([[_msg("say", 1), {"kind": "sync"}], [{"kind": "sync"}]])
+    sess.run_session("room-test", {"url": "wss://x", "seat": "s"},
+                     connect=lambda: room, once=True, idle_s=0,
+                     clock=_jumping_clock())
+    renews = [p for p in room.submitted if p.get("kind") == "renew"]
+    assert len(renews) == 1, "one refusal is the whole answer"
+    status = json.loads(paths.status.read_text())
+    assert status.get("lease_keepalive") == "unsupported by host"

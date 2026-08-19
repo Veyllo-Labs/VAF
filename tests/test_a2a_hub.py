@@ -367,3 +367,31 @@ def test_hub_peers_and_file_peers_render_the_same_room(rooms):
     # And a peer that never touched the hub at all.
     file_only = Room.open("room-truth", base=rooms)
     assert [f.id for f in file_only.store.frames() if f.kind == "say"] == on_disk
+
+
+def test_a_renewed_lease_outlives_the_original_ttl(rooms):
+    """MUTATION: make `renew` a no-op.
+
+    Contract C9: leases are renewed while attached. The session daemon sends a
+    renew on an interval for exactly this - a held line that reads and thinks
+    for longer than the TTL keeps its write right. The first foreign agent to
+    hold one lost it mid-conversation, connected and receiving all the while,
+    because nothing but a successful submit ever renewed.
+    """
+    from vaf.core.a2a.hub import WRITER_LEASE_TTL_S
+
+    room = Room.create(kind="round", owner_scope=None, base=rooms, room_id="room-renew")
+    alice = room.join(display="Alice", scope_id=None, peer_id="p-alice")
+    now = {"t": 0.0}
+    hub = Hub(room, sink=lambda p, m: None, clock=lambda: now["t"])
+    token = hub.attach(alice)
+
+    now["t"] = WRITER_LEASE_TTL_S - 5.0        # almost out, nothing submitted yet
+    hub.renew(alice, token)
+    now["t"] = WRITER_LEASE_TTL_S + 30.0       # past the ORIGINAL expiry
+    ack = hub.submit(alice, token, {"kind": "say", "body": {"text": "still me"}})
+    assert ack["status"] == "committed", "the renewed lease must carry the write"
+
+    now["t"] += WRITER_LEASE_TTL_S + 1.0       # now let it truly lapse
+    with pytest.raises(NotWriter):
+        hub.renew(alice, token)

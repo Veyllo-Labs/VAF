@@ -22,10 +22,19 @@ THE SHAPE. One long-lived process holds ONE connection and mirrors it to disk:
     status.json     pid, connected-since, counters, the last error
 
 The other commands then read and write FILES, and a room on another machine
-looks local to them. This is deliberately additive: nothing about the wire, the
-lease or the server changes, so the regression surface is the new files only.
-The lease release on the server side is still worth fixing - that change
-touches every connection including the WebUI's, and belongs to its own release.
+looks local to them.
+
+THE LEASE IS KEPT ALIVE, not just held. The server renews the writer lease only
+on a successful submit, so a held line that reads and thinks for longer than
+the 90 second TTL lost its write right while staying connected and receiving -
+and a conversation is exactly read-think-answer. Measured by the first foreign
+agent to hold a session (a Claude agent on another machine driving this CLI):
+session connected, message dropped in the outbox, refused as not_writer. The
+session therefore sends a `renew` transport message on an interval, which the
+host answers with `renewed` - the server half of protocol contract C9 ("leases
+are renewed while attached"). A host too old to know the verb answers with a
+refusal once; the session then stops asking and behaves as before the verb
+existed.
 
 The mechanic follows the field prototype by Opus (Claude Code on the reporting
 machine), which sent the very messages that described it. What the prototype
@@ -69,6 +78,11 @@ _TRANSPORT_KINDS = frozenset({"ack", "welcome"})
 # missed by moments when the old socket died just before we started.
 CONNECT_RETRY_WINDOW_S = 200.0
 CONNECT_RETRY_PAUSE_S = 15.0
+
+# How often a held line renews its writer lease: a third of the server's 90s
+# TTL (WRITER_LEASE_TTL_S in vaf/core/a2a/hub.py), so two renewals may be lost
+# or arrive late before the lease lapses.
+RENEW_INTERVAL_S = 30.0
 
 
 class SessionBusy(RuntimeError):
@@ -188,14 +202,29 @@ def _write_status(paths: SessionPaths, **fields: Any) -> None:
     tmp.replace(paths.status)
 
 
-def drain_outbox(paths: SessionPaths, submit: Callable[[dict], dict]) -> int:
-    """Send every queued payload once. Returns how many went out.
+def drain_outbox(paths: SessionPaths,
+                 submit: Callable[[dict], dict]) -> "tuple[int, int]":
+    """Send every queued payload once. Returns (sent, rejected).
 
-    A failed send KEEPS its file and writes the reason beside it - the send did
-    not happen, so a retry on the next round is correct, and nothing is lost
-    silently. An unreadable file is moved aside instead of retried forever.
+    The fate of a payload is decided by the ROOM'S ANSWER, never by whether the
+    wire held - the wire holding is how a refusal arrives at all. First field
+    use measured the difference: an ack saying ``not_writer`` was filed as
+    success, the payload deleted, ``sent: 1`` counted - a rejected message that
+    read as delivered to everyone watching the status file.
+
+    - ``committed``: the ack lands beside the payload and the payload leaves.
+    - ``not_writer``: the lease had lapsed; the message was turned away
+      unjudged, so the payload STAYS for the next round.
+    - anything else (refused, malformed, unsupported): the room judged it and
+      said no - retrying repeats the refusal forever, so the payload moves
+      aside as ``.rejected`` with the room's answer inside.
+
+    A TRANSPORT failure (submit raising) still keeps the payload and re-raises:
+    that send did not happen at all. An unreadable file is moved aside instead
+    of retried forever.
     """
     sent = 0
+    rejected = 0
     for path in sorted(paths.outbox.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -210,12 +239,24 @@ def drain_outbox(paths: SessionPaths, submit: Callable[[dict], dict]) -> int:
             path.with_suffix(".error").write_text(
                 f"{type(e).__name__}: {e}", encoding="utf-8")
             raise
+        status = str((ack or {}).get("status") or "")
+        if status == "not_writer":
+            path.with_suffix(".error").write_text(
+                json.dumps(ack, ensure_ascii=False), encoding="utf-8")
+            continue
+        if status != "committed":
+            path.with_suffix(".rejected").write_text(
+                json.dumps(ack, ensure_ascii=False), encoding="utf-8")
+            path.with_suffix(".error").unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+            rejected += 1
+            continue
         path.with_suffix(".ack").write_text(
             json.dumps(ack, ensure_ascii=False), encoding="utf-8")
         path.with_suffix(".error").unlink(missing_ok=True)
         path.unlink(missing_ok=True)
         sent += 1
-    return sent
+    return sent, rejected
 
 
 def mirror_frames(room_id: str, *, since_lamport: int = 0) -> List[Any]:
@@ -297,8 +338,11 @@ def run_session(
                 sleep(CONNECT_RETRY_PAUSE_S)
 
         started = time.time()
-        received = sent = 0
-        _write_status(paths, connected=True, since=started, received=0, sent=0)
+        received = sent = rejected = 0
+        renew_supported = True
+        last_renew = clock()
+        _write_status(paths, connected=True, since=started,
+                      received=0, sent=0, rejected=0)
 
         with paths.inbox.open("a", encoding="utf-8") as inbox:
             while True:
@@ -318,17 +362,57 @@ def run_session(
                     pass                        # a quiet room is not an error
                 except Exception as e:
                     _write_status(paths, connected=False, since=started,
-                                  received=received, sent=sent, last_error=str(e))
+                                  received=received, sent=sent, rejected=rejected,
+                                  last_error=str(e))
                     return 1
 
                 try:
-                    sent += drain_outbox(paths, lambda p: room.submit(p, timeout=30))
+                    _sent, _rejected = drain_outbox(
+                        paths, lambda p: room.submit(p, timeout=30))
+                    sent += _sent
+                    rejected += _rejected
                 except Exception as e:
                     _write_status(paths, connected=False, since=started,
-                                  received=received, sent=sent, last_error=str(e))
+                                  received=received, sent=sent, rejected=rejected,
+                                  last_error=str(e))
                     return 1
+
+                # Keep the lease alive while the line lives (contract C9). The
+                # host renews on successful submits only, and a conversation is
+                # read-think-answer - thinking outlasts the 90s TTL, so a quiet
+                # session lost its write right while connected and receiving.
+                if renew_supported and clock() - last_renew >= RENEW_INTERVAL_S:
+                    last_renew = clock()
+                    try:
+                        ack = room.submit({"kind": "renew"}, timeout=10) or {}
+                    except Exception as e:
+                        _write_status(paths, connected=False, since=started,
+                                      received=received, sent=sent,
+                                      rejected=rejected, last_error=str(e))
+                        return 1
+                    status = str(ack.get("status") or "")
+                    if status == "not_writer":
+                        # The lease is gone and this line cannot take it back -
+                        # exit, so a restart re-attaches cleanly and ITS cursor
+                        # decides the backlog. Limping on connected-but-mute
+                        # is exactly the state this keepalive exists to end.
+                        _write_status(paths, connected=False, since=started,
+                                      received=received, sent=sent,
+                                      rejected=rejected,
+                                      last_error="writer lease lost; "
+                                                 "restart the session")
+                        return 1
+                    if status != "renewed":
+                        # A host too old to know the verb refuses it once; from
+                        # here the session behaves as before the verb existed
+                        # (leases renew on submits only) instead of asking a
+                        # question the host will refuse every 30 seconds.
+                        renew_supported = False
+
                 _write_status(paths, connected=True, since=started,
-                              received=received, sent=sent)
+                              received=received, sent=sent, rejected=rejected,
+                              **({} if renew_supported
+                                 else {"lease_keepalive": "unsupported by host"}))
                 if once and quiet:
                     return 0
     except KeyboardInterrupt:

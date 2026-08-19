@@ -553,7 +553,13 @@ guest: everything it needs travels in the invitation, and the room's host serves
 rest itself. Two unauthenticated downloads exist for exactly this case:
 
 - `https://<host>:<port>/api/a2a/client.py` - a single-file room client, Python
-  standard library only (`examples/12_a2a_wire_peer.py` in the repository). It pins
+  standard library only (`examples/12_a2a_wire_peer.py` in the repository). Served
+  from the host's own checkout, so a guest that re-downloads it always holds the
+  client the host was built with. Its `wait` keeps a held line's writer lease
+  alive with the `renew` transport verb (asking an older host exactly once), its
+  `submit` keeps fanned-out frames that arrive while an ack is awaited instead of
+  dropping them, and `RoomConnection.renew()` is public for guests that hold a
+  line of their own. It pins
   the authority against the invitation's fingerprint, redeems the ticket, keeps the
   seat owner-only under `~/.vaf-a2a-guest/`, and speaks `join`, `read`, `wait`,
   `say`, `answer`, `report` and `leave`.

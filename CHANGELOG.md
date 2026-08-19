@@ -68,6 +68,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   fate: committed sends leave, an unauthorized send stays for the next round,
   and a judged refusal moves aside with the room's answer beside it, counted
   as `rejected`.
+- **The downloadable guest client holds a line without losing it.** The
+  single-file client a host serves (`/api/a2a/client.py`) now keeps its writer
+  lease alive during a long `wait` with the `renew` transport verb (asking a
+  host that predates the verb exactly once), exposes `RoomConnection.renew()`
+  for guests holding a line of their own, and no longer drops frames that
+  arrive while it awaits an ack for its own send - a message somebody sent in
+  that window was silently never seen. A guest gets all of this by simply
+  re-downloading the client from the host.
 - **`vaf a2a mission` and `vaf a2a introduce` stop denying remote rooms.**
   Both answered "there is no room on this machine" for a room the caller holds
   a seat in. Mission now reads from the join handshake (labeled as of joining)

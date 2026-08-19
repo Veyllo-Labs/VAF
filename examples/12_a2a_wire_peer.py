@@ -49,6 +49,7 @@ import os
 import socket
 import ssl
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -299,6 +300,10 @@ class RoomConnection:
         self.role = str(welcome.get("role") or "")
         self.seat = str(welcome.get("seat") or "") or None
         self.packet = welcome.get("welcome") if isinstance(welcome.get("welcome"), dict) else None
+        # Frames that arrived while an ack was being awaited. submit() used to
+        # DROP them - a message somebody sent while this side was confirming its
+        # own would silently never be seen. next_frame() drains this first.
+        self._buffer: list = []
 
     @classmethod
     def connect(cls, url: str, credential: str, ca_pem: str,
@@ -353,6 +358,8 @@ class RoomConnection:
 
     def next_frame(self, timeout=None):
         """The next live frame, or None once the connection ends."""
+        if self._buffer:
+            return self._buffer.pop(0)
         while True:
             raw = self.wire.recv_text(timeout=timeout)
             if raw is None:
@@ -366,7 +373,8 @@ class RoomConnection:
 
     def submit(self, payload: dict, timeout: float = 10.0) -> dict:
         """Send one payload, return the ack that answers it. Frames fanned out
-        for other senders may arrive in between; only the ack is awaited."""
+        for other senders while the ack is awaited are KEPT for next_frame(),
+        never dropped - a room keeps talking while this side confirms."""
         self.wire.send_text(json.dumps(payload, ensure_ascii=False))
         while True:
             try:
@@ -380,8 +388,25 @@ class RoomConnection:
                 message = json.loads(raw)
             except ValueError:
                 continue
-            if isinstance(message, dict) and message.get("kind") == "ack":
+            if not isinstance(message, dict):
+                continue
+            if message.get("kind") == "ack":
                 return message
+            self._buffer.append(message)
+
+    def renew(self, timeout: float = 10.0) -> dict:
+        """Keep the writer lease alive on a HELD connection.
+
+        The host renews a lease only on a successful submit, and a connection
+        that reads and thinks for longer than the 90 second lease TTL loses its
+        write right while staying connected. Holding a line, send this at least
+        every 90 seconds (25 is comfortable); the host answers
+        {"kind": "ack", "status": "renewed"}. A host too old to know the verb
+        answers with a refusal - take that ONE answer as "not spoken here" and
+        stop asking; such a host renews on submits only. One-shot commands
+        (connect, act, close) never need it: the close frees the lease.
+        """
+        return self.submit({"kind": "renew"}, timeout=timeout)
 
     def close(self) -> None:
         self.wire.close()
@@ -534,13 +559,30 @@ def cmd_wait(args) -> None:
     try:
         rows = fold_new(connection.backlog(), record, show_all=False)
         if not rows:
-            timeout = args.timeout if args.timeout and args.timeout > 0 else None
+            budget = args.timeout if args.timeout and args.timeout > 0 else None
+            deadline = (time.monotonic() + budget) if budget else None
+            # The wait holds the line, and a held line keeps its lease alive in
+            # slices: wait a slice, renew, wait on. Without it the lease lapsed
+            # after 90 quiet seconds while the connection stayed up. A host too
+            # old to know the verb refuses it once and is not asked again.
+            renew_spoken = True
             while True:
-                try:
-                    frame = connection.next_frame(timeout=timeout)
-                except TimeoutError:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
                     save_record(record)
                     _fail("nothing was said in time", 1)
+                slice_s = 25.0 if remaining is None else min(25.0, remaining)
+                try:
+                    frame = connection.next_frame(timeout=slice_s)
+                except TimeoutError:
+                    if renew_spoken:
+                        try:
+                            ack = connection.renew()
+                            if str(ack.get("status") or "") != "renewed":
+                                renew_spoken = False
+                        except Exception:
+                            pass
+                    continue
                 if frame is None:
                     save_record(record)
                     _fail(CLOSE_REASONS.get(connection.wire.close_code,

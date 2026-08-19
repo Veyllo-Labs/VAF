@@ -317,3 +317,70 @@ def test_the_client_runs_standalone(peer):
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0
     assert "join" in result.stdout
+
+
+# ── the held line: keepalive and no swallowed frames ───────────────────────
+
+class _ScriptedWire:
+    """A WireSocket stand-in: answers from a script, records what was sent."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.sent = []
+        self.close_code = 0
+
+    def send_text(self, text):
+        self.sent.append(json.loads(text))
+
+    def recv_text(self, timeout=None):
+        if not self.script:
+            raise TimeoutError()
+        return self.script.pop(0)
+
+    def close(self):
+        pass
+
+
+def _connection(peer, script):
+    return peer.RoomConnection(_ScriptedWire(script),
+                               {"kind": "welcome", "room": ROOM, "peer": "p-x",
+                                "role": "peer"})
+
+
+def test_submit_keeps_the_frames_that_arrive_while_it_waits(peer):
+    """MUTATION: drop non-ack messages in submit again.
+
+    A room keeps talking while this side confirms its own send. submit used to
+    consume and DISCARD every fanned-out frame that arrived before the ack -
+    a message somebody sent in that window was silently never seen.
+    """
+    say = json.dumps({"kind": "say", "id": "m-1", "body": {"text": "while you typed"}})
+    ack = json.dumps({"kind": "ack", "status": "committed"})
+    conn = _connection(peer, [say, ack])
+
+    answer = conn.submit({"kind": "say", "body": {"text": "mine"}})
+    assert answer["status"] == "committed"
+    kept = conn.next_frame(timeout=0)
+    assert kept and kept["id"] == "m-1", "the concurrent frame must be kept, not eaten"
+
+
+def test_renew_speaks_the_transport_verb_and_returns_the_answer(peer):
+    """MUTATION: point renew at a frame kind instead of the transport verb.
+
+    The verb is what keeps a held line's writer lease alive (protocol contract
+    C9); a frame kind would land in the store and be refused by role rules.
+    """
+    conn = _connection(peer, [json.dumps({"kind": "ack", "status": "renewed"})])
+    answer = conn.renew()
+    assert answer["status"] == "renewed"
+    assert conn.wire.sent == [{"kind": "renew"}]
+
+
+def test_wait_renews_between_slices_and_respects_an_old_host(peer):
+    """The wait loop holds the line in slices and renews between them; a host
+    that refuses the verb once is not asked again (source pin - the loop is
+    wired through argparse and files, so its shape is pinned where it lives)."""
+    source = WIRE.read_text(encoding="utf-8")
+    wait = source.split("def cmd_wait")[1][:2400]
+    assert "connection.renew()" in wait
+    assert '!= "renewed"' in wait and "renew_spoken = False" in wait

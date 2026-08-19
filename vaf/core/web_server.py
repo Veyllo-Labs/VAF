@@ -8255,7 +8255,10 @@ async def a2a_workspace_list(room_id: str, request: Request,
         for path in sorted(workspace.rglob("*")):
             if not path.is_file():
                 continue
-            rows.append({"path": str(path.relative_to(workspace)),
+            # POSIX on the wire, whatever this host's OS: the listed path is
+            # what a remote client hands back to fetch, and a Windows host
+            # would otherwise list `sub\a.bin` for a file pushed as `sub/a.bin`.
+            rows.append({"path": path.relative_to(workspace).as_posix(),
                          "size": path.stat().st_size,
                          "mtime": path.stat().st_mtime})
             if len(rows) >= _A2A_WORKSPACE_LIST_CAP:
@@ -8298,7 +8301,8 @@ async def a2a_workspace_push(room_id: str, request: Request,
         target = _a2a_workspace_member_path(workspace, path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(body)
-        return {"room": room_id, "path": str(target.relative_to(workspace.resolve())),
+        return {"room": room_id,
+                "path": target.relative_to(workspace.resolve()).as_posix(),
                 "size": len(body)}
 
     return await asyncio.to_thread(_push)

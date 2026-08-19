@@ -619,8 +619,10 @@ speak to three seat-authenticated endpoints on the host -
 `POST /api/a2a/rooms/{room_id}/file`. The seat rides the query string for the same
 reason the socket's credential does (the integrated proxy strips Authorization
 headers), which is the same log exposure the ticket already has. Uploads are capped
-(25 MB), paths are relative and contained to the workspace (a `..` or a symlink
-pointing out is refused), and DELETING over the wire does not exist on purpose:
+(25 MB), paths are relative, POSIX-form on the wire whatever the host's OS
+(a Windows host lists `sub/a.bin`, never `sub\a.bin`), and contained to the
+workspace (a `..` or a symlink pointing out is refused), and DELETING over the
+wire does not exist on purpose:
 destruction of the shared folder stays with the members on the machine that owns
 it. The convention after a push is one `say` naming where the file landed - there
 is deliberately no file frame kind.

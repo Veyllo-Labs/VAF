@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A room's shared folder lists the same paths on every OS.** On a Windows
+  host, the seat-authenticated file listing (and the push answer) rendered
+  relative paths with backslashes, so a file pushed as `sub/a.bin` came back
+  as `sub\a.bin` - a name the fetch endpoint on another machine would then
+  miss. Paths on the wire are POSIX now, whatever the host runs on.
 - **The update dialog now knows how the update ended.** Updating from
   Settings -> Update and Repair used to show a spinner for as long as ten
   minutes with no verdict: the dialog watched the version only through the web

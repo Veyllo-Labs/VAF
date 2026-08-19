@@ -1762,7 +1762,9 @@ def _evidence_grounded(details: str, pool: str, min_chars: int) -> bool:
 # fail-OPEN on any error so a question is never lost to the gate.
 
 def _cosine(a: List[float], b: List[float]) -> float:
-    """Cosine similarity with DEFENSIVE normalization — embed_sync does NOT L2-normalize MiniLM vectors."""
+    """Cosine similarity with DEFENSIVE normalization - embed_sync only
+    L2-normalizes for the E5 family, so vectors here may arrive unnormalized
+    (MiniLM and custom models)."""
     try:
         import numpy as _np
         va = _np.asarray(a, dtype=_np.float32)

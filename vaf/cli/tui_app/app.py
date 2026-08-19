@@ -426,6 +426,7 @@ class VafApp(App):
         self._bridge.begin_stopping()
 
     def _tasks_loop(self) -> None:
+        maint_was_active = False
         while not self._tasks_stop.wait(1.5):
             entries = self._bridge.tasks_snapshot()
             try:
@@ -433,6 +434,26 @@ class VafApp(App):
                     self.query_one("#tasksline", TasksLine).set_tasks, entries)
             except Exception:
                 return                        # the app is gone; so is the poll
+            # Machine-level maintenance (memory re-embed): announce start and
+            # finish as notifications, counts only. Deliberately NOT a percent
+            # bar (see the deletion note in widgets.py) - though unlike a
+            # sub-agent run this job HAS an honest total, the counts style
+            # keeps the TUI's one progress language.
+            try:
+                from vaf.core.maintenance_state import MAINTENANCE
+                snap = MAINTENANCE.snapshot()
+                if snap["active"] and not maint_was_active:
+                    self.call_from_thread(
+                        self.notify,
+                        f"database migration running in the background "
+                        f"({snap['done']}/{snap['total']})", timeout=6.0)
+                elif maint_was_active and not snap["active"]:
+                    msg = ("database migration incomplete - see logs/memory.log"
+                           if snap["error"] else "database migration complete")
+                    self.call_from_thread(self.notify, msg, timeout=6.0)
+                maint_was_active = snap["active"]
+            except Exception:
+                pass
 
     # helpers ------------------------------------------------------------------------
     @property

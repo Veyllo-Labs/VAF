@@ -917,6 +917,18 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         run_once()
     except Exception:
         pass
+    # Embedding-model reconcile, same every-lane rule (spawns its worker and
+    # returns; progress lands in the status file / maintenance state).
+    try:
+        from vaf.memory.reembed import ensure_embedding_model_current, read_status
+        ensure_embedding_model_current()
+        _reembed_status = read_status()
+        if _reembed_status and _reembed_status.get("active"):
+            UI.info("Database migration running in the background "
+                    f"({_reembed_status.get('done', 0)}/{_reembed_status.get('total', 0)} rows); "
+                    "memory search stays available.")
+    except Exception:
+        pass
 
     try:
         from vaf.cli.tui import TUI
@@ -2601,6 +2613,17 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
     try:
         from vaf.core.at_rest_migration import run_once
         run_once()
+    except Exception:
+        pass
+    # Embedding-model reconcile, same every-lane rule.
+    try:
+        from vaf.memory.reembed import ensure_embedding_model_current, read_status
+        ensure_embedding_model_current()
+        _reembed_status = read_status()
+        if _reembed_status and _reembed_status.get("active"):
+            UI.info("Database migration running in the background "
+                    f"({_reembed_status.get('done', 0)}/{_reembed_status.get('total', 0)} rows); "
+                    "memory search stays available.")
     except Exception:
         pass
 

@@ -1416,6 +1416,12 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
         run_once()
     except Exception as _mig_err:
         boot_tui.info(f"At-rest migration skipped: {_mig_err}")
+    # Embedding-model reconcile, same every-lane rule as run_once above.
+    try:
+        from vaf.memory.reembed import ensure_embedding_model_current
+        ensure_embedding_model_current()
+    except Exception as _reembed_err:
+        boot_tui.info(f"Embedding-model reconcile skipped: {_reembed_err}")
 
     # The service stack (memory DB, sandbox, speech): the tray starts it and
     # STOPS it on quit, so a terminal-only start used to run against a dead

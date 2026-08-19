@@ -70,6 +70,17 @@ def _log_ingest_profile(profile_id: int, stage: str, **fields: Any) -> None:
     append_domain_log("rag", f"INGEST_PROFILE id={profile_id} stage={stage} rss_mb={_rss_mb():.2f} {extras}".strip())
 
 
+def _memory_summary_text(content: str, tags) -> str:
+    """The canonical text behind a memory-level embedding: content head + tags.
+
+    Single source for every writer of Memory.embedding (ingest, update,
+    re-embed jobs). Divergent formulas silently split the memory-level vector
+    space: the update path used title+tags for a while, which embedded a
+    deliberately content-free label instead of the fact itself.
+    """
+    return f"{(content or '')[:256]} {' '.join(tags or [])}"
+
+
 def _tokenize_lexical_query(query: str) -> List[str]:
     # Umlauts/ß included: without them "können" tokenized to "k"+"nnen" and
     # German names like "Müller" were unfindable.
@@ -271,11 +282,12 @@ class RagPipeline:
         # would be meaningless for graph similarity. (Embeddings are always
         # plaintext-derived - the chunk embeddings already encode the full
         # content, so this adds no new exposure.)
-        # Note: Only E5 models need prefix; MiniLM works without
-        model_name = self.embeddings.model_name or ""
-        use_prefix = "e5" in model_name.lower()
-        summary = f"{content[:256]} {' '.join(metadata.get('tags', []))}"
-        memory_embedding = await self.embeddings.embed(summary, prefix="passage" if use_prefix else None)
+        # The prefix is passed unconditionally: EmbeddingService applies it
+        # only for models that need it (the E5 family), so this is the single
+        # place that knows WHICH side of the asymmetry this text is on, not
+        # whether the active model cares.
+        summary = _memory_summary_text(content, metadata.get("tags", []))
+        memory_embedding = await self.embeddings.embed(summary, prefix="passage")
         _log_ingest_profile(profile_id, "after_memory_embedding")
         
         # 3. Create memory record
@@ -285,6 +297,7 @@ class RagPipeline:
             nonce=nonce,
             meta=metadata, # Fixed: was metadata=metadata, but model uses 'meta'
             embedding=memory_embedding,
+            embedding_model=self.embeddings.model_name,
             parent_id=parent_id,
             user_scope_id=user_scope_id
         )
@@ -300,7 +313,7 @@ class RagPipeline:
         if chunks_data:
             chunk_texts = [c["text"] for c in chunks_data]
             _log_ingest_profile(profile_id, "before_chunk_embedding_batch", chunk_texts=len(chunk_texts))
-            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage" if use_prefix else None)
+            chunk_embeddings = await self.embeddings.embed_batch(chunk_texts, prefix="passage")
             _log_ingest_profile(profile_id, "after_chunk_embedding_batch", embeddings=len(chunk_embeddings))
             
             for chunk_data, embedding in zip(chunks_data, chunk_embeddings):
@@ -311,6 +324,7 @@ class RagPipeline:
                     # plaintext above); readers go through decrypt_field.
                     text=encrypt_field(chunk_data["text"]),
                     embedding=embedding,
+                    embedding_model=self.embeddings.model_name,
                     chunk_index=chunk_data["index"],
                     start_char=chunk_data["start_char"],
                     end_char=chunk_data["end_char"],
@@ -389,10 +403,9 @@ class RagPipeline:
         from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
         if len(query) > MAX_EMBED_INPUT_CHARS:
             query = query[:MAX_EMBED_INPUT_CHARS].rstrip()
-        # Embed query - NO prefix for MiniLM (only E5 needs prefix)
-        model_name = self.embeddings.model_name or ""
-        use_prefix = "e5" in model_name.lower()
-        query_embedding = await self.embeddings.embed(query, prefix="query" if use_prefix else None)
+        # Prefix is applied by EmbeddingService only for models that need it
+        # (E5 family); for others it is a no-op.
+        query_embedding = await self.embeddings.embed(query, prefix="query")
 
         # Debug logging
         logger.info(f"RAG search: query='{query[:50]}...', user_scope_id={user_scope_id}, threshold={threshold}")
@@ -840,13 +853,12 @@ Always cite which source(s) you used."""
             memory.encrypted_content = encrypted_content
             memory.nonce = nonce
             
-            # Update preview
+            # No meta.preview write: it was an UNENCRYPTED copy of the content
+            # head, removed everywhere as an at-rest leak (migration v3 drops
+            # it) - re-adding it here would regress that fix on every update.
             if not memory.meta:
                 memory.meta = {}
-            memory.meta["preview"] = content[:200].strip().replace('\n', ' ')
-            if len(content) > 200:
-                memory.meta["preview"] += "..."
-            
+
             # Delete old chunks
             await self.db.execute(
                 Chunk.__table__.delete().where(Chunk.memory_id == memory_id)
@@ -863,16 +875,21 @@ Always cite which source(s) you used."""
                         memory_id=memory.id,
                         text=encrypt_field(chunk_data["text"]),
                         embedding=embedding,
+                        embedding_model=self.embeddings.model_name,
                         chunk_index=chunk_data["index"],
                         start_char=chunk_data["start_char"],
                         end_char=chunk_data["end_char"],
                         user_scope_id=memory.user_scope_id,
                     )
                     self.db.add(chunk)
-            # Update memory embedding
+            # Update memory embedding with the canonical formula (content head
+            # + tags, same as ingest). This path embedded title+tags for a
+            # while, but titles are deliberately content-free labels, so that
+            # vector carried no signal about the fact it indexed.
             meta = memory.meta or {}
-            summary = f"{meta.get('title', '')} {' '.join(meta.get('tags', []))}"
+            summary = _memory_summary_text(content, meta.get("tags", []))
             memory.embedding = await self.embeddings.embed(summary, prefix="passage")
+            memory.embedding_model = self.embeddings.model_name
         
         memory.updated_at = datetime.utcnow()
         await self.db.flush()

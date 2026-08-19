@@ -58,7 +58,7 @@ Settings are available in:
 |---------|---------|-------------|
 | `memory_enabled` | `true` | Enable/disable memory system |
 | `memory_db_url` | `postgresql://...` | Database connection URL |
-| `memory_embedding_model` | `all-MiniLM-L6-v2` | Sentence-transformers model (384-dim) |
+| `memory_embedding_model` | `intfloat/multilingual-e5-small` | Embedding model (384-dim, multilingual); existing stores are re-embedded automatically on model change |
 | `memory_chunk_size` | `512` | Chunk size in tokens |
 | `memory_chunk_overlap` | `50` | Overlap between chunks |
 | `memory_auto_connect_threshold` | `0.7` | Similarity threshold for auto-connections |

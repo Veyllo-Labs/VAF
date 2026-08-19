@@ -24,7 +24,7 @@ from typing import Awaitable, Callable, List, Tuple
 
 from sqlalchemy import text
 
-DB_SCHEMA_VERSION = 3
+DB_SCHEMA_VERSION = 4
 
 
 async def _v1_memories_user_scope_id(conn) -> None:
@@ -116,11 +116,35 @@ async def _v3_encrypt_chunks_and_strip_meta_leaks(conn) -> None:
     """))
 
 
+async def _v4_stamp_embedding_model(conn) -> None:
+    """Backfill the embedding_model stamp on pre-stamp rows.
+
+    Every vector written before the stamp column existed came from the
+    then-only wired model, all-MiniLM-L6-v2, so legacy rows get that literal.
+    Installs that configured a custom model are stamped the same literal; that
+    is inert, because the re-embed startup hook refuses to act on any install
+    whose configured model is neither the old nor the target default.
+    Idempotent via the IS NULL guard; only rows that actually carry a vector
+    are stamped (embedding IS NOT NULL), so a stamp never claims a model for
+    a vectorless row. The column is added here rather than left to the generic
+    reconcile: ordered migrations run BEFORE the reconcile phase, and the
+    backfill must land in the same startup as the column (the v2 pattern).
+    """
+    for table in ("memories", "chunks"):
+        await conn.execute(text(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS embedding_model TEXT NULL"))
+        await conn.execute(text(f"""
+            UPDATE {table} SET embedding_model = 'all-MiniLM-L6-v2'
+            WHERE embedding_model IS NULL AND embedding IS NOT NULL
+        """))
+
+
 # Applied in order on every startup; each must be idempotent (see module docstring).
 DB_MIGRATIONS: List[Tuple[int, Callable[[object], Awaitable[None]]]] = [
     (1, _v1_memories_user_scope_id),
     (2, _v2_chunks_user_scope_id_rls),
     (3, _v3_encrypt_chunks_and_strip_meta_leaks),
+    (4, _v4_stamp_embedding_model),
 ]
 
 

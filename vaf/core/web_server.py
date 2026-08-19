@@ -1327,6 +1327,20 @@ async def startup_event():
                 log("WebServer", f"At-rest migration: {report}")
         except Exception as e:
             log("WebServer", f"At-rest migration skipped: {e}")
+        # Embedding-model reconcile (returns immediately; worker + waiting run
+        # on its own thread). Wired into every start lane like run_once above.
+        try:
+            from vaf.memory.reembed import ensure_embedding_model_current
+            ensure_embedding_model_current()
+        except Exception as e:
+            log("WebServer", f"Embedding-model reconcile skipped: {e}")
+        # Progress lane for machine-level maintenance jobs (re-embed today):
+        # polls the shared state, frames go out only while a job is active.
+        try:
+            from vaf.core.web_interface import start_maintenance_broadcast
+            start_maintenance_broadcast()
+        except Exception as e:
+            log("WebServer", f"Maintenance broadcast not started: {e}")
 
     # Whare Wananga EAGER: opt-in background scanner that proactively trains safe, configured,
     # not-yet-learned tools (off by default; tolerates a not-yet-built agent). Guarded.
@@ -4465,6 +4479,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "type": "config_update",
                         "config": cfg
                     })
+
+                elif type == "get_maintenance_status":
+                    # Late-joiner snapshot: a client connecting mid-job has
+                    # missed every pushed maintenance_progress frame.
+                    from vaf.core.web_interface import maintenance_snapshot_frame
+                    await websocket.send_json(maintenance_snapshot_frame())
 
                 elif type == "get_models":
                     # Scan models directory for .gguf files

@@ -137,7 +137,7 @@ Additional settings in `~/.vaf/config.json`:
     "memory_enabled": true,
     "memory_rag_refine_query": true,
     "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",
-    "memory_embedding_model": "all-MiniLM-L6-v2",
+    "memory_embedding_model": "intfloat/multilingual-e5-small",
     "memory_auto_connect_threshold": 0.7,
     "memory_chunk_size": 512,
     "memory_chunk_overlap": 50,
@@ -467,6 +467,30 @@ container running and connects via `memory_db_owner_url` (the RLS-restricted
 app role cannot see the whole store). Take a `pg_dump` first for a rollback
 path.
 
+### Embedding-Model Migration (`vaf memory reembed`)
+
+Vectors from two different embedding models are mutually meaningless even at
+the same dimension, and the dimension check cannot see that. Every memory and
+chunk therefore carries an `embedding_model` stamp, and `vaf memory reembed`
+re-embeds every row whose stamp differs from the target model:
+
+```bash
+vaf memory reembed --dry-run   # count what would change; writes nothing
+vaf memory reembed             # decrypt, re-embed, re-stamp (resumable)
+```
+
+The app start runs this automatically when the configured model and the
+stored vectors diverge (a background worker process; the Web UI shows a
+progress banner). Until the whole store is migrated, queries keep using the
+model the vectors were written with - the configured model is only switched
+over when the pending count reaches zero, so search never runs in a mixed
+vector space. Rows the current encryption key cannot open are stamped
+`unreadable` and skipped (they cannot block the migration); after a
+successful `vaf memory rekey`, `--include-unreadable` retries them. The
+command is idempotent and keyset-paginated: a killed run resumes at the
+stamps. Like `rekey`, it connects via `memory_db_owner_url`. Progress is
+logged to `memory.log` as `[REEMBED]` lines.
+
 ## Redis Caching
 
 Redis provides a high-performance caching layer for the Memory System:
@@ -512,9 +536,13 @@ VAF uses a highly optimized embedding pipeline to minimize resource usage while 
   - **Performance:**
     - **RAM Usage:** ~200 MB (vs. ~1.5 GB with PyTorch).
     - **Startup Time:** < 1 second (vs. 10-200 seconds depending on system load).
-    - **Inference:** ~100ms per query on standard CPUs.
-- **Model:** `Xenova/all-MiniLM-L6-v2` (Quantized)
-  - 384-dimensional dense vectors.
+    - **Inference:** on the order of 100 ms per query on standard CPUs (e5-small is somewhat slower than MiniLM; both stay interactive).
+- **Model:** `Xenova/multilingual-e5-small` (Quantized; the ONNX export of the
+  default `intfloat/multilingual-e5-small`)
+  - 384-dimensional dense vectors, multilingual (100+ languages).
+  - Asymmetric retrieval prefixes ("query: " / "passage: ") are applied by the
+    embedding service automatically; call sites only declare which side of the
+    asymmetry a text is on.
   - Automatically downloaded from HuggingFace Hub on first launch.
 - **Tokenizer:** Rust-based `tokenizers` library for sub-millisecond tokenization.
 
@@ -524,8 +552,12 @@ VAF uses a highly optimized embedding pipeline to minimize resource usage while 
 3.  **Non-Blocking:** Embedding operations are offloaded to avoid blocking the main event loop, ensuring the UI remains responsive even during heavy indexing.
 
 ### Supported Models
-While `all-MiniLM-L6-v2` is the default, the system is compatible with other ONNX-exported models.
-- **Multilingual:** `intfloat/multilingual-e5-small` (requires `memory_embedding_model` config update).
+While `intfloat/multilingual-e5-small` is the default, the system is compatible with other ONNX-exported models.
+- **English-only:** `all-MiniLM-L6-v2` (the previous default; smaller and slightly faster).
+- Changing `memory_embedding_model` strands existing vectors in the old model's
+  space; every row carries an `embedding_model` stamp, and the app start
+  re-embeds the store automatically before switching queries over (see
+  "Embedding-Model Migration" above).
 
 ## Docker Management
 
@@ -594,7 +626,7 @@ and `vaf run` start the stack when Docker and the compose file are present
 
 ### Embedding Model Slow to Load
 
-The embedding model is downloaded on first use (~90MB). Subsequent loads use the cached model.
+The embedding model is downloaded on first use (the quantized multilingual-e5-small ONNX export, roughly 113 MB). Subsequent loads use the cached model.
 
 ### Memory Not Appearing in Graph
 

@@ -70,7 +70,10 @@ waiting for a stable `X.Y.Z`.
   `vaf/memory/db_migrations.py` as an idempotent ordered migration. Changing the
   embedding model to a different **dimension** is a breaking change with no in-place
   migration: the reconcile detects and loudly reports the mismatch, and the memory
-  store must be re-embedded/reset.
+  store must be re-embedded/reset. A SAME-dimension model change is invisible to that
+  check and equally breaking for retrieval; the per-row `embedding_model` stamp is the
+  detector there, and the reembed startup hook migrates the store automatically
+  (`vaf/memory/reembed.py`) while queries stay on the old model until it completes.
 
 ## Cutting a release
 

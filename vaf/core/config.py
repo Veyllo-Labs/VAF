@@ -531,7 +531,10 @@ class Config:
         "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # App DATA connection (per-user). At the RLS cutover this becomes the non-superuser role.
         "memory_db_owner_url": "",                                  # Owner/superuser DSN for DDL/migrations/global stats. Empty -> falls back to memory_db_url (correct before cutover); at cutover set this to the OWNER dsn while memory_db_url switches to the non-super role.
         "memory_encryption_key": "",                               # AES-256 key (Base64). Minted once when a CLEANLY-PARSED config genuinely lacks it; an unreadable config refuses to mint (vaf/memory/crypto.py)
-        "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model
+        # Multilingual by default; the reembed startup hook migrates existing
+        # stores and PINS the previous model until every row is re-embedded,
+        # so flipping this default never mixes vector spaces (vaf/memory/reembed.py).
+        "memory_embedding_model": "intfloat/multilingual-e5-small",
         "memory_auto_connect_threshold": 0.7,                      # Cosine similarity threshold for auto-connections
         "memory_chunk_size": 512,                                  # Chunk size in tokens
         "memory_chunk_overlap": 50,                                # Chunk overlap in tokens

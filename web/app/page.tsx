@@ -2385,6 +2385,17 @@ function VAFDashboardContent() {
     }>({ status: 'idle' });
     const [modelPreviewData, setModelPreviewData] = useState<{ repo_id: string; card_content?: string; gguf_files: { filename: string; size_bytes: number }[]; error?: string } | null>(null);
     const [downloadToast, setDownloadToast] = useState<{ show: boolean; message: string; success: boolean }>({ show: false, message: '', success: false });
+    // Machine-level maintenance job (memory re-embed today; generic by `kind`).
+    // No sessionId on these frames: the job is machine-wide, every client shows it.
+    const [maintenanceStatus, setMaintenanceStatus] = useState<{
+        active: boolean;
+        kind: string;
+        done: number;
+        total: number;
+        pct: number;
+        phase: string;
+        error: string;
+    } | null>(null);
     const [apiModels, setApiModels] = useState<Record<string, string[]>>({});
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
@@ -3759,6 +3770,7 @@ function VAFDashboardContent() {
             socket.send(JSON.stringify({ type: 'get_skills' }));    // Fetch skills (second routing tier)
             socket.send(JSON.stringify({ type: 'get_tools' }));     // Fetch tools for reference
             socket.send(JSON.stringify({ type: 'speaker_profile_get' })); // Voice profile (call button offers enrollment without one)
+            socket.send(JSON.stringify({ type: 'get_maintenance_status' })); // Late joiner: a running migration pushed its frames before we connected
             // Reconnect: a panel still showing "running" may be describing a run that ended
             // while we were disconnected - every event in that window went to nobody.
             // Deferred so the connection has been subscribed to a session first; asking in
@@ -5402,6 +5414,31 @@ function VAFDashboardContent() {
                     setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
                     if (data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 3000);
                     if (!data.success) setTimeout(() => setDownloadModelStatus({ status: 'idle' }), 5000);
+                }
+                else if (data.type === 'maintenance_progress') {
+                    // Field-by-field on purpose (an unforwarded field is silently dropped).
+                    const active = data.active === true;
+                    const next = {
+                        active,
+                        kind: String(data.kind ?? ''),
+                        done: typeof data.done === 'number' ? data.done : 0,
+                        total: typeof data.total === 'number' ? data.total : 0,
+                        pct: typeof data.pct === 'number' ? data.pct : 0,
+                        phase: String(data.phase ?? ''),
+                        error: String(data.error ?? ''),
+                    };
+                    // The late-joiner snapshot answers even when nothing ever ran;
+                    // an inactive frame with no kind is "no job", not "job finished".
+                    if (!active && !next.kind) {
+                        setMaintenanceStatus(null);
+                    } else {
+                        setMaintenanceStatus(next);
+                        if (!active) {
+                            // Completed (or failed): keep the closing state readable, then clear.
+                            setTimeout(() => setMaintenanceStatus(prev =>
+                                prev && !prev.active ? null : prev), next.error ? 15000 : 6000);
+                        }
+                    }
                 }
                 else if (data.type === 'api_models' || data.type === 'api_models_list') {
                     setApiModels(prev => ({ ...prev, [data.provider]: data.models }));
@@ -8282,6 +8319,50 @@ function VAFDashboardContent() {
                                             >
                                                 Cancel
                                             </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Maintenance banner (machine-level jobs, e.g. the memory re-embed
+                                    migration). Same markup family as the model download banner; no
+                                    cancel: the job is resumable and finishing it is the safe state. */}
+                                {maintenanceStatus && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                                                    <span className="truncate">
+                                                        {maintenanceStatus.error
+                                                            ? tMain('maintenanceFailed')
+                                                            : maintenanceStatus.active
+                                                                ? (maintenanceStatus.kind === 'memory_reembed'
+                                                                    ? tMain('maintenanceReembedTitle')
+                                                                    : tMain('maintenanceGenericTitle'))
+                                                                : tMain('maintenanceDone')}
+                                                    </span>
+                                                    {maintenanceStatus.total > 0 && (
+                                                        <span className="shrink-0 ml-2">{maintenanceStatus.done}/{maintenanceStatus.total}</span>
+                                                    )}
+                                                </div>
+                                                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                                    <div
+                                                        className={cn(
+                                                            "h-full rounded-full transition-[width] duration-300",
+                                                            // dark: literal app-white — the token remap turns
+                                                            // bg-gray-900/bg-white both dark, so the fill would
+                                                            // vanish on the dark track.
+                                                            maintenanceStatus.error ? "bg-red-600" : "bg-gray-900 dark:bg-[#ececec]"
+                                                        )}
+                                                        style={{ width: `${maintenanceStatus.active ? (maintenanceStatus.pct ?? 0) : 100}%` }}
+                                                    />
+                                                </div>
+                                                {maintenanceStatus.active && (
+                                                    <div className="mt-1 text-xs font-medium text-amber-500">
+                                                        {tMain('maintenanceWait')}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}

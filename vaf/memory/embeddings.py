@@ -198,26 +198,42 @@ class OnnxEmbeddingModel:
         
         return sum_embeddings / sum_mask
 
-def get_model():
+# Models with a known ONNX export compatible with OnnxEmbeddingModel's file
+# layout (onnx/model_quantized.onnx + tokenizer.json + config.json). Keeping a
+# supported model in this map is what keeps the documented ~200 MB RAM profile
+# true for it; an unmapped value falls back to the PyTorch stack (~1.5 GB).
+_ONNX_MODEL_MAP = {
+    "all-MiniLM-L6-v2": "Xenova/all-MiniLM-L6-v2",
+    "intfloat/multilingual-e5-small": "Xenova/multilingual-e5-small",
+}
+
+
+def _resolve_model(config_value: str) -> tuple:
+    """Resolve a configured model name to (model_id, use_onnx)."""
+    onnx_id = _ONNX_MODEL_MAP.get(config_value)
+    if onnx_id:
+        return onnx_id, True
+    return config_value, False
+
+
+def get_model(model_id: Optional[str] = None):
     """
     Get or load the embedding model (ONNX preferred).
 
     THREAD-SAFE: Uses lock to prevent multiple threads from loading the model simultaneously.
     This prevents memory leaks from multiple model instances being created.
+
+    model_id: explicit model to load instead of the configured one, resolved
+    through the same ONNX map. The global stays a SINGLE slot: asking for a
+    different model than the loaded one replaces it. In-process callers must
+    keep sharing the configured model; the explicit parameter exists for
+    dedicated worker processes (e.g. the re-embed job) that run one model
+    for their whole lifetime.
     """
     global _model, _model_name
 
-    # Default to Xenova's optimized ONNX version of MiniLM
-    default_onnx = "Xenova/all-MiniLM-L6-v2"
-    config_model = Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
-
-    # If config is default, switch to ONNX ID
-    if config_model == "all-MiniLM-L6-v2":
-        model_id = default_onnx
-        use_onnx = True
-    else:
-        model_id = config_model
-        use_onnx = False  # Fallback to PyTorch for custom models
+    config_model = model_id or Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
+    model_id, use_onnx = _resolve_model(config_model)
 
     # Fast path: model already loaded (no lock needed for read)
     if _model is not None and _model_name == model_id:
@@ -274,10 +290,18 @@ class EmbeddingService:
     CACHE_SIZE = 1000
     
     def __init__(self, model_name: Optional[str] = None):
-        self.model_name = model_name or Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
+        # An explicit model_name pins this instance to that model (worker
+        # processes); without it the instance follows the config LIVE via the
+        # property below, so a config flip switches prefix/normalize decisions
+        # and the model handed out by get_model() without recreating services.
+        self._model_override = model_name
         self._cache: Dict[str, List[float]] = {}
         self._cache_keys: List[str] = []
         self._redis_cache = None
+
+    @property
+    def model_name(self) -> str:
+        return self._model_override or Config.get("memory_embedding_model", "all-MiniLM-L6-v2")
     
     def _get_redis_cache(self):
         if self._redis_cache is None:
@@ -299,8 +323,14 @@ class EmbeddingService:
         if prefix.strip().lower() == "passage": return "passage: " + text
         return text
 
+    def _cache_material(self, input_text: str) -> str:
+        # The model is part of the cache identity: two models produce
+        # incompatible vectors for the same text, and both cache layers
+        # (in-process and Redis) outlive a model switch.
+        return f"{self.model_name}\x00{input_text}"
+
     def _get_cache_key(self, text: str) -> str:
-        return hashlib.sha256(text.encode()).hexdigest()[:16]
+        return hashlib.sha256(self._cache_material(text).encode()).hexdigest()[:16]
 
     def _add_to_cache(self, text: str, embedding: List[float]):
         key = self._get_cache_key(text)
@@ -350,7 +380,7 @@ class EmbeddingService:
         append_domain_log("memory", f"[EMBED_MISS] Starting encode for '{input_text[:30]}...'")
         
         t_load_start = time.time()
-        model = get_model()
+        model = get_model(self._model_override)
         t_load_end = time.time()
         if t_load_end - t_load_start > 0.1:
              append_domain_log("memory", f"[EMBED_LOAD] Model access took {t_load_end - t_load_start:.4f}s")
@@ -407,19 +437,19 @@ class EmbeddingService:
         redis_cache = self._get_redis_cache()
         if redis_cache:
             try:
-                cached = await redis_cache.get_embedding(input_text)
+                cached = await redis_cache.get_embedding(self._cache_material(input_text))
                 if cached:
                     self._add_to_cache(input_text, cached)
                     return cached
             except Exception:
                 pass
-                
+
         loop = asyncio.get_event_loop()
         embedding = await loop.run_in_executor(None, lambda: self.embed_sync(text, prefix=prefix))
-        
+
         if redis_cache:
             try:
-                asyncio.create_task(redis_cache.set_embedding(input_text, embedding))
+                asyncio.create_task(redis_cache.set_embedding(self._cache_material(input_text), embedding))
             except Exception:
                 pass
         return embedding

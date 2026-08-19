@@ -8,6 +8,11 @@ the previous key are decrypted with it and re-encrypted with the current one.
 The old key is read from a config backup FILE and never printed or persisted
 anywhere by this command.
 
+`reembed` migrates the stored vectors to another embedding model: rows whose
+embedding_model stamp differs from the target are decrypted, re-embedded and
+re-stamped. The app start runs it automatically when config and store diverge;
+the command exists for manual runs, dry runs and unreadable-row retries.
+
 `cross-chat` is a dry run of the Cross Chat Hint lane: it prints exactly what a
 turn with that question would put into the prompt, and why. Unit tests cannot
 tell you whether the lane finds the chat you actually meant; this can.
@@ -119,3 +124,76 @@ def rekey(
                    "untouched - a second backup with another key may exist.")
         raise typer.Exit(2)
     UI.success("Rekey dry-run complete." if dry_run else "Rekey complete.")
+
+
+@app.command()
+def reembed(
+    target_model: str = typer.Option(
+        None, "--target-model",
+        help="Embedding model to migrate the store to (default: the managed target)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Count what would change; write nothing"),
+    include_unreadable: bool = typer.Option(
+        False, "--include-unreadable",
+        help="Retry rows previously stamped unreadable (after a successful rekey)"),
+    auto: bool = typer.Option(
+        False, "--auto", hidden=True,
+        help="Machine mode for the startup hook: quiet, status-file driven"),
+    status_file: Path = typer.Option(
+        None, "--status-file", hidden=True,
+        help="Write progress snapshots to this JSON file"),
+):
+    """Re-embed memories/chunks whose vectors were written by another embedding model."""
+    import asyncio
+
+    from vaf.memory.reembed import (TARGET_EMBEDDING_MODEL, lock_file_path,
+                                    reembed_store)
+
+    target = target_model or TARGET_EMBEDDING_MODEL
+
+    # One re-embed at a time, across processes (startup hook + manual CLI).
+    from filelock import FileLock, Timeout
+    lock_path = lock_file_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(str(lock_path))
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        if not auto:
+            UI.info("A re-embed run is already active (see the app's progress "
+                    "banner or logs/memory.log [REEMBED] lines).")
+        raise typer.Exit(0)
+
+    progress_cb = None
+    if not auto and not dry_run:
+        from vaf.cli.tui import TUI
+        tui = TUI()
+
+        def progress_cb(done: int, total: int) -> None:
+            # An honest total exists here (row count), unlike sub-agent runs.
+            tui.progress_bar(done, max(total, 1), label="Re-embedding memory store")
+
+    try:
+        report = asyncio.run(reembed_store(
+            target, dry_run=dry_run, include_unreadable=include_unreadable,
+            status_file=status_file, progress_cb=progress_cb))
+    except RuntimeError as e:
+        UI.error(str(e))
+        raise typer.Exit(1)
+    except Exception as e:
+        UI.warning(f"Memory DB not reachable - start VAF (or the vaf-memory-db "
+                   f"container) and retry. ({type(e).__name__})")
+        raise typer.Exit(1)
+    finally:
+        lock.release()
+
+    if not auto:
+        for line in report.lines():
+            UI.info(line)
+    if report.pending_after and not dry_run:
+        if not auto:
+            UI.warning("Rows are still pending; the run can be repeated safely "
+                       "(it resumes at the stamps).")
+        raise typer.Exit(2)
+    if not auto:
+        UI.success("Re-embed dry-run complete." if dry_run else "Re-embed complete.")

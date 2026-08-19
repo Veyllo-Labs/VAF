@@ -889,6 +889,67 @@ def start_model_download_broadcast(poll_seconds: float = 0.5):
     return stop_evt.set
 
 
+def start_maintenance_broadcast(poll_seconds: float = 1.0):
+    """Stream the current maintenance job's progress to all WebSocket clients
+    as ``maintenance_progress`` frames. Driven by ``maintenance_state
+    .MAINTENANCE`` (generic: the memory re-embed today, any machine-level job
+    with honest counts tomorrow). Machine-level jobs have no session, so this
+    is a broadcast like the model-download banner, not a StatePublisher lane.
+    The poll interval is the throttle (WEBSOCKET_FLOW rate-cap rule); frames
+    are only sent while a job is active, plus one final inactive frame so the
+    banner can close itself. Returns a ``stop()`` callable."""
+    import threading
+    import time as _time
+    from vaf.core.maintenance_state import MAINTENANCE
+
+    stop_evt = threading.Event()
+
+    def _frame(snap: dict) -> dict:
+        return {
+            "type": "maintenance_progress",
+            "kind": snap["kind"],
+            "active": snap["active"],
+            "done": snap["done"],
+            "total": snap["total"],
+            "pct": snap["pct"],
+            "phase": snap["phase"],
+            "error": snap["error"],
+        }
+
+    def _loop():
+        wi = get_web_interface()
+        was_active = False
+        while not stop_evt.is_set():
+            snap = MAINTENANCE.snapshot()
+            if snap["active"] or was_active:
+                try:
+                    wi.push_update(_frame(snap))
+                except Exception:
+                    pass
+            was_active = snap["active"]
+            stop_evt.wait(poll_seconds)
+
+    threading.Thread(target=_loop, daemon=True, name="maintenance-broadcast").start()
+    return stop_evt.set
+
+
+def maintenance_snapshot_frame() -> dict:
+    """The same frame the broadcast sends, for the late-joiner request lane
+    (a client connecting mid-job has missed every pushed frame)."""
+    from vaf.core.maintenance_state import MAINTENANCE
+    snap = MAINTENANCE.snapshot()
+    return {
+        "type": "maintenance_progress",
+        "kind": snap["kind"],
+        "active": snap["active"],
+        "done": snap["done"],
+        "total": snap["total"],
+        "pct": snap["pct"],
+        "phase": snap["phase"],
+        "error": snap["error"],
+    }
+
+
 def internal_api_base() -> str:
     """Base URL for SUBPROCESS -> backend HTTP calls (single source, Rule 2).
 

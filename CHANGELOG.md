@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Memory search knows which model wrote each vector.** Every stored memory
+  and chunk now records the embedding model that produced its vector. Two
+  models can emit same-sized vectors that are mutually meaningless, and until
+  now nothing could tell such a mixed store from a healthy one - search would
+  just quietly get worse. Existing rows are stamped on the next start. The
+  embedding caches include the model in their identity for the same reason,
+  editing a memory no longer writes an unencrypted content preview back into
+  its metadata (re-introducing a leak that was already cleaned up), and an
+  edited memory's summary vector is computed from the content again instead
+  of from its deliberately content-free title.
 - **A model that asks for four files now gets four, not one.** When a model
   writes its tool calls as text instead of using the structured field - which
   DeepSeek does intermittently, emitting several calls inside one wrapper - VAF
@@ -21,7 +31,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a batch are recovered now. A batch entry naming a tool that does not exist is
   skipped on its own rather than cancelling the real calls beside it.
 
+### Changed
+- **Memory understands more languages.** The default embedding model for
+  long-term memory is now `intfloat/multilingual-e5-small` (100+ languages)
+  instead of the English-centric MiniLM: a question asked in German now finds
+  facts that were stored in English, and the other way round. Existing
+  installations are migrated automatically in the background on the next
+  start, with a progress banner in the app and a status line in the terminal;
+  until the migration finishes, search keeps working on the previous model.
+
 ### Added
+- **The memory store can move to a new embedding model without losing anyone's
+  data.** `vaf memory reembed` re-embeds every stored memory and chunk whose
+  vector was written by another model - resumable, idempotent, nothing is
+  deleted, and rows the encryption key cannot open are set aside instead of
+  blocking the run. The app start does this automatically when the configured
+  model and the stored vectors diverge, in a background worker process; until
+  the store is fully migrated, search keeps using the model the vectors were
+  written with, so results never come from a half-converted store.
 - **Deleting a chat asks first.** The trash icon opened no dialog at all: one
   mis-click removed a conversation and its attachments for good. It now opens
   the same kind of confirmation the group chats already had, naming the

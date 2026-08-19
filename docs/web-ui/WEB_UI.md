@@ -512,6 +512,18 @@ learning and a checkmark when done, and `GET /api/memory/learn-status/{doc_tag}`
 serves the coverage (learned/partial, pages) across reloads. The completion
 message with the full numbers arrives as a chat message.
 
+**Maintenance banner.** Machine-level maintenance jobs (the memory re-embed
+migration after an embedding-model change; generic by `kind` for later jobs)
+render in the same banner family above the composer: a title, a `done/total`
+count and a determinate bar, driven by `maintenance_progress` frames (see
+[WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md)). There is no Cancel: the
+job is resumable and finishing it is the safe state. The banner is shown to
+every connected client - the job is machine-wide and memory search quality is
+affected for everyone until it completes. A client connecting mid-job requests
+the current snapshot with `get_maintenance_status` on socket open. On
+completion the banner shows a success state and clears itself; on failure it
+stays visible longer and points at the log.
+
 ### 7a. HTML Viewer
 
 A dedicated viewer for HTML files (reports, generated web pages). Opens automatically when the agent creates a `.html` or `.htm` file - shown as an **orange chip** in the chat (distinct from violet code chips and blue download chips).

@@ -84,9 +84,11 @@ def trigger_match(text: str) -> Optional[str]:
 
 
 def _embed_one(text: str) -> Optional[Sequence[float]]:
-    """One normalized embedding via the shared MiniLM singleton, or None. Isolated
-    behind a helper so tests can inject deterministic vectors and the realtime path
-    degrades cleanly when embeddings are unavailable."""
+    """One embedding via the shared embedding-service singleton (whatever model
+    the config selects), or None. Both sides of the comparison go through this
+    helper, so the vectors are self-consistent regardless of model. Isolated
+    behind a helper so tests can inject deterministic vectors and the realtime
+    path degrades cleanly when embeddings are unavailable."""
     try:
         from vaf.memory.embeddings import get_embedding_service
         v = get_embedding_service().embed_sync(str(text or ""))

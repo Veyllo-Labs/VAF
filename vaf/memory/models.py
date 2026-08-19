@@ -23,7 +23,9 @@ from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
-# Vector dimension for all-MiniLM-L6-v2
+# Vector dimension of the supported embedding models (multilingual-e5-small
+# and all-MiniLM-L6-v2 both emit 384). A model with another dimension is a
+# hard schema change; _check_embedding_dim in database.py flags the mismatch.
 EMBEDDING_DIM = 384
 
 
@@ -52,7 +54,13 @@ class Memory(Base):
     # Summary embedding for memory-level similarity search
     # This embeds a summary/title, not the full content
     embedding = Column(Vector(EMBEDDING_DIM), nullable=True)
-    
+
+    # Which embedding model produced `embedding`. NULL only on legacy rows
+    # (backfilled by migration v4). Same-dimension model swaps are invisible
+    # to the vector column itself, so this stamp is the only detector of a
+    # mixed vector space and the resume cursor for re-embedding jobs.
+    embedding_model = Column(Text, nullable=True)
+
     # Tree hierarchy (optional parent for nested organization)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("memories.id"), nullable=True)
     
@@ -127,13 +135,16 @@ class Chunk(Base):
     # migration v2, enforced by policy user_isolation_chunks.
     user_scope_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     
-    # Chunk text (stored encrypted in the memory, decrypted for embedding)
-    # This is stored in plain text for RAG retrieval efficiency
-    # The parent memory's full content remains encrypted
+    # Chunk text, field-encrypted at rest ("enc:gcm:..." via encrypt_field;
+    # legacy plaintext rows were converted by migration v3). The embedding is
+    # computed from the plaintext BEFORE encryption; readers decrypt_field.
     text = Column(Text, nullable=False)
-    
+
     # Chunk embedding for vector search
     embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
+
+    # Which embedding model produced `embedding` (see Memory.embedding_model).
+    embedding_model = Column(Text, nullable=True)
     
     # Position in original document (for reconstruction)
     chunk_index = Column(Integer, nullable=False)

@@ -39,12 +39,13 @@ _redis_available = None
 class CacheKeys:
     """Cache key prefixes for different data types."""
     # The embedding prefix carries a VECTOR-SPACE VERSION ("v2" = bucket padding,
+    # 2026-08; "v3" = the embedding model became part of the hashed key material,
     # 2026-08). Redis outlives the process, so without the version a change to how
     # vectors are computed would quietly mix old and new vectors under the same keys.
     # The bucket-padding drift itself is small (pairwise <= 0.016, measured) - the
     # version exists so the NEXT change, which may drift harder, has a lever: bump it
     # and the old entries age out via TTL instead of being served as fresh.
-    EMBEDDING = "vaf:emb:v2:"
+    EMBEDDING = "vaf:emb:v3:"
     RAG_QUERY = "vaf:rag:"
     RAG_SOURCES = "vaf:rag_src:"
     SESSION = "vaf:session:"

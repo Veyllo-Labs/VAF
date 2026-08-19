@@ -1105,7 +1105,10 @@ async def _search_session_async(
                 try:
                     coarse_k = max(1, min(10, int(Config.get("attachment_rag_hierarchical_coarse_k", 3) or 3)))
                     from vaf.memory.embeddings import get_embedding_service as _get_emb
-                    q_vec = await asyncio.wait_for(_get_emb().embed(q), timeout=op_timeout)
+                    # prefix="query": the rows this vector is compared against
+                    # were ingested with the "passage" side of the asymmetry;
+                    # the service applies it only for models that need it (E5).
+                    q_vec = await asyncio.wait_for(_get_emb().embed(q, prefix="query"), timeout=op_timeout)
                     max_distance = 1.0 - vector_threshold
 
                     # Tier 1: cosine search over section Memory.embedding

@@ -6374,14 +6374,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         // a menu entry. Hovering lifts the box and swings its lid open
                                         // - the affordance says "there is something inside" without a
                                         // caption saying it.
-                                        <div className="grid grid-cols-3 gap-4 max-md:grid-cols-2">
+                                        <div className="grid grid-cols-5 gap-4 max-xl:grid-cols-4 max-md:grid-cols-2">
                                             {archiveChats.map(c => (
                                                 <button key={c.id} type="button" onClick={() => setArchiveOpenId(c.id)}
-                                                        className="group/box text-left p-4 rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] transition-[transform,border-color,box-shadow] duration-200 ease-out hover:-translate-y-1 hover:scale-[1.03] hover:border-gray-300 dark:hover:border-yellow-400/70 hover:shadow-lg dark:hover:shadow-yellow-400/5">
-                                                    {/* Sized and centred rather than stretched: a full-width
-                                                        drawing over left-aligned text below reads as off-centre
-                                                        even when its viewBox is not. */}
-                                                    <svg viewBox="0 0 64 52" className="w-32 h-28 mx-auto translate-x-9 mb-3" aria-hidden="true">
+                                                        className="group/box text-center p-4 rounded-2xl border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1f1f1f] transition-[transform,border-color,box-shadow] duration-200 ease-out hover:-translate-y-1 hover:scale-[1.03] hover:border-gray-300 dark:hover:border-yellow-400/70 hover:shadow-lg dark:hover:shadow-yellow-400/5">
+                                                    {/* Box on top, its caption centred underneath: the card is
+                                                        a label on a container, and a drawing beside left-aligned
+                                                        text left most of the card empty while reading as
+                                                        off-centre. Narrower cards for the same reason. */}
+                                                    <svg viewBox="0 0 64 52" className="w-24 h-20 mx-auto mb-3" aria-hidden="true">
                                                         {/* The lid lifts STRAIGHT up and stays level - the way one
                                                             comes off a document box - instead of hinging at the
                                                             back. Kept in the group so the whole card's hover
@@ -6397,8 +6398,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <rect x="20" y="31" width="24" height="3" rx="1.5"
                                                               className="fill-gray-400/70 dark:fill-[#555]" />
                                                     </svg>
-                                                    <div className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate">{c.name}</div>
-                                                    <div className="text-xs text-gray-400 mt-0.5">
+                                                    <div className="text-sm text-gray-800 dark:text-[#e6e6e6] truncate" title={c.name}>{c.name}</div>
+                                                    <div className="text-xs text-gray-400 mt-0.5 truncate">
                                                         {tPersona('archiveMeta', { count: c.message_count, date: (c.updated_at || '').slice(0, 10) })}
                                                     </div>
                                                 </button>

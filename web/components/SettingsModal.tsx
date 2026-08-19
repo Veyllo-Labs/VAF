@@ -1844,6 +1844,38 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
+                // Escape is ONE step back, never a jump to the bottom: the
+                // archive stacks three levels deep (window -> a chat -> a
+                // dialog about that chat), and closing the lot from the
+                // innermost one loses the reader's place for a keypress they
+                // meant as "not this". Highest z-index first, like the rest of
+                // this stack.
+                if (archiveToDelete) {
+                    setArchiveToDelete(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (usageDay) {
+                    setUsageDay(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (openPrice) {
+                    setOpenPrice(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showArchive && archiveOpenId) {
+                    setArchiveOpenId(null);
+                    setArchiveJump(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showArchive) {
+                    setShowArchive(false);
+                    e.stopPropagation();
+                    return;
+                }
                 // Check topmost modal first
                 if (codeModal) {
                     setCodeModal(null);
@@ -1940,7 +1972,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowCreator, skillsEditor, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showMcpModal, showWorkflowsModal, showSkillsModal, showTrustedSourcesModal, showUpdateRepairModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
+    }, [isOpen, codeModal, workflowCreator, skillsEditor, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showMcpModal, showWorkflowsModal, showSkillsModal, showTrustedSourcesModal, showUpdateRepairModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, showArchive, archiveOpenId, archiveToDelete, usageDay, openPrice, onClose]);
 
     // When automation calendar is opened from Settings, request notes/todos so they are loaded
     useEffect(() => {

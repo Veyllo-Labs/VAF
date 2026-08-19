@@ -102,6 +102,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   instead of showing a bare zero.
 - The Settings window is slightly larger, so the new tab is not cramped.
 
+### Security
+- Dependency updates (Dependabot, both npm trees): Next.js 16.2.11 to 16.3.0,
+  whose vendored lodash closes CVE-2025-13465, with eslint-config-next in sync;
+  monaco-editor 0.56.0, next-intl 4.13.6, mammoth 1.12.1, zustand 5.0.15 and
+  autoprefixer 10.5.4 ride in the same group. The WhatsApp bridge moves to
+  Baileys 6.7.24, which mainly refreshes the pinned WhatsApp Web version. The
+  dompurify override stays required: monaco-editor 0.56.0 still pins an old
+  copy. Next.js now requires sharp 0.35 itself, so the sharp override has
+  become redundant and can go with the next dependency pass.
+
 ### Changed
 - **Every model call is counted now, not just the chat.** Usage was recorded at
   the end of a chat turn, so the coder, sub-agents, vision, voice, memory

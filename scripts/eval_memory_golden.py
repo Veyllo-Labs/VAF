@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Veyllo Labs
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# This file is part of VAF (Veyllo Agent Framework).
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Golden-question retrieval evaluation for the memory RAG.
 
 Measures hit@1, hit@k and mean reciprocal rank of `RagPipeline.search()` (the

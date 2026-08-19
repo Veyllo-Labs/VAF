@@ -6381,7 +6381,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     {/* Sized and centred rather than stretched: a full-width
                                                         drawing over left-aligned text below reads as off-centre
                                                         even when its viewBox is not. */}
-                                                    <svg viewBox="0 0 64 52" className="w-24 h-16 mx-auto translate-x-1 mb-3" aria-hidden="true">
+                                                    <svg viewBox="0 0 64 52" className="w-32 h-28 mx-auto translate-x-9 mb-3" aria-hidden="true">
                                                         {/* The lid lifts STRAIGHT up and stays level - the way one
                                                             comes off a document box - instead of hinging at the
                                                             back. Kept in the group so the whole card's hover

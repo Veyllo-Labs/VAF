@@ -21,7 +21,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   spent a whole turn hunting the rest in encrypted stores and capped logs,
   until the model collapsed into raw markup. Tools can now declare
   `result_is_deliverable` and reach the model whole; `use_skill`, `read_skill`
-  and `room_invite` do, each keeping its own output bounded in exchange.
+  and `room_invite` do, each keeping its own output bounded in exchange. The
+  declaration is honored along the whole path, not only at the funnel: the
+  in-history compression stage no longer prunes such results (it had become the
+  new cut once the funnel stepped aside), and the error classifier no longer
+  paints a briefing as failed for containing the words "failed" and "tool" in
+  its own vocabulary - which had marked perfectly successful skill loads and
+  invitations as errors on the step chips.
+- **Veyllo no longer rejects the empty-response retry.** Veyllo speaks
+  DeepSeek's thinking dialect and demands that a replayed assistant message
+  carry its reasoning as a separate field; VAF restored that field for DeepSeek
+  only, so the first lane that rebuilds and resends history - the
+  empty-response retry - died with a 400 instead of recovering the turn. The
+  restore now covers the family.
 - **A group chat no longer shows phantom notifications.** The sidebar's unread
   badge counted the room's own check-in pings, which the transcript view
   deliberately never shows - so the dot lit up, the room had nothing new, and

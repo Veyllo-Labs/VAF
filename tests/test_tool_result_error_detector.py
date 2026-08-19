@@ -264,3 +264,50 @@ def test_program_output_printing_error_markers_deep_in_content_is_ok():
     # the 200-char head window (e.g. while testing its own error handling).
     _ok("test run summary\n" + ("case passed\n" * 30)
         + "[ERROR] (exit=1) <- expected string asserted by the test itself\n")
+
+
+# --- Tier: declared content carriers (BaseTool.result_is_deliverable) ----
+
+def test_a_declared_document_is_judged_by_anchored_belts_only():
+    """MUTATION: drop the content_carrying early-return in tool_result_is_error.
+
+    A hand-over artifact trips the whole-content belts on its own vocabulary -
+    measured live: an invitation briefing listing the room's task statuses
+    ("completed, failed, rejected") lit the failed+tool belt, and the successful
+    invitation was painted as an error on the step chip, in the timeline log,
+    and in every later turn's summary.
+    """
+    briefing = (
+        "Invitation for Opus to join 'room-ab12cd34' as peer.\n"
+        "Report progress on the room's shared task board - and again with "
+        "completed (or failed and why) when you are done.\n"
+        "Task statuses are: submitted, working, completed, failed, rejected.\n"
+        "Use the room tools to say things.\n" + ("More briefing text. " * 200))
+    assert tool_result_is_error(briefing)          # the belts still see an error
+    assert not tool_result_is_error(briefing, content_carrying=True)
+
+
+def test_a_declared_carriers_real_failure_still_reads_as_one():
+    # The tools behind the declaration return prefix-anchored errors, and those
+    # anchored belts run for carriers too - the exemption is for content scans,
+    # not for outcomes. (room_invite's unanchored "Could not invite into ..."
+    # shape was never caught by any belt, before or now - not this exemption's
+    # doing.)
+    assert tool_result_is_error("error: skill 'x' not found or not available to you.",
+                                content_carrying=True)
+    assert tool_result_is_error("Error: you are not a member of 'room-ab12cd34', and "
+                                "only a member may invite. Join it first.",
+                                content_carrying=True)
+
+
+def test_the_turn_summary_trusts_the_declaration():
+    """MUTATION: stop passing content_tools through summarize_tool_turn."""
+    from vaf.core.context import summarize_tool_turn
+    msgs = [{"role": "tool", "name": "room_invite",
+             "content": "Invitation minted. Task statuses are: completed, failed. "
+                        "Use the room tools." + ("x" * 100)}]
+    summary_plain = summarize_tool_turn(msgs) or ""
+    summary_aware = summarize_tool_turn(msgs, content_tools={"room_invite"}) or ""
+    assert "FAILED" in summary_plain               # the belts alone misread it
+    assert "FAILED" not in summary_aware
+    assert "OK" in summary_aware

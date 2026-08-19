@@ -115,3 +115,36 @@ def test_all_agent_mint_sites_use_the_stamp():
         src = open(mod.__file__, encoding="utf-8").read()
         assert not re.search(r'f"call_\{os\.urandom', src), mod.__file__
         assert not re.search(r'f"extracted_\{int\(time', src), mod.__file__
+
+
+def test_the_deepseek_family_gets_reasoning_content_passed_back():
+    """MUTATION: restore reasoning_content for provider "deepseek" only.
+
+    Veyllo speaks DeepSeek's thinking dialect: an assistant message whose think
+    block is stored inline as <think>...</think> must go back to the API with a
+    separate reasoning_content field, or the backend answers 400 "The
+    `reasoning_content` in the thinking mode must be passed back to the API".
+    That 400 fired live on veyllo during the empty-response retry - the first
+    lane that REBUILDS and resends such a history instead of only appending.
+    """
+    from vaf.core.agent import Agent
+
+    class _Stub:
+        _thinking_reply_context = None
+        filename = "api"
+        model_display_name = ""
+        config = {}          # the vision-capability check reads the active model
+
+        def _consolidate_system_messages(self, messages):
+            return messages
+
+    for provider in ("deepseek", "veyllo"):
+        stub = _Stub()
+        stub.provider = provider
+        out = Agent._prepare_messages(stub, [
+            {"role": "user", "content": "u"},
+            {"role": "assistant", "content": "<think>weighing it</think>done"},
+        ])
+        asst = [m for m in out if m["role"] == "assistant"][0]
+        assert asst.get("reasoning_content") == "weighing it", provider
+        assert asst["content"] == "done", provider

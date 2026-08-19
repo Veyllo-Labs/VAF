@@ -722,8 +722,11 @@ Results are capped by the dispatch funnel (`max_result_chars`, 2000 by default)
 before they reach the model. A tool whose result IS the deliverable - a briefing
 to hand over, a document body to follow - declares `result_is_deliverable = True`
 and is returned whole; the flag is a promise in return that the tool keeps its
-own output bounded. Observation is unaffected either way: the event stream caps
-tool results independently.
+own output bounded. The full agent honors the same declaration downstream: its
+history compression never prunes such a result, and its error classifier judges
+it by anchored belts only (a document is not a failure for containing the word
+"failed"). Observation is unaffected either way: the event stream caps tool
+results independently.
 
 `self.log(message)` is the supported way for a tool to write a diagnostic
 line. It appends to `tools_<date>.log` in the VAF log directory, filling in

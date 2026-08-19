@@ -222,8 +222,18 @@ _ERROR_HEAD_RES = tuple(re.compile(p) for p in (
 ))
 
 
-def tool_result_is_error(content: str) -> bool:
-    """True when a tool result string represents a failure (prefix-anchored)."""
+def tool_result_is_error(content: str, *, content_carrying: bool = False) -> bool:
+    """True when a tool result string represents a failure (prefix-anchored).
+
+    `content_carrying`: the caller knows by DECLARATION that this result is a
+    document (BaseTool.result_is_deliverable) - only the position-anchored belts
+    run, because every belt below them is a substring scan over the whole result,
+    and a document trips those on its own vocabulary. Measured live: a room
+    invitation briefing that lists the task statuses ("completed, failed,
+    rejected") lit the failed+tool belt, and a successful invitation was painted
+    as an error on every surface. A real failure from such a tool still reads as
+    one: their error returns are prefix-anchored ("error: ...").
+    """
     if not isinstance(content, str):
         return False
     head = content[:50].lower().strip()
@@ -234,6 +244,8 @@ def tool_result_is_error(content: str) -> bool:
     for _hr in _ERROR_HEAD_RES:
         if _hr.match(low):
             return True
+    if content_carrying:
+        return False
     # Head-bounded belts: markers a short banner or one explanation line can
     # push off the string start (so neither the prefix anchor nor the
     # start-regexes see them), still specific literal markers, and bounded to
@@ -268,7 +280,8 @@ def tool_result_is_error(content: str) -> bool:
 _tool_result_is_error = tool_result_is_error
 
 
-def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200) -> Optional[str]:
+def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200,
+                        content_tools: Optional[set] = None) -> Optional[str]:
     """Build a compact, readable summary of a turn's squashed intermediate steps.
 
     Instead of only listing tool names, include each tool's outcome (OK/FAILED)
@@ -276,6 +289,11 @@ def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200) -> Optio
     of WHAT happened (and which errors occurred) on later turns. Returns the
     summary string (always starting with TURN_CONTEXT_PREFIX) or None if there is
     nothing worth summarizing.
+
+    `content_tools`: names whose results are documents by declaration
+    (BaseTool.result_is_deliverable) - their outcome is judged by the anchored
+    belts only, or a successful hand-over reads as FAILED in every later turn's
+    summary (see tool_result_is_error).
     """
     tool_outcomes = []  # (name, status, snippet)
     thoughts_count = 0
@@ -284,7 +302,8 @@ def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200) -> Optio
         content = str(m.get("content", "") or "")
         if role == "tool":
             name = m.get("name") or "UnknownTool"
-            status = "FAILED" if _tool_result_is_error(content) else "OK"
+            carrying = bool(content_tools) and name in content_tools
+            status = "FAILED" if _tool_result_is_error(content, content_carrying=carrying) else "OK"
             snippet = " ".join(content.split())  # collapse whitespace/newlines
             if len(snippet) > snippet_limit:
                 snippet = snippet[:snippet_limit].rstrip() + "…"
@@ -598,10 +617,18 @@ class ContextManager:
         
         self.state.last_updated = datetime.now().isoformat()
 
-    def process_tool_output(self, tool_name: str, content: str) -> str:
+    def process_tool_output(self, tool_name: str, content: str, *,
+                            deliverable: bool = False) -> str:
         """
         Seamlessly compress a tool output BEFORE it enters history.
         Extracts facts into StateContext and returns a pruned version of the content.
+
+        `deliverable`: the caller declared this result a hand-over artifact
+        (BaseTool.result_is_deliverable) - it is never pruned here. The dispatch
+        funnel already leaves such results whole for the same reason, and a cut
+        applied here instead is the same torn artifact one stage later: measured
+        live, exempting only the funnel moved the cut from its 2000 chars to this
+        stage's 1500, and the agent went back to hunting the missing half.
         """
         content_str = str(content)
         lines = content_str.split('\n')
@@ -610,6 +637,10 @@ class ContextManager:
 
         # 1. Update State immediately
         self.update_state({"role": "tool", "name": tool_name, "content": content_str})
+
+        if deliverable:
+            return content_str
+
 
         # Dynamic limits based on context size
         is_small_context = self.max_tokens < 6000

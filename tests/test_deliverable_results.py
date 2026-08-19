@@ -15,6 +15,8 @@ stores and capped logs, until the model collapsed.
 `BaseTool.result_is_deliverable` is the declared exemption; the flag is a promise in
 return that the tool keeps its own output bounded. Both halves are pinned here.
 """
+from pathlib import Path
+
 from vaf.core.tool_dispatch import EVENT_RESULT_CHARS, ToolCaller
 from vaf.tools.base import BaseTool
 from vaf.tools.read_skill import ReadSkillTool
@@ -97,3 +99,39 @@ def test_read_skill_keeps_its_own_promise(monkeypatch):
     out = ReadSkillTool().run(skill_id="giant")
     assert len(out) < SKILL_BODY_BUDGET_CHARS + 300
     assert "truncated at the skill body budget" in out
+
+
+def test_the_history_compressor_honors_the_declaration():
+    """MUTATION: ignore `deliverable` in ContextManager.process_tool_output.
+
+    The funnel exemption alone was measured insufficient: with the funnel cap
+    gone, the seamless-compression stage became the new cut - a 1500-char prune
+    with a compression banner where the funnel used to cut at 2000 - and the
+    agent went straight back to hunting the missing half of the briefing.
+    """
+    from vaf.core.context import ContextManager
+
+    cm = ContextManager(max_tokens=32000)
+    # The ticket sits past the default prune's 1500-char window, like the real
+    # briefing's remote-join block did.
+    big = "line\n" * 400 + "the ticket line t-ab12cd34"
+    pruned = cm.process_tool_output("room_invite", big)
+    assert "t-ab12cd34" not in pruned, "the default prune must still prune"
+    whole = cm.process_tool_output("room_invite", big, deliverable=True)
+    assert whole == big
+
+
+def test_the_chat_loop_wires_the_declaration_to_all_three_consumers():
+    """MUTATION: drop any one of the three call-site wires in agent.py.
+
+    The lesson this round was taught twice: a declaration tested at one stage
+    and not handed to the next is a fix that moves the failure, not one that
+    removes it. Three consumers must agree on what a deliverable is - the
+    history compressor, the error classifier behind the step chip and timeline,
+    and the turn summarizer - so all three must ask the same resolver.
+    """
+    source = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py"
+              ).read_text(encoding="utf-8")
+    assert "deliverable=self._tool_is_deliverable(function_name)" in source
+    assert "content_carrying=self._tool_is_deliverable(function_name)" in source
+    assert "content_tools={n for n in (self.tools or {})" in source

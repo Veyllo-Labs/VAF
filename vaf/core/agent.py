@@ -10626,7 +10626,8 @@ class Agent:
                         # result" (context.py) - the per-turn summarizer and the
                         # tool_end ok flag use the same helper so they cannot drift.
                         from vaf.core.context import tool_result_is_error
-                        is_err = tool_result_is_error(r_str)
+                        is_err = tool_result_is_error(
+                            r_str, content_carrying=self._tool_is_deliverable(function_name))
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
                             from vaf.core.subagent_ipc import get_current_session_id
@@ -10692,7 +10693,9 @@ class Agent:
                         # ═══════════════════════════════════════════════════════════════
                         # SEAMLESS COMPRESSION: Prune large tool output while extracting facts
                         # ═══════════════════════════════════════════════════════════════
-                        processed_result = self.context_manager.process_tool_output(function_name, result_str)
+                        processed_result = self.context_manager.process_tool_output(
+                            function_name, result_str,
+                            deliverable=self._tool_is_deliverable(function_name))
 
                         # PROACTIVE EVIDENCE POOL: in a thinking run, capture real retrieved memory so the
                         # proactive evidence-gate can verify a suggestion is grounded in it (not fabricated).
@@ -11438,7 +11441,10 @@ class Agent:
                         # hit on later turns. This summary is also persisted (see
                         # headless_runner save) and survives session reloads.
                         from vaf.core.context import summarize_tool_turn
-                        summary_msg = summarize_tool_turn(msgs_to_squash)
+                        summary_msg = summarize_tool_turn(
+                            msgs_to_squash,
+                            content_tools={n for n in (self.tools or {})
+                                           if self._tool_is_deliverable(n)})
 
                         # Delete ALL intermediate messages
                         del self.history[start_idx:end_idx]
@@ -11783,6 +11789,19 @@ class Agent:
         return caller.execute(name, args)
 
     # ── the chat turn's own stages, handed to the pipeline as hooks ──────────────
+
+    def _tool_is_deliverable(self, name: str) -> bool:
+        """Whether this registered tool declared its result a hand-over artifact.
+
+        One resolver for the three consumers that must agree (history compression,
+        the error classifier's UI/timeline call, the turn summarizer) - the funnel
+        exemption alone was measured insufficient: the next stage cut the artifact
+        at 1500 instead, and the classifier painted the successful call as failed.
+        """
+        try:
+            return bool(getattr((self.tools or {}).get(name), "result_is_deliverable", False))
+        except Exception:
+            return False
 
     def _chat_turn_gates(self, name, tool_instance, args):
         """The five turn gates. Each returns a RESULT string rather than prompting or
@@ -12836,11 +12855,15 @@ class Agent:
         messages = multimodal_messages
         # -------------------------------------------------------------------
 
-        # DeepSeek: restore reasoning_content as a separate field in assistant history messages.
-        # When DeepSeek returns reasoning_content we store it inline as <think>...</think> in content.
-        # On the next API call, DeepSeek 400s with "reasoning_content in thinking mode must be
-        # passed back" unless we include it as a separate "reasoning_content" field in the message.
-        if _provider == "deepseek":
+        # DeepSeek family: restore reasoning_content as a separate field in assistant
+        # history messages. When the model returns reasoning_content we store it inline
+        # as <think>...</think> in content. On the next API call the backend 400s with
+        # "The reasoning_content in the thinking mode must be passed back" unless we
+        # include it as a separate "reasoning_content" field in the message. Veyllo
+        # speaks the same dialect and 400ed live with that exact message - on the
+        # empty-response retry, the first lane that rebuilds and RESENDS such a
+        # history instead of only appending to it.
+        if _provider in ("deepseek", "veyllo"):
             import re as _re
             _think_re = _re.compile(r"<think>(.*?)</think>", _re.DOTALL)
             fixed = []
@@ -12858,7 +12881,7 @@ class Agent:
                             msg["content"] = remaining or ""
                 fixed.append(msg)
             messages = fixed
-        elif _provider == "veyllo":
+        if _provider == "veyllo":
             # Veyllo rejects replayed tool_call ids it did not issue itself.
             # Exchanges whose ids VAF minted (text-recovered calls, id-less
             # streams) are folded into plain text pre-send; genuine exchanges

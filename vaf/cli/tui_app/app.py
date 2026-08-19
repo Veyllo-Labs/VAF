@@ -88,11 +88,11 @@ def _agent_name() -> str:
     wrong (usually empty) workspace.
     """
     try:
-        from vaf.auth.user_workspace import get_user_workspace
+        from vaf.auth.user_workspace import agent_display_name
         from vaf.core.config import get_local_admin_username
-        name = (get_user_workspace(get_local_admin_username()).get_identity() or {}).get("name")
+        name = agent_display_name(get_local_admin_username())
         if name:
-            return str(name)
+            return name
     except Exception:
         pass
     return "unnamed (set one in Settings)"

@@ -79,6 +79,32 @@ def _open(room_id: str):
     return Room.open(str(room_id))
 
 
+def _own_display(kwargs: Dict[str, Any]) -> str:
+    """The name this agent introduces itself under when the model names none.
+
+    The agent's OWN persona name first - the same identity every other surface
+    greets with - and the product name only as the last resort. This is the
+    A2A-card idea applied to the name: an agent presents ITS identity, not its
+    vendor's. Measured live: a room opened without an explicit display seated
+    the agent as "VAF" while its persona was named, and the user asked whether
+    the agent had renamed itself.
+
+    Resolved through the registered persona resolver, never by importing the
+    auth layer from here (the shrink-only baseline in
+    tests/test_framework_auth_layering.py is the ledger of that debt): the
+    harness registers its user-store answer in vaf/main.py, and an embedder
+    that registers nothing keeps the product name as the last resort.
+    """
+    explicit = str(kwargs.get("display") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from vaf.core.tool_dispatch import resolve_agent_display_name
+        return resolve_agent_display_name(kwargs.get("username")) or "VAF"
+    except Exception:
+        return "VAF"
+
+
 class RoomJoinTool(BaseTool):
     """
     Join an agent-to-agent room so you can read it and speak in it.
@@ -94,7 +120,7 @@ class RoomJoinTool(BaseTool):
         "or take part in one, or gives you a room id. To START one instead, use "
         "room_open."
     )
-    identity_kwargs = ("user_scope_id", "user_role")
+    identity_kwargs = ("user_scope_id", "user_role", "username")
     permission_level = "write"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -133,7 +159,7 @@ class RoomJoinTool(BaseTool):
         if not room_id:
             return "Error: room_id is required."
         key = _acting_key(kwargs.get("user_scope_id"))
-        display = str(kwargs.get("display") or "VAF").strip() or "VAF"
+        display = _own_display(kwargs)
         mode = str(kwargs.get("mode") or DEFAULT_MODE)
 
         try:
@@ -457,7 +483,7 @@ class RoomOpenTool(BaseTool):
         "among equals where nobody gives orders, 'chain' when you lead and the agents "
         "you invite report to you."
     )
-    identity_kwargs = ("user_scope_id", "user_role")
+    identity_kwargs = ("user_scope_id", "user_role", "username")
     permission_level = "write"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -509,7 +535,7 @@ class RoomOpenTool(BaseTool):
             return f"Error: kind must be one of {', '.join(ROOM_KINDS)}."
         scope = kwargs.get("user_scope_id")
         key = _acting_key(scope)
-        display = str(kwargs.get("display") or "VAF").strip() or "VAF"
+        display = _own_display(kwargs)
         topic = str(kwargs.get("topic") or "").strip()
 
         try:

@@ -1952,3 +1952,62 @@ def test_the_room_bound_actor_answers_only_for_its_own_room():
     for broken in ("", "   ", "agent:scope-1", "room-a|", "|agent:scope-1", "room-a|   "):
         assert resolve_room_actor("room-a", {ROOM_ACTOR_ENV: broken}) == "", broken
     assert resolve_room_actor("room-a", {}) == ""
+
+
+def test_the_agent_introduces_itself_by_its_own_name(tmp_path, monkeypatch):
+    """MUTATION: fall straight back to "VAF" in room_tools._own_display.
+
+    The join/open display fell back to the product name while every other
+    surface greets with the persona name from the user's workspace - so an
+    agent whose user had NAMED it introduced itself to a room of strangers as
+    its vendor, and the user asked whether it had renamed itself. Same idea as
+    an A2A agent card: an agent presents ITS identity, not its vendor's.
+    """
+    import vaf.core.a2a.store as store_mod
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    # Through the registered persona resolver - the same seam vaf/main.py fills
+    # with the user-store answer; the tool itself never imports the auth layer.
+    import vaf.core.tool_dispatch as dispatch_mod
+    monkeypatch.setattr(dispatch_mod, "_agent_persona_resolver",
+                        lambda username: "Ada" if username == "alice" else "")
+    from vaf.tools.room_tools import RoomJoinTool, RoomOpenTool
+
+    opened = RoomOpenTool().run(topic="t", user_scope_id=None, username="alice")
+    assert "as Ada" in opened, opened
+
+    # An explicit display always wins over the persona.
+    named = RoomOpenTool().run(topic="t2", user_scope_id=None, username="alice",
+                               display="Scout")
+    assert "as Scout" in named, named
+
+    # No resolvable persona (no username injected): the product name stays the
+    # last resort, never an empty seat.
+    room_id = named.split("'")[1]
+    joined = RoomJoinTool().run(room_id=room_id, user_scope_id="ab12cd34")
+    assert "as VAF" in joined, joined
+
+
+def test_agent_display_name_reads_the_persona_and_never_raises(monkeypatch):
+    """MUTATION: let the resolver raise, or read the USER identity instead.
+
+    The workspace's get_identity is the agent persona (the same block the
+    greeting and the TUI title use); the user's own profile is a different
+    accessor. A surface asking for a name must never crash for the lack of one.
+    """
+    import vaf.auth.user_workspace as ws_mod
+
+    class _WS:
+        def get_identity(self):
+            return {"name": " Nobelia "}
+
+    monkeypatch.setattr(ws_mod, "get_user_workspace", lambda u: _WS())
+    assert ws_mod.agent_display_name("alice") == "Nobelia"
+    assert ws_mod.agent_display_name("") == ""
+
+    class _Boom:
+        def get_identity(self):
+            raise OSError("disk gone")
+
+    monkeypatch.setattr(ws_mod, "get_user_workspace", lambda u: _Boom())
+    assert ws_mod.agent_display_name("alice") == ""

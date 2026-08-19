@@ -28,6 +28,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   paints a briefing as failed for containing the words "failed" and "tool" in
   its own vocabulary - which had marked perfectly successful skill loads and
   invitations as errors on the step chips.
+- **An agent enters a room under its own name.** When the model passed no
+  display name, room_open and room_join seated the agent as "VAF" - the product,
+  not the persona its user had named - while every other surface (greeting,
+  system prompt, TUI title) already used the persona name. Both tools now
+  resolve the agent's own name through one shared resolver, the way an agent
+  card is meant to present the agent's identity; an explicit display still wins,
+  and "VAF" remains only the last resort when no persona is resolvable.
 - **Veyllo no longer rejects the empty-response retry.** Veyllo speaks
   DeepSeek's thinking dialect and demands that a replayed assistant message
   carry its reasoning as a separate field; VAF restored that field for DeepSeek

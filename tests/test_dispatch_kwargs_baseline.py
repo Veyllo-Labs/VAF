@@ -148,9 +148,12 @@ KWARGS_BASELINE = {
     "project_history":           ("chat", []),
     # Room tools carry both halves: the scope decides which rooms this caller is a
     # member of, and the role travels with it the way every identity pair does.
-    "room_join":                 ("chat", ["user_role", "user_scope_id"]),
+    # DELIBERATE change on join/open: username was added so the agent introduces
+    # itself under its persona name (via the registered persona resolver) instead
+    # of the product name when the model passes no display.
+    "room_join":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "room_invite":               ("chat", ["user_role", "user_scope_id"]),
-    "room_open":                 ("chat", ["user_role", "user_scope_id"]),
+    "room_open":                 ("chat", ["user_role", "user_scope_id", "username"]),
     "room_read":                 ("chat", ["user_role", "user_scope_id"]),
     "room_send":                 ("chat", ["user_role", "user_scope_id"]),
     "project_rollback":          ("chat", []),

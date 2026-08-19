@@ -156,9 +156,11 @@ NEWLY_IDENTIFIED = {
     "read_telegram_chat": ('user_scope_id', 'username'),
     "replace_editor_selection": ('user_scope_id',),
     "restore_automation": ('user_role', 'user_scope_id'),
-    "room_join": ('user_role', 'user_scope_id'),
+    # join/open added username 2026-08-19: the persona resolver keys on it, so the
+    # agent enters a room under its own name instead of the product name.
+    "room_join": ('user_role', 'user_scope_id', 'username'),
     "room_invite": ('user_role', 'user_scope_id'),
-    "room_open": ('user_role', 'user_scope_id'),
+    "room_open": ('user_role', 'user_scope_id', 'username'),
     "room_read": ('user_role', 'user_scope_id'),
     "room_send": ('user_role', 'user_scope_id'),
     "telegram_inbox": ('user_scope_id', 'username'),

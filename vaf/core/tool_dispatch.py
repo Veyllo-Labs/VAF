@@ -721,6 +721,47 @@ def resolve_workflow_allowlist(user_scope_id: str):
     return frozenset(str(t) for t in answer if str(t).strip())
 
 
+# The PRESENTATION sibling of the two policy slots above: what is this user's agent
+# CALLED. Not policy - nothing is allowed or refused by it - but the same direction
+# problem: the persona lives in the application's user store, and framework code
+# (the room tools introducing the agent to other agents) must not import the auth
+# layer to ask (the shrink-only baseline in tests/test_framework_auth_layering.py is
+# the ledger of exactly that debt). Deliberately NOT on the facade yet, like the
+# workflow twin: one internal consumer; the export is one lazy __getattr__ branch
+# the day an embedder needs to register its own.
+_agent_persona_resolver = None
+
+
+def set_agent_persona_resolver(resolver) -> None:
+    """Register the application's answer to "what is this user's agent called?".
+
+    ``resolver(username: str) -> str | None`` - the agent's persona/display name,
+    or None/"" when the user has none. Process-wide; the last registration wins and
+    ``None`` deregisters. Unregistered means "no name known" - consumers keep their
+    own last resort, so a bare library embedder loses nothing by not registering.
+    """
+    global _agent_persona_resolver
+    _agent_persona_resolver = resolver
+
+
+def get_agent_persona_resolver():
+    """The currently registered persona resolver, or None. For wiring checks."""
+    return _agent_persona_resolver
+
+
+def resolve_agent_display_name(username) -> str:
+    """Internal: the registered resolver's answer for one username, or "".
+
+    "" when no resolver is registered, the username is empty, or the resolver
+    answers nothing. A raising resolver raises through - the caller owns the
+    fallback, because only it knows what a missing name should look like there.
+    """
+    fn = _agent_persona_resolver              # local capture: a mid-call detach is safe
+    if fn is None or not username:
+        return ""
+    return str(fn(str(username)) or "").strip()
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 

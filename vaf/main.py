@@ -287,6 +287,7 @@ bootstrap()
 # tests/test_account_allowlist_wiring.py.
 from vaf.core.tool_dispatch import (
     set_account_allowlist_resolver,
+    set_agent_persona_resolver,
     set_confirmation_bypass_resolver,
     set_workflow_allowlist_resolver,
 )
@@ -295,9 +296,14 @@ from vaf.auth.permissions import (
     resolve_allowed_workflows as _workflow_allowlist_resolver,
     resolve_confirmation_bypass as _confirmation_bypass_resolver,
 )
+from vaf.auth.user_workspace import agent_display_name as _agent_persona_resolver
 set_account_allowlist_resolver(_account_allowlist_resolver)
 set_workflow_allowlist_resolver(_workflow_allowlist_resolver)
 set_confirmation_bypass_resolver(_confirmation_bypass_resolver)
+# Presentation, not policy: the room tools introduce the agent under its persona
+# name, and the persona lives in the harness's user store - registered here for
+# the same direction rule as the three above.
+set_agent_persona_resolver(_agent_persona_resolver)
 
 # Who may open a room connection. Registered for the same reason and in the same place:
 # the framework must not import the auth layer, and an unregistered verifier refuses

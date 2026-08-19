@@ -271,3 +271,24 @@ def get_user_workspace(username: str) -> UserWorkspace:
     ws = UserWorkspace(username)
     ws.ensure_exists()
     return ws
+
+
+def agent_display_name(username) -> str:
+    """The name this user's AGENT goes by - its persona name, or "".
+
+    One resolver for every surface that starts from a username and needs to say
+    who the agent is (the room tools' self-introduction, the TUI's greeting);
+    before it existed each caller hand-rolled `(ws.get_identity()).get("name")`
+    with its own fallback, and the room tools skipped it entirely - so an agent
+    with a configured name introduced itself to other agents as the product.
+    Falls back the way `get_identity` always has: an unnamed persona answers to
+    the username. Never raises - a surface asking for a name must not crash for
+    the lack of one; it returns "" and the caller picks its own last resort.
+    """
+    if not username:
+        return ""
+    try:
+        return str((get_user_workspace(str(username)).get_identity() or {})
+                   .get("name") or "").strip()
+    except Exception:
+        return ""

@@ -96,8 +96,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Max sessions sent to Web UI (sidebar list); increase if users have many chats.
-SESSION_LIST_LIMIT = 500
+# The sidebar list's limit and its ONE projection both live with the store that
+# answers them (vaf/core/session.py), so a surface that is not the web server -
+# the classic CLI pushes this list too - can build the same rows without
+# importing the web application.
+from vaf.core.session import SESSION_LIST_LIMIT, session_list_payload  # noqa: E402
 
 # Max room frames painted into the browser at once. A room is a finite conversation
 # by design (the named limit in the protocol doc), and every frame is a separate
@@ -556,46 +559,6 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
         pass
 
 
-def session_list_payload(rows: List[Dict]) -> List[Dict]:
-    """The sidebar list in the shape the browser reads it.
-
-    Seven call sites wrote this dict out by hand, byte for byte identical, and the
-    cost of that was not hypothetical: a room row carries fields no conversation has
-    - what it is, how many agents are in it, whether it has been closed - and every
-    one of them was dropped on the way out. A projection that names the extra fields
-    in ONE place is the fix; an eighth hand-written copy would only have been an
-    eighth place to forget.
-
-    Rows that are not rooms keep exactly the five keys they always had, plus the kind,
-    so the ordinary conversation renders from the same payload as before.
-    """
-    out: List[Dict] = []
-    for s in rows:
-        kind = s.get("kind") or "chat"
-        item = {
-            "id": s["id"],
-            "title": s["name"],
-            "date": s["updated_at"],
-            "messageCount": s["message_count"],
-            "source": (s.get("metadata") or {}).get("source"),
-            "kind": kind,
-        }
-        if kind == "room":
-            # The room id is deliberately NOT the row id: a surface that handed the
-            # row id to the session loader would open, and later SAVE, something that
-            # is not a session. It travels under its own name for the surfaces that
-            # legitimately need it, such as opening the transcript.
-            item.update({
-                "roomId": s.get("room_id"),
-                "roomKind": s.get("room_kind"),
-                "role": s.get("role"),
-                "unread": int(s.get("unread") or 0),
-                "members": int(s.get("members") or 0),
-                "closed": bool(s.get("closed")),
-            })
-        out.append(item)
-    return out
-
 log("WebServer", "Getting WebInterfaceManager...")
 manager = get_web_interface()
 
@@ -713,6 +676,23 @@ def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=Fa
         is_admin=is_admin,
         allow_missing=allow_missing,
     )
+
+def _session_record_exists(session_id) -> bool:
+    """Is there a file for this chat at all?
+
+    The ownership gate cannot answer it: a record that is missing and one that
+    cannot be READ both come back as `(allowed, None)`, and the two need
+    opposite treatment when a delete arrives without a confirmation. An
+    unreadable record must be asked about; an absent one has nothing to ask
+    about, and a dialog for a chat that is already gone (a double-clicked trash
+    icon, a second tab) would be a question with no subject.
+    """
+    try:
+        return any((session_mgr.storage_dir / f"{session_id}{ext}").exists()
+                   for ext in (".json", ".json.gz"))
+    except Exception:
+        return True          # cannot tell -> treat as present -> ask
+
 
 # Mount Memory System routes if enabled
 if Config.get("memory_enabled", True):
@@ -4451,21 +4431,59 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "delete_session":
                     sid = cmd.get("id")
+                    if not sid:
+                        continue
                     user_scope_id = manager.get_connection_user(websocket)
-                    allowed, _ = _ws_session_owner_ok(websocket, sid)
+                    allowed, loaded = _ws_session_owner_ok(websocket, sid)
                     if not allowed:
                         log("API", f"Access denied: delete_session {sid} not owned by {user_scope_id}")
                         await websocket.send_json({"type": "error", "message": "Access denied"})
+                        continue
+                    # WHETHER TO ASK IS DECIDED HERE, not in the browser.
+                    #
+                    # The sidebar row is a cached copy and nothing refreshes it
+                    # after a turn - no session_list is pushed when a chat gains
+                    # messages - so a chat that filled up while the list stood
+                    # still went on reporting zero, and the trash icon skipped its
+                    # dialog for it. That is the one guess in the product that
+                    # destroys something when it is wrong (live incident: a full
+                    # conversation deleted with no dialog and no archive).
+                    #
+                    # `confirmed` is the browser reporting that a person read the
+                    # dialog; without it the RECORD has to be untouched, judged by
+                    # the framework's one definition. A record that cannot be read
+                    # (an admin clearing a corrupt file) counts as not untouched:
+                    # being unable to prove a chat is empty must never read as
+                    # "it is empty". No title is logged here - a chat name is user
+                    # text, and this branch has no encoding-safe printer.
+                    if (not bool(cmd.get("confirmed"))
+                            and _session_record_exists(sid)
+                            and not (loaded is not None and loaded.is_untouched())):
+                        await websocket.send_json({
+                            "type": "session_delete_result",
+                            "id": sid, "deleted": False, "needsConfirm": True,
+                        })
                         continue
                     # Archive-then-delete, in that order and never both: archiving
                     # MOVES the file, so a delete afterwards would have nothing to
                     # remove - and if the move failed we must still delete rather
                     # than silently leave a chat the user asked to be gone.
+                    gone = False
                     if bool(cmd.get("archive")):
                         if not session_mgr.archive(sid, user_scope_id=user_scope_id):
-                            session_mgr.delete(sid)
+                            gone = session_mgr.delete(sid)
+                        else:
+                            gone = True          # the move IS the removal
                     else:
-                        session_mgr.delete(sid)
+                        gone = session_mgr.delete(sid)
+                    # The answer goes out BEFORE the list. The browser decides where
+                    # to go next from the row it is about to lose - its title, and
+                    # whether it was a thinking run - and the broadcast below takes
+                    # that row out of its hands.
+                    await websocket.send_json({
+                        "type": "session_delete_result",
+                        "id": sid, "deleted": bool(gone), "needsConfirm": False,
+                    })
                     # Broadcast update ONLY to this user's connections
                     web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                     await manager.broadcast_to_user(user_scope_id, {
@@ -4475,13 +4493,33 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "hide_session":
                     sid = cmd.get("id")
+                    if not sid:
+                        continue
                     user_scope_id = manager.get_connection_user(websocket)
-                    allowed, _ = _ws_session_owner_ok(websocket, sid)
+                    allowed, loaded = _ws_session_owner_ok(websocket, sid)
                     if not allowed:
                         log("API", f"Access denied: hide_session {sid} not owned by {user_scope_id}")
                         await websocket.send_json({"type": "error", "message": "Access denied"})
                         continue
-                    if sid and session_mgr.hide(sid):
+                    # A thinking run leaves the list the same way a chat leaves the
+                    # store, so it is asked about the same way. Hiding keeps the
+                    # record (the age-based sweep removes it later), but from the
+                    # sidebar it is just as gone, and the row this decision used to
+                    # be taken from is just as stale.
+                    if (not bool(cmd.get("confirmed"))
+                            and _session_record_exists(sid)
+                            and not (loaded is not None and loaded.is_untouched())):
+                        await websocket.send_json({
+                            "type": "session_delete_result",
+                            "id": sid, "deleted": False, "needsConfirm": True,
+                        })
+                        continue
+                    hidden = bool(session_mgr.hide(sid))
+                    await websocket.send_json({
+                        "type": "session_delete_result",
+                        "id": sid, "deleted": hidden, "needsConfirm": False,
+                    })
+                    if hidden:
                         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",

@@ -65,13 +65,18 @@ def test_entries_also_read_plain_dicts():
 
 
 def test_untouched_reads_the_same_shapes():
-    """One definition of "did the user speak", whatever the row looks like."""
-    assert AgentBridge.session_is_untouched(_session(
-        [Message.from_dict(_RAW[0])])) is True
-    assert AgentBridge.session_is_untouched(_session(_MESSAGES)) is False
-    assert AgentBridge.session_is_untouched(_session(_RAW)) is False
-    assert AgentBridge.session_is_untouched(_session(
-        [("user", "hallo", "09:15")])) is False
+    """One definition of "was anything said here", whatever the row looks like.
+
+    The replay tuple is the reason this lives next to the replay: it is a shape
+    `Session.messages` never holds, and a predicate blind to it would call a
+    real conversation untouched and discard it on exit.
+    """
+    from vaf.core.session import is_untouched
+
+    assert is_untouched(_session([Message.from_dict(_RAW[0])])) is True
+    assert is_untouched(_session(_MESSAGES)) is False
+    assert is_untouched(_session(_RAW)) is False
+    assert is_untouched(_session([("user", "hallo", "09:15")])) is False
 
 
 def _bridge(loaded_session):

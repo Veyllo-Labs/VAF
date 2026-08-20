@@ -66,6 +66,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **Deleting a chat cannot skip its confirmation any more.** The trash icon in
+  the sidebar deletes a chat that is genuinely empty without asking, which is
+  right: there is nothing to decide about a chat nobody used. Whether it was
+  empty, though, was judged in the browser from a number that arrives with the
+  session list and is refreshed by nothing a conversation does, so a chat that
+  filled up while the list stood still still counted as empty and was deleted on
+  one click, with no dialog and no copy kept. The browser no longer decides
+  this. It asks, and VAF answers from the chat itself: a chat holding messages,
+  an attached document or a file in its folder always brings up the dialog
+  first. The same question is now asked everywhere a chat can be removed, so a
+  cleanup started from the terminal cannot quietly delete what the app just
+  refused to delete, and a chat that only holds an automation result or a
+  proactive question the user has not answered yet counts as worth keeping.
+  Keeping a copy in the archive is offered afresh every time the dialog opens.
+
 - **A rejected mail login now says what to do about it.** Connecting a GMX
   account with two-factor authentication switched on failed with nothing but
   "authentication failed", which named no action: IMAP has no step where a

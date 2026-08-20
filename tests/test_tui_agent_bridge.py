@@ -633,19 +633,19 @@ def test_a_session_with_a_real_message_is_kept(quiet_run_module):
 
 
 def test_only_a_user_message_counts_as_touched(quiet_run_module):
-    """The same criterion `SessionManager.cleanup_empty` uses - a system
-    prompt alone is still an abandoned session, and inventing a second
-    definition of "empty" is how the two would drift apart."""
-    from vaf.cli.tui_app.agent_bridge import AgentBridge as Bridge
+    """The framework's definition, not a copy of it. This lane carried its own
+    for a while and the two drifted exactly as predicted - see
+    tests/test_session_untouched.py for what the shared one now decides."""
+    from vaf.core.session import is_untouched
 
     only_system = SimpleNamespace(id="x", messages=[
         SimpleNamespace(role="system", content="you are ...")])
-    assert Bridge.session_is_untouched(only_system) is True
+    assert is_untouched(only_system) is True
 
     with_user = SimpleNamespace(id="x", messages=[
         SimpleNamespace(role="system", content="..."),
         SimpleNamespace(role="user", content="hi")])
-    assert Bridge.session_is_untouched(with_user) is False
+    assert is_untouched(with_user) is False
 
 
 def test_switching_away_from_an_empty_session_discards_it(quiet_run_module):

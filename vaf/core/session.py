@@ -188,6 +188,81 @@ class Session:
         
         return f"{len(self.messages)} messages"
 
+    def is_untouched(self) -> bool:
+        """Thin delegate; `is_untouched(session)` below is the definition."""
+        return is_untouched(self)
+
+
+def is_untouched(session) -> bool:
+    """True when nobody has put anything into this chat yet.
+
+    ONE definition, because there were four and they did not agree: the
+    terminal app carried its own copy, `SessionManager.cleanup_empty` had a
+    looser one, and the browser decided from a cached message COUNT plus an
+    attachment list it only had for chats it had opened. The disagreement was
+    not academic. A chat holding an automation's proactive reply and nothing
+    else has no message with role "user" at all, so the older rule read it as an
+    abandoned husk and removed it without asking anyone.
+
+    Content is a user OR an assistant message, or a stored sidebar document, or
+    a file in the chat's workspace. A document can be attached and never sent
+    and a file can be uploaded into the workspace of a chat that was never
+    written in, which is why neither needs a message to count. System and tool
+    rows are scaffolding, not content: a session carrying only the system
+    prompt, or the wreckage of a turn that produced no text, is exactly what the
+    husk cleanup exists to remove.
+
+    Deliberately tolerant about shape - `Message` objects, plain dicts and the
+    `(role, text, when)` replay tuples of the terminal app all arrive here - and
+    `None` answers False: a caller that cannot read a session at all must never
+    conclude that it is empty.
+
+    Not on the public facade. `docs/EMBEDDING.md` records the session store as
+    engine-internal by design and no embedder has asked for it; this stays
+    beside the store it describes.
+    """
+    if session is None:
+        return False
+    for message in getattr(session, "messages", None) or []:
+        if isinstance(message, dict):
+            role = message.get("role")
+        else:
+            role = getattr(message, "role", None)
+        # Replay rows arrive as (role, text, when) tuples.
+        if role is None and isinstance(message, (tuple, list)) and message:
+            role = message[0]
+        if role in ("user", "assistant"):
+            return False
+    if (getattr(session, "runtime_state", None) or {}).get("sidebar_documents"):
+        return False
+    return not _session_workspace_has_content(session)
+
+
+def _session_workspace_has_content(session) -> bool:
+    """Files a person put into the chat's own folder, with no message written.
+
+    `POST /api/session/workspace/upload` writes straight into
+    `VAF_Projects/<uid8>/<id>/`, so a chat can hold real work while its message
+    list is still empty. The scope is read from the record rather than left to
+    the resolver, because the resolver would otherwise load the session a second
+    time and repoint the module-global manager's current session - which
+    deleting a background chat must not do. Any doubt answers True: the chat
+    then counts as touched and the surface asks before removing it.
+
+    Not to be confused with `_cleanup_empty_session_workspace`, which asks the
+    opposite question about the same folder (may the FOLDER go once the chat
+    has), and never about the chat.
+    """
+    try:
+        sid = str(getattr(session, "id", "") or "").strip()
+        if not sid:
+            return False
+        scope = (getattr(session, "metadata", None) or {}).get("user_scope_id")
+        path = get_session_workspace_dir(sid, create=False, user_scope_id=scope)
+        return bool(path) and _workspace_has_real_content(path)
+    except Exception:
+        return True
+
 
 def turn_context_messages_since_last_user(history: List[Dict], user_input: str) -> List[Dict]:
     """Extract the per-turn context artifacts of the latest turn from an agent
@@ -466,7 +541,9 @@ class SessionManager:
         return sessions
 
     def hide(self, session_id: str) -> bool:
-        """Mark session as hidden from list (e.g. thinking session). Does not delete; GC can delete later."""
+        """Mark session as hidden from list (e.g. thinking session). Does not
+        delete; the age-based thinking sweep in `garbage_collector.py` removes
+        it later - NOT the husk cleanup, which keeps anything the agent wrote."""
         try:
             session = self.load(session_id)
             if not session.metadata:
@@ -977,12 +1054,20 @@ class SessionManager:
 
     def cleanup_empty(self, exclude_session_id: str = None) -> int:
         """
-        Delete sessions that are empty or contain only system/internal messages.
-        Prevents accumulation of 'New Chat' sessions with no user interaction.
-        
+        Delete the husks: chats nobody put anything into.
+
+        "Nothing in it" is `is_untouched`, the same question the browser's
+        delete dialog asks - not a second, looser rule. It used to be one: any
+        chat without a message of role "user" was removed, which took the
+        automation results and proactive replies delivered into a chat the user
+        had not answered yet, and the attachments of a chat where a document was
+        added but nothing was sent. Two processes deciding differently is worse
+        than either rule: this runs from the terminal lanes while the web server
+        is refusing to delete exactly those chats without asking.
+
         Args:
             exclude_session_id: Optional session ID to exclude from cleanup (e.g., current active session)
-        
+
         Returns: Number of deleted sessions.
         """
         count = 0
@@ -1007,26 +1092,17 @@ class SessionManager:
                     continue
                 
                 try:
-                    # Load session
-                    session = self.load(sid)
-                    
-                    # Check criteria:
-                    # 1. No messages at all
-                    # 2. Only system messages (role='system')
-                    # 3. Only internal tool messages? (usually linked to user prompt, so role='user' check is enough)
-                    
-                    has_user_interaction = False
-                    for msg in session.messages:
-                        if msg.role == "user":
-                            has_user_interaction = True
-                            break
-                    
-                    if not has_user_interaction:
-                        # Delete it (it's a Lehre-Chat - empty teaching session)
+                    # restore_state/repoint off: this walks EVERY session in the
+                    # store, and a husk sweep must not repoint the current
+                    # session or push another chat's runtime state into the live
+                    # registry on the way past.
+                    session = self.load(sid, restore_state=False, repoint=False)
+
+                    if is_untouched(session):
                         self.delete(sid)
                         count += 1
                         deleted_ids.append(sid)
-                        
+
                 except Exception:
                     continue
                     
@@ -1248,6 +1324,51 @@ class SessionManager:
         return results
 
 
+# Max sessions a surface shows in its list; increase if users have many chats.
+SESSION_LIST_LIMIT = 500
+
+
+def session_list_payload(rows: List[Dict]) -> List[Dict]:
+    """The sidebar list in the shape the browser reads it.
+
+    Seven call sites wrote this dict out by hand, byte for byte identical, and the
+    cost of that was not hypothetical: a room row carries fields no conversation has
+    - what it is, how many agents are in it, whether it has been closed - and every
+    one of them was dropped on the way out. A projection that names the extra fields
+    in ONE place is the fix; an eighth hand-written copy would only have been an
+    eighth place to forget.
+
+    Rows that are not rooms keep exactly the five keys they always had, plus the kind,
+    so the ordinary conversation renders from the same payload as before.
+    """
+    out: List[Dict] = []
+    for s in rows:
+        kind = s.get("kind") or "chat"
+        item = {
+            "id": s["id"],
+            "title": s["name"],
+            "date": s["updated_at"],
+            "messageCount": s["message_count"],
+            "source": (s.get("metadata") or {}).get("source"),
+            "kind": kind,
+        }
+        if kind == "room":
+            # The room id is deliberately NOT the row id: a surface that handed the
+            # row id to the session loader would open, and later SAVE, something that
+            # is not a session. It travels under its own name for the surfaces that
+            # legitimately need it, such as opening the transcript.
+            item.update({
+                "roomId": s.get("room_id"),
+                "roomKind": s.get("room_kind"),
+                "role": s.get("role"),
+                "unread": int(s.get("unread") or 0),
+                "members": int(s.get("members") or 0),
+                "closed": bool(s.get("closed")),
+            })
+        out.append(item)
+    return out
+
+
 def session_access_allowed(
     manager,
     session_id: str,
@@ -1372,7 +1493,8 @@ def record_created_file(session_id: Optional[str], file_path) -> None:
         pass
 
 
-def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = False) -> Optional[Path]:
+def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = False,
+                              *, user_scope_id: Optional[str] = None) -> Optional[Path]:
     """Per-chat workspace folder: VAF_Projects/<uid[:8]>/<session_id>/.
 
     Single source for every sub-agent that creates files (coder projects,
@@ -1383,6 +1505,12 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     without session context. With create=False only an EXISTING folder is
     returned (browser use); with create=True the preferred candidate is
     created (agent output use).
+
+    `user_scope_id` skips the lookup that reads the scope back off disk, for
+    callers that already hold the session - the same reason
+    `get_session_attachments_dir` takes it explicitly. It matters beyond speed:
+    that lookup goes through the module-global manager's `load()`, which
+    repoints its current session at whatever it read.
     """
     import re as _re
 
@@ -1404,12 +1532,13 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     if not folder:
         return None
 
-    uid = ""
-    try:
-        sess = get_manager().load(sid)
-        uid = str((getattr(sess, "metadata", None) or {}).get("user_scope_id") or "")
-    except Exception:
-        uid = ""
+    uid = str(user_scope_id or "").strip()
+    if not uid:
+        try:
+            sess = get_manager().load(sid)
+            uid = str((getattr(sess, "metadata", None) or {}).get("user_scope_id") or "")
+        except Exception:
+            uid = ""
 
     from vaf.core.platform import Platform
     root = Platform.documents_dir() / "VAF_Projects"

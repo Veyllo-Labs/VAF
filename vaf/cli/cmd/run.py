@@ -2548,16 +2548,25 @@ def _process_agent_message(agent, user_input: str, tui, session):
             mgr = SessionManager()
             mgr.save(session)
             
-            # Notify Web UI about session list update (so the timestamp/preview updates)
-            # This keeps the sidebar fresh
+            # Notify Web UI about session list update (so the timestamp/preview
+            # updates). Through the ONE projection and to ONE account, because
+            # this row was hand-built and neither: it shipped id/title/date only,
+            # so every browser read messageCount as undefined - which the trash
+            # icon takes for "empty chat, delete it without asking" - and a room
+            # row arrived without the kind that keeps it out of the session
+            # loader. It was also a global broadcast of an unscoped listing, so
+            # one account's chat titles reached every connected browser.
             try:
-                web_iface = get_web_interface()
-                sessions_list = mgr.list(limit=20)
-                web_iface.push_update({
-                    "type": "session_list", 
-                    "sessions": [{"id": s["id"], "title": s["name"], "date": s["updated_at"]} for s in sessions_list]
+                from vaf.core.config import get_local_admin_scope_id
+                from vaf.core.session import SESSION_LIST_LIMIT, session_list_payload
+                scope = str((getattr(session, "metadata", None) or {}).get("user_scope_id")
+                            or get_local_admin_scope_id() or "")
+                get_web_interface().push_update_to_user(scope, {
+                    "type": "session_list",
+                    "sessions": session_list_payload(
+                        mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=scope)),
                 })
-            except:
+            except Exception:
                 pass
                 
         except Exception:

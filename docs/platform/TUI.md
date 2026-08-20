@@ -194,10 +194,15 @@ on both surfaces. Renames go through the engine primitive, which writes the
 file and nothing else; the file is the name's source of truth, and the app
 adopts the on-disk name before its exit save, so a rename made in the web
 while the app was open survives the app closing. Esc closes the panel. A
-session nobody actually wrote in is discarded rather than kept - on leaving
-it and on quitting - using the same criterion `SessionManager.cleanup_empty`
-applies (no message with role `user`), so starting the app and closing it
-again does not grow the list. Reading the list happens off the UI thread. On
+session nobody put anything into is discarded rather than kept - on leaving
+it and on quitting - so starting the app and closing it again does not grow
+the list. The criterion is the framework's one definition,
+`vaf.core.session.is_untouched`: no user or assistant message, no stored
+sidebar document, no file in the chat's workspace. The husk sweep
+(`SessionManager.cleanup_empty`) and the web delete dialog ask exactly the
+same question. It used to be "no message with role `user`", which discarded a
+chat holding an automation result or a proactive question simply because
+nobody had answered it yet. Reading the list happens off the UI thread. On
 the way out, the plain terminal gets the session id and both ways back into
 it - the classic lane printed the same thing, minus its blocking "save?"
 question, since the app saves unconditionally.

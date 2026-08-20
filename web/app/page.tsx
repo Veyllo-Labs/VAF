@@ -3124,6 +3124,10 @@ function VAFDashboardContent() {
     const [sessionViewerState, setSessionViewerState] = useState<Record<string, { isOpen: boolean; documents: DocumentViewerDoc[] }>>({});
     const defaultViewerState = useMemo(() => ({ isOpen: false as const, documents: [] as DocumentViewerDoc[] }), []);
 
+    // Keeping a copy is the default every time the dialog opens, not only the
+    // first: unticking it once used to make every later delete - including one
+    // the server forced this dialog for - quietly skip the archive.
+    useEffect(() => { if (chatToDelete) setArchiveOnDelete(true); }, [chatToDelete]);
     // One timer for both destructive dialogs: opening either arms it, and it
     // counts down to zero once. Cleared on close so a reopened dialog waits again.
     useEffect(() => {
@@ -3807,27 +3811,46 @@ function VAFDashboardContent() {
         setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
-    // What the dialog performs once it is confirmed. Unchanged from what the
-    // trash icon used to do inline; only the moment it happens moved.
-    const performChatDelete = useCallback((target: { id: string; isThinking: boolean; archive?: boolean }) => {
-        wsSocketRef.current?.send(JSON.stringify({
-            type: target.isThinking ? 'hide_session' : 'delete_session', id: target.id,
-            archive: !!target.archive,
-        }));
-        if (currentSessionId === target.id) {
-            const remaining = conversationsOnly(sessions).filter(sess => sess.id !== target.id);
-            const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
-            if (empty) {
-                handleSessionSwitch(empty.id);
-            } else if (remaining.length > 0) {
-                handleSessionSwitch(remaining[0].id);
-            } else {
-                setTimeout(() => {
-                    wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
-                }, 100);
-            }
+    // Where to go once a chat is actually GONE. Split out of performChatDelete
+    // because the moment moved: the server now decides whether a delete may
+    // happen without a dialog, so the switch belongs to its answer, not to the
+    // sending of the command. Idempotent on purpose - the answer and the fresh
+    // session list can both arrive, and whichever is second finds the app has
+    // already moved. Rooms are filtered out first: the fallback after a delete
+    // must never hand a room id to the session loader.
+    const switchAfterDelete = useCallback((id: string) => {
+        if (currentSessionId !== id) return;
+        const remaining = conversationsOnly(sessions).filter(sess => sess.id !== id);
+        const empty = remaining.find(sess => (sess.messageCount || 0) === 0);
+        if (empty) {
+            handleSessionSwitch(empty.id);
+        } else if (remaining.length > 0) {
+            handleSessionSwitch(remaining[0].id);
+        } else {
+            setTimeout(() => {
+                wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
+            }, 100);
         }
     }, [currentSessionId, sessions, handleSessionSwitch]);
+    // The socket's onmessage closure is built once and keeps whatever it captured,
+    // so the answer handler reaches this through the latest-callback ref the
+    // workflow poller already uses rather than through a stale copy.
+    const switchAfterDeleteRef = useRef(switchAfterDelete);
+    useEffect(() => { switchAfterDeleteRef.current = switchAfterDelete; }, [switchAfterDelete]);
+
+    // Asking for a chat to go. `confirmed` reports that a person read the dialog;
+    // without it the server checks the record itself and answers
+    // session_delete_result instead of removing anything. The browser does not
+    // decide emptiness any more: its row carries a message count that nothing
+    // refreshes after a turn, and an attachment list it only has for chats this
+    // browser has opened.
+    const performChatDelete = useCallback((target: { id: string; isThinking: boolean; archive?: boolean; confirmed?: boolean }) => {
+        wsSocketRef.current?.send(JSON.stringify({
+            type: target.isThinking ? 'hide_session' : 'delete_session', id: target.id,
+            archive: !!target.archive, confirmed: !!target.confirmed,
+        }));
+        if (target.confirmed) switchAfterDelete(target.id);
+    }, [switchAfterDelete]);
 
     // Keep the selected chat visible in the sidebar (don't jump to the top)
     useEffect(() => {
@@ -4598,6 +4621,32 @@ function VAFDashboardContent() {
                                 text: data.content
                             }));
                         }
+                    }
+                }
+                else if (data.type === 'session_delete_result') {
+                    // The answer to the trash icon. It carries `id`, not
+                    // `sessionId`, deliberately: the master filter above drops any
+                    // event stamped with a session that is not the open one, and
+                    // the chat being deleted usually is not.
+                    const id = data.id as string;
+                    if (data.needsConfirm) {
+                        // Refused: the record holds something. Open the dialog the
+                        // shortcut used to skip, naming the row while the sidebar
+                        // still has it - the fresh list arrives right after this.
+                        const row = sessionsRef.current.find(s => s.id === id);
+                        setChatToDelete({
+                            id,
+                            title: (row?.title || '').replace('.json', ''),
+                            isThinking: (row as { source?: string } | undefined)?.source === 'thinking',
+                        });
+                    } else if (data.deleted) {
+                        switchAfterDeleteRef.current?.(id);
+                    } else {
+                        // Nothing was removed: another tab got there first, or the
+                        // record was already gone. No session list follows a delete
+                        // that deleted nothing, so ask for one rather than leaving a
+                        // row that points at nothing.
+                        wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
                     }
                 }
                 else if (data.type === 'session_unread') {
@@ -7342,23 +7391,15 @@ function VAFDashboardContent() {
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                         e.stopPropagation();
                                                         const isThinking = (s as { source?: string }).source === 'thinking';
-                                                        // An empty chat has nothing to lose and nothing to archive, so
-                                                        // asking about it is friction with no decision behind it - the
-                                                        // "new chat, never used" case is the one people delete most.
-                                                        // Attachments count as content even with no messages: a document
-                                                        // can be added and never sent, and losing it silently would be
-                                                        // exactly the confirmation this dialog exists for.
-                                                        const isEmpty = (s.messageCount || 0) === 0
-                                                            && !(sessionViewerState[s.id]?.documents || []).length;
-                                                        if (isEmpty) {
-                                                            performChatDelete({ id: s.id, isThinking, archive: false });
-                                                            return;
-                                                        }
-                                                        setChatToDelete({
-                                                            id: s.id,
-                                                            title: s.title.replace(".json", ""),
-                                                            isThinking,
-                                                        });
+                                                        // An empty chat still goes without a dialog - asking about it is
+                                                        // friction with no decision behind it, and "new chat, never used"
+                                                        // is the one people delete most. What changed is WHO decides it
+                                                        // is empty. This row cannot: its message count is a cached number
+                                                        // that no chat turn refreshes, and its attachment list exists
+                                                        // only for chats this browser has opened, so an unopened chat
+                                                        // full of documents looked as empty as a new one. The server
+                                                        // answers session_delete_result, and the dialog opens from there.
+                                                        performChatDelete({ id: s.id, isThinking, archive: false });
                                                     }} />
                                                 </>
                                             )}
@@ -10542,7 +10583,7 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 disabled={deleteArmedIn > 0}
-                                onClick={() => { performChatDelete({ ...chatToDelete, archive: archiveOnDelete }); setChatToDelete(null); }}
+                                onClick={() => { performChatDelete({ ...chatToDelete, archive: archiveOnDelete, confirmed: true }); setChatToDelete(null); }}
                                 className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-red-600/40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
                             >
                                 <span className="inline-flex items-center justify-center gap-2">

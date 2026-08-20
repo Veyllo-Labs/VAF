@@ -99,9 +99,15 @@ def test_the_delete_handler_archives_before_deleting():
     block = src[src.index('elif type == "delete_session"'):]
     block = block[:block.index('elif type == "hide_session"')]
     assert 'cmd.get("archive")' in block, "the handler ignores the dialog's checkbox"
-    assert re.search(r"if not session_mgr\.archive\([^)]*\):\s*\n\s*session_mgr\.delete", block), (
+    # The assignment target is free (the branch reports back what happened now),
+    # the ORDER is not: a failed archive still has to reach a real delete.
+    assert re.search(r"if not session_mgr\.archive\([^)]*\):\s*\n\s*(?:\w+ = )?session_mgr\.delete", block), (
         "a failed archive must fall through to a real delete"
     )
+    # A successful archive is a removal too - the file MOVED. Reporting it as
+    # "nothing happened" would leave the browser sitting on a chat the sidebar
+    # no longer lists, and archiving is the dialog's default.
+    assert "gone = True" in block, "a successful archive must count as gone"
     # And ownership is still checked before either path runs.
     assert "_ws_session_owner_ok" in block
 

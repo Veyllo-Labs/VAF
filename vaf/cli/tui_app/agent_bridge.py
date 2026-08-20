@@ -796,27 +796,19 @@ class AgentBridge:
                   f"    vaf session load {session_id}"]
         return "\n".join(lines)
 
-    @classmethod
-    def session_is_untouched(cls, session) -> bool:
-        """True when the user never actually said anything in this session.
-
-        The criterion is the one `SessionManager.cleanup_empty` already uses -
-        no message with role "user" - deliberately NOT a second definition of
-        "empty". A session carrying only the system prompt is a session that
-        was opened and abandoned, and keeping it just grows the list.
-        """
-        for message in getattr(session, "messages", []) or []:
-            role = cls._message_field(message, "role")
-            # Replay rows arrive as (role, text, when) tuples.
-            if role is None and isinstance(message, (tuple, list)) and message:
-                role = message[0]
-            if role == "user":
-                return False
-        return True
-
     def _discard_if_untouched(self, session) -> bool:
-        """Drop an abandoned session instead of leaving a husk behind."""
-        if session is None or not self.session_is_untouched(session):
+        """Drop an abandoned session instead of leaving a husk behind.
+
+        The question is `vaf.core.session.is_untouched`, the framework's one
+        definition of "nobody put anything in here", which the browser's delete
+        dialog and the husk cleanup ask too. This lane used to carry its own
+        copy - no message with role "user" - and that copy discarded a chat
+        holding an automation's proactive reply, or an attachment added but
+        never sent, simply because the person had not answered yet.
+        """
+        from vaf.core.session import is_untouched
+
+        if session is None or not is_untouched(session):
             return False
         try:
             self.session_mgr.delete(str(session.id))

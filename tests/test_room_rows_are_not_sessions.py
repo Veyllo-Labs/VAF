@@ -223,10 +223,21 @@ def test_there_is_exactly_one_projection_left(rooms):
     Seven identical copies is how the room fields came to be dropped in the first
     place, and the eighth would be the eighth place to forget.
     """
-    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    # Tree-wide, because the eighth copy DID appear and it appeared where a
+    # guard reading only web_server.py could not see it: the classic CLI pushed
+    # its own session_list after every turn, with id/title/date and nothing else.
+    # Every browser row then read messageCount as undefined - which the trash
+    # icon took for "empty chat, delete it without asking" - and lost the `kind`
+    # that keeps a room row out of the session loader.
+    copies = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "vaf").rglob("*.py")
+        if '"title": s["name"]' in path.read_text(encoding="utf-8")
+    )
+    assert copies == ["vaf/core/session.py"], (
+        f"a session list is being built by hand again: {copies}")
 
-    assert source.count('"title": s["name"]') == 1, (
-        "a session list is being built by hand again")
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert source.count("session_list_payload(web_sessions)") >= 7, (
         "a call site stopped going through the one projection")
 

@@ -516,7 +516,14 @@ class MailService:
 
     def get_attachment(self, message_pk: int, part_ref: str) -> Optional[Tuple[str, str, bytes]]:
         """(filename, content_type, payload) by part_id or Content-ID. Served
-        from the cached raw message only - no live fetch here."""
+        from the cached raw message only - no live fetch here.
+
+        Returns None when the part's bytes are on the machine's known-bad list. The
+        gate sits HERE, on the fetch, rather than on the sync: mail arrives whether we
+        like it or not, and the raw message is stored as received, so the only thing
+        that can actually be refused is handing the bytes onward - to the browser, to
+        an agent tool, to a save-to-disk. One choke point covers all three.
+        """
         raw = self.store.get_raw(message_pk)
         if raw is None:
             return None
@@ -536,5 +543,8 @@ class MailService:
                 payload = part.get_payload(decode=True) or b""
                 filename = part.get_filename() or f"part-{index}"
                 ctype = part.get_content_type() or "application/octet-stream"
+                from vaf.core.threat_db import refuse_known_bad
+                if refuse_known_bad(payload, filename=filename, origin="mail"):
+                    return None
                 return filename, ctype, payload
         return None

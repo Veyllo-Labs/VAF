@@ -116,6 +116,9 @@ async def _enqueue_discord_image(message, attachment, session_id, caption) -> bo
         return False
     mime = (getattr(attachment, "content_type", "") or "image/jpeg") or "image/jpeg"
     name = getattr(attachment, "filename", "") or "discord_image.jpg"
+    from vaf.core.threat_db import refuse_known_bad
+    if refuse_known_bad(raw, filename=name, origin="discord"):
+        return False           # never encoded, never persisted, never sent to vision
     attached_images = [{"data": _b64.b64encode(raw).decode("ascii"), "mime_type": mime, "name": name}]
     try:
         from vaf.core.web_server import _persist_attached_images_to_files
@@ -152,6 +155,9 @@ async def _handle_discord_document(message, attachment, session_id, caption) -> 
         raw = await attachment.read()
     except Exception:
         return False
+    from vaf.core.threat_db import refuse_known_bad
+    if refuse_known_bad(raw, filename=file_name, origin="discord"):
+        return False           # no temp file, no extraction, no RAG index
     tmp = None
     extracted = ""
     try:

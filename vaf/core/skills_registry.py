@@ -425,6 +425,29 @@ def import_skill_zip(
             if not parsed.get("valid"):
                 raise ValueError(f"invalid SKILL.md: {parsed.get('error')}")
 
+            # Known-bad first, heuristics second. The scanner SCORES a bundle and an
+            # admin may override that score; the hash list carries a verdict a human
+            # already reached about these exact bytes, so it is not overridable here -
+            # the way past it is to delist the digest, which is a deliberate act with
+            # its own audit trail. Checked on the staged copy, so nothing has landed.
+            from vaf.core.threat_db import check_skill_folder, emit_threat_block
+            listed = check_skill_folder(extract_dir)
+            if listed is not None:
+                from vaf.skills.scanner import SkillScanBlocked
+                blocked_scan = {
+                    "score": 100, "level": "high", "blocked": True,
+                    "findings": [{
+                        "id": "known_bad_hash", "category": "known_bad",
+                        "severity": "high", "file": str(listed.get("name") or skill_id),
+                        "line": 0, "snippet": str(listed.get("sha256") or "")[:12],
+                        "message": ("Content is on this machine's known-bad list: "
+                                    f"{listed.get('reason') or 'listed as dangerous'}. "
+                                    "An administrator must delist it first."),
+                    }],
+                }
+                emit_threat_block("import", skill_id, listed)
+                raise SkillScanBlocked(blocked_scan)
+
             # Security scan the full bundle (body + every bundled file) before install.
             from vaf.skills.scanner import scan_skill_folder, SkillScanBlocked, emit_skill_security_event
             scan = scan_skill_folder(extract_dir)

@@ -42,6 +42,7 @@ EMITTERS = {
     "_emit_sk",              # web_server's import alias for emit_skill_security_event
     "_emit_security_event",  # auth/middleware.py wrapper
     "_log_auth_failure",     # api/auth_routes.py wrapper
+    "_emit_threat_event",    # core/threat_db.py wrapper
 }
 
 

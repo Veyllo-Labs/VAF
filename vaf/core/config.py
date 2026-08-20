@@ -642,6 +642,16 @@ class Config:
         # a worsened level raises a security event on the Overview dashboard. 0 disables.
         "skills_rescan_interval_hours": 5,
 
+        # Arriving content (chat attachments, workspace and room uploads, messenger files,
+        # mail attachments, cloud downloads) is hashed and checked against the machine-wide
+        # known-bad list in vaf/core/threat_db.py. A hit is refused outright. False turns the
+        # lookup off everywhere at once; the list itself is untouched.
+        "upload_threat_scan_enabled": True,
+        # The second, non-binding half: the static scanner's opinion on arriving text
+        # (dynamic execution, pipe-to-shell, embedded keys, hidden bidi characters). It NEVER
+        # blocks - it raises an `upload_flagged` event so an admin can decide. False silences it.
+        "upload_scan_advisory_enabled": True,
+
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
         "front_office_contact_reply_require_approval": False,

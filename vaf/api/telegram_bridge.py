@@ -245,6 +245,11 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
             logger.warning(f"Failed to download voice file: {audio_resp.status_code}")
             return None, None
 
+        from vaf.core.threat_db import refuse_known_bad
+        if refuse_known_bad(audio_resp.content, filename=os.path.basename(file_path),
+                            origin="telegram"):
+            return None, None      # not written, not transcribed
+
         # 3. Save to temp file
         suffix = ".ogg" if file_path.endswith(".oga") or file_path.endswith(".ogg") else ".oga"
         with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=suffix, delete=False) as temp_file:
@@ -362,6 +367,10 @@ async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = ""
         if not dl_resp.ok:
             logger.warning("File download failed: %s", dl_resp.status_code)
             return None
+        from vaf.core.threat_db import refuse_known_bad
+        if refuse_known_bad(dl_resp.content, filename=os.path.basename(tg_path),
+                            origin="telegram"):
+            return None            # never written to disk; caller treats it as a failed download
         ext = suffix or os.path.splitext(tg_path)[1] or ".bin"
         if not ext.startswith("."):
             ext = "." + ext

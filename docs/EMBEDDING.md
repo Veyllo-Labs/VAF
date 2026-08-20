@@ -535,6 +535,77 @@ What an embedded agent can and cannot do on the host - the short version of
 
 ---
 
+## Content arriving from someone else: `vaf.inspect_upload`
+
+If your application lets anyone attach a file - a chat upload, a webhook payload,
+a mailbox, a shared folder - you have an ingress lane, and it needs the same
+question asked at every one of them: *have we already decided about exactly these
+bytes?*
+
+VAF keeps that decision in a machine-wide list of digests and gives you the funnel
+that consults it:
+
+```python
+import vaf
+
+verdict = vaf.inspect_upload(data, filename="report.pdf", origin="my_upload_form")
+if verdict.blocked:
+    return {"error": verdict.message("report.pdf")}   # a sentence you can show a user
+if verdict.flagged:
+    log.warning("suspicious upload: %s", verdict.advisory_level)
+save(data)
+```
+
+`UploadVerdict` carries `blocked`, `reason`, `sha256`, `sha3_256`, `size`,
+`advisory_level` and `advisory` (the individual findings). Two companions live in
+`vaf.core.threat_db` for shapes the facade name does not fit:
+`refuse_known_bad(data, filename=, origin=)` returns a plain bool, for a callback
+deep inside a bridge that has no way to answer the sender; and
+`inspect_upload_file(path)` streams the digests, for content already on disk that
+may be large.
+
+**Two verdicts, and only one of them refuses.** A listed digest is a block: a
+human already judged these exact bytes. The second half is the static scanner's
+opinion on arriving text (dynamic execution, pipe-to-shell, embedded keys, hidden
+bidi characters), and it NEVER blocks - those heuristics have false positives by
+construction, and refusing on them would reject ordinary work daily. Honour
+`blocked`; treat `flagged` as something to log, warn about, or route to a human.
+
+**Filling the list** is your call to make, and the intended trigger is a
+CONFIRMED verdict, not a suspicion:
+
+```python
+vaf.record_threat(sha256=digest, sha3_256=digest3, name="payload.py",
+                  reason="confirmed hostile", listed_by="admin@example")
+```
+
+Also in `vaf.core.threat_db`: `record_bytes_threat` / `record_file_threat` (which
+hash for you), `check_bytes` / `check_file` / `check_hashes` for a lookup with no
+event, `list_threats`, `threat_count` and `remove_threat`.
+
+**What you are responsible for.** This module is a library: it enforces nothing
+about who may call it. Gate your own write path - `record_threat` and
+`remove_threat` are administrative actions, and delisting in particular re-opens
+every lane at once. The list is machine-wide on purpose (a verdict about bytes
+does not belong to an account), so in a multi-tenant deployment it is a shared
+resource that one tenant must not be able to edit.
+
+**Properties worth knowing.** Every record carries a sha256 and a sha3_256, and
+either matching is a hit. The store is append-only JSONL at
+`~/.vaf/security/threat_db.jsonl`, 0600 in a 0700 directory (both no-ops on
+Windows - see the platform note in `secure_store.harden_path`), and it is NOT
+encrypted, deliberately: a hash is not a secret, and an operator needs to be able
+to read the file when a block has to be explained. Nothing here raises - a guard
+that throws is a guard that gets wrapped in a bare `except` and stops guarding -
+and a list that cannot be read fails OPEN, because it has not refused anything.
+Two config keys switch the halves off: `upload_threat_scan_enabled` and
+`upload_scan_advisory_enabled`.
+
+The full lane inventory, the event kinds and the product's own admin surface are
+in [SECURITY_DASHBOARD.md](security/SECURITY_DASHBOARD.md).
+
+---
+
 ## Sub-agents as a library
 
 VAF's heavy sub-agents (`coding_agent`, `research_agent`, `document_agent`,

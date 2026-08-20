@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .core.pdf_extract import extract_pdf_markdown
+    from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver, set_confirmation_bypass_resolver
     from .framework import Agent, CoreAgent
     from .tools.base import BaseTool
@@ -20,11 +21,12 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "RemoteRefused",
            "RemoteRoom", "Room", "RoomError",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
-           "VoiceTurnEngine",
+           "UploadVerdict", "VoiceTurnEngine",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
-           "fold_room_tasks", "fold_room_votes",
+           "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "joined_rooms", "markers",
-           "participant_key", "room_invitation", "set_account_allowlist_resolver",
+           "participant_key", "record_threat", "room_invitation",
+           "set_account_allowlist_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
 
 
@@ -90,6 +92,20 @@ def __getattr__(name):
         # means: nobody has it. Stdlib-only underneath. See docs/EMBEDDING.md.
         from .core.tool_dispatch import set_confirmation_bypass_resolver
         return set_confirmation_bypass_resolver
+    if name in ("UploadVerdict", "inspect_upload", "record_threat"):
+        # Content arriving from someone else, judged once and remembered. `inspect_upload`
+        # is the question a lane asks before it accepts bytes (hash them, look them up,
+        # take the static scanner's non-binding opinion); `record_threat` is how a
+        # confirmed verdict is kept. Exported because THIRTEEN ingress points in this
+        # tree ask the same question - chat attachments, workspace and room uploads, four
+        # messenger lanes, mail, cloud sync, the skill installer - and an embedder
+        # building any file-accepting surface has that need on day one with nothing to
+        # call. The list is machine-wide, not per user: a verdict about bytes does not
+        # belong to an account. Stdlib-only underneath, so the slim base is unaffected.
+        # See docs/EMBEDDING.md.
+        from .core.threat_db import UploadVerdict, inspect_upload, record_threat
+        return {"UploadVerdict": UploadVerdict, "inspect_upload": inspect_upload,
+                "record_threat": record_threat}[name]
     if name == "extract_pdf_markdown":
         # PDF -> Markdown with honest coverage facts (pages_read/total_pages/
         # truncated, absolute page markers, OCR reason). Exported because in-tree

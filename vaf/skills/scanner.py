@@ -221,6 +221,21 @@ def scan_skill_md_text(content: str) -> Dict[str, Any]:
     return _result(_scan_text(body, "body", "SKILL.md"))
 
 
+def scan_text_content(text: str, label: str = "content") -> Dict[str, Any]:
+    """Scan arbitrary text with the CODE rules, for content that is not a skill.
+
+    An uploaded attachment is not a SKILL.md: nobody promised the agent would follow
+    it as instructions, so the body rules (prompt injection, role override) would say
+    more about the document's topic than about its danger. The code rules - dynamic
+    execution, pipe-to-shell, embedded keys, hidden bidi characters - keep meaning the
+    same thing wherever the bytes came from, and those are what runs here.
+
+    The result has the same shape every other scan returns. Callers on the upload
+    lanes treat it as ADVISORY: see vaf.core.threat_db.
+    """
+    return _result(_scan_text(text, "code", label))
+
+
 def scan_skill_folder(folder: Path | str) -> Dict[str, Any]:
     """Scan a skill folder: the SKILL.md body plus every bundled text/code file."""
     folder = Path(folder)

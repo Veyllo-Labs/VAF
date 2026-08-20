@@ -80,6 +80,16 @@ class CreateSkillTool(BaseTool):
         parsed = parse_skill_md_text(content, sid)
         if not parsed.get("valid"):
             return f"error: invalid skill: {parsed.get('error')}"
+        # Known-bad first: if these exact bytes are on the machine's list, no score
+        # and no wording gets past it. Cheap - one hash of the text.
+        from vaf.core.threat_db import check_bytes, emit_threat_block
+        listed = check_bytes(content.encode("utf-8"))
+        if listed is not None:
+            emit_threat_block("skill_create", sid, listed, username)
+            return ("error: this skill content is on the machine's known-bad list "
+                    f"({listed.get('reason') or 'listed as dangerous'}). "
+                    "An administrator must delist it first.")
+
         scan = scan_skill_md_text(content)
         if scan.get("level") == "high":
             emit_skill_security_event("skill_blocked", "create", sid, scan)

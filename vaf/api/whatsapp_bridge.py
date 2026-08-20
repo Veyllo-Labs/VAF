@@ -370,6 +370,13 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
             logger.warning("WhatsApp STT: voice file not found: %s", voice_path)
             return None, None
         file_size = path_obj.stat().st_size
+        # Known-bad gate. This is WhatsApp's only inbound FILE lane: Node has already
+        # written the media to disk, so the gate sits here, at the one door through
+        # which those bytes reach anything that reads them. Refused audio is simply
+        # not transcribed, and the caller's existing "no transcript" branch takes over.
+        from vaf.core.threat_db import inspect_upload_file
+        if inspect_upload_file(path_obj, origin="whatsapp").blocked:
+            return None, None
         # Use MIME type from extension (Node sends .ogg for PTT, .opus for other audio)
         ext = (path_obj.suffix or "").lower()
         mime = "audio/ogg" if ext == ".ogg" else ("audio/opus" if ext == ".opus" else "audio/ogg")

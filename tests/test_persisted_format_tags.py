@@ -113,6 +113,8 @@ def test_format_identities_are_pinned_literals():
     assert TRUST_FORMAT == "trust-2-b17c4e"
     from vaf.core.a2a.store import ROOM_FORMAT
     assert ROOM_FORMAT == "a2aroom-1-7f4c1e"
+    from vaf.core.threat_db import THREAT_DB_FORMAT
+    assert THREAT_DB_FORMAT == "threatdb-1-9c2f7b"
 
 
 def test_chain_with_versioned_seed_verifies():

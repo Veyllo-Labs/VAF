@@ -217,6 +217,32 @@ def _isolated_store_dirs(tmp_path_factory):
     os.environ.pop("VAF_TEST_STORE_ROOT", None)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_threat_db(tmp_path_factory):
+    """The known-bad hash list is MACHINE-global by design, so it is machine-global
+    under test too unless something redirects it.
+
+    It hangs off `Platform.vaf_dir()` (`~/.vaf/security/`), which none of the axes
+    above reach: HOME is not redirected here, and the fixtures that do redirect
+    (`Config.APP_DIR`, the XDG vars) do not feed that helper. Left alone, any test
+    that deletes a quarantined skill - the path that LISTS a digest - would append to
+    the developer's real list, and a suite that silently adds entries to a live block
+    list is the same class of damage the two fixtures above were written for.
+
+    The seam is `threat_db.threat_db_dir` rather than `Platform.vaf_dir`, so the
+    redirect cannot leak into unrelated consumers of the home directory.
+    """
+    import vaf.core.threat_db as tdb
+
+    root = tmp_path_factory.mktemp("vaf-test-threatdb")
+    original = tdb.threat_db_dir
+    tdb.threat_db_dir = lambda: root
+    tdb.reset_cache()
+    yield root
+    tdb.threat_db_dir = original
+    tdb.reset_cache()
+
+
 # ── duck-typed agents for the dispatch tests ─────────────────────────────────
 #
 # Eight tests drive `Agent.execute_tool` against a `SimpleNamespace` instead of a real

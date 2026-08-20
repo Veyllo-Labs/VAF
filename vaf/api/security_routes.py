@@ -444,6 +444,49 @@ def collect_skills_status() -> Dict[str, Any]:
     return derive_skills_status(skills, read_security_events(today, limit=1000), last)
 
 
+# ── Arriving content / known-bad list ────────────────────────────
+
+
+def derive_content_status(listed_total: int, events: List[Dict[str, Any]],
+                          enabled: bool) -> Dict[str, Any]:
+    """Pure assembly of the arriving-content module.
+
+    States follow the dashboard's own convention, and the distinction is the same
+    one the skills module makes: a BLOCK is the guard working, so it stays green
+    while reporting the count. Only two things move it: the lookup being switched
+    OFF (every lane is accepting anything, which is a real posture change and must
+    not read as green), and a FLAGGED upload, which is a finding nobody has looked
+    at yet.
+    """
+    blocked = sum(1 for e in events if e.get("kind") == "upload_blocked")
+    flagged = sum(1 for e in events if e.get("kind") == "upload_flagged")
+    return {
+        "state": "warn" if (not enabled or flagged > 0) else "ok",
+        "enabled": bool(enabled),
+        "listed_total": int(listed_total),
+        "blocked_today": blocked,
+        "flagged_today": flagged,
+        "listed_today": sum(1 for e in events if e.get("kind") == "threat_listed"),
+        "delisted_today": sum(1 for e in events if e.get("kind") == "threat_delisted"),
+    }
+
+
+def collect_content_status() -> Dict[str, Any]:
+    """Count the known-bad list and today's ingress events."""
+    try:
+        from vaf.core.threat_db import threat_count
+        listed = threat_count()
+    except Exception:
+        listed = 0
+    try:
+        from vaf.core.config import Config
+        enabled = bool(Config.get("upload_threat_scan_enabled", True))
+    except Exception:
+        enabled = True
+    today = datetime.now().strftime("%Y-%m-%d")
+    return derive_content_status(listed, read_security_events(today, limit=1000), enabled)
+
+
 # ── Guardrails / tool policy ─────────────────────────────────────────────────
 
 
@@ -695,13 +738,97 @@ def quarantined_skill_delete(skill_id: str,
         raise HTTPException(status_code=404, detail="Unknown skill")
     if not entry.get("quarantined"):
         raise HTTPException(status_code=400, detail="Skill is not quarantined")
+
+    # Keep the verdict before the evidence goes. Deleting a quarantined skill is the
+    # point at which a human has CONFIRMED it is hostile - the one signal worth
+    # remembering machine-wide, and the last moment its bytes still exist to hash.
+    # Without this the identical bundle walks back in through any upload lane an hour
+    # later and nothing is looking at it. Never fatal: a failure here must not leave a
+    # quarantined skill undeletable.
+    listed: List[Dict[str, Any]] = []
+    try:
+        from vaf.core.skills_registry import resolve_skill_folder
+        from vaf.core.threat_db import record_skill_threat
+        folder = resolve_skill_folder(sid)
+        if folder is not None:
+            listed = record_skill_threat(
+                folder, skill_id=sid,
+                reason=f"quarantined skill deleted ({(entry.get('quarantined') or {}).get('reason', 'manual')})",
+                scan=(entry.get("scan") or {}),
+                listed_by=str(user.get("username") or ""))
+    except Exception:
+        listed = []
+
     delete_skill(sid)
     try:
         from vaf.core.security_events import log_security_event
         log_security_event("skill_removed", username=str(user.get("username") or ""), detail=f"quarantine-delete:{sid}")
     except Exception:
         pass
-    return {"ok": True, "deleted": sid}
+    return {"ok": True, "deleted": sid, "listed_digests": len(listed)}
+
+
+# ── the known-bad hash list ────────────────────────────────────────
+#
+# The list is machine-wide, so every route here is admin-gated. The asymmetry
+# mirrors the quarantine routes exactly: ADDING an entry only refuses more content,
+# so it needs no second factor; REMOVING one re-opens every upload lane to those
+# bytes, so it requires the admin's TOTP - the same reasoning as restoring a
+# quarantined skill.
+
+@router.get("/threats")
+def threats_list(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Every currently listed digest, newest first, plus today's block count."""
+    from vaf.core.threat_db import list_threats
+    items = list_threats()
+    today = datetime.now().strftime("%Y-%m-%d")
+    events = read_security_events(today, limit=1000)
+    return {
+        "items": items,
+        "total": len(items),
+        "blocked_today": sum(1 for e in events if e.get("kind") == "upload_blocked"),
+        "flagged_today": sum(1 for e in events if e.get("kind") == "upload_flagged"),
+    }
+
+
+@router.post("/threats")
+def threats_add(payload: Dict[str, Any] = Body(default={}),
+                user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """List one digest by hand.
+
+    Takes digests, never a file: the browser hashes locally and sends 64 hex
+    characters, so listing a large sample never uploads it to the machine it is
+    meant to be kept off. `sha3_256` is optional but strongly preferred - without
+    it the entry only matches on one hash family.
+    """
+    from vaf.core.threat_db import record_threat
+    sha256 = str(payload.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise HTTPException(status_code=400, detail="sha256 must be 64 hex characters")
+    sha3 = str(payload.get("sha3_256") or "").strip().lower()
+    if sha3 and not re.fullmatch(r"[0-9a-f]{64}", sha3):
+        raise HTTPException(status_code=400, detail="sha3_256 must be 64 hex characters")
+    record = record_threat(
+        sha256=sha256, sha3_256=sha3, size=int(payload.get("size") or 0),
+        name=str(payload.get("name") or "")[:200],
+        reason=str(payload.get("reason") or "listed by an administrator")[:300],
+        listed_by=str(user.get("username") or ""))
+    return {"ok": True, "record": record}
+
+
+@router.post("/threats/{sha256}/remove")
+async def threats_remove(sha256: str, payload: Dict[str, Any] = Body(default={}),
+                         user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Delist a digest. Requires the admin's TOTP: this is the one action that puts
+    content back within reach of every upload lane at once."""
+    from vaf.core.threat_db import remove_threat
+    digest = str(sha256 or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(status_code=400, detail="sha256 must be 64 hex characters")
+    await _verify_admin_totp(user, str(payload.get("code") or ""))
+    if not remove_threat(digest, by=str(user.get("username") or "")):
+        raise HTTPException(status_code=404, detail="That digest is not listed")
+    return {"ok": True, "delisted": digest}
 
 
 @router.get("/skills/{skill_id}/scan")
@@ -832,6 +959,7 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
     channels = await run_in_threadpool(collect_channels_status)
     guardrails = await run_in_threadpool(collect_guardrails_status)
     skills = await run_in_threadpool(collect_skills_status)
+    content = await run_in_threadpool(collect_content_status)
     # Newest security-event timestamp today: lets the window's log badge be
     # unread-based (clears when the admin opens the security log), shared with
     # the sidebar dot via the same seen-marker.
@@ -852,6 +980,7 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
         "channels": channels,
         "guardrails": guardrails,
         "skills": skills,
+        "content": content,
         "security_latest_ts": security_latest_ts,
         "security_events_today": security_events_today,
     }

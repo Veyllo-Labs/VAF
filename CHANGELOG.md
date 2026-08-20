@@ -11,6 +11,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **A dangerous file is now recognised everywhere, not just once.** When an
+  administrator deletes a quarantined skill, VAF keeps the verdict: it records
+  the fingerprint of the bundle and of the files that earned the block in a
+  machine-wide list. From then on, every place a file can arrive checks against
+  that list before doing anything with it - chat attachments and images, the
+  chat workspace upload, files put into a shared agent room, Telegram, Discord
+  and WhatsApp media, mail attachments, cloud-sync downloads, and skill
+  installs. A match is refused outright and appears on the security dashboard.
+  Renaming the file or repacking it into a different bundle does not help: the
+  content itself is what is recognised, using two independent secure hashes.
+  Administrators can see and manage the list under Logs -> Overview, or from a
+  terminal with `vaf security threats list | check | add | remove`. Removing an
+  entry re-opens every lane at once, so it asks for the admin's 2FA code.
+- **Files that merely look suspicious are pointed out, never blocked.**
+  Alongside the check above, uploaded text is scanned for patterns that are
+  often unsafe - commands piped into a shell, embedded credentials, hidden
+  characters used to smuggle instructions. Anything found is noted next to the
+  file and on the dashboard, and the file is delivered as normal. Legitimate
+  scripts do these things too, so this is information, not a refusal.
+
 ### Fixed
 - **Sending a room message no longer shows it twice.** The pending copy was
   matched against the delivered message by exact text, but the server trims

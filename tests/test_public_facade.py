@@ -48,11 +48,13 @@ def test_facade_exports_exactly_the_documented_surface():
     assert sorted(vaf.__all__) == [
         "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent", "RemoteRefused", "RemoteRoom",
         "Room", "RoomError", "StoreError",
-        "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "VoiceTurnEngine",
+        "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "UploadVerdict",
+        "VoiceTurnEngine",
         "__version__",
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
-        "fold_room_tasks", "fold_room_votes", "joined_rooms", "markers",
-        "participant_key", "room_invitation", "set_account_allowlist_resolver",
+        "fold_room_tasks", "fold_room_votes", "inspect_upload", "joined_rooms", "markers",
+        "participant_key", "record_threat", "room_invitation",
+        "set_account_allowlist_resolver",
         "set_confirmation_bypass_resolver",
         "unread_counts", "user_jail",
     ]

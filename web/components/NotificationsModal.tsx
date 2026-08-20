@@ -194,6 +194,29 @@ type SkillsStatus = {
   last_rescan: { ts?: string; scanned?: number; changed?: number; alerts?: number; worst?: string } | null;
 };
 
+type ContentStatus = {
+  state: 'ok' | 'warn';
+  enabled: boolean;
+  listed_total: number;
+  blocked_today: number;
+  flagged_today: number;
+  listed_today: number;
+  delisted_today: number;
+};
+
+type ThreatEntry = {
+  sha256: string;
+  sha3_256?: string;
+  size?: number;
+  kind?: string;
+  name?: string;
+  reason?: string;
+  source?: string;
+  listed_at?: string;
+  listed_by?: string;
+  skill_id?: string;
+};
+
 type ThinkingUserStatus = {
   username: string;
   scope: string;
@@ -228,6 +251,7 @@ type SecurityOverview = {
   channels?: ChannelsStatus;
   guardrails?: GuardrailsStatus;
   skills?: SkillsStatus;
+  content?: ContentStatus;
   security_latest_ts?: string | null;
   security_events_today?: number;
 };
@@ -1403,6 +1427,10 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'skill_scan_alert': return t('ovEvSkillAlert');
       case 'skill_quarantined': return t('ovEvSkillQuarantined');
       case 'skill_removed': return t('ovEvSkillRemoved');
+      case 'upload_blocked': return t('ovEvUploadBlocked');
+      case 'upload_flagged': return t('ovEvUploadFlagged');
+      case 'threat_listed': return t('ovEvThreatListed');
+      case 'threat_delisted': return t('ovEvThreatDelisted');
       case 'room_account_admitted': return t('ovEvRoomAccountAdmitted');
       case 'cli_password_gate_failed': return t('ovEvCliGateFailed');
       case 'default_db_password': return t('ovEvDefaultDbPassword');
@@ -1412,6 +1440,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   const channels = security?.channels;
   const guardrails = security?.guardrails;
   const skills = security?.skills;
+  const content = security?.content;
 
   // ── Health and update row ────────────────────────────────────────────────
   // Order matters and is the dashboard's honesty rule: not measured beats
@@ -1483,6 +1512,49 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
     }
     setQBusy(false);
   };
+  // ── Known-bad list (arriving content) ─────────────────────────
+  // Delisting is the mirror of a skill restore: it puts content back within reach
+  // of every ingress lane at once, so it asks for the same second factor and
+  // reuses the same code/busy/error state rather than growing a parallel one.
+  const [threats, setThreats] = useState<ThreatEntry[] | null>(null);
+  const [threatPending, setThreatPending] = useState<string | null>(null); // sha256 awaiting a code
+  // An explicit counter, not `threats === null` as a dependency: that flips back the
+  // moment the fetch lands, which re-runs the effect and fetches the same list twice.
+  const [threatsNonce, setThreatsNonce] = useState(0);
+  const delistThreat = async (sha256: string) => {
+    setQBusy(true);
+    setQError(null);
+    try {
+      const res = await fetch(`${getApiBase()}/api/security/threats/${encodeURIComponent(sha256)}/remove`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: qCode }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setQError(String(d?.detail ?? `HTTP ${res.status}`));
+      } else {
+        setQCode('');
+        setThreatPending(null);
+        setThreats(null);
+        setThreatsNonce(n => n + 1);   // re-fetch the now-changed list
+        onRefreshSecurity();
+      }
+    } catch {
+      setQError('network error');
+    }
+    setQBusy(false);
+  };
+  useEffect(() => {
+    if (detail !== 'content') { setThreats(null); return; }
+    setThreatPending(null); setQCode(''); setQError(null);
+    fetch(`${getApiBase()}/api/security/threats`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setThreats(Array.isArray(d?.items) ? d.items : []))
+      .catch(() => setThreats([]));
+  }, [detail, threatsNonce]);
+
   const detailSkillId = detail?.startsWith('skill:') ? detail.slice(6) : null;
   useEffect(() => {
     if (!detailSkillId) { setSkillScan(null); return; }
@@ -1534,6 +1606,8 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
     skills?.state === 'warn' ? t('ovRaSkillMedium') : '',
     skillOverridesToday > 0 ? t('ovRaSkillOverride', { n: skillOverridesToday }) : '',
     skillAlertsToday > 0 ? t('ovRaSkillAlert', { n: skillAlertsToday }) : '',
+    (content && !content.enabled) ? t('ovRaUploadScanOff') : '',
+    (content && content.flagged_today > 0) ? t('ovRaUploadFlagged', { n: content.flagged_today }) : '',
   ].filter(Boolean);
   const overallState: 'critical' | 'attention' | 'ok' | 'nodata' =
     criticalReasons.length > 0 ? 'critical'
@@ -1548,8 +1622,10 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   const blockedToday =
     (firewall ? firewall.blocked_today + firewall.failed_logins_today : 0)
     + (channels ? channels.rejected_today : 0)
-    + (skills ? skills.blocked_today + skillOverridesToday + skillAlertsToday : 0);
-  const eventsNeedAttention = skillOverridesToday > 0 || skillAlertsToday > 0;
+    + (skills ? skills.blocked_today + skillOverridesToday + skillAlertsToday : 0)
+    + (content ? content.blocked_today + content.flagged_today : 0);
+  const eventsNeedAttention = skillOverridesToday > 0 || skillAlertsToday > 0
+    || Boolean(content && content.flagged_today > 0);
   const amber = dark ? '#fbbf24' : '#b45309';
   const overall = overallState === 'ok'
     ? { rgb: '34,197,94', shield: 'rgba(74,222,128,.5)', color: green, Icon: ShieldCheck, border: 'rgba(34,197,94,.28)', head: t('ovHeroOk'), sub: `${t('ovHeroOkSub')} · ${totalRaw} ${t('ovEventsSecured')}`, pulse: false }
@@ -1719,6 +1795,16 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                 : mail.length === 0 ? t('ovPhNoMail')
                   : t('ovPhActive', { n: mailFlagged?.length ?? 0 }),
               statusColor: mail === null || mail.length === 0 ? C.textDim : green,
+            },
+            {
+              key: 'content',
+              name: t('ovCardContent'),
+              dot: !content ? C.textFaint : content.state === 'warn' ? '#f59e0b' : '#22c55e',
+              status: !content ? noData
+                : !content.enabled ? t('ovCtOff')
+                  : content.flagged_today > 0 ? t('ovCtFlagged', { n: content.flagged_today })
+                    : t('ovCtGuarding', { n: content.listed_total }),
+              statusColor: !content ? C.textDim : content.state === 'warn' ? amber : green,
             },
             {
               key: 'guardrails',
@@ -2131,12 +2217,14 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
           audit: t('ovCardAudit'), sandbox: t('ovCardSandbox'), firewall: t('ovCardFirewall'),
           isolation: t('ovCardIsolation'), channels: t('ovCardChannels'),
           phishing: t('ovCardPhishing'), guardrails: t('ovCardGuardrails'),
+          content: t('ovCardContent'),
           events: t('ovEventsTitle'),
         };
         const descs: Record<string, string> = {
           audit: t('ovDescAudit'), sandbox: t('ovDescSandbox'), firewall: t('ovDescFirewall'),
           isolation: t('ovDescIsolation'), channels: t('ovDescChannels'),
           phishing: t('ovDescPhishing'), guardrails: t('ovDescGuardrails'),
+          content: t('ovDescContent'),
           events: t('ovDescEvents'),
         };
         const factRow = (label: string, value: ReactNode, okDot?: boolean | null) => (
@@ -2166,6 +2254,61 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
               </div>
               <div style={{ padding: '14px 16px', overflow: 'auto' }}>
                 <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.5, marginBottom: 12 }}>{detailSkillId ? t('ovSkDetailDesc') : (descs[detail] ?? '')}</div>
+
+                {/* ── Arriving content: the known-bad list + delist ── */}
+                {detail === 'content' && content && (
+                  <>
+                    {factRow(t('ovCtRowScan'), content.enabled ? t('ovCtOn') : t('ovCtOff'), content.enabled)}
+                    {factRow(t('ovCtRowListed'), String(content.listed_total), null)}
+                    {factRow(t('ovCtRowBlocked'), String(content.blocked_today), null)}
+                    {factRow(t('ovCtRowFlagged'), String(content.flagged_today), content.flagged_today === 0)}
+                    <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.5, margin: '12px 0 6px' }}>
+                      {t('ovCtExplain')}
+                    </div>
+                    {threats === null ? (
+                      <div style={{ fontSize: 11.5, color: C.textFaint }}>{t('ovCtLoading')}</div>
+                    ) : threats.length === 0 ? (
+                      <div style={{ fontSize: 11.5, color: C.textFaint }}>{t('ovCtEmpty')}</div>
+                    ) : threats.map(item => (
+                      <div key={item.sha256} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.textStrong, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {item.name || item.sha256.slice(0, 12)}
+                          </span>
+                          <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>{item.sha256.slice(0, 12)}</span>
+                          <button type="button" disabled={qBusy}
+                            onClick={() => { setThreatPending(item.sha256); setQCode(''); setQError(null); }}
+                            style={{ fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 6, border: `1px solid ${C.borderLt}`, background: 'transparent', color: C.textMid, cursor: 'pointer', flexShrink: 0 }}>
+                            {t('ovCtDelist')}
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>
+                          {item.reason || ''}{item.listed_at ? ` \u00b7 ${item.listed_at}` : ''}
+                        </div>
+                        {threatPending === item.sha256 && (
+                          <div style={{ marginTop: 7 }}>
+                            <div style={{ fontSize: 11.5, color: C.textMid, marginBottom: 5 }}>{t('ovCtDelistPrompt')}</div>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              <input value={qCode} onChange={e => setQCode(e.target.value)} inputMode="numeric"
+                                placeholder="000000" maxLength={8}
+                                style={{ width: 92, fontFamily: 'monospace', fontSize: 12.5, letterSpacing: 2, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgRuler, color: C.textStrong }} />
+                              <button type="button" disabled={qBusy || qCode.trim().length < 6}
+                                onClick={() => delistThreat(item.sha256)}
+                                style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: '1px solid rgba(34,197,94,.35)', background: 'rgba(34,197,94,.10)', color: green, cursor: 'pointer', opacity: qBusy || qCode.trim().length < 6 ? 0.5 : 1 }}>
+                                {t('ovCtDelistConfirm')}
+                              </button>
+                              <button type="button" onClick={() => { setThreatPending(null); setQCode(''); setQError(null); }}
+                                style={{ fontSize: 11.5, padding: '5px 10px', borderRadius: 6, border: `1px solid ${C.borderLt}`, background: 'transparent', color: C.textMid, cursor: 'pointer' }}>
+                                {t('cancel')}
+                              </button>
+                            </div>
+                            {qError && <div style={{ fontSize: 11, color: red, marginTop: 5 }}>{qError}</div>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
 
                 {/* ── Skill detail: WHY it was flagged + resolution actions ── */}
                 {detailSkillId && (() => {

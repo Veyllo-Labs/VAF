@@ -73,6 +73,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "room_account_admitted": "An account was let into a room shared across accounts; "
                              "every member of such a room reads everything said in it. "
                              "`path` carries the room id, `username` who admitted",
+    # arriving content (attachments, uploads, shared folders, messenger files)
+    "upload_blocked": "Arriving content matched the machine's known-bad hash list and was "
+                      "refused; `channel` carries the lane it arrived on, `path` the digest prefix",
+    "upload_flagged": "Arriving content tripped the static scanner (advisory only, not blocked)",
+    "threat_listed": "A digest was added to the known-bad list",
+    "threat_delisted": "A digest was removed from the known-bad list (admin, second factor)",
     # data at rest
     "cli_password_gate_failed": "Three wrong admin passwords at the interactive terminal",
     "default_db_password": "The memory database is still using the shipped default password; "

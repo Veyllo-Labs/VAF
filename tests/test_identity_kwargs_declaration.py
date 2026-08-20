@@ -494,7 +494,7 @@ REMAINING_LITERAL_NAME_SOURCES = {
         "channel message store, while the reader gets its name from the assigner. For a "
         "session with no username the two now disagree - writer literal, reader owner or "
         "tenant bucket - so a sync writes one file and the query reads another.",
-    "vaf/api/discord_bridge.py:127":
+    "vaf/api/discord_bridge.py:130":
         "The bridges stamp a hardcoded 'admin' into task metadata, which headless_runner "
         "copies into session metadata and the agent into _current_username. It arrives TRUTHY, "
         "so the rule returns it unchanged and never gets to ask the scope. WHAT THAT COSTS IN "

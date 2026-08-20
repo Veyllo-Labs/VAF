@@ -347,6 +347,24 @@ class SyncEngine:
         logger.debug("Downloading: %s", rel_path)
         self.provider.download_file(remote_file.file_id, local_path)
 
+        # Known-bad gate. A cloud folder is a shared surface: anyone the user shared
+        # it with, on any of their devices, can drop a file in and this loop will pull
+        # it onto the machine the agent runs on. The file is deleted again and NOT
+        # recorded in the manifest, which has a consequence worth stating plainly:
+        # the next sync sees a remote file with no local record, downloads it and
+        # refuses it again. That is the honest behaviour - the file genuinely is still
+        # up there - and each cycle re-raises the event so the situation stays visible
+        # instead of decaying into a silent skip.
+        from vaf.core.threat_db import inspect_upload_file
+        if inspect_upload_file(local_path, filename=rel_path, origin="cloud_sync").blocked:
+            try:
+                local_path.unlink()
+            except OSError:
+                pass
+            logger.warning("Refused known-bad download: %s", rel_path)
+            result.errors += 1
+            return
+
         local_hash = _md5_hash(local_path)
         try:
             local_mtime = local_path.stat().st_mtime

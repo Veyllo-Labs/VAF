@@ -152,6 +152,10 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `skill_scan_alert` | Periodic re-scan found a worsened risk level (below high) | `vaf/skills/rescan.py` |
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
+| `upload_blocked` | Arriving content matched the known-bad hash list and was refused; `channel` carries the lane (`web_chat`, `workspace_upload`, `a2a_room`, `telegram`, `discord`, `whatsapp`, `mail`, `cloud_sync`, `skill_import`), `path` the sha256 prefix | `vaf/core/threat_db.py` (`inspect_upload`, `emit_threat_block`), called from every ingress lane |
+| `upload_flagged` | Arriving content tripped the static scanner. ADVISORY: it was delivered, not refused | `vaf/core/threat_db.py` (`inspect_upload`) |
+| `threat_listed` | A digest was added to the known-bad list | `vaf/core/threat_db.py` (`record_threat`) |
+| `threat_delisted` | A digest was removed from the known-bad list | `vaf/core/threat_db.py` (`remove_threat`) |
 | `room_account_admitted` | An account was let into a room shared across accounts; every member of such a room reads everything said in it. `path` carries the room id, `username` who admitted | `vaf/cli/cmd/a2a.py` (`share`) - emitted by the CALLER, so an embedder using `Room.admit` does not write into this log |
 | `cli_password_gate_failed` | Three wrong admin passwords at the interactive terminal | `vaf/cli/gate.py` |
 | `default_db_password` | The memory database is still using the shipped default password; the event text carries the fix (`vaf secure rotate-db`, via the agent or a terminal) | `service_stack.py` start |
@@ -214,6 +218,139 @@ The asymmetry is deliberate: silencing a warning
 so a stolen admin session alone must not suffice; the second factor is
 required. Deleting or isolating a skill only reduces risk, so no second
 factor is needed there.
+
+---
+
+## Arriving content: the known-bad hash list
+
+The skill lifecycle above protects one door. This lane protects every other one.
+
+### The problem it closes
+
+A confirmed verdict used to be unrecoverable. An admin studies a hostile bundle,
+decides it is dangerous and deletes it - and the identical bytes walk back in an
+hour later as a chat attachment, a Telegram document or a file dropped into a
+room's shared folder, where nothing was ever looking at them. The scanner reads
+SHAPE and can be argued with; a hash is the judgement itself, kept.
+
+### The store
+
+`vaf/core/threat_db.py`, at `~/.vaf/security/threat_db.jsonl` (0600, in a 0700
+directory; on Windows both are no-ops and the profile ACL is what protects the
+file - see `harden_path`). Append-only JSONL, folded on read: last `op` per
+sha256 wins. A delist appends a tombstone rather than erasing the listing, so the
+file answers "why is this no longer blocked?" as well as "why was it blocked?".
+First line carries the format tag `threatdb-1-9c2f7b`, pinned in
+`tests/test_persisted_format_tags.py`; a file written without it still loads.
+
+**Deliberately not user-scoped.** Content that is hostile to one account is
+hostile to every account on the machine, and a per-user list would re-learn the
+same answer once per user. Lookups ignore identity entirely.
+
+**What "write protected" means, stated honestly.** Three mechanisms, no more:
+the 0600/0700 file modes above; every write-side entry point being admin-gated
+(the routes below, or the machine owner at a terminal); and every mutation
+emitting a security event, so a list that grew or shrank leaves a trace outside
+itself. NOT claimed: encryption (a hash is not a secret, and an admin must be
+able to `cat` this file when a block needs explaining) or a hash chain over the
+records - the event log is the audit trail, and a chain stays addable later
+because every record already carries `op`.
+
+**Two hash families.** Every record carries a sha256 AND a sha3_256, and either
+one matching is a hit. Their constructions are unrelated (Merkle-Damgard vs
+sponge), so a collision attack that ever became practical against one does not
+carry over to the other. Digests come from `vaf/skills/scanner.py`, whose
+allow-list is SHA-2 and SHA-3 and deliberately excludes md5/sha1. Every record
+also carries `source`, which is `local` today and exists so an imported
+third-party feed can be told apart from a local verdict without a format break.
+
+### The funnel, and the two verdicts it can reach
+
+`inspect_upload(data, filename=, origin=)` is the one question every lane asks
+before it accepts bytes. It hashes, looks up, and then lets the static scanner
+have a second, non-binding opinion:
+
+| Outcome | Effect | Event |
+|---------|--------|-------|
+| Listed digest | REFUSED. Nothing is written, extracted, indexed or shown to the model | `upload_blocked` |
+| Static scanner finds high/medium patterns | DELIVERED, with a note where the lane has a text channel | `upload_flagged` |
+| Neither | Delivered unchanged | none |
+
+The asymmetry is the design, not a shortcut. Those heuristics have false
+positives by construction - a legitimate deployment script uses `os.system` - and
+an attachment is not a SKILL.md the agent will follow as instructions. Blocking
+on them would refuse ordinary work daily; a warning that reaches both the person
+who attached the file and the admin's dashboard is what the finding is worth.
+Config gates: `upload_threat_scan_enabled`, `upload_scan_advisory_enabled`.
+
+The advisory pass runs the CODE rules only (`scanner.scan_text_content`), not the
+prompt-injection body rules: those would say more about a document's topic than
+about its danger. It skips content that is not valid UTF-8 and anything over
+512 KB.
+
+### Every lane that asks
+
+Ingress means bytes arriving from someone else. All of these call the funnel
+before the bytes reach anything that reads them:
+
+| Lane | Where | On a hit |
+|------|-------|----------|
+| Web chat files | `process_uploaded_files`, `process_files_to_sidebar_list` | `[BLOCKED]` replaces the content in the transcript; nothing persisted, nothing RAG-indexed |
+| Web chat images | `_persist_attached_images_to_files` | Entry dropped (NOT kept inline, which is that loop's usual fallback and would hand the bytes to vision) |
+| Workspace upload | `POST /api/session/workspace/upload` | 403, nothing written |
+| Room shared folder | `POST /api/a2a/rooms/{id}/file` | 403 back over the wire, workspace untouched |
+| Skill zip import | `skills_registry.import_skill_zip` | Refused on the staged copy. NOT overridable - see below |
+| Skill authoring | `create_skill` / `update_skill` tools | Refused with the reason |
+| Telegram | `_download_telegram_file` and the voice path | Returns None; callers already treat that as a failed download |
+| Discord | `_enqueue_discord_image`, `_handle_discord_document` | Returns False before the queue or any extraction |
+| WhatsApp | `_transcribe_voice_file` | Not transcribed |
+| Mail attachments | `MailService.get_attachment` | None. The gate is on the FETCH, not the sync: mail arrives regardless, and the only thing that can be refused is handing the bytes onward |
+| Cloud sync | `SyncEngine._execute_download` | File deleted, no manifest row, `errors` incremented. The next sync re-downloads and re-refuses - honest, because the file genuinely is still up there |
+
+Not ingress, and deliberately not gated: live microphone audio (not a file), and
+the agent's own `write_file` tool (an agent action, not foreign content).
+
+### Filling the list
+
+Auto-listing happens at exactly one point: **deleting a quarantined skill**
+(`POST /api/security/skills/{id}/delete`). That is where a human has CONFIRMED
+the verdict, and the last moment the bytes still exist to hash. Two records go
+in: the bundle fingerprint (`scanner.hash_skill_folder`) and each guilty FILE.
+Both are needed - repack the same payload with one extra blank line and the
+bundle digest is new, while the payload's own digest is not.
+
+Which files count as guilty: those a scan finding names. Listing every file in
+the bundle would poison the list with whatever ordinary code it happened to ship.
+When no finding names a file (a bundle quarantined by hand), the fallback lists
+every file above a 64-byte floor - below that, digests are shared by thousands of
+harmless bundles.
+
+A scanner HIGH does NOT auto-list. It already has its answer (block, with an
+admin override), and auto-listing would silently remove that override, because a
+listed digest is refused with no way past it.
+
+### Resolution endpoints
+
+| Endpoint | Method | Admin TOTP | Effect |
+|----------|--------|------------|--------|
+| `/api/security/threats` | GET | no | The list, plus today's blocked and flagged counts |
+| `/api/security/threats` | POST | no | List a digest by hand. Takes 64 hex characters, never a file upload - the browser hashes locally, so listing a sample never puts it on the machine it is meant to be kept off |
+| `/api/security/threats/{sha256}/remove` | POST | yes | Delist |
+
+Same asymmetry as the quarantine routes, for the same reason: adding an entry
+only refuses more content, while removing one re-opens every ingress lane to
+those bytes at once, so a stolen admin session alone must not suffice.
+
+The machine owner can do all of it from a terminal instead:
+`vaf security threats list | check <path> | add <path> --reason "..." | remove <sha256>`.
+Same store, same events - the CLI is not a second implementation.
+
+### For embedders
+
+`inspect_upload`, `record_threat` and `UploadVerdict` are on the public facade;
+`refuse_known_bad` (the boolean form, for lanes with no way to answer the sender)
+and `inspect_upload_file` (streamed, for content already on disk) live in
+`vaf.core.threat_db`. See [EMBEDDING.md](../EMBEDDING.md).
 
 ---
 

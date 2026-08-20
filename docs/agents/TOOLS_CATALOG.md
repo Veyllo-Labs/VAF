@@ -28,7 +28,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `read_file` | read | Read a file (text, PDF, Word, Excel, PowerPoint, …). |
+| `read_file` | read | Read a file (text, PDF, Word, Excel, PowerPoint, …). Budgets its own result (deliverable exemption): large text returns a first window plus a heading index with line numbers, continued via `start_line`/`end_line`; PDFs via `first_page`/`last_page`. |
 | `write_file` | write | Write a single file (create/overwrite); binary files via `content_base64` (e.g. sandbox-rendered images). Relative paths land in the chat workspace; non-admin users are jailed to their own `VAF_Projects/<uid8>`. |
 | `find_files` | read | Find files by glob pattern, recursively. |
 | `list_files` | read | List files in a directory. |

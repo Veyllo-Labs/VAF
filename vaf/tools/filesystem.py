@@ -677,7 +677,10 @@ Use this when:
 **IMPORTANT:** If a sub-agent just created a file, the path is already in the conversation context!
 Example: research_agent says "Saved to: C:\\...\\report.html" → use read_file("C:\\...\\report.html")
 
-For detailed analysis of large files, consider using librarian_agent instead."""
+Large files are never a reason to stop: a big text file returns a first window
+plus a structure index (headings with line numbers) - continue with
+start_line/end_line to read any part. PDFs work the same with first_page/last_page.
+For semantic analysis across many files, consider librarian_agent instead."""
 
     parameters = {
         "type": "object",
@@ -696,8 +699,53 @@ For detailed analysis of large files, consider using librarian_agent instead."""
     # read and how to continue (first_page=N) - never a bare "(truncated)".
     _PDF_READ_DEFAULT_PAGES = 50
 
+    # This tool budgets its own result, so the dispatch funnel's generic cap
+    # (max_result_chars, 2000 in the chat lane) must not cut it again: the cap
+    # destroyed exactly the facts a reader needs to continue (measured live: a
+    # 2,781-char summary file arrived cut at 2,000 with no line count and no
+    # start_line hint, and PDF page windows forced the model into ever-smaller
+    # page slices). The exemption's contract (TOOL_ROUTER_ARCHITECTURE.md) is
+    # honored by _cap_result below: no branch can return more than
+    # _RESULT_CHAR_BUDGET, and the cap always names the total and the range
+    # parameters to continue with. Side effect of the declaration, wanted: the
+    # error classifier judges results by anchored prefixes only, so file CONTENT
+    # containing the word "failed" cannot paint a successful read as an error.
+    result_is_deliverable = True
+
+    # One ceiling for every branch (was three byte-similar hand copies in the
+    # docx/xlsx/pptx branches, each ending in a factless "... (truncated)").
+    _RESULT_CHAR_BUDGET = 15000
+    # Text window target: whole lines up to this many chars, leaving headroom
+    # inside _RESULT_CHAR_BUDGET for the header and the structure index.
+    _TEXT_WINDOW_CHARS = 12000
+    # Structure index: at most this many heading lines.
+    _INDEX_MAX_ENTRIES = 50
 
     def run(self, **kwargs) -> str:
+        result = self._read(**kwargs)
+        return self._cap_result(result)
+
+    def _cap_result(self, result: str) -> str:
+        """The bounded-output promise behind result_is_deliverable, in one place.
+
+        The text branch windows itself below the budget; this ceiling is for the
+        branches whose natural unit is not characters (a 50-page PDF window, a
+        dense spreadsheet) and for absurd explicit ranges. It cuts at a line
+        boundary and names the facts: how much of how much, and which range
+        parameters continue the read."""
+        text = str(result)
+        if len(text) <= self._RESULT_CHAR_BUDGET:
+            return text
+        cut = text.rfind("\n", 0, self._RESULT_CHAR_BUDGET)
+        if cut < self._RESULT_CHAR_BUDGET // 2:
+            # One enormous line (minified files): a "line boundary" cut would
+            # keep almost nothing, so cutting mid-line is the honest choice.
+            cut = self._RESULT_CHAR_BUDGET
+        return (f"{text[:cut]}\n\n[Output capped at {cut:,} of {len(text):,} chars. "
+                f"Read a smaller part: PDFs with first_page/last_page, "
+                f"text with start_line/end_line.]")
+
+    def _read(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         start_line = kwargs.get('start_line')
         end_line = kwargs.get('end_line')
@@ -765,11 +813,7 @@ For detailed analysis of large files, consider using librarian_agent instead."""
                                     content.append(row_text)
                     
                     full_text = "\n".join(content)
-                    
-                    # Truncate if too long
-                    if len(full_text) > 15000:
-                        full_text = full_text[:15000] + "\n\n... (truncated)"
-                    
+                    # No local cut: _cap_result is the one ceiling, and it names the facts.
                     return f"### Word Document: {file_path.name}\n**Paragraphs:** {len(doc.paragraphs)}\n**Tables:** {len(doc.tables)}\n\n{full_text}"
                     
                 except ImportError:
@@ -807,11 +851,7 @@ For detailed analysis of large files, consider using librarian_agent instead."""
                         content.append(f"\n... ({len(wb.sheetnames) - 3} more sheets not shown)")
                     
                     full_text = "\n".join(content)
-                    
-                    # Truncate if too long
-                    if len(full_text) > 15000:
-                        full_text = full_text[:15000] + "\n\n... (truncated)"
-                    
+                    # No local cut: _cap_result is the one ceiling, and it names the facts.
                     return f"### Excel File: {file_path.name}\n{full_text}"
                     
                 except ImportError:
@@ -843,11 +883,7 @@ For detailed analysis of large files, consider using librarian_agent instead."""
                         content.append(f"\n... ({len(prs.slides) - 20} more slides not shown)")
                     
                     full_text = "\n".join(content)
-                    
-                    # Truncate if too long
-                    if len(full_text) > 15000:
-                        full_text = full_text[:15000] + "\n\n... (truncated)"
-                    
+                    # No local cut: _cap_result is the one ceiling, and it names the facts.
                     return f"### PowerPoint: {file_path.name}\n{full_text}"
                     
                 except ImportError:
@@ -866,12 +902,60 @@ For detailed analysis of large files, consider using librarian_agent instead."""
                     s = max(1, int(start_line or 1)) - 1  # convert to 0-indexed
                     e = int(end_line) if end_line is not None else total_lines
                     selected = lines[s:e]
-                    header = f"[Lines {s+1}–{min(e, total_lines)} of {total_lines} total]\n"
+                    header = f"[Lines {s+1}-{min(e, total_lines)} of {total_lines} total]\n"
                     return header + "".join(selected)
                 content = "".join(lines)
-                return content
-                
+                if len(content) <= self._TEXT_WINDOW_CHARS:
+                    return content
+                # Large text file: a WINDOW plus the facts, never a blind cut.
+                # Same shape as the PDF lane (default window, honest header,
+                # continuation hint), in the unit text actually has: lines. The
+                # structure index gives line numbers to jump to, so the reader
+                # is not blind about everything outside the window.
+                window: list = []
+                used = 0
+                for line in lines:
+                    if window and used + len(line) > self._TEXT_WINDOW_CHARS:
+                        break
+                    window.append(line)
+                    used += len(line)
+                shown = len(window)
+                cont = (f" Continue with start_line={shown + 1}, or jump via the structure index."
+                        if shown < total_lines else "")
+                header = f"[Lines 1-{shown} of {total_lines} total | {len(content):,} chars.{cont}]\n"
+                index = self._structure_index(lines)
+                return header + (index + "\n" if index else "") + "".join(window)
+
         except Exception as e: return str(e)
+
+    def _structure_index(self, lines: list) -> str:
+        """Markdown heading index with line numbers, for jumping with start_line.
+
+        Deterministic and free (no model call): atx headings only, which is what
+        the files this lane produces and receives actually carry (summaries,
+        transcripts, reports are written as Markdown). Fewer than three headings
+        is no structure worth a block; over the cap, the tail is counted rather
+        than silently dropped."""
+        entries = []
+        in_fence = False
+        for i, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            hashes = len(stripped) - len(stripped.lstrip("#"))
+            if 1 <= hashes <= 6 and stripped[hashes:hashes + 1] == " ":
+                entries.append(f"  line {i}: {stripped[:100]}")
+        if len(entries) < 3:
+            return ""
+        shown = entries[:self._INDEX_MAX_ENTRIES]
+        more = len(entries) - len(shown)
+        block = "[Structure index]\n" + "\n".join(shown)
+        if more > 0:
+            block += f"\n  (+{more} more headings)"
+        return block
 
 class WriteFileTool(BaseTool):
     name = "write_file"

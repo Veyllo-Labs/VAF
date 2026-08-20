@@ -66,6 +66,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **Reading a large file no longer cuts it off blind.** Every tool result in
+  the chat used to be capped at 2,000 characters, and a file read hit that wall
+  with nothing to go on: no length, no line count, no way to ask for the rest.
+  A YouTube summary of 2,781 characters arrived cut, and reading a long report
+  meant guessing ever-smaller page ranges. File reads are now exempt from that
+  generic cap and budget themselves instead: a large text file returns its
+  first section together with the facts (how many lines and characters it has,
+  which lines are shown, how to continue with `start_line`/`end_line`) and a
+  structure index, a list of the file's headings with their line numbers, so
+  the agent can jump straight to the part it needs, the same way PDFs already
+  read by page range. Word, Excel and PowerPoint reads share one honest
+  ceiling that names what was left out instead of a bare "(truncated)".
 - **A background bookkeeping task could kill the tool spinner, silently.** Every
   30 seconds a debug profiler counted all objects in memory to watch for leaks.
   That census briefly touches objects other threads are still in the middle of

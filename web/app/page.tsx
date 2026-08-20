@@ -4668,6 +4668,15 @@ function VAFDashboardContent() {
                         setLoading(false);
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
+                        // And nothing in THIS chat can still be running a tool. A tool end
+                        // that fired while another chat was open went to nobody (the socket
+                        // was subscribed elsewhere), so its card would say "running" and
+                        // "waiting for output" forever. Settled here without a result text -
+                        // the persisted history carries the real output for the next load.
+                        setMessages(prev => prev.some(m => m.role === 'tool' && m.toolStatus === 'running')
+                            ? prev.map(m => (m.role === 'tool' && m.toolStatus === 'running')
+                                ? { ...m, toolStatus: 'completed' as const } : m)
+                            : prev);
                         // Final-answer punctuation reaction: a trailing '?' replays the "permission" asking
                         // animation, a trailing '!' the "exclaim" twin — each for 3s — to punctuate the close.
                         try {
@@ -5517,10 +5526,17 @@ function VAFDashboardContent() {
 
                     // Find Orphans: Messages in Cache but NOT in Server
                     const orphans = cachedMsgs.filter(cMsg => {
-                        // Best practice on reload: trust server history for assistant/user turns.
-                        // Cached assistant "orphans" (especially thinking-only stream fragments)
-                        // can appear out of turn after restart and should not be re-injected.
-                        if (cMsg.role === 'assistant' || cMsg.role === 'user') return false;
+                        // Trust server history for assistant turns: cached assistant orphans
+                        // (especially thinking-only stream fragments) can appear out of turn
+                        // after restart, and the live stream rebuilds the current bubble
+                        // anyway (agent_message_update carries the full content so far).
+                        // USER prompts are different: this merge only runs while the turn is
+                        // ACTIVE, and the runner saves the session AFTER the turn - so the
+                        // in-flight turn's own prompt is exactly the user message the server
+                        // does not have yet. Dropping it made the prompt vanish on a
+                        // switch-back into a running turn (live incident, screenshot: the
+                        // running tool card stood alone with no prompt above it).
+                        if (cMsg.role === 'assistant') return false;
                         if (cMsg.role === 'system') return true;
 
                         const existsInServer = hydratedServerMsgs.some((sMsg: Message) => {

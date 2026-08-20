@@ -441,7 +441,10 @@ def test_the_composer_writes_into_the_room_it_is_showing():
     behaviours - worse than refusing, because nothing tells the user it happened.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    body = source.split("const sendMessage = async (")[1][:3400]
+    # Window sized to hold BOTH markers: the room branch grew (trimmed send +
+    # the blend-up bookkeeping), which pushed the chat path's marker past the
+    # old 3400 and made index() throw without the invariant ever breaking.
+    body = source.split("const sendMessage = async (")[1][:6000]
 
     assert "if (roomView) {" in body
     assert "type: 'room_say'" in body
@@ -1421,8 +1424,11 @@ def test_the_context_gauge_and_the_room_messages_follow_the_open_view():
     gauge = source.split("data.type === 'context_status'", 1)[1][:700]
     assert "eventBelongsHere(data, activeSessionId, 'worker')" in gauge, (
         "the context gauge accepts reports from any conversation again")
-    assert '<div className="flex gap-3 py-2 room-msg-enter">' in source, (
-        "the room's messages lost their entry animation")
+    # The entry animation is conditional now: a message whose text stood here
+    # as the person's own pending copy a second ago BLENDS UP in place
+    # (room-msg-confirm) instead of drifting in; everything else still enters.
+    assert '"room-msg-confirm" : "room-msg-enter"' in source, (
+        "the room's messages lost their entry/blend-up animation pair")
     # The app's OTHER animations (58 sites) come from the plugin, which was
     # missing for so long that every one of them was inert. A plugin list that
     # loses it again takes them all down silently - Tailwind drops an unknown

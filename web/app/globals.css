@@ -501,6 +501,19 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   100% { transform: scaleX(.94) }
 }
 .room-msg-enter { animation: roomMessageEnter .75s cubic-bezier(.16,.84,.44,1) both }
+/* The person's own message while it travels to the store: dimmed in place, a
+   light band sweeping left to right for as long as the send lasts (honest at
+   any duration - a one-shot wipe would claim "done" before the store answered).
+   When the transcript confirms it, the SAME spot re-renders as the real message
+   wearing room-msg-confirm: a blend up from the pending dimness, never the
+   drift-in of a message that was not on screen before. Sweep and blend are
+   transform and opacity only, per the repaint rule above. */
+@keyframes roomSheenSweep {
+  0% { transform: translateX(-100%) }
+  60%, 100% { transform: translateX(100%) }
+}
+@keyframes roomMsgConfirm { from { opacity: .5 } to { opacity: 1 } }
+.room-msg-confirm { animation: roomMsgConfirm .45s ease-out both }
 @media (prefers-reduced-motion: reduce) {
   /* A person who asked the system for less motion still gets a message that
      arrives - it fades without travelling, rather than not animating at all. */
@@ -510,6 +523,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
      near the end say "loading" without motion. */
   @keyframes skelPulse { 0%, 100% { opacity: .75 } 50% { opacity: .75 } }
   @keyframes loadCrawl { 0%, 100% { transform: scaleX(.9) } }
+  /* The pending message holds still at its dimness; the sending note under it
+     already says what the sweep says. */
+  @keyframes roomSheenSweep { 0%, 100% { transform: translateX(-100%) } }
 }
 /* The vote panel docking above the message box, and leaving the same way.
    Both directions, because a vote here ENDS by itself - the last ballot lands or

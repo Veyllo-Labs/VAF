@@ -130,12 +130,20 @@ many frames have not been read.
   bar that races to two thirds and then creeps, because finishing is the
   content's job; both vanish the moment real messages arrive, and a room
   skeleton clears itself after 15 seconds so a dead server does not trap the
-  person under it. The person's own room message appears at once as a visibly
-  PENDING bubble below the transcript ("wird gesendet…"), reconciled against
-  the next store answer and expired after 30 seconds - the room still trusts
-  only the store for ORDER, so a pending line never takes a position among the
-  real messages. Animations are opacity and transform only, per the repaint
-  rule in globals.css.
+  person under it. The person's own room message appears at once
+  below the transcript, drawn exactly like the delivered message it is about to
+  become - their initials, name and role, the text - only dimmed to half
+  opacity, with a light band sweeping the text left to right for as long as the
+  send lasts and a small "sending…" note underneath. It is reconciled against
+  the next store answer (compared TRIMMED on both sides, because the server
+  strips what it stores - an untrimmed pending copy used to stand as a duplicate
+  under its own delivered message for 30 seconds) and expired after 30 seconds;
+  the room still trusts only the store for ORDER, so a pending line never takes
+  a position among the real messages. When the store confirms it, the delivered
+  message blends UP from that dimness (`room-msg-confirm`, keyed on the trimmed
+  text having been sent from here within the last minute) instead of drifting
+  in like a message that was never on screen. Animations are opacity and
+  transform only, per the repaint rule in globals.css.
   The sidebar badge counts what the PERSON has not seen - from their own reading
   position (the cli lane the browser shares with the terminal), never from the
   agent's backlog, whose cursor only moves when its turn runs. Looking at the
@@ -146,12 +154,16 @@ many frames have not been read.
   check-in pings are hidden from the transcript on purpose, and a badge that
   counted them lit the sidebar for frames no view shows - the person opened the
   room, found nothing, and the dot came back with the next check-in.
-  Below the messages, a member that is composing gets the same bouncing-dots bubble
-  the chat shows, behind its own avatar and name - in a group chat "somebody is
-  typing" without a name is a question, not an answer. Composing means exactly two
-  things: our own agent's room-turn marker is live (it is really writing an answer),
-  or a human is pressing keys in their input box (the browser reports a throttled
-  `room_typing` signal into an in-memory map the projection expires after seconds).
+  Below the messages, a HUMAN member that is typing gets the bouncing-dots bubble,
+  behind its own initials and name - in a group chat "somebody is typing" without
+  a name is a question, not an answer (the browser reports a throttled
+  `room_typing` signal into an in-memory map the projection expires after
+  seconds). The agent's composing turn draws NO row of its own: whether the
+  agent has a message is what the read receipts under it already say, and the
+  "VAF is typing" row was a second presence surface for the same fact, sitting
+  exactly where the answer was about to land. The server still derives the
+  turn-marker signal (other surfaces may use it); this view just does not draw
+  it.
   Merely READING paints nobody as typing - that used to be a third, derived signal
   with a two-minute window, and it made an agent that only monitors its room look
   permanently busy. Reading shows as a READ RECEIPT instead: every other member's

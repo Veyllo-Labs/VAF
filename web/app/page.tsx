@@ -1529,7 +1529,7 @@ function RoomTaskHistory({ rows, loading, timeFormat }: {
         </div>
     );
 }
-function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote }: {
+function RoomConversation({ view, onMembers, closedNote, membersTitle, timeFormat, onOpenWorker, liveWorker, connected = true, pending, pendingNote, recentSends }: {
     view: { room: RoomView; messages: RoomMessage[] };
     onMembers: () => void;
     closedNote: string;
@@ -1540,6 +1540,11 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
      *  where N writers landed - this is presence, not position. */
     pending?: Array<{ key: number; text: string }>;
     pendingNote?: string;
+    /** Trimmed texts this person sent from here recently (text -> epoch ms).
+     *  A delivered message whose text is in this map was ON SCREEN as its own
+     *  pending copy a moment ago, so it blends up from that dimness instead of
+     *  drifting in like a message the person has never seen. */
+    recentSends?: Map<string, number>;
     timeFormat?: '24h' | '12h';
     /** Open the sub-agent window for a live worker - the mobile preview-pill
      *  gesture, applied to the room's worker cards. */
@@ -1578,9 +1583,11 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     }
     // The same liveliness rule the ordinary chat applies to its bot bubbles
     // (botAvatarDim): the agent is ONE living thing, so exactly one avatar is
-    // alive at a time - its newest message, or its typing bubble while it
-    // composes - and every older bubble wears the dimmed face.
-    const agentComposing = !!typing.some(t => t.kind === 'turn');
+    // alive at a time - its newest message - and every older bubble wears the
+    // dimmed face. Composing draws NO row of its own any more: whether the
+    // agent has seen a message is what the read receipts say, and a second
+    // presence surface for the same fact was the clutter it took a screenshot
+    // to name.
     const lastAgentMsgId = view.room.agentPeer
         ? view.messages.filter(m => m.peer === view.room.agentPeer).slice(-1)[0]?.id
         : undefined;
@@ -1874,12 +1881,17 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                         never animated anything anywhere. It runs ONCE per message
                         because the key is the frame id - the 3s poll replaces the
                         payload, React keeps the element, and a stable element does not
-                        re-animate. */}
-                    <div className="flex gap-3 py-2 room-msg-enter">
+                        re-animate. One exception: the person's OWN message that stood
+                        here as its pending copy a second ago blends up from that
+                        dimness (room-msg-confirm) - drifting in would move something
+                        that never left the screen. */}
+                    <div className={cn("flex gap-3 py-2",
+                        mine && recentSends?.has((m.text || '').trim())
+                            ? "room-msg-confirm" : "room-msg-enter")}>
                         {isOwnAgent ? (
                             <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
                                 <AgentAvatar mode="idle"
-                                    dim={m.id !== lastAgentMsgId || agentComposing} />
+                                    dim={m.id !== lastAgentMsgId} />
                             </div>
                         ) : (
                         <div className={cn(
@@ -1955,46 +1967,60 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 );
             })}
             {/* The person's own words, already on screen while they travel to the
-                store. Dimmed and labeled as sending, never given a position among
-                the real messages - they sit BELOW the transcript until the store
-                answers, because only the store knows where N writers landed. */}
-            {(pending || []).map(p => (
-                <div key={p.key} className="flex gap-3 py-2 room-msg-enter opacity-60">
-                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]">…</div>
+                store. Drawn EXACTLY like the delivered message they are about to
+                become - their own initials, name and role, the text - only dimmed,
+                with a light band sweeping the text and a small "sending" note, so
+                that delivery is a blend-up in place rather than a second copy.
+                They sit BELOW the transcript until the store answers, because only
+                the store knows where N writers landed. */}
+            {(pending || []).map(p => {
+                const meMember = (view.room.members_list || [])
+                    .find(mm => mm.peer === view.room.me);
+                return (
+                <div key={p.key} className="flex gap-3 py-2 room-msg-enter opacity-50">
+                    <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]">
+                        {(meMember?.label || '?').slice(0, 2)}
+                    </div>
                     <div className="min-w-0 flex-1">
-                        {pendingNote && (
-                            <div className="flex items-baseline gap-2">
-                                <span className="text-[10px] text-gray-400"
-                                    style={{ animation: 'skelPulse 1.6s ease-in-out infinite' }}>{pendingNote}</span>
-                            </div>
-                        )}
-                        <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
-                            {p.text}
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-gray-900 dark:text-[#e6e6e6]">{meMember?.label || ''}</span>
+                            {meMember?.role && <span className="text-[10px] text-gray-400">{meMember.role}</span>}
                         </div>
+                        <div className="relative overflow-hidden rounded-md">
+                            <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
+                                {p.text}
+                            </div>
+                            <div aria-hidden className="absolute inset-0 pointer-events-none"
+                                style={{
+                                    background: 'linear-gradient(100deg, transparent 30%, rgba(255,255,255,.16) 50%, transparent 70%)',
+                                    animation: 'roomSheenSweep 1.6s ease-in-out infinite',
+                                }} />
+                        </div>
+                        {pendingNote && (
+                            <div className="text-[10px] text-gray-400 mt-0.5"
+                                style={{ animation: 'skelPulse 1.6s ease-in-out infinite' }}>{pendingNote}</div>
+                        )}
                     </div>
                 </div>
-            ))}
+                );
+            })}
             {hasWorkerCards && !lastAgentMsgId && workerCards}
-            {/* Who is composing. The same bouncing dots the chat shows while our
-                agent generates, one row per busy member, each behind its own
-                avatar: in a group chat "somebody is typing" without a name is a
-                question, not an answer. The server derives the list (see
-                _send_room_transcript) and the 3s poll keeps it honest. */}
-            {!view.room.closed && typing.length > 0 && (
+            {/* Who is TYPING - humans pressing keys in their input box, one row per
+                busy member behind their own initials: in a group chat "somebody is
+                typing" without a name is a question, not an answer. The server
+                derives the list (see _send_room_transcript) and the 3s poll keeps
+                it honest. The agent's composing turn draws NO row here any more:
+                whether the agent has a message is what the read receipts under it
+                already say, and the extra "VAF is typing" row was a second
+                presence surface for the same fact, sitting where the next message
+                was about to land. */}
+            {!view.room.closed && typing.some(t => t.kind !== 'turn') && (
                 <div>
-                    {typing.map(t => (
+                    {typing.filter(t => t.kind !== 'turn').map(t => (
                         <div key={t.peer} className="flex gap-3 py-2">
-                            {t.kind === 'turn' ? (
-                                // Our agent, actually working on its answer right now -
-                                // it wears its living face here too, in the working pose.
-                                <div className="w-8 h-8 shrink-0 flex items-center justify-center mt-0.5">
-                                    <AgentAvatar mode="plan" />
-                                </div>
-                            ) : (
                             <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]">
                                 {(t.label || '?').slice(0, 2)}
                             </div>
-                            )}
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-baseline gap-2 flex-wrap">
                                     <span className="text-sm font-medium text-gray-400 dark:text-[#6a6a6a]">{t.label}</span>
@@ -2337,6 +2363,10 @@ function VAFDashboardContent() {
     // visibly pending, dropped when the transcript carries them (or after 30s).
     const [pendingRoomSays, setPendingRoomSays] = useState<Array<{
         key: number; roomId: string; text: string; ts: number }>>([]);
+    // Trimmed texts sent from here in the last minute (text -> epoch ms). The
+    // room view reads it to let a delivered message BLEND UP from its pending
+    // copy's dimness instead of drifting in as if it were new to the screen.
+    const recentRoomSendsRef = useRef<Map<string, number>>(new Map());
     const [roomToRename, setRoomToRename] = useState<Session | null>(null);
     const [roomTitleDraft, setRoomTitleDraft] = useState('');
     const [roomMembersOpen, setRoomMembersOpen] = useState(false);
@@ -4649,9 +4679,12 @@ function VAFDashboardContent() {
                             // A pending say has arrived when the transcript carries the
                             // person's text; expired ones go too, so a send the room
                             // never answered does not sit as "sending" forever.
-                            const texts = new Set((data.messages || []).map((m: RoomMessage) => m.text || ''));
+                            // Compared TRIMMED on both sides: the server strips what it
+                            // stores, and pending copies written before this build may
+                            // still carry the untrimmed input.
+                            const texts = new Set((data.messages || []).map((m: RoomMessage) => (m.text || '').trim()));
                             setPendingRoomSays(prev => prev.filter(p =>
-                                p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text)));
+                                p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text.trim())));
                         }
                     }
                 }
@@ -6158,15 +6191,27 @@ function VAFDashboardContent() {
             // live: a room message arrived minutes late, after retyping). Keeping
             // the text in the box is the honest failure.
             if (ws.readyState !== WebSocket.OPEN) return;
+            // Trimmed HERE so the pending copy is byte-identical to what the
+            // store will carry: the server strips the text, and the reconcile
+            // below matches exactly - an untrimmed pending copy (a phone's
+            // autocomplete trailing space) never matched and stood as a
+            // duplicate under its own delivered message for 30 seconds.
+            const roomText = textToSend.trim();
             ws.send(JSON.stringify({
-                type: 'room_say', room_id: roomView.room.roomId, text: textToSend,
+                type: 'room_say', room_id: roomView.room.roomId, text: roomText,
             }));
             // On screen at once, visibly pending, reconciled against the next
             // transcript - the wait for the 3s poll made a sent message look lost.
             setPendingRoomSays(prev => [...prev, {
                 key: Date.now() + Math.random(), roomId: roomView.room.roomId,
-                text: textToSend, ts: Date.now(),
+                text: roomText, ts: Date.now(),
             }]);
+            // Remembered for the blend-up when the store echoes it back; old
+            // entries expire so the map never grows past a minute of sending.
+            for (const [t, ts] of recentRoomSendsRef.current) {
+                if (Date.now() - ts > 60000) recentRoomSendsRef.current.delete(t);
+            }
+            recentRoomSendsRef.current.set(roomText, Date.now());
             setInput('');
             return;
         }
@@ -7491,7 +7536,8 @@ function VAFDashboardContent() {
                                         liveWorker={roomLiveWorker}
                                         connected={isConnected}
                                         pending={pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
-                                        pendingNote={tMain('roomSending')} />
+                                        pendingNote={tMain('roomSending')}
+                                        recentSends={recentRoomSendsRef.current} />
                                 ) : roomOpening ? (
                                     <LoadingIllusion kind="room" label={roomOpening.name} />
                                 ) : (<>

@@ -12,6 +12,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Sending a room message no longer shows it twice.** The pending copy was
+  matched against the delivered message by exact text, but the server trims
+  what it stores - one trailing space (a phone's autocomplete) and the copy
+  stood under its own delivered message for 30 seconds. The comparison is
+  trimmed on both sides now. The pending copy also looks like the message it
+  is about to become - your initials, name and text, dimmed, a light band
+  sweeping while it sends, a small "sending" note - and on delivery the
+  message blends up in place instead of drifting in as if it were new.
+- **The room no longer draws a "VAF is typing" row.** Whether the agent has
+  seen a message is what the read receipts under it already say; the extra
+  presence row said the same thing a second time, sitting exactly where the
+  answer was about to land. A human member typing keeps the small dots bubble.
 - **A room's shared folder lists the same paths on every OS.** On a Windows
   host, the seat-authenticated file listing (and the push answer) rendered
   relative paths with backslashes, so a file pushed as `sub/a.bin` came back

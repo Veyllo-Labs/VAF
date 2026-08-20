@@ -57,11 +57,13 @@ This tracking happens **in real-time** (inside `vaf/core/context.py`):
 
 ### How Extraction Works (`process_tool_output`)
 
-When a tool returns a massive result (e.g., `read_file` returning 2000 lines of code), VAF intercepts it:
+When a tool returns a massive result (e.g., `list_files` on a large tree, or an inbox listing 50 mails), VAF intercepts it:
 
 1.  **Scan:** Regex scans the output for keywords (`Error`, `Created`, `...`).
 2.  **Update:** The `StateContext` is updated immediately.
-3.  **Prune:** The actual output added to the LLM history is **truncated** (e.g., "File read, 2000 lines. Facts stored in State.").
+3.  **Prune:** The actual output added to the LLM history is **truncated** (e.g., head/tail with a count of the hidden lines).
+
+Step 3 is skipped for a tool that declares `result_is_deliverable` - it already bounds its own output, so pruning it again would cut the very facts the model needs. `read_file` is the case to know about: it returns a window plus a structure index rather than the whole file, and enters history intact. See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) → "Tool Output Compression".
 
 ---
 

@@ -189,11 +189,13 @@ The Context Manager dynamically adjusts its behavior based on the configured con
 To prevent the context window from being flooded by large tool outputs (which would trigger aggressive history pruning), VAF implements **tool-output compression**. Certain tools have their output pruned *before* entering the chat history, while key facts are extracted into the permanent State Context.
 
 **Supported Tools:**
-- **Filesystem:** `read_file`, `list_files`, `github_get_file`, `github_list_repos`
+- **Filesystem:** `list_files`, `github_get_file`, `github_list_repos`
 - **Search:** `web_search`, `web_fetch`
 - **Communication:** `mail_inbox`, `whatsapp_inbox`, `telegram_inbox`, `list_email_accounts`
 
-**Best Practice:** When dealing with large datasets (e.g., reading a 2000-line log file or listing 50 emails), the agent sees a pruned version (head/tail) in history, but knows the full content is processed. This maintains conversational continuity without losing context "depth".
+**Best Practice:** When dealing with large datasets (e.g., listing 50 emails), the agent sees a pruned version (head/tail) in history, but knows the full content is processed. This maintains conversational continuity without losing context "depth".
+
+**`read_file` is exempt in the agent.** It declares `result_is_deliverable` and budgets its own output instead: a large text file already returns a bounded window plus a structure index naming the line numbers to continue from, so a head/tail prune on top of that would cut exactly those facts and send the model hunting again. The declaration is honored at every stage, not only here (see [TOOL_ROUTER_ARCHITECTURE.md](../agents/TOOL_ROUTER_ARCHITECTURE.md) → "Result truncation and the deliverable exemption"). `process_tool_output` still lists the tool for callers that use `ContextManager` directly and pass no `deliverable` flag.
 
 ### Per-Turn Intermediate-Step Squash (Tool Memory)
 

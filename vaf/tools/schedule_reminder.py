@@ -16,6 +16,7 @@ from vaf.tools.base import BaseTool
 class ScheduleReminderTool(BaseTool):
     """Schedule/list/cancel one-shot reminders delivered on the user's main messenger."""
     name = "schedule_reminder"
+    category    = "timers"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "reversible"

@@ -14,6 +14,7 @@ from vaf.tools.base import BaseTool
 
 class ListSkillsTool(BaseTool):
     name = "list_skills"
+    category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (
         "List the Skills available to you (reusable expert procedures). Returns each skill's "

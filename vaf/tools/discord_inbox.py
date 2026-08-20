@@ -14,6 +14,7 @@ class DiscordInboxTool(BaseTool):
     Use to discover which chats exist before calling read_discord_chat.
     """
     name = "discord_inbox"
+    category    = "discord"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

@@ -22,6 +22,7 @@ class ThinkingWorkspaceWriteTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_write"
+    category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"
     description = (

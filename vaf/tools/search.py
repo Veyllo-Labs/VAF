@@ -351,6 +351,7 @@ def _search_internal_knowledge(query: str, max_results: int, *,
 
 class WebSearchTool(BaseTool):
     name = "web_search"
+    category    = "web"
     # WHOSE memory the last-resort RAG fallback may read. Declared rather than resolved
     # inside the tool: it used to come from a process-global env var, which with several
     # main workers could name another user's session (see _search_internal_knowledge).

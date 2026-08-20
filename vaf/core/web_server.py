@@ -1055,6 +1055,8 @@ async def _broadcast_tools_update(manager) -> None:
             get_tool_manifest_entry,
         )
 
+        from vaf.core.tool_contract import tool_category
+
         agent          = manager.agent_instance
         local_admin    = get_local_admin_scope_id()
         all_custom     = set(get_all_custom_tool_names())
@@ -1080,7 +1082,7 @@ async def _broadcast_tools_update(manager) -> None:
                         entry = {
                             "name":        name,
                             "description": getattr(tool, "description", ""),
-                            "category":    getattr(tool, "category", "general"),
+                            "category":    tool_category(name, tool),
                             "is_custom":   is_custom,
                             "can_manage":  _is_admin,
                         }
@@ -1155,6 +1157,7 @@ def _scan_tool_modules() -> List[dict]:
         import importlib
         import inspect
         from vaf.tools.base import BaseTool
+        from vaf.core.tool_contract import tool_category
         import vaf.tools
         
         tools = []
@@ -1171,13 +1174,15 @@ def _scan_tool_modules() -> List[dict]:
                         tools.append({
                             "name": getattr(obj, "name", name),
                             "description": getattr(obj, "description", "Python tool"),
-                            "category": getattr(obj, "category", "general")
+                            "category": tool_category(getattr(obj, "name", name), obj)
                         })
             except Exception:
                 # Fallback to module name if import fails
                 tools.append({
                     "name": name,
                     "description": "Python tool module (load failed)",
+                    # Modul liess sich nicht laden - es gibt keine Klasse,
+                    # an der eine Kategorie haengen koennte.
                     "category": "general"
                 })
         return sorted(tools, key=lambda t: t["name"])
@@ -3863,13 +3868,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         })
         # Send tools list (cached or live) so UI has correct count
         try:
+            from vaf.core.tool_contract import tool_category
             agent = manager.agent_instance
             if agent and hasattr(agent, "tools"):
                 tools_list = [
                     {
                         "name": name,
                         "description": getattr(tool, "description", "No description"),
-                        "category": getattr(tool, "category", "general")
+                        "category": tool_category(name, tool)
                     }
                     for name, tool in agent.tools.items()
                 ]
@@ -5822,6 +5828,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         all_custom_names   = set(get_all_custom_tool_names())
                         visible_custom     = set(get_visible_tool_names_for_user(_gt_filter_scope))
+                        from vaf.core.tool_contract import tool_category
 
                         agent = manager.agent_instance
                         if agent and hasattr(agent, "tools"):
@@ -5834,7 +5841,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 entry = {
                                     "name":        name,
                                     "description": getattr(tool, "description", "No description"),
-                                    "category":    getattr(tool, "category", "general"),
+                                    "category":    tool_category(name, tool),
                                     # Frontend uses these two flags to render management controls
                                     "is_custom":   is_custom,
                                     "can_manage":  _gt_is_admin,

@@ -153,6 +153,7 @@ class ProjectHistoryTool(BaseTool):
     """Show the version history of a project folder (coder-owned)."""
 
     name = "project_history"
+    category    = "git"
     coder_only = True  # Main Agent delegates via coding_agent task instead
     description = (
         "Show the version history of the project (one entry per saved state, "
@@ -217,6 +218,7 @@ class ProjectRollbackTool(BaseTool):
     """Restore a project folder to an earlier version (coder-owned, undoable)."""
 
     name = "project_rollback"
+    category    = "git"
     coder_only = True  # Main Agent delegates via coding_agent task instead
     description = (
         "Restore the project to an earlier version from project_history. "

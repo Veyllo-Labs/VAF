@@ -18,6 +18,7 @@ class AskUserTool(BaseTool):
     """Contact the user with one clean question/proposal and track it (Thinking Mode only)."""
 
     name = "ask_user"
+    category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"
     description = (

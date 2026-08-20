@@ -12,6 +12,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Tools are grouped into bundles instead of one long wall of cards.** Settings
+  -> Available Tools now shows one card per integration or area - GitHub,
+  WhatsApp, Telegram, Email, Calendar and so on - with the number of tools in
+  it and how many of them VAF has learned. Clicking a bundle opens a shelf
+  across the full width, directly under the card you clicked, holding that
+  bundle's tools; a notch on the card points at the shelf it opened. The rest of
+  the grid keeps its place, so opening a bundle no longer rearranges everything
+  else on screen. Searching still searches tools: type anything and the grid
+  switches to the matching tools, ungrouped. The same grouping now applies in
+  the terminal - the `vaf` settings tool table and the terminal app's tool
+  overlay print one section per bundle instead of 120 alphabetical rows, and the
+  agent's own tool list is grouped too. Which bundle a tool belongs to is
+  declared on the tool itself, so a tool you write - or a connected MCP server -
+  can name a bundle of its own. Tools you upload yourself stay recognisable:
+  they get their own bundles ("Custom GitHub" next to "GitHub", never inside
+  it), and the custom-tool editor now has a bundle picker instead of expecting
+  you to know the attribute by heart.
 - **The tools window now says how much of your toolbox VAF has learned.** Settings
   -> Available Tools counts the installed tools along the top: how many there
   are in total, how many VAF has trained itself on, and how many it has not.

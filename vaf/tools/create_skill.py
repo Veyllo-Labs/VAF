@@ -28,6 +28,7 @@ def _build_skill_md(kwargs: dict) -> str:
 
 class CreateSkillTool(BaseTool):
     name = "create_skill"
+    category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (
         "Create a new private Skill owned by the current user — a reusable expert procedure "

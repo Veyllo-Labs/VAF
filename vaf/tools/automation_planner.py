@@ -31,6 +31,7 @@ class AddAutomationNoteTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "add_automation_note"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation calendar. Use when the user or you want to remember something for automation planning."""
@@ -64,6 +65,7 @@ class AddAutomationTodoTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "add_automation_todo"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Add a to-do for the automation calendar. The user sees it in the To-do list. Use when the user or you want to track a task (e.g. 'Prepare report by Friday'). Optional due_at: ISO8601 or YYYY-MM-DD."""
@@ -97,6 +99,7 @@ class ListAutomationNotesTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "list_automation_notes"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = "List current automation notes (with created_at). Shown in the automation calendar Note section."
@@ -125,6 +128,7 @@ class ListAutomationTodosTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "list_automation_todos"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = "List current automation to-dos (created_at, due_at, done). Shown in the automation calendar To-do list."
@@ -153,6 +157,7 @@ class DeleteAutomationNoteTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "delete_automation_note"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = "Delete an automation note when it is no longer needed. Use note_id from list_automation_notes."
@@ -184,6 +189,7 @@ class DeleteAutomationTodoTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "delete_automation_todo"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = "Delete an automation to-do (e.g. after completion or when obsolete). Use todo_id from list_automation_todos."

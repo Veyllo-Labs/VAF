@@ -44,6 +44,7 @@ from vaf.tools.base import BaseTool
 
 class AgentToolBuilderTool(BaseTool):
     name        = "create_agent_tool"
+    category    = "tool_catalog"
     description = (
         "Create or update a Python tool that the agent can use immediately. "
         "Use this when you need a capability that no existing tool provides. "

@@ -18,6 +18,7 @@ from vaf.tools.base import BaseTool
 
 class AnalyzeImageTool(BaseTool):
     name = "analyze_image"
+    category    = "documents"
     identity_kwargs = ("user_scope_id",)
     description = (
         "Take a closer, targeted look at an image: one the user attached to this chat, OR an "

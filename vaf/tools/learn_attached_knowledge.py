@@ -39,6 +39,7 @@ def _split_by_pages(content: str) -> List[Tuple[int, str]]:
 
 class LearnAttachedKnowledgeTool(BaseTool):
     name = "learn_attached_knowledge"
+    category    = "memory"
     identity_kwargs = ("user_scope_id",)
     permission_level = "write"
     side_effect_class = "irreversible"

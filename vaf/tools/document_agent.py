@@ -51,6 +51,7 @@ class DocumentAgentTool(BaseTool):
     """
     
     name = "document_agent"
+    category    = "documents"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Specialized Sub-Agent for creating large, structured documents (contracts, reports, letters, templates).

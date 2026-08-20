@@ -43,6 +43,7 @@ class SendTelegramTool(BaseTool):
     For documents (invoices, contracts, PDFs): pass file_path after creating/finding the file.
     """
     name = "send_telegram"
+    category    = "telegram"
     identity_kwargs = ("user_role", "user_scope_id", "username")
     # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
     # make skill files shared by OTHER users attachable to an outgoing message.

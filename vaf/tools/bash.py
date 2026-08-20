@@ -28,6 +28,7 @@ class BashTool(BaseTool):
     """Execute shell commands on the system."""
 
     name = "bash"
+    category    = "code"
     permission_level = "dangerous"
     side_effect_class = "irreversible"
     coder_only = True  # Only available to Coder Sub-Agent

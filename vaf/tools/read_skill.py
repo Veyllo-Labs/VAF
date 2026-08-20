@@ -15,6 +15,7 @@ from vaf.tools.base import BaseTool
 
 class ReadSkillTool(BaseTool):
     name = "read_skill"
+    category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     # The source IS the deliverable - the caller inspects it before editing, and a
     # funnel-cut source shows a frontmatter with half a body. Bounded below by the

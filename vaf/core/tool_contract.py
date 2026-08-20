@@ -19,6 +19,7 @@ Contract fields (all defined on BaseTool):
   channel_restrictions — sources where the tool is hard-blocked
   side_effect_class — "none" | "reversible" | "irreversible"
   admin_only        — True → blocked for non-admin sessions
+  category          — which bundle the tool appears under in tool lists
 
 Evaluation order inside evaluate_tool_policy():
   1. admin_only check  (hard block — role-based)
@@ -42,6 +43,94 @@ SideEffectClass = Literal["none", "reversible", "irreversible"]
 ALLOWED_PERMISSION_LEVELS = {"read", "write", "dangerous", "system"}
 ALLOWED_SIDE_EFFECT_CLASSES = {"none", "reversible", "irreversible"}
 
+# Human-facing bundles for tool lists (the web tools window, the CLI table, the
+# TUI overlay, list_tools). The order is the display order.
+#
+# The four messaging keys are the KNOWN_CHANNELS literals from
+# vaf/core/messaging_connections.py. They are repeated rather than imported so
+# this module keeps its import surface; the subset relation is pinned by
+# tests/test_tool_category_registry_sync.py, which fails if the two drift.
+#
+# This vocabulary is OPEN at runtime: resolve_tool_contract keeps a value it has
+# never seen. Closing it would mean an MCP server or a third-party tool could
+# never form a bundle of its own, which is exactly the capability the attribute
+# exists for. The guard pins the IN-TREE declarations only.
+TOOL_CATEGORIES = (
+    "web", "files", "documents", "memory", "context", "code", "git", "github",
+    "workflows", "skills", "automations", "timers", "calendar", "contacts",
+    "mail", "whatsapp", "telegram", "discord", "slack", "messaging", "rooms",
+    "tool_catalog", "cloud", "mcp", "general",
+)
+
+# Bundles belonging to a tool a USER uploaded live in their own namespace and can
+# never be one of the above. A bundle is a statement about origin: a tool that
+# ships with VAF is reviewed, versioned and trained, and a Python file dropped
+# into the custom-tools store must not borrow that standing by declaring
+# `category = "github"` and landing among the shipped GitHub tools.
+#
+# The prefix is stamped at the ONE boundary that knows a class came from a user
+# file - load_custom_tool_class() in vaf/core/custom_tools_registry.py - and not
+# in any of the four surfaces that render the list, which would each have to
+# repeat the rule and would each eventually forget it.
+#
+# It is reserved, not merely conventional: an in-tree tool declaring it fails
+# tests/test_tool_category_registry_sync.py.
+CUSTOM_CATEGORY_PREFIX = "custom"
+
+
+def namespaced_custom_category(raw: str | None) -> str:
+    """The bundle a user-uploaded tool belongs to.
+
+    A declared bundle is kept but moved into the custom namespace
+    ("github" -> "custom_github"); an undeclared one becomes the plain
+    "custom" bundle. Idempotent, so re-stamping an already-stamped class on a
+    hot reload cannot produce "custom_custom_github".
+    """
+    key = str(raw or "").strip().lower()
+    if not key or key == CUSTOM_CATEGORY_PREFIX:
+        return CUSTOM_CATEGORY_PREFIX
+    if key.startswith(f"{CUSTOM_CATEGORY_PREFIX}_"):
+        return key
+    if key == "general":
+        return CUSTOM_CATEGORY_PREFIX
+    return f"{CUSTOM_CATEGORY_PREFIX}_{key}"
+
+# The canonical English name of each bundle, for the surfaces that have no
+# translation catalogue of their own (the CLI table, the TUI overlay,
+# list_tools). The web UI translates via its own message catalogues; the guard
+# only pins that both know the same KEYS, not that they choose the same words.
+CATEGORY_LABELS = {
+    "web": "Web & research",        "files": "Files",
+    "documents": "Documents",       "memory": "Memory",
+    "context": "Working memory",    "code": "Code & execution",
+    "git": "Git (local)",           "github": "GitHub",
+    "workflows": "Workflows",       "skills": "Skills",
+    "automations": "Automations",   "timers": "Timers & reminders",
+    "calendar": "Calendar",         "contacts": "Contacts",
+    "mail": "Email",                "whatsapp": "WhatsApp",
+    "telegram": "Telegram",         "discord": "Discord",
+    "slack": "Slack",               "messaging": "Messaging",
+    "rooms": "Agent rooms",         "tool_catalog": "Tool catalogue",
+    "cloud": "Cloud storage",       "mcp": "MCP",
+    "general": "Other",
+}
+
+
+def category_label(key: str) -> str:
+    """Human name for a bundle.
+
+    A bundle in the custom namespace is named after the bundle it mirrors, so
+    "custom_github" reads "Custom GitHub" and sits recognisably beside the
+    shipped "GitHub" without being mistaken for it. An unknown key (a
+    third-party tool or an MCP server naming its own) is title-cased rather
+    than dropped.
+    """
+    if key == CUSTOM_CATEGORY_PREFIX:
+        return "Custom tools"
+    if key.startswith(f"{CUSTOM_CATEGORY_PREFIX}_"):
+        return f"Custom {category_label(key[len(CUSTOM_CATEGORY_PREFIX) + 1:])}"
+    return CATEGORY_LABELS.get(key) or key.replace("_", " ").strip().title()
+
 logger = logging.getLogger("vaf.policy")
 
 
@@ -56,9 +145,12 @@ class ToolContract:
     channel_restrictions: tuple[str, ...] = ()
     side_effect_class: SideEffectClass = "none"
     # Role-based restriction: True → only admin sessions may call this tool.
-    # Stored here (not on BaseTool directly) so the evaluator always has a
-    # normalised, immutable snapshot.
+    # Declared on BaseTool; kept here as a normalised, immutable snapshot so the
+    # evaluator never reads a live attribute mid-decision.
     admin_only: bool = False
+    # Presentation only: which bundle the tool appears under in tool lists.
+    # No policy reads this field.
+    category: str = "general"
 
 
 @dataclass(frozen=True)
@@ -111,13 +203,33 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
     # "anyone can call this" (the safe default for existing tools).
     admin_only = bool(getattr(tool, "admin_only", False))
 
+    # An UNKNOWN category is kept verbatim, deliberately: that is how an MCP
+    # server or a third-party tool names a bundle of its own. Only an empty or
+    # malformed value collapses to "general", so a typo cannot produce a bundle
+    # whose name is punctuation.
+    raw_category = str(getattr(tool, "category", "general") or "general").strip().lower()
+    if not raw_category.replace("_", "").replace("-", "").isalnum():
+        raw_category = "general"
+
     return ToolContract(
         name=str(getattr(tool, "name", tool_name) or tool_name),
         permission_level=raw_permission,     # type: ignore[arg-type]
         channel_restrictions=restrictions,
         side_effect_class=raw_side_effect,   # type: ignore[arg-type]
         admin_only=admin_only,
+        category=raw_category,
     )
+
+
+def tool_category(tool_name: str, tool: Any | None) -> str:
+    """
+    Which bundle does this tool belong to in a human-facing list?
+
+    The one place that answers it. Every list surface calls this instead of
+    reading the attribute itself; before it, six sites hand-rolled the same
+    getattr with the same default and none of them normalised.
+    """
+    return resolve_tool_contract(tool_name, tool).category
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ class DocumentViewerTool(BaseTool):
     identity_kwargs = ("user_scope_id", "user_role")
     file_access = "read"
     name = "document_viewer"
+    category    = "documents"
     permission_level = "read"
     side_effect_class = "none"
     description = """Open a document in the Document Viewer (Anhänge list) so its content is visible in the right panel.
@@ -201,6 +202,7 @@ class DocumentEditorTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "document_editor"
+    category    = "documents"
     permission_level = "read"
     side_effect_class = "none"
     description = """Open a document in the Document Editor panel so the user can view and edit it.
@@ -273,6 +275,7 @@ class ReplaceEditorSelectionTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "replace_editor_selection"
+    category    = "documents"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Replace the text at a marked selection in the Document Editor.
@@ -349,6 +352,7 @@ class ReplaceEditorTextTool(BaseTool):
     """
 
     name = "replace_editor_text"
+    category    = "documents"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Replace an exact text snippet in the open Document Editor without requiring a marked selection.

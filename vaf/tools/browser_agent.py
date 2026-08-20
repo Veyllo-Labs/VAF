@@ -557,6 +557,7 @@ class BrowserAgentTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "browser_agent"
+    category    = "web"
     permission_level = "write"
     side_effect_class = "irreversible"
     channel_restrictions = ("telegram", "whatsapp", "discord")

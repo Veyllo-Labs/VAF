@@ -13,6 +13,7 @@ class ReadWhatsAppChatTool(BaseTool):
     Read messages from a WhatsApp chat. Use chat_id from whatsapp_inbox or find_whatsapp_messages.
     """
     name = "read_whatsapp_chat"
+    category    = "whatsapp"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

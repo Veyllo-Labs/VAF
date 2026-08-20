@@ -41,6 +41,7 @@ class CodeSearchTool(BaseTool):
     """Search through the codebase for code patterns."""
     
     name = "codesearch"
+    category    = "code"
     permission_level = "read"
     identity_kwargs = ("user_scope_id", "user_role")
     file_access = "read"

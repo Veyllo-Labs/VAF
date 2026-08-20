@@ -68,6 +68,34 @@ export interface CustomToolEditorProps {
   backendError?: string | null;
 }
 
+import { TOOL_BUNDLE_ORDER } from '@/lib/toolBundles';
+
+// ─── Bundle declaration inside the code ──────────────────────────────────────
+// The picker edits the ONE line in the source rather than keeping a second
+// value beside it: the code is what actually gets loaded, so a picker that
+// disagreed with it would be lying. Whatever is chosen here, the loader moves
+// it into the reserved custom namespace ("github" -> "custom_github"), so a
+// user tool never lands inside a bundle of tools that ship with VAF.
+const CATEGORY_RE = /^([ \t]*)category\s*=\s*["'][^"']*["'].*$/m;
+
+function readCategory(source: string): string {
+  const match = source.match(/^[ \t]*category\s*=\s*["']([^"']*)["']/m);
+  return match ? match[1] : 'general';
+}
+
+function writeCategory(source: string, key: string): string {
+  if (CATEGORY_RE.test(source)) {
+    return source.replace(CATEGORY_RE, (_m, indent) => `${indent}category    = "${key}"`);
+  }
+  // No declaration yet: put it directly under `description`, where the rest of
+  // the contract lives.
+  const afterDescription = /^([ \t]*)description\s*=.*$/m;
+  if (afterDescription.test(source)) {
+    return source.replace(afterDescription, (line, indent) => `${line}\n${indent}category    = "${key}"`);
+  }
+  return source;
+}
+
 // ─── Default template injected in create mode ────────────────────────────────
 
 const TOOL_TEMPLATE = `from vaf.tools.base import BaseTool
@@ -77,10 +105,11 @@ class MyCustomTool(BaseTool):
     name        = "my_custom_tool"   # snake_case, must match the file name
     description = "Describe what this tool does for the agent."
 
-    # Declarative contract — set all three on every tool
+    # Declarative contract — set these on every tool
     permission_level  = "read"   # "read" | "write" | "dangerous" | "system"
     side_effect_class = "none"   # "none" | "reversible" | "irreversible"
     channel_restrictions = ()    # e.g. ("telegram", "whatsapp") to block chat channels
+    category    = "general"      # bundle it appears under; yours always land in "Custom …"
 
     # Optional: 1–3 concrete examples shown to the agent (provider-agnostic)
     input_examples = [
@@ -211,6 +240,29 @@ export default function CustomToolEditor({
                 )}
               </div>
             )}
+
+            {/* Bundle picker. Writes the declaration into the code, so the
+                source stays the single truth about the tool. */}
+            <div className="px-4 pt-3 pb-2 border-b border-white/10 shrink-0">
+              <label className="block text-xs text-gray-400 mb-1">
+                Bundle&nbsp;
+                <span className="text-gray-500">
+                  (yours are always listed under &quot;Custom …&quot;, never inside a built-in bundle)
+                </span>
+              </label>
+              <select
+                value={readCategory(code)}
+                onChange={e => setCode(writeCategory(code, e.target.value))}
+                className="w-full bg-[#2d2d2d] text-white text-sm px-3 py-2 rounded-lg border
+                  border-white/20 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
+              >
+                {TOOL_BUNDLE_ORDER.filter(k => k !== 'custom').map(key => (
+                  <option key={key} value={key}>
+                    {key === 'general' ? 'No bundle (Custom tools)' : `Custom ${key}`}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             {/* Monaco code editor */}
             <div className="flex-1 overflow-hidden">

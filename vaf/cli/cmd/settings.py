@@ -482,13 +482,20 @@ def show_tools_menu(agent):
     
     # Contents come from the shared catalog: which tools are hidden and which
     # are coder-only is POLICY, and a second lane needs the same answer.
-    from vaf.cli.tool_catalog import describe_tools
-    for row in describe_tools(agent):
-        if row.coder_only:
-            table.add_row(f"[dim]{row.name}[/dim]", f"[dim]{row.description}[/dim]",
-                          f"[yellow]{row.audience}[/yellow]")
-        else:
-            table.add_row(row.name, row.description, row.audience)
+    # Rendered in bundles - this menu has no pager and no search, so a flat
+    # alphabetical list of 120 names is the worst of all the tool surfaces.
+    from vaf.cli.tool_catalog import describe_tools, group_tools
+    from vaf.core.tool_contract import category_label
+    for category, rows in group_tools(describe_tools(agent)):
+        table.add_section()
+        table.add_row(f"[bold]{category_label(category)}[/bold]",
+                      f"[dim]{len(rows)} tools[/dim]", "")
+        for row in rows:
+            if row.coder_only:
+                table.add_row(f"[dim]{row.name}[/dim]", f"[dim]{row.description}[/dim]",
+                              f"[yellow]{row.audience}[/yellow]")
+            else:
+                table.add_row(row.name, row.description, row.audience)
     
     UI.console.print(table)
     UI.print("\n[dim]Note: Dim tools are only available to Sub-Agents[/dim]")

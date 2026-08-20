@@ -233,7 +233,20 @@ class BaseTool(ABC):
     # e.g. create_agent_tool, which lets the agent write arbitrary Python code
     # to disk.  An admin has explicitly elevated trust; a regular user has not.
     admin_only: bool = False
-    
+
+    # category: which bundle this tool belongs to in the human-facing tool
+    # lists - the web tools window, the CLI tool table, the TUI overlay and
+    # list_tools. Values come from TOOL_CATEGORIES in vaf/core/tool_contract.py.
+    # A value outside that vocabulary is KEPT as declared and rendered as its
+    # own bundle, which is what lets a third-party tool or an MCP server name a
+    # bundle the framework has never heard of; only an empty or malformed value
+    # collapses to the default.
+    # Deliberately NOT a JSON-schema keyword: like input_aliases it stays off
+    # the model-facing `parameters`, so a strict provider can never reject the
+    # whole tool over an unknown schema field. The default is the safe one - an
+    # undeclared tool is listed under "general", never hidden.
+    category: str = "general"
+
     # ═══════════════════════════════════════════════════════════════════════════
     # ABSTRACT METHOD
     # ═══════════════════════════════════════════════════════════════════════════
@@ -521,13 +534,19 @@ class BaseTool(ABC):
         }
 
     def get_contract_metadata(self) -> Dict[str, Any]:
-        """Return declarative tool metadata for central policy checks."""
-        return {
-            "name": self.name,
-            "permission_level": getattr(self, "permission_level", "read"),
-            "channel_restrictions": list(getattr(self, "channel_restrictions", []) or []),
-            "side_effect_class": getattr(self, "side_effect_class", "none"),
-        }
+        """
+        Return declarative tool metadata for central policy checks.
+
+        Delegates to resolve_tool_contract() rather than reading the attributes
+        again: a second hand-rolled projection is how a contract field comes to
+        exist in one place and be missing in the other. Imported inside the
+        method so vaf.tools.base keeps its empty import surface.
+        """
+        from dataclasses import asdict
+        from vaf.core.tool_contract import resolve_tool_contract
+        data = asdict(resolve_tool_contract(self.name, self))
+        data["channel_restrictions"] = list(data["channel_restrictions"])
+        return data
 
     def __repr__(self) -> str:
         return f"<Tool: {self.name}>"

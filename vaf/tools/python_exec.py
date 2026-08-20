@@ -29,6 +29,7 @@ logger = logging.getLogger("vaf.python_exec")
 
 class PythonExecTool(BaseTool):
     name = "python_exec"
+    category    = "code"
     # The trust policy is per user now, so the tool must know WHOSE policy to
     # read: without the declaration it would read the local-admin bucket for
     # every tenant.

@@ -55,6 +55,7 @@ class UpdateIntentTool(BaseTool):
     Do NOT use for preferences like language or "remember that..." – use memory_save for long-term facts.
     """
     name = "update_intent"
+    category    = "context"
     identity_kwargs = ("user_scope_id",)
     permission_level = "system"
     side_effect_class = "reversible"
@@ -102,6 +103,7 @@ class UpdateWorkingMemoryTool(BaseTool):
     Use for multi-step tasks: save your plan, notes, and checkable tasks (pending/done; done removed after 12h).
     """
     name = "update_working_memory"
+    category    = "context"
     identity_kwargs = ("user_scope_id",)
     permission_level = "system"
     side_effect_class = "reversible"
@@ -335,6 +337,7 @@ class AddTaskAliasTool(BaseTool):
     LLM learns the correct pattern for future calls.
     """
     name = "add_task"
+    category    = "context"
     permission_level = "system"
     side_effect_class = "reversible"
     description = (
@@ -394,6 +397,7 @@ class RequestClarificationTool(BaseTool):
     Use this instead of failing or guessing.
     """
     name = "request_clarification"
+    category    = "context"
     permission_level = "system"
     side_effect_class = "reversible"
     description = "Signal a blocker and ask the Main Agent/User for clarification."
@@ -462,6 +466,7 @@ class MemorySearchTool(BaseTool):
     chat hits instead of only the outage.
     """
     name = "memory_search"
+    category    = "memory"
     # username: the chat lane needs it to recognise conversations with a CONTACT,
     # which are that person's chats and not the user's own.
     identity_kwargs = ("user_scope_id", "username")
@@ -576,6 +581,7 @@ class MemorySaveTool(BaseTool):
     Do NOT use for 'who am I?' or 'what do you remember?' – use memory_search or the Memory context block for that.
     """
     name = "memory_save"
+    category    = "memory"
     identity_kwargs = ("user_scope_id",)
     permission_level = "write"
     side_effect_class = "irreversible"

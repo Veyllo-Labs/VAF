@@ -21,6 +21,7 @@ class MarkMailAnsweredTool(BaseTool):
     handled again. Use account_id, folder, message_id from mail_inbox.
     """
     name = "mark_mail_answered"
+    category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "reversible"

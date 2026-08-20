@@ -465,6 +465,7 @@ class ResearchAgentTool(BaseTool):
     """
 
     name = "research_agent"
+    category    = "web"
     permission_level = "read"
     side_effect_class = "none"
     description = (

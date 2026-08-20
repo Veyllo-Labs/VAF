@@ -14,6 +14,7 @@ class FindTelegramMessagesTool(BaseTool):
     Use when the user asks 'find the Telegram message about X' or 'what did I send on Telegram'.
     """
     name = "find_telegram_messages"
+    category    = "telegram"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

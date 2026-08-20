@@ -17,6 +17,7 @@ class ListContactsTool(BaseTool):
     Use get_contact(name) to get full details (e.g. for 'has Max written to me?' then read_whatsapp_chat(chat_id=contact's whatsapp_phone)).
     """
     name = "list_contacts"
+    category    = "contacts"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

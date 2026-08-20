@@ -777,6 +777,7 @@ class WeatherTool(BaseTool):
     description = "Return the current weather for a city."
     permission_level = "read"          # read | write | dangerous | system
     side_effect_class = "none"         # none | reversible | irreversible
+    category = "web"                   # which bundle it appears under in tool lists
     parameters = {
         "type": "object",
         "properties": {"city": {"type": "string"}},
@@ -834,6 +835,20 @@ Key declarative rules the runtime enforces:
   built-ins `move_file`, `bash`, `run_command`, `python_exec`).
 - `side_effect_class` - surfaced to the model so it knows what is reversible.
 - `admin_only`, `channel_restrictions`, `coder_only` - visibility/scoping.
+- `category` - which bundle the tool appears under in the human-facing tool
+  lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
+  The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,
+  but the field is **open**: a value the framework has never seen is kept as
+  declared and rendered as its own bundle, which is how your tool - or an MCP
+  server - names a bundle of its own without patching the framework. Omitting
+  it puts the tool in `general`; it is presentation only, no policy reads it.
+  One namespace is reserved: `custom` and `custom_*` belong to tools loaded
+  through VAF's own custom-tools store (files a user uploaded through the web
+  UI), whose declared bundle is moved into that namespace by the loader so an
+  uploaded file never appears inside a bundle of tools that ship with VAF.
+  **Your tools are not "custom" in that sense** - a tool you register with
+  `add_tool()` or publish as a `vaf.tools` entry point is first-party to your
+  application and keeps whatever bundle it declares.
 
 ---
 

@@ -53,6 +53,7 @@ _HEARTBEAT_INTERVAL_S = 5.0
 
 class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
+    category    = "workflows"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Execute a specific workflow by ID.

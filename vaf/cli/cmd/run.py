@@ -2002,8 +2002,15 @@ Tab             - Autocomplete
 
                 elif cmd == "tools":
                     if hasattr(agent, 'tools'):
-                        tools_list = [f"{name}: {tool.description[:50]}..." for name, tool in agent.tools.items()]
-                        tui.list_items(tools_list, title="Loaded Tools", numbered=True)
+                        # Was a second, drifted copy: it listed update_intent,
+                        # which the shared catalog hides, and grouped nothing.
+                        from vaf.cli.tool_catalog import describe_tools, group_tools
+                        from vaf.core.tool_contract import category_label
+                        tools_list = []
+                        for _cat, _rows in group_tools(describe_tools(agent)):
+                            tools_list.append(f"[{category_label(_cat)}]")
+                            tools_list.extend(f"  {r.name}: {r.description}" for r in _rows)
+                        tui.list_items(tools_list, title="Loaded Tools", numbered=False)
                     else:
                         tui.warning("No tools loaded")
                     continue

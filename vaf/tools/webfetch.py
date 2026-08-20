@@ -26,6 +26,7 @@ MIN_DELAY = 1.0
 
 class WebFetchTool(BaseTool):
     name = "webfetch"
+    category    = "web"
     permission_level = "read"
     side_effect_class = "none"
     description = (

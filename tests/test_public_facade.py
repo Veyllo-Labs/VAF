@@ -214,6 +214,7 @@ def test_basetool_contract_defaults_are_stable():
         "channel_restrictions": (),
         "admin_only": False,
         "input_examples": [],
+        "category": "general",
     }
     for attr, default in expected_defaults.items():
         assert getattr(BaseTool, attr) == default, attr

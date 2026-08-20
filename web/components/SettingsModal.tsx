@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 // PERFORMANCE: Lazy load ReactFlow - it's heavy and only needed for specific modals
 const ReactFlow = lazy(() => import('reactflow').then(mod => ({ default: mod.default })));
 import {
@@ -30,6 +30,7 @@ import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
 import UpdateRepairModal from './settings/UpdateRepairModal';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
@@ -48,7 +49,8 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3, Folder, ArrowLeft, Unlock
+    Eye, EyeOff, ExternalLink, Sparkles, ShieldCheck, BarChart3, Folder, ArrowLeft, Unlock,
+    Mail, Phone, Cloud, Terminal, FileText, Clock, Send, List, Plug, Github
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -1306,6 +1308,170 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         [tools, coderOnlyTools]);
 
     const [toolsSearch, setToolsSearch] = useState('');
+
+
+    // ── Tool bundles ───────────────────────────────────────────────────────
+    // Which bundle a tool belongs to is DECLARED on the tool class and
+    // resolved by vaf/core/tool_contract.py; the frontend only decides how a
+    // bundle looks. Order/colour/icon live in web/lib/toolBundles.ts.
+    const [openBundle, setOpenBundle] = useState<string | null>(null);
+    const toolsGridRef = useRef<HTMLDivElement | null>(null);
+    const [toolCols, setToolCols] = useState(5);
+
+    // Material 3 motion: what enters is decelerated, what leaves is
+    // accelerated, and leaving is the shorter of the two.
+    const EASE_EMPHASIZED: [number, number, number, number] = [0.2, 0, 0, 1];
+    const EASE_DECELERATE: [number, number, number, number] = [0.05, 0.7, 0.1, 1];
+    const EASE_ACCELERATE: [number, number, number, number] = [0.3, 0, 0.8, 0.15];
+
+    // The shelf grows with its content, so a fixed duration would make a shelf
+    // four card rows tall collapse four times as fast as a one-row shelf. The
+    // surcharge per extra row is sub-linear on purpose - a linear one makes
+    // large bundles feel sluggish.
+    const shelfRows = (count: number) => Math.max(1, Math.ceil(count / Math.max(toolCols, 1)));
+    const openMs = (rows: number) => Math.min(700, 450 + (rows - 1) * 80);
+    const closeMs = (rows: number) => Math.min(460, 233 + (rows - 1) * 80);
+
+    // How many columns does the grid actually have right now? Only the browser
+    // knows - the count comes from Tailwind breakpoints, not from our state.
+    useEffect(() => {
+        if (!showToolsModal) return;
+        const el = toolsGridRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const read = () => {
+            const n = getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length;
+            if (n > 0) setToolCols(n);
+        };
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [showToolsModal, tools.length, toolsSearch]);
+
+    // Closing the window must not leave a shelf open behind it.
+    useEffect(() => { if (!showToolsModal) setOpenBundle(null); }, [showToolsModal]);
+
+    const filteredTools = useMemo(() => {
+        const q = toolsSearch.trim().toLowerCase();
+        if (!q) return tools;
+        return tools.filter(t => t.name.toLowerCase().includes(q)
+            || (t.description || '').toLowerCase().includes(q));
+    }, [tools, toolsSearch]);
+
+    const toolBundles = useMemo(() => groupToolsIntoBundles(tools), [tools]);
+
+    const BUNDLE_ICONS: Record<string, React.ElementType> = {
+        sparkles: Sparkles, github: Github, mail: Mail, phone: Phone, chat: MessageSquare,
+        send: Send, network: Network, calendar: Calendar, users: Users, cloud: Cloud,
+        zap: Zap, clock: Clock, workflow: Workflow, database: Database, brain: Brain,
+        terminal: Terminal, branch: GitBranch, folder: Folder, file: FileText,
+        globe: Globe, list: List, plug: Plug, cpu: Cpu,
+    };
+    const bundleIcon = (key: string): React.ElementType =>
+        BUNDLE_ICONS[bundleIconKey(key) || ''] || Cpu;
+
+    /** One tool card. Shared by the search results and the shelf, so the two
+     *  can never drift apart the way two copies of a card always do. */
+    const renderToolCard = (tool: typeof tools[number], idx: number) => (
+                                    <div
+                                        key={tool.name}
+                                        onClick={() => {
+                                            // Custom tools that the admin can manage: open the editor
+                                            if (tool.is_custom && tool.can_manage) {
+                                                if (onGetCustomToolUsers) onGetCustomToolUsers();
+                                                // Fetch source code from backend first, then open editor
+                                                setCustomToolEditor({
+                                                    toolName: tool.name,
+                                                    initialSharedWith: tool.shared_with ?? ['*'],
+                                                    // Source is loaded asynchronously via get_custom_tool_source WS;
+                                                    // the editor will show an empty string until it arrives.
+                                                    initialCode: undefined,
+                                                });
+                                            } else {
+                                                // Built-in tools: open the read-only code viewer
+                                                handleViewCode(tool.name);
+                                            }
+                                        }}
+                                        className={`group relative aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col
+                                            ${tool.is_custom
+                                                ? 'border-purple-200 hover:border-purple-500'
+                                                : 'border-gray-200 hover:border-blue-500'
+                                            }`}
+                                    >
+                                        {/* Decoration: Floppy Disk Icon Background */}
+                                        <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                            <Save size={160} />
+                                        </div>
+
+                                        {/* Content */}
+                                        <div className="p-5 flex-1 flex flex-col relative z-10">
+                                            <div className="flex items-start justify-between mb-2">
+                                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm transition-colors
+                                                    ${tool.is_custom
+                                                        ? 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white'
+                                                        : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
+                                                    }`}>
+                                                    <Cpu size={20} />
+                                                </div>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    {/* Custom badge */}
+                                                    {tool.is_custom && (
+                                                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                            Custom
+                                                        </span>
+                                                    )}
+                                                    {/* Category badge (built-in tools) */}
+                                                    {!tool.is_custom && tool.category && (
+                                                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                                                            {tool.category}
+                                                        </span>
+                                                    )}
+                                                    {/* Whare Wananga learned-state badge (neutral) */}
+                                                    {tool.learned_state && (
+                                                        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md ${
+                                                            tool.learned_state === 'learned' ? 'bg-emerald-100 text-emerald-700'
+                                                            : tool.learned_state === 'learning' ? 'bg-amber-100 text-amber-700'
+                                                            : 'bg-gray-100 text-gray-400'
+                                                        }`}>
+                                                            {tool.learned_state === 'learned' ? 'Learned'
+                                                             : tool.learned_state === 'learning' ? 'Learning'
+                                                             : tool.learned_state === 'stale' ? 'Stale'
+                                                             : 'Not learned'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        
+                                            <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${tool.is_custom ? 'group-hover:text-purple-600' : 'group-hover:text-blue-600'}`}>
+                                                {tool.name}
+                                            </h3>
+
+                                            <div className="flex-1">
+                                                <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
+                                                    {tool.description}
+                                                </p>
+                                            </div>
+
+                                            <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
+                                                {tool.is_custom && tool.updated_at ? (
+                                                    // Custom tools: show last updated date instead of version
+                                                    <span className="font-mono text-[10px]">
+                                                        {new Date(tool.updated_at).toLocaleDateString()}
+                                                    </span>
+                                                ) : (
+                                                    <span className="font-mono">v1.0.0</span>
+                                                )}
+                                                <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity font-medium ${tool.is_custom ? 'text-purple-600' : 'text-blue-600'}`}>
+                                                    {tool.is_custom && tool.can_manage ? 'Edit' : tModals('tools.viewCode')}
+                                                    <ChevronRight size={12} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Bottom Bar (Floppy style) */}
+                                        <div className={`h-2 border-t transition-colors ${tool.is_custom ? 'bg-purple-50 border-purple-100' : 'bg-gray-100 border-gray-200 group-hover:bg-blue-50 group-hover:border-blue-100'}`} />
+                                    </div>
+    );
     const [workflowsSearch, setWorkflowsSearch] = useState('');
     const [skillsSearch, setSkillsSearch] = useState('');
     const [trustedSourceForm, setTrustedSourceForm] = useState<{ categoryId: string; name: string; url: string }>({ categoryId: '', name: '', url: '' });
@@ -5411,9 +5577,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         </div>
 
-                        {/* Tools Grid */}
+                        {/* ── Tools grid ────────────────────────────────────────────────
+                            A bundle does NOT reflow the grid. It opens a shelf across the
+                            full width, in its own row under the card that owns it, and the
+                            only thing that moves in the whole window is that what sits
+                            below makes room. Reordering a hundred unrelated cards to reveal
+                            ten was the actual defect; no easing curve repairs it.
+                            While a search is active the grid shows the matching TOOLS flat -
+                            someone searching is looking for a tool, not for a bundle. */}
                         <div className="relative flex-1 overflow-y-auto p-6 bg-gray-50/30">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                            <div
+                                ref={toolsGridRef}
+                                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-6 gap-y-0 -mb-6 [&>*]:mb-6 [grid-auto-flow:row_dense]"
+                            >
 
                                 {/* ── "Create custom tool" card (admin only, always first) ── */}
                                 {currentUser?.role === 'admin' && onCreateCustomTool && toolsSearch === '' && (
@@ -5433,120 +5609,136 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </button>
                                 )}
 
-                                {tools
-                                    .filter(tool =>
-                                        toolsSearch === '' ||
-                                        tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
-                                        tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
-                                    )
-                                    .map((tool, idx) => (
-                                        <div
-                                            key={idx}
-                                            onClick={() => {
-                                                // Custom tools that the admin can manage: open the editor
-                                                if (tool.is_custom && tool.can_manage) {
-                                                    if (onGetCustomToolUsers) onGetCustomToolUsers();
-                                                    // Fetch source code from backend first, then open editor
-                                                    setCustomToolEditor({
-                                                        toolName: tool.name,
-                                                        initialSharedWith: tool.shared_with ?? ['*'],
-                                                        // Source is loaded asynchronously via get_custom_tool_source WS;
-                                                        // the editor will show an empty string until it arrives.
-                                                        initialCode: undefined,
-                                                    });
-                                                } else {
-                                                    // Built-in tools: open the read-only code viewer
-                                                    handleViewCode(tool.name);
-                                                }
-                                            }}
-                                            className={`group relative aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col
-                                                ${tool.is_custom
-                                                    ? 'border-purple-200 hover:border-purple-500'
-                                                    : 'border-gray-200 hover:border-blue-500'
-                                                }`}
-                                        >
-                                            {/* Decoration: Floppy Disk Icon Background */}
-                                            <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
-                                                <Save size={160} />
-                                            </div>
-
-                                            {/* Content */}
-                                            <div className="p-5 flex-1 flex flex-col relative z-10">
-                                                <div className="flex items-start justify-between mb-2">
-                                                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm transition-colors
-                                                        ${tool.is_custom
-                                                            ? 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white'
-                                                            : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
-                                                        }`}>
-                                                        <Cpu size={20} />
-                                                    </div>
-                                                    <div className="flex flex-col items-end gap-1">
-                                                        {/* Custom badge */}
-                                                        {tool.is_custom && (
-                                                            <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold uppercase tracking-wider rounded-md">
-                                                                Custom
-                                                            </span>
-                                                        )}
-                                                        {/* Category badge (built-in tools) */}
-                                                        {!tool.is_custom && tool.category && (
-                                                            <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
-                                                                {tool.category}
-                                                            </span>
-                                                        )}
-                                                        {/* Whare Wananga learned-state badge (neutral) */}
-                                                        {tool.learned_state && (
-                                                            <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md ${
-                                                                tool.learned_state === 'learned' ? 'bg-emerald-100 text-emerald-700'
-                                                                : tool.learned_state === 'learning' ? 'bg-amber-100 text-amber-700'
-                                                                : 'bg-gray-100 text-gray-400'
-                                                            }`}>
-                                                                {tool.learned_state === 'learned' ? 'Learned'
-                                                                 : tool.learned_state === 'learning' ? 'Learning'
-                                                                 : tool.learned_state === 'stale' ? 'Stale'
-                                                                 : 'Not learned'}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                
-                                                <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${tool.is_custom ? 'group-hover:text-purple-600' : 'group-hover:text-blue-600'}`}>
-                                                    {tool.name}
-                                                </h3>
-
-                                                <div className="flex-1">
-                                                    <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">
-                                                        {tool.description}
-                                                    </p>
-                                                </div>
-
-                                                <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
-                                                    {tool.is_custom && tool.updated_at ? (
-                                                        // Custom tools: show last updated date instead of version
-                                                        <span className="font-mono text-[10px]">
-                                                            {new Date(tool.updated_at).toLocaleDateString()}
-                                                        </span>
-                                                    ) : (
-                                                        <span className="font-mono">v1.0.0</span>
+                                {toolsSearch !== ''
+                                    ? filteredTools.map(renderToolCard)
+                                    : toolBundles.map(bundle => {
+                                        const isOpen = openBundle === bundle.key;
+                                        const accent = bundleColor(bundle.key);
+                                        const rows = shelfRows(bundle.tools.length);
+                                        const learned = bundle.tools.filter(t => t.learned_state === 'learned').length;
+                                        const BundleIcon = bundleIcon(bundle.key);
+                                        return (
+                                            <React.Fragment key={bundle.key}>
+                                                {/* The wrapper carries the stack leaves and the notch, because
+                                                    the card itself clips its own overflow. */}
+                                                <div className="relative">
+                                                    {bundle.tools.length > 1 && (
+                                                        <>
+                                                            <div className="absolute inset-x-0 top-0 aspect-square rounded-2xl bg-white border-2 border-gray-200 opacity-85 translate-x-2 translate-y-2 rotate-[2deg]" />
+                                                            <div className="absolute inset-x-0 top-0 aspect-square rounded-2xl bg-white border-2 border-gray-200 translate-x-1 translate-y-1 rotate-[0.9deg]" />
+                                                        </>
                                                     )}
-                                                    <div className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity font-medium ${tool.is_custom ? 'text-purple-600' : 'text-blue-600'}`}>
-                                                        {tool.is_custom && tool.can_manage ? 'Edit' : tModals('tools.viewCode')}
-                                                        <ChevronRight size={12} />
+                                                    <div
+                                                        data-bundle={bundle.key}
+                                                        onClick={() => setOpenBundle(isOpen ? null : bundle.key)}
+                                                        style={{ ['--acc' as string]: accent }}
+                                                        className={`group relative z-[3] aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col ${isOpen ? 'shadow-xl' : 'border-gray-200'}`}
+                                                    >
+                                                        {isOpen && (
+                                                            <span className="pointer-events-none absolute inset-0 rounded-2xl border-2" style={{ borderColor: accent }} />
+                                                        )}
+                                                        <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                                            <BundleIcon size={160} />
+                                                        </div>
+                                                        <div className="p-5 flex-1 flex flex-col relative z-10 min-h-0">
+                                                            <div className="flex items-start justify-between mb-2">
+                                                                <div
+                                                                    className="w-10 h-10 rounded-lg flex items-center justify-center shadow-sm text-white shrink-0"
+                                                                    style={{ backgroundColor: accent }}
+                                                                >
+                                                                    <BundleIcon size={20} />
+                                                                </div>
+                                                                <span className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md whitespace-nowrap">
+                                                                    {bundle.tools.length === 1
+                                                                        ? tModals('tools.bundleTool')
+                                                                        : tModals('tools.bundleTools', { count: bundle.tools.length })}
+                                                                </span>
+                                                            </div>
+                                                            <h3 className="text-lg font-bold text-gray-900 mb-1 line-clamp-1">
+                                                                {bundleLabel(bundle.key, tModals)}
+                                                            </h3>
+                                                            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                                                                <p className="text-xs text-gray-500">
+                                                                    {tModals('tools.bundleLearned', { done: learned, total: bundle.tools.length })}
+                                                                </p>
+                                                                <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-2">
+                                                                    <i
+                                                                        className="block h-full rounded-full bg-emerald-700/75"
+                                                                        style={{ width: `${Math.round(learned / bundle.tools.length * 100)}%` }}
+                                                                    />
+                                                                </div>
+                                                                <p className="mt-2.5 font-mono text-xs leading-relaxed text-gray-400 line-clamp-4">
+                                                                    {bundle.tools.slice(0, 3).map(t => t.name).join('\n')}
+                                                                    {bundle.tools.length > 3 && (
+                                                                        <>{'\n'}<span className="italic text-gray-500">
+                                                                            {tModals('tools.bundleMore', { count: bundle.tools.length - 3 })}
+                                                                        </span></>
+                                                                    )}
+                                                                </p>
+                                                            </div>
+                                                            <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-end text-xs text-gray-400 group-hover:text-gray-700 font-medium">
+                                                                {isOpen ? tModals('tools.bundleClose') : tModals('tools.bundleOpen')}
+                                                                <ChevronRight size={12} className={`ml-1 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="h-2 border-t transition-colors" style={isOpen
+                                                            ? { backgroundColor: accent, borderColor: accent }
+                                                            : { backgroundColor: 'rgb(243 244 246)', borderColor: 'rgb(229 231 235)' }} />
                                                     </div>
+                                                    {/* Points at the shelf this card owns. */}
+                                                    {isOpen && (
+                                                        <span
+                                                            className="pointer-events-none absolute left-1/2 -translate-x-1/2 -bottom-[13px] z-[4] w-0 h-0 border-x-[9px] border-x-transparent border-b-[10px]"
+                                                            style={{ borderBottomColor: accent }}
+                                                        />
+                                                    )}
                                                 </div>
-                                            </div>
 
-                                            {/* Bottom Bar (Floppy style) */}
-                                            <div className={`h-2 border-t transition-colors ${tool.is_custom ? 'bg-purple-50 border-purple-100' : 'bg-gray-100 border-gray-200 group-hover:bg-blue-50 group-hover:border-blue-100'}`} />
-                                        </div>
-                                    ))}
+                                                <AnimatePresence initial={false}>
+                                                    {isOpen && (
+                                                        <motion.div
+                                                            key="shelf"
+                                                            className="col-span-full overflow-hidden -mx-1"
+                                                            initial={{ height: 0, marginBottom: 0 }}
+                                                            animate={{ height: 'auto', marginBottom: 24 }}
+                                                            exit={{ height: 0, marginBottom: 0, transition: { duration: closeMs(rows) / 1000, ease: EASE_ACCELERATE } }}
+                                                            transition={{ duration: openMs(rows) / 1000, ease: EASE_EMPHASIZED }}
+                                                        >
+                                                            <div
+                                                                className="rounded-2xl py-5"
+                                                                style={{
+                                                                    border: `4px solid ${accent}`,
+                                                                    background: `color-mix(in srgb, ${accent} 7%, rgb(var(--sfc-white)))`,
+                                                                }}
+                                                            >
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                                                                    {bundle.tools.map((tool, idx) => (
+                                                                        <motion.div
+                                                                            key={tool.name}
+                                                                            initial={{ opacity: 0, y: 10, scale: 0.985 }}
+                                                                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                                            exit={{ opacity: 0, y: -6, scale: 0.99 }}
+                                                                            transition={{
+                                                                                duration: 0.26,
+                                                                                delay: 0.09 + Math.min(idx, 12) * 0.026,
+                                                                                ease: EASE_DECELERATE,
+                                                                            }}
+                                                                        >
+                                                                            {renderToolCard(tool, idx)}
+                                                                        </motion.div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </React.Fragment>
+                                        );
+                                    })}
                             </div>
 
                             {/* Empty State */}
-                            {tools.length > 0 && tools.filter(tool =>
-                                toolsSearch === '' ||
-                                tool.name.toLowerCase().includes(toolsSearch.toLowerCase()) ||
-                                tool.description.toLowerCase().includes(toolsSearch.toLowerCase())
-                            ).length === 0 && (
+                            {tools.length > 0 && filteredTools.length === 0 && toolsSearch !== '' && (
                                 <div className="flex flex-col items-center justify-center py-20 text-center">
                                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
                                         <Search size={32} />

@@ -19,6 +19,7 @@ class SendWhatsAppTool(BaseTool):
     Use to_phone when the user asks to send a message to someone (e.g. Alice); get the number from get_contact(name='Alice').
     """
     name = "send_whatsapp"
+    category    = "whatsapp"
     identity_kwargs = ("user_role", "user_scope_id", "username")
     # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
     # make skill files shared by OTHER users attachable to an outgoing message.

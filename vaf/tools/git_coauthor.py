@@ -24,6 +24,7 @@ class SetGitCoauthorTool(BaseTool):
     """Turn VAF's commit co-author attribution on or off."""
 
     name = "set_git_coauthor"
+    category    = "git"
     permission_level = "write"
     side_effect_class = "reversible"
     description = (

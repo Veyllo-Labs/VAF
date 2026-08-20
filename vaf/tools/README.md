@@ -533,6 +533,7 @@ class WeatherTool(BaseTool):
 
     permission_level = "read"        # read | write | dangerous | system
     side_effect_class = "none"       # none | reversible | irreversible
+    category = "web"                 # bundle it appears under in tool lists
     input_examples = [{"city": "Berlin"}]
 
     parameters = {

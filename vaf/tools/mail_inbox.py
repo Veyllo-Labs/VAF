@@ -110,6 +110,7 @@ class MailInboxTool(BaseTool):
     To read a message's content, use read_mail with account_id, message_id, folder, and provider_message_id from the list.
     """
     name = "mail_inbox"
+    category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

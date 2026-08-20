@@ -28,6 +28,7 @@ class ReadMailTool(BaseTool):
     Call mail_inbox first to get message_id and provider_message_id for the message you want.
     """
     name = "read_mail"
+    category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

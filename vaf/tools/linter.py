@@ -21,6 +21,7 @@ from vaf.core.platform import Platform
 
 class LinterTool(BaseTool):
     name = "linter"
+    category    = "code"
     permission_level = "read"
     identity_kwargs = ("user_scope_id", "user_role")
     # THE OTHER EDGE OF THE PRIMITIVE, and it is the reason this comment is longer than the

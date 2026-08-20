@@ -144,12 +144,13 @@ class WebInterfaceManager:
         """Register the active agent instance to allow control from Web UI."""
         self.agent_instance = agent
         try:
+            from vaf.core.tool_contract import tool_category
             if agent and hasattr(agent, "tools"):
                 self.tools_cache = [
                     {
                         "name": name,
                         "description": getattr(tool, "description", "No description"),
-                        "category": getattr(tool, "category", "general")
+                        "category": tool_category(name, tool)
                     }
                     for name, tool in agent.tools.items()
                 ]

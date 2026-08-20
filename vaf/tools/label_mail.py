@@ -65,6 +65,7 @@ class LabelMailTool(BaseTool):
     Use account_id, message_id, folder from mail_inbox output.
     """
     name = "label_mail"
+    category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "reversible"

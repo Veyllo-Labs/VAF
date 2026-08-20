@@ -298,6 +298,7 @@ class RunTestsTool(BaseTool):
     """Coder tool: run the project's tests in the isolated sandbox and return the real result."""
 
     name = "run_tests"
+    category    = "code"
     coder_only = True              # coder-only: the main agent delegates via a coding_agent task
     permission_level = "read"      # reads the host project; executes only inside the sandbox
     side_effect_class = "none"     # never modifies the host project

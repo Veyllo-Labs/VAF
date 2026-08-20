@@ -61,6 +61,7 @@ class SearchToolsTool(BaseTool):
     """Discover available tools by keyword query."""
 
     name = "search_tools"
+    category    = "tool_catalog"
     permission_level = "read"
     side_effect_class = "none"
     description = (

@@ -130,6 +130,10 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
         "parameters": parameters,
         "permission_level": permission,
         "side_effect_class": "irreversible",
+        # Every MCP server becomes its own bundle in the tool lists. The
+        # category vocabulary is deliberately open, so a server the framework
+        # has never heard of still groups correctly without a registry entry.
+        "category": f"mcp_{_safe(server_name)}",
         "run": _run,
         "__doc__": description,
     }

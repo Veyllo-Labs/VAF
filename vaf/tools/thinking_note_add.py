@@ -19,6 +19,7 @@ class ThinkingNoteAddTool(BaseTool):
     """Persist a note for your next thinking run (Thinking Mode only)."""
 
     name = "thinking_note_add"
+    category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"
     # The schema below has always told the model this field is "injected by the

@@ -22,6 +22,7 @@ class ThinkingWorkspaceHandoffTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_handoff"
+    category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"
     description = (

@@ -55,6 +55,7 @@ class SetTimerTool(BaseTool):
     """Schedule a short, one-shot timer that fires proactively in the current chat."""
 
     name = "set_timer"
+    category    = "timers"
     permission_level = "write"
     side_effect_class = "reversible"
     # Proactive in-chat delivery is only wired for the live CLI / WebUI session.
@@ -138,6 +139,7 @@ class ListTimersTool(BaseTool):
     """List the pending timers for the current chat."""
 
     name = "list_timers"
+    category    = "timers"
     permission_level = "read"
     side_effect_class = "none"
     description = "List the currently pending one-shot timers for this chat (id, time left, and what they do)."
@@ -161,6 +163,7 @@ class CancelTimerTool(BaseTool):
     """Cancel a pending timer by its id."""
 
     name = "cancel_timer"
+    category    = "timers"
     permission_level = "write"
     side_effect_class = "reversible"
     description = "Cancel a pending one-shot timer by its id (the '#id' shown by set_timer / list_timers)."

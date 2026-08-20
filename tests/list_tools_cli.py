@@ -11,35 +11,19 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
-CODER_SUBAGENT_TOOLS = [
-    ("read_file", "Read a file's contents", "Coder Sub-Agent"),
-    ("list_files", "List files in directory", "Coder Sub-Agent"),
-    ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),
-    ("codesearch", "Search for code patterns/symbols", "Coder Sub-Agent"),
-]
-
-
 def main():
+    # Hidden/coder-only policy and the bundle order come from the shared
+    # catalog. This file used to keep byte-identical copies of both, which is
+    # the drift CLAUDE Rule 2 forbids - and the copies were already stale.
+    from vaf.cli.tool_catalog import describe_tools, group_tools
     from vaf.core.agent import Agent
+    from vaf.core.tool_contract import category_label
+
     agent = Agent(verbose=False)
-    print("=== Main Agent tools (update_intent excluded) ===\n")
-    for name, tool in sorted(agent.tools.items()):
-        if name in TOOLS_HIDDEN_FROM_CLI:
-            continue
-        t_type = "Main Agent"
-        tstr = str(type(tool))
-        if "CodingAgent" in tstr or "Librarian" in tstr:
-            t_type = "Sub-Agent Delegator"
-        if "WebSearch" in tstr:
-            t_type = "Main Agent (Research)"
-        if "WebFetch" in tstr:
-            t_type = "Main Agent (Research)"
-        desc = (tool.description[:55] + "...") if len(tool.description) > 55 else tool.description
-        print(f"  {name:<28} | {desc:<56} | {t_type}")
-    print("\n=== Coder Sub-Agent only (not given to Main Agent) ===\n")
-    for name, desc, available_to in CODER_SUBAGENT_TOOLS:
-        print(f"  {name:<28} | {desc:<56} | {available_to}")
+    for category, rows in group_tools(describe_tools(agent)):
+        print(f"\n=== {category_label(category)} ({len(rows)}) ===\n")
+        for row in rows:
+            print(f"  {row.name:<28} | {row.description:<58} | {row.audience}")
     return 0
 
 

@@ -25,6 +25,7 @@ SKILL_BODY_BUDGET_CHARS = 14000
 
 class UseSkillTool(BaseTool):
     name = "use_skill"
+    category    = "skills"
     identity_kwargs = ("user_scope_id",)
     # The loaded body IS the deliverable: the agent is meant to FOLLOW it, and the
     # funnel's default cap sits well under the body budget above - it cut every

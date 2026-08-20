@@ -104,6 +104,7 @@ def _repair_raw_step(s: dict) -> dict:
 
 class AgentWorkflowBuilderTool(BaseTool):
     name = "create_agent_workflow"
+    category    = "workflows"
     description = (
         "Plan and run multi-step workflows. Use action='run_temp' for any complex "
         "task that needs more than one tool — it runs immediately and leaves nothing on disk.\n\n"

@@ -69,6 +69,7 @@ class PythonSandboxTool(BaseTool):
     
     identity_kwargs = ("user_scope_id",)
     name = "python_sandbox"
+    category    = "code"
     permission_level = "write"
     side_effect_class = "reversible"
     # Whare Wananga: probe this in full rather than via the error path. Executing self-contained

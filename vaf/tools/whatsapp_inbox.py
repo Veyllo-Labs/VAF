@@ -16,6 +16,7 @@ class WhatsAppInboxTool(BaseTool):
     Call find_whatsapp_messages to search, or read_whatsapp_chat to read a chat.
     """
     name = "whatsapp_inbox"
+    category    = "whatsapp"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

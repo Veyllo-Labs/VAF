@@ -484,6 +484,7 @@ def is_safe_path(path):
 
 class ListFilesTool(BaseTool):
     name = "list_files"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "read"
     permission_level = "read"
@@ -564,6 +565,7 @@ class ListFilesTool(BaseTool):
 
 class FolderSizeTool(BaseTool):
     name = "folder_size"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "read"
     permission_level = "read"
@@ -663,6 +665,7 @@ class FolderSizeTool(BaseTool):
 
 class ReadFileTool(BaseTool):
     name = "read_file"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "read"
     permission_level = "read"
@@ -959,6 +962,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
 
 class WriteFileTool(BaseTool):
     name = "write_file"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "write"
     permission_level = "write"
@@ -1304,6 +1308,7 @@ class EditFileTool(BaseTool):
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "write"
     name = "edit_file"
+    category    = "files"
     permission_level = "write"
     side_effect_class = "reversible"
     description = (
@@ -1473,6 +1478,7 @@ class EditFileTool(BaseTool):
 
 class MoveFileTool(BaseTool):
     name = "move_file"
+    category    = "files"
     permission_level = "write"
     side_effect_class = "reversible"
     description = "Moves or renames a file. Use for renaming: src=current_path, dst=same_folder/new_name.ext"
@@ -1503,6 +1509,7 @@ class MoveFileTool(BaseTool):
 
 class TreeTool(BaseTool):
     name = "tree"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "read"
     permission_level = "read"
@@ -1556,6 +1563,7 @@ class TreeTool(BaseTool):
 
 class FinderTool(BaseTool):
     name = "find_files"
+    category    = "files"
     identity_kwargs = ("user_role", "user_scope_id")
     file_access = "read"
     permission_level = "read"

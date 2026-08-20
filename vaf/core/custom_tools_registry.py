@@ -26,6 +26,13 @@ Manifest structure:
         }
     }
 
+Bundles:
+    A custom tool may declare `category` like any other tool, but the loader moves
+    it into the reserved "custom_" namespace ("github" -> "custom_github", nothing
+    declared -> "custom"). A user-uploaded file therefore never appears inside a
+    bundle of tools that ship with VAF - see CUSTOM_CATEGORY_PREFIX in
+    vaf/core/tool_contract.py for why that separation is worth a namespace.
+
 Access rules:
     - Only admin users may create / delete / update permissions on custom tools.
     - "shared_with": ["*"]  → visible to every logged-in user.
@@ -184,6 +191,16 @@ def load_custom_tool_class(tool_name: str):
             and obj.__module__ == module_name
             and not inspect.isabstract(obj)
         ):
+            # THE boundary where "this class came from a user file" is known.
+            # Moving the declared bundle into the custom namespace here - and
+            # not in any of the four surfaces that render a tool list - is what
+            # keeps the web window, the CLI table, the TUI overlay and
+            # list_tools from each having to repeat the rule (and each
+            # eventually forgetting it). Same reasoning as the type coercion in
+            # persistence.Task.__post_init__: fix at the boundary, not at the
+            # call site.
+            from vaf.core.tool_contract import namespaced_custom_category
+            obj.category = namespaced_custom_category(getattr(obj, "category", None))
             return obj
 
     logger.warning(

@@ -17,6 +17,7 @@ class ListEmailAccountsTool(BaseTool):
     Labels (e.g. support, outreach, sending) help choose the right account. Use account_id with send_mail.
     """
     name = "list_email_accounts"
+    category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

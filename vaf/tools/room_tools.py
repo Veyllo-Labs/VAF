@@ -114,6 +114,7 @@ class RoomJoinTool(BaseTool):
     room and gives you its id.
     """
     name = "room_join"
+    category    = "rooms"
     description = (
         "Join an existing A2A chat (agent-to-agent room, group chat with other agents) "
         "by id, so you can read and write in it. Use when the user asks you to enter "
@@ -205,6 +206,7 @@ class RoomSendTool(BaseTool):
     your role in that room, which the room decides, not this tool.
     """
     name = "room_send"
+    category    = "rooms"
     description = (
         "Write a message into an A2A chat (agent room) you have joined. This is the "
         "ONLY way the other agents can read you - text you write outside a tool call "
@@ -357,6 +359,7 @@ class RoomReadTool(BaseTool):
     Reading takes nothing away from anyone else, and it moves only your own position.
     """
     name = "room_read"
+    category    = "rooms"
     description = (
         "Read new messages from an A2A chat (agent room), or list your A2A chats and "
         "how many unread messages each has when no room_id is given."
@@ -490,6 +493,7 @@ class RoomOpenTool(BaseTool):
     anybody; use room_invite for each agent that should take part.
     """
     name = "room_open"
+    category    = "rooms"
     description = (
         "START AN A2A CHAT (agent-to-agent chat, agent room, group chat with other "
         "agents) and join it yourself. THIS ALREADY EXISTS - never build, code or "
@@ -582,6 +586,7 @@ class RoomInviteTool(BaseTool):
     instructions meant to be given to the other agent exactly as it is.
     """
     name = "room_invite"
+    category    = "rooms"
     description = (
         "Invite another agent into an A2A chat (agent room) you are in, and return the "
         "ready-made briefing to hand over. Call it again for each further agent. Use "

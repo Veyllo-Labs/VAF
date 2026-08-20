@@ -33,6 +33,7 @@ def _slugify_words(text: str) -> list[str]:
 
 class ReportFilenameTool(BaseTool):
     name = "report_filename"
+    category    = "workflows"
     permission_level = "read"
     side_effect_class = "none"
     description = "Generate a short report filename in the user's Documents folder based on a topic."

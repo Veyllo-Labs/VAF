@@ -648,6 +648,7 @@ class CloudStorageTool(BaseTool):
     """Tool for browsing and managing connected cloud storage (Google Drive, OneDrive, etc.)."""
 
     name = TOOL_NAME
+    category    = "cloud"
     permission_level = "write"
     side_effect_class = "reversible"
     description = TOOL_DESCRIPTION

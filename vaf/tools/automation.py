@@ -87,6 +87,7 @@ class AutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "create_automation"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Create a scheduled automation task that runs a prompt at a specific clock time. Use frequency='once' for a one-time task or reminder at a given clock time (runs exactly once, then self-deletes). Use frequency='daily'/'weekly'/'monthly'/'hourly' only for recurring schedules. For a SHORT relative delay that should fire proactively in the live chat (e.g. 'in 1 minute', 'in 90 seconds'), use the set_timer tool instead — not this one.
@@ -911,6 +912,7 @@ class ListAutomationsTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "list_automations"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = (
@@ -975,6 +977,7 @@ class ReadAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "read_automation"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = "Read the full content of a specific automation task including prompt, parameters, schedule, and all details. Use this when user asks about what an automation does or wants to see the full content of an automation."
@@ -1046,6 +1049,7 @@ class UpdateAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "update_automation"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Update an existing automation task by ID. Use this when user wants to modify an existing automation (change time, frequency, prompt, etc.) instead of creating a new one.
@@ -1201,6 +1205,7 @@ class DeleteAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "delete_automation"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Delete an automation task by ID. The task will be moved to trash and can be restored later.
@@ -1260,6 +1265,7 @@ class RestoreAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "restore_automation"
+    category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Restore a deleted automation task from trash by ID.
@@ -1318,6 +1324,7 @@ class ListTrashTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "list_trash"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = "List all automation tasks in trash (deleted but recoverable)."

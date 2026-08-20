@@ -12,6 +12,7 @@ class ThinkingDoneTool(BaseTool):
     """Signal that this thinking pass is complete. Call when you have nothing left to do for the user in this run."""
 
     name = "thinking_done"
+    category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"
     description = (

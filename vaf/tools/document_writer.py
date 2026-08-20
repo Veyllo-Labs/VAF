@@ -34,6 +34,7 @@ class DocumentWriterTool(BaseTool):
     """
     
     name = "document_writer"
+    category    = "documents"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Creates simple structured documents (contracts, letters, messages, templates).

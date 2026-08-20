@@ -89,6 +89,7 @@ class LibrarianTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "librarian_agent"
+    category    = "files"
     permission_level = "write"
     side_effect_class = "reversible"
     description = """A specialized Sub-Agent for File System, Storage & Information Retrieval.

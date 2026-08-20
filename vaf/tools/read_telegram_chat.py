@@ -14,6 +14,7 @@ class ReadTelegramChatTool(BaseTool):
     Telegram conversation, so 'what did we talk about on Telegram' works without an id.
     """
     name = "read_telegram_chat"
+    category    = "telegram"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

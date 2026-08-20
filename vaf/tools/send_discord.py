@@ -18,6 +18,7 @@ class SendDiscordTool(BaseTool):
     Use when the user asked you to send them something and they prefer Discord or said "via Discord".
     """
     name = "send_discord"
+    category    = "discord"
     identity_kwargs = ("user_role", "user_scope_id", "username")
     # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
     # make skill files shared by OTHER users attachable to an outgoing message.

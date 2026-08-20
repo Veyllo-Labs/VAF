@@ -22,6 +22,7 @@ class ThinkingWorkspaceReadTool(BaseTool):
 
     identity_kwargs = ("user_scope_id",)
     name = "thinking_workspace_read"
+    category    = "automations"
     permission_level = "read"
     side_effect_class = "none"
     description = (

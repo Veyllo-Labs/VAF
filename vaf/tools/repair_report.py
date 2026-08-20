@@ -74,6 +74,7 @@ def _extract_sections(html: str) -> List[Section]:
 
 class RepairReportTool(BaseTool):
     name = "repair_report"
+    category    = "workflows"
     permission_level = "read"
     side_effect_class = "none"
     description = "Check an HTML report and regenerate empty/too-short sections (returns repaired HTML)."

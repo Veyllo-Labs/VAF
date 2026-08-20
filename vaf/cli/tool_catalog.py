@@ -16,7 +16,7 @@ Rich table, the terminal app fills an overlay, both from `describe_tools()`.
 Import-light on purpose (no textual, no Rich, no agent import).
 """
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 # Internal plumbing the model calls but a human list should not advertise.
 TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
@@ -25,10 +25,10 @@ TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
 # is not silently incomplete. Note read_file/list_files/write_file ARE on the
 # main agent as well and are therefore not listed as coder-only here.
 CODER_SUBAGENT_TOOLS = (
-    ("read_file", "Read a file's contents"),
-    ("list_files", "List files in directory"),
-    ("bash", "Execute shell commands (build, test, git)"),
-    ("codesearch", "Search for code patterns/symbols"),
+    ("read_file", "Read a file's contents", "files"),
+    ("list_files", "List files in directory", "files"),
+    ("bash", "Execute shell commands (build, test, git)", "code"),
+    ("codesearch", "Search for code patterns/symbols", "code"),
 )
 
 _MAIN = "Main Agent"
@@ -45,6 +45,7 @@ class ToolRow:
     description: str
     audience: str
     coder_only: bool = False
+    category: str = "general"
 
 
 def _audience(tool) -> str:
@@ -57,24 +58,49 @@ def _audience(tool) -> str:
 
 
 def describe_tools(agent) -> List[ToolRow]:
-    """Every tool a human should see, main-agent tools first.
+    """Every tool a human should see, grouped by bundle, bundles in display
+    order and tools alphabetical inside each.
+
+    Plain alphabetical order was actively hostile at this size: over 117 names
+    the five WhatsApp tools spanned 84 positions and the four Telegram tools
+    70, in a 26-row overlay with no search box. Grouping is the whole point of
+    the `category` declaration, and both renderers get it for free.
 
     Returns data, never prints - the classic menu's own version blocked on
     `console.input()` at the end, which no full-screen lane can call.
     """
+    from vaf.core.tool_contract import TOOL_CATEGORIES, tool_category
+
+    order = {key: index for index, key in enumerate(TOOL_CATEGORIES)}
+    unknown_at = len(order)          # a bundle the framework does not know goes last
+
     rows: List[ToolRow] = []
-    for name, tool in sorted(getattr(agent, "tools", {}).items()):
+    for name, tool in getattr(agent, "tools", {}).items():
         if name in TOOLS_HIDDEN_FROM_CLI:
             continue
         text = str(getattr(tool, "description", "") or "")
         if len(text) > DESCRIPTION_CHARS:
             text = text[:DESCRIPTION_CHARS] + "..."
-        rows.append(ToolRow(name=name, description=text, audience=_audience(tool)))
+        rows.append(ToolRow(name=name, description=text, audience=_audience(tool),
+                            category=tool_category(name, tool)))
 
     listed = {r.name for r in rows}
-    for name, text in CODER_SUBAGENT_TOOLS:
+    for name, text, category in CODER_SUBAGENT_TOOLS:
         if name in listed:
             continue
         rows.append(ToolRow(name=name, description=text, audience=_CODER_ONLY,
-                            coder_only=True))
+                            coder_only=True, category=category))
+
+    rows.sort(key=lambda r: (order.get(r.category, unknown_at), r.category, r.name))
     return rows
+
+
+def group_tools(rows: List[ToolRow]) -> List[Tuple[str, List[ToolRow]]]:
+    """(bundle key, its rows) in the order describe_tools() already produced, so
+    a renderer only has to draw a heading and never has to know the order."""
+    groups: List[Tuple[str, List[ToolRow]]] = []
+    for row in rows:
+        if not groups or groups[-1][0] != row.category:
+            groups.append((row.category, []))
+        groups[-1][1].append(row)
+    return groups

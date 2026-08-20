@@ -14,6 +14,7 @@ class FindWhatsAppMessagesTool(BaseTool):
     Use when the user asks 'find messages from Alice' or 'what did X say in WhatsApp'.
     """
     name = "find_whatsapp_messages"
+    category    = "whatsapp"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "read"
     side_effect_class = "none"

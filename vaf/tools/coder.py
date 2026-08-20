@@ -2382,6 +2382,7 @@ class ContextState:
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
+    category    = "git"
     permission_level = "write"
     side_effect_class = "reversible"
     description = "Initialize a Git repository in the current project directory. Creates .git directory and .gitignore file."
@@ -2413,6 +2414,7 @@ class GitInitTool(BaseTool):
 class GitAddCommitTool(BaseTool):
     """Add files to Git staging area and commit them."""
     name = "git_add_commit"
+    category    = "git"
     permission_level = "write"
     side_effect_class = "irreversible"
     description = "Add files to Git staging area and create a commit with a message. Use this to save your work progress."
@@ -2469,6 +2471,7 @@ class GitAddCommitTool(BaseTool):
 class GitStatusTool(BaseTool):
     """Get the current Git status of the repository."""
     name = "git_status"
+    category    = "git"
     permission_level = "read"
     side_effect_class = "none"
     description = "Check the current Git status: shows modified, staged, and untracked files."
@@ -2504,6 +2507,7 @@ class GitStatusTool(BaseTool):
 class GitLogTool(BaseTool):
     """View Git commit history."""
     name = "git_log"
+    category    = "git"
     permission_level = "read"
     side_effect_class = "none"
     description = "View the Git commit history. Shows recent commits with messages."
@@ -2622,6 +2626,7 @@ def _assign_caller_identity(tool, fn_args: dict, scope, role) -> dict:
 
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
+    category    = "code"
     permission_level = "write"
     side_effect_class = "reversible"
     # WHO IS ASKING, so the coder's inner tools can act as that person. This was `()` until

@@ -32,6 +32,7 @@ from vaf.core.command_policy import is_command_safe  # offline classifier, stric
 
 class HostBashTool(BaseTool):
     name = "host_bash"
+    category    = "code"
     permission_level = "dangerous"   # -> confirmation gate in execute_tool
     channel_restrictions = ("channel", "telegram", "whatsapp", "discord")  # hard-blocked on remote
     side_effect_class = "irreversible"

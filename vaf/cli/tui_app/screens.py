@@ -181,11 +181,22 @@ class ToolsScreen(ModalScreen[None]):
         lv = self.query_one("#tools-list", ListView)
         if not self._rows:
             lv.append(ListItem(Static("[$text-disabled]no tools loaded[/]")))
+        # One heading per bundle. The box is 30 rows tall and has no search, so
+        # without headings the reader has to know the alphabet to find the four
+        # Telegram tools among a hundred and twenty.
+        from vaf.cli.tool_catalog import group_tools
+        from vaf.core.tool_contract import category_label
+        current = None
         for row in self._rows:
+            category = getattr(row, "category", "general")
+            if category != current:
+                current = category
+                lv.append(ListItem(Static(
+                    f"[bold $text]{_esc(category_label(category))}[/]")))
             audience = (f"  [$vaf-muted]{_esc(row.audience)}[/]"
                         if row.audience else "")
             lv.append(ListItem(Static(
-                f"[$text]{_esc(row.name):<26}[/] "
+                f"  [$text]{_esc(row.name):<24}[/] "
                 f"[$vaf-muted]{_esc(row.description)}[/]{audience}")))
         lv.focus()
 

@@ -295,6 +295,14 @@ many frames have not been read.
 - **Auto-Open**: The panel opens when a sub-agent starts (via tool events/logs).
 - **Tool Card Toggle**: Clicking a sub-agent tool card expands details and opens the panel; collapsing the card closes the panel.
 - **Auto-Close Guard**: The panel does not auto-close while any sub-agent step is still running.
+- **Per-chat isolation**: The window's state is snapshotted and swapped per session on a
+  chat switch, exactly like the message list - chat A's running coder view (and the stop
+  button its "running" state arms) never shows over chat B. A snapshot is restored with
+  its presence demoted to idle, because the worker's terminal event may have been
+  addressed to a chat nobody had open; a worker that truly still runs re-arms the window
+  with its next heartbeat within seconds. A window whose feed goes silent for 30 seconds
+  while claiming running work settles itself (open steps to `timeout`, presence down),
+  so a lost terminal event can never pin the stop button forever.
 
 ### 5. Message Features
 

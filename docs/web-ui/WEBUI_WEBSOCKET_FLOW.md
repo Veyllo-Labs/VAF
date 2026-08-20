@@ -133,7 +133,21 @@ Key rules:
   events that intentionally target other sessions: `session_list`, `history_update`,
   `contact_reply_pending`, `session_unread`, and `agent_message_append`. These pass the
   cross-session filter so the UI can refresh lists, show an unread badge, or surface a
-  proactive message instead of silently dropping it.
+  proactive message instead of silently dropping it. Also whitelisted are the
+  **terminal/bookkeeping events** `message_complete`, `generation_stopped` and the
+  attachment index family (`attachment_indexing` / `attachment_indexed` /
+  `attachment_index_error` / `attachment_index_cancelled`): their handlers write
+  per-session state first and gate every visible mutation on the active session
+  themselves. They must pass because a terminal event can race the user's switch away
+  from its session; dropping it froze that session's client-side state at
+  "generating" (or "indexing") with nothing left to ever clear it - the stop button
+  then re-armed on every later visit to that chat.
+- The per-session UI state (stop button, loader) is restored from the client's own
+  bookkeeping on switch, but the `history_update`'s `isActive` (queue-answered, per
+  session) is the truth and overrides a stale local "generating" flag. The local flag
+  wins only within a short window after a LOCAL send (the enqueue race: the snapshot
+  was computed before the chat frame reached the queue); the send-time ref is zeroed
+  on every session switch, so a stale flag can never survive a switch-back.
 - WebUI enqueue path rejects implicit fallback into messenger sessions (`telegram_*`, `discord_*`, `whatsapp_*`) when `sessionId` is missing, to prevent cross-channel routing.
 - **Server-side ownership gate:** Beyond frontend `sessionId` filtering, the backend enforces ownership before the first side effect of every session command - `chat` (before subscribing to the session stream), `load_session`, `delete_session`, `rename_session`, `hide_session`, and `artifact_edit`. The caller must own the session (`metadata.user_scope_id` matches) or be admin (connection role `admin` or local-admin scope); a session with no recorded scope is admin-only. On denial the server sends `{"type":"error","message":"Access denied"}` and continues the receive loop (it does not close the socket). This is stricter than `session_list` visibility, which still shows no-scope sessions to all users.
 
@@ -270,7 +284,14 @@ The native DOCX editor uses dedicated backend endpoints instead of the legacy HT
 These endpoints are used only for the native DOCX editor path. The legacy HTML editor endpoints remain available for non-DOCX editor flows.
 - `session_list`: available sessions
 - `session_delete_result`: the answer to `delete_session` / `hide_session`. `{ id, deleted, needsConfirm }`. `needsConfirm: true` means the server refused because the chat is not untouched and nobody confirmed - the browser opens the delete dialog and asks again with `confirmed: true`. `deleted: true` means it is gone (a successful archive counts, the file moved) and the browser switches away from it. Both false means nothing was removed. Addressed by `id`, deliberately NOT `sessionId`: the cross-session filter above drops events stamped with a session that is not the open one, and the chat being deleted usually is not.
-- `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches. Tool messages now include `toolName`, `toolId`, and `toolStatus` (either from `metadata.*` or from top-level keys `name`/`tool_call_id`; status defaults to `"completed"` if content is present). The frontend extracts these fields when parsing server messages to ensure tool cards display correctly after reload.
+- `history_update`: session history (also sets active session). `isActive` answers "is a
+  turn running or queued in THIS chat" and is read from the queue
+  (`TaskQueue.is_busy_for_session`), never from process-global agent state: only worker 1
+  is ever registered on the interface manager and `latest_state.status` is one field for
+  the whole process (unwritten on the headless product path), so the former construction
+  was wrong under parallel workers. `currentStatus` carries the registered agent's status
+  text only when that agent is provably on this session, otherwise the neutral `working`.
+  The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches. Tool messages now include `toolName`, `toolId`, and `toolStatus` (either from `metadata.*` or from top-level keys `name`/`tool_call_id`; status defaults to `"completed"` if content is present). The frontend extracts these fields when parsing server messages to ensure tool cards display correctly after reload.
 - `agent_message_update`: streaming assistant text (full content so far). The frontend shows a **separate** assistant bubble when the last message is a tool card: only the text after the previous assistant content is shown in the new bubble, so tool use and the follow-up answer appear distinctly. Carries `turnId` (see below).
 - `agent_message_append`: a complete, **standalone** assistant message that is always appended as its own new bubble - never streamed or merged in-place. Used for proactive messages (e.g. automation results) where there is no live agent turn to attach to; the streaming `agent_message_update` path would otherwise overwrite the previous reply or drop the text. If it targets the active session the frontend appends it; if it targets another session the frontend shows an unread badge instead; if no session is active yet the frontend adopts and loads the target session.
 - `file_created`: a file the agent (or an upload) produced, shown as a chip inside an assistant bubble. Payload: `sessionId`, `filePath`, `title`, `turnId`.
@@ -442,6 +463,7 @@ If the tool card expands but the panel does not open:
 | Automation result not shown in WebUI (only created files appear) | Result delivered via streaming `agent_message_update`, which overwrote/dropped the bubble when no live turn was active; the `session_unread` fallback was filtered out by the cross-session guard | Deliver results via `agent_message_append` (always appends a new bubble); allow `session_unread` and `agent_message_append` through the cross-session filter |
 | Chat empty after app start until switching sessions and back | `session_list` auto-select sent `load_session` via the `ws` STATE variable, which the `onmessage` closure captured as `null` on the first connect - the send silently did nothing | Handlers send via `wsSocketRef.current` (set before `onopen`) instead of the captured state |
 | LAN WebUI keeps reconnecting / connection lost on a heavy session | Oversized `history_update` frame (inline base64 images) exceeded the proxy relay's default 1 MB per-frame cap (`PayloadTooBig`), tearing down the relay | Proxy relay connects to the backend with `max_size=None`; every uvicorn passes `WS_MAX_SIZE_BYTES` (200 MB) explicitly - see WebSocket Frame Sizing below |
+| Stop button / loader from chat A visible in chat B, or stuck forever after switching back | Per-turn state was process-global (sub-agent window, workflow store, stop-press feedback, tool avatar) and the terminal events that clear the per-session flags were dropped by the cross-session filter, so a stale "generating" could never heal | Sub-agent window snapshots are swapped per session on switch, the workflow store records its run's `sessionId`, transient stop/tool state is cleared on switch, `message_complete`/`generation_stopped` pass the filter for bookkeeping, and `history_update.isActive` (queue-answered, per session) is the truth on a genuine switch |
 
 ## Message Ordering (history_update)
 
@@ -483,4 +505,4 @@ per-file gate on both sides (client before base64, server after decoding).
 - `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy with connection pooling)
 - `web/app/page.tsx` (frontend session filtering, message ordering & render)
 
-*Last updated: 2026-06-02*
+*Last updated: 2026-08-20*

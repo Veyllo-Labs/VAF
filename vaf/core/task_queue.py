@@ -370,6 +370,25 @@ class TaskQueue:
                     continue
             return False
 
+    def is_busy_for_session(self, session_id: str) -> bool:
+        """True if this session has an in-flight OR queued task - "is a turn running
+        or about to run in this chat", the per-session sibling of is_busy_for_scope().
+
+        `_session_inflight` is checked first because it is the wider set: it carries
+        the worker in-flight sessions AND the drain's try_claim_session() claims,
+        which have no task object in `_inflight_by_worker` to iterate. Housekeeping
+        commands need no filter here: every `__CMD__` task is enqueued under
+        session_id="system", which no chat session id ever equals.
+        """
+        sid = str(session_id or "")
+        if not sid:
+            return False
+        with self._cv:
+            if sid in self._session_inflight:
+                return True
+            heaps = [self._legacy_heap] if self._legacy_mode else list(self._queues.values())
+            return any(item[3].session_id == sid for heap in heaps for item in heap)
+
     def get_queue_stats(self) -> Dict[str, Any]:
         with self._cv:
             if self._legacy_mode:

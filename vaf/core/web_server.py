@@ -694,6 +694,41 @@ def _session_record_exists(session_id) -> bool:
         return True          # cannot tell -> treat as present -> ask
 
 
+def _session_is_active(session_id) -> bool:
+    """Is a turn running or queued in THIS chat - the queue is the authority.
+
+    The former construction (registered agent's _session_id plus the global
+    latest_state status) could not answer this: only worker 1 is registered,
+    latest_state.status is one field for the whole process and the headless
+    product path never writes it, so parallel workers made the answer wrong in
+    both directions. TaskQueue.is_busy_for_session reads the same in-flight
+    set the workers maintain, so it is right for every worker and every user.
+    """
+    if not session_id:
+        return False
+    try:
+        from vaf.core.task_queue import TaskQueue
+        return TaskQueue().is_busy_for_session(str(session_id))
+    except Exception:
+        return False
+
+
+def _session_status_label(session_id) -> str:
+    """Status text for an ACTIVE session's history_update.
+
+    latest_state.status is process-global, so it may only be shown when the one
+    registered agent is provably on this session; any other busy session gets
+    the neutral label rather than another chat's status.
+    """
+    try:
+        if (manager.agent_instance and
+                getattr(manager.agent_instance, "_session_id", None) == str(session_id)):
+            return manager.latest_state.get("status", "working")
+    except Exception:
+        pass
+    return "working"
+
+
 # Mount Memory System routes if enabled
 if Config.get("memory_enabled", True):
     try:
@@ -3944,20 +3979,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 except Exception:
                     pass
 
-            is_active = False
-            try:
-                if (manager.agent_instance and
-                    getattr(manager.agent_instance, '_session_id', None) == sid and
-                    manager.latest_state.get("status") != "idle"):
-                    is_active = True
-            except: pass
+            is_active = _session_is_active(sid)
 
             await websocket.send_json({
                 "type": "history_update",
                 "messages": frontend_messages,
                 "sessionId": sid,
                 "isActive": is_active,
-                "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
+                "currentStatus": _session_status_label(sid) if is_active else "idle"
             })
             artifact_payload = _build_artifact_payload(loaded, sid)
             if artifact_payload:
@@ -4334,23 +4363,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
-                        # Check if this session is currently active in the agent
-                        is_active = False
-                        try:
-                            # If agent is working on this session ID right now
-                            # We use internal _session_id which we synced in agent.py
-                            if (manager.agent_instance and 
-                                getattr(manager.agent_instance, '_session_id', None) == sid and
-                                manager.latest_state.get("status") != "idle"):
-                                is_active = True
-                        except: pass
+                        is_active = _session_is_active(sid)
 
                         await websocket.send_json({
                             "type": "history_update",
                             "messages": frontend_messages,
                             "sessionId": sid,
                             "isActive": is_active,
-                            "currentStatus": manager.latest_state.get("status", "idle") if is_active else "idle"
+                            "currentStatus": _session_status_label(sid) if is_active else "idle"
                         })
                         artifact_payload = _build_artifact_payload(loaded, sid)
                         if artifact_payload:

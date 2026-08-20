@@ -66,6 +66,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **Each chat now keeps its own working state; switching no longer bleeds one
+  chat into another.** With the agent busy in one chat, opening another showed
+  that chat's stop button too, and coming back to the first could leave its
+  loader, stop button and tool animation running forever with nothing left to
+  clear them. Three causes, all fixed: the sub-agent window, the workflow panel
+  and the stop-press feedback lived in state shared by every chat and now
+  belong to the chat they came from (the sub-agent view is swapped per chat
+  like the messages, the workflow panel records which chat its run belongs to
+  and only appears there); the events that end a turn used to be thrown away
+  when they raced a chat switch, so a chat could never learn its turn had
+  finished - they are kept for bookkeeping now, and a chat that finishes in
+  the background shows an unread mark instead of a sound; and the server's own
+  "is this chat busy" answer was read from one process-wide status field that
+  parallel workers overwrite, so it now comes from the task queue, which knows
+  it per chat. A worker display whose updates stop arriving settles itself
+  after 30 seconds instead of claiming a running task forever, and a failed
+  turn now tells the browser it is over instead of leaving the stop button
+  armed.
 - **Reading a large file no longer cuts it off blind.** Every tool result in
   the chat used to be capped at 2,000 characters, and a file read hit that wall
   with nothing to go on: no length, no line count, no way to ask for the rest.

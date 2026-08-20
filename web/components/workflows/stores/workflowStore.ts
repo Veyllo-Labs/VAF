@@ -20,6 +20,10 @@ export interface VAFStep {
 export interface VAFWorkflow {
   id: string;
   name: string;
+  // The chat this run belongs to. The store is a module-global singleton, so the
+  // view layer needs this to show the run ONLY in its own chat; a run without it
+  // (persisted before the field existed) keeps the old everywhere-visible reading.
+  sessionId?: string | null;
   steps: VAFStep[];
   currentStepId: string | null;
   // 'ended' is a NEUTRAL terminal state: the run is over but this panel never learned

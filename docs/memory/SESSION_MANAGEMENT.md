@@ -130,13 +130,19 @@ On WebSocket connect, the backend sends a **user-filtered** `session_list` and i
 
 
 ```typescript
-// web/app/page.tsx (line 278-283)
+// web/app/page.tsx (conceptually - the real filter carries an exception list)
 if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
-    if (data.type !== 'session_list' && data.type !== 'history_update') {
+    if (!crossSessionAllowed) {
         return;  // Reject messages for other sessions
     }
 }
 ```
+
+The `crossSessionAllowed` exception list (events that legitimately target other
+sessions, plus terminal/bookkeeping events whose handlers scope themselves per
+session) is documented in
+[WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md) under *Session
+Scoping Rules*.
 
 ---
 

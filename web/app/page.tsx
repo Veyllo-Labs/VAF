@@ -2976,7 +2976,7 @@ function VAFDashboardContent() {
     }, [contextStats]);
 
     // Sub-Agent Window State
-    const [subAgentState, setSubAgentState] = useState<{
+    type SubAgentViewState = {
         isOpen: boolean;
         agentName: string;
         agentKind: SubAgentKind | null;   // known at the tool CALL -> open the matching custom window at once
@@ -3061,7 +3061,8 @@ function VAFDashboardContent() {
             actions: Array<{ verb: string; text: string; status: string }>;
             history: string[];
         } | null;
-    }>({
+    };
+    const IDLE_SUB_AGENT_STATE: SubAgentViewState = useMemo(() => ({
         isOpen: false,
         agentName: "Sub-Agent",
         agentKind: null,
@@ -3081,7 +3082,42 @@ function VAFDashboardContent() {
         document: null,
         librarian: null,
         browser: null,
-    });
+    }), []);
+    const [subAgentState, setSubAgentState] = useState<SubAgentViewState>(IDLE_SUB_AGENT_STATE);
+    // The window's state is ONE object, so a chat switch must swap it like the
+    // message list: what session A's coder streamed is not what session B shows.
+    // Snapshots keyed by session; restored on switch-in, idle when none exists.
+    const sessionSubAgentStates = useRef<Record<string, SubAgentViewState>>({});
+    // Watchdog input: bumped by every subAgentState write. A window whose feed has
+    // gone silent (its terminal event was addressed to a chat we had already left)
+    // must stop claiming a running worker at some point; the heartbeats arrive
+    // every few seconds while anything runs, so 30s of silence means stale.
+    const subAgentLastEventAtRef = useRef<number>(0);
+    useEffect(() => { subAgentLastEventAtRef.current = Date.now(); }, [subAgentState]);
+    useEffect(() => {
+        const claimsRunning = subAgentState.presence === 'online' ||
+            subAgentState.steps.some((s: { status?: string }) => s?.status === 'running' || s?.status === 'pending');
+        if (!claimsRunning) return;
+        const t = setInterval(() => {
+            if (Date.now() - subAgentLastEventAtRef.current <= 30000) return;
+            setSubAgentState(prev => {
+                const stillClaims = prev.presence === 'online' ||
+                    prev.steps.some((s: { status?: string }) => s?.status === 'running' || s?.status === 'pending');
+                if (!stillClaims) return prev;
+                // Settle the same way the idle/error frame would have: presence down,
+                // open steps to 'timeout' (a finished status, so the window becomes
+                // closable), and a status text that says what happened.
+                return {
+                    ...prev,
+                    presence: prev.presence === 'error' ? 'error' as const : 'idle' as const,
+                    status: 'Timeout: no updates received',
+                    steps: prev.steps.map((s: { status?: string }) =>
+                        (s?.status === 'running' || s?.status === 'pending') ? { ...s, status: 'timeout' } : s),
+                };
+            });
+        }, 5000);
+        return () => clearInterval(t);
+    }, [subAgentState]);
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
     const [sessionEditorState, setSessionEditorState] = useState<Record<string, SessionEditorDocumentState>>({});
@@ -3433,8 +3469,13 @@ function VAFDashboardContent() {
 
     // Workflow Store
     const { workflow: activeWorkflow, isOpen: workflowPanelOpen, loadWorkflow, updateStepStatus, appendWorkflowLine, clearWorkflow } = useWorkflowStore();
-    // Check if a workflow is actively running
-    const isWorkflowRunning = activeWorkflow?.status === 'running';
+    // Does the stored run belong to the OPEN chat? The store is a global singleton,
+    // so without this gate a run started in chat A kept the stop button and the
+    // runtime panel alive in every other chat. A run with no recorded session
+    // (persisted before the field existed) keeps the old everywhere reading.
+    const workflowBelongsHere = !activeWorkflow?.sessionId || activeWorkflow.sessionId === currentSessionId;
+    // Check if a workflow is actively running IN THIS chat
+    const isWorkflowRunning = activeWorkflow?.status === 'running' && workflowBelongsHere;
 
     // Ref for WebSocket access (to avoid stale closure)
     const isWorkflowRunningRef = useRef(isWorkflowRunning);
@@ -3453,7 +3494,9 @@ function VAFDashboardContent() {
             sock.send(JSON.stringify({
                 type: 'get_workflow_run_state',
                 workflowId: wf.id,
-                sessionId: currentSessionIdRef.current || undefined,
+                // The run's own chat when recorded: after a switch the panel asks
+                // about ITS run, not about whatever chat happens to be open.
+                sessionId: wf.sessionId || currentSessionIdRef.current || undefined,
             }));
         } catch { /* the socket died again; the next trigger retries */ }
     }, []);
@@ -3769,11 +3812,43 @@ function VAFDashboardContent() {
                 statusMessage,
                 loadingMessageId
             };
+            sessionSubAgentStates.current[currentSessionId] = subAgentState;
         }
 
-        // 2. Close Sub-Agent panel – it belongs to the previous session. Viewer/Editor state is per-session and will show correctly for the new session.
+        // 2. Swap the Sub-Agent window like the message list: the leaving chat's
+        // worker view is snapshotted above, the entering chat gets its own snapshot
+        // back (closed - reopening is the live feed's or the user's call) or idle.
+        // Leaving only isOpen:false here is how session A's "running" coder kept
+        // the stop button and the delegate avatar alive in session B.
         subAgentUserClosedRef.current = false;  // Reset for new session
-        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+        const restoredSubAgent = sessionSubAgentStates.current[id] ?? IDLE_SUB_AGENT_STATE;
+        // Restored with presence DEMOTED: while this chat was closed, its worker's
+        // terminal event went to nobody, so the snapshot may claim "running" about
+        // work that finished long ago. A worker that truly still runs re-arms the
+        // window with its next heartbeat within seconds; a finished one stays down
+        // instead of pinning the stop button on a chat that is idle.
+        setSubAgentState({
+            ...restoredSubAgent,
+            isOpen: false,
+            presence: restoredSubAgent.presence === 'error' ? 'error' : 'idle',
+        });
+        // The handler's step-merge base reads this ref, not the state: it must
+        // swap with the window or the next heartbeat merges the OLD chat's steps.
+        subAgentStepsRef.current = Array.isArray(restoredSubAgent.steps) ? restoredSubAgent.steps : [];
+
+        // 2b. Per-turn transient state is the previous chat's: the tool avatar and
+        // its minimum-hold timer, and the stop press feedback (ripple, disarm flag).
+        // None of these are addressed by session, so a switch must clear them or
+        // they play on over the next chat.
+        if (toolModeClearTimerRef.current) { clearTimeout(toolModeClearTimerRef.current); toolModeClearTimerRef.current = null; }
+        setActiveToolName('');
+        setActiveToolMode(null);
+        isStoppingGenerationRef.current = false;
+        setIsStoppingGeneration(false);
+        if (stopPulseTimerRef.current) { clearTimeout(stopPulseTimerRef.current); stopPulseTimerRef.current = null; }
+        setStopPulsing(false);
+        setStopBtnPos(null);
+        setStopHovered(false);
 
         // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
         setCurrentSessionId(id);
@@ -3810,6 +3885,16 @@ function VAFDashboardContent() {
         //    already synced this session (a new/empty chat has nothing to load → no spinner flash).
         setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
         ws?.send(JSON.stringify({ type: 'load_session', id }));
+        // Entering the chat a stored workflow run belongs to: ask the backend
+        // whether that run is actually still going. Its events were addressed to
+        // this chat while another one was open (nobody was subscribed), so the
+        // panel's last received state can be arbitrarily stale. Sent after
+        // load_session on the same socket, so the subscription is already moved
+        // when the server answers.
+        const wfStored = useWorkflowStore.getState().workflow;
+        if (wfStored?.sessionId === id && wfStored.status === 'running') {
+            requestWorkflowRunStateRef.current?.();
+        }
     };
     // Where to go once a chat is actually GONE. Split out of performChatDelete
     // because the moment moved: the server now decides whether a delete may
@@ -3929,12 +4014,24 @@ function VAFDashboardContent() {
                     // Exception: events that intentionally target other sessions must pass
                     // through so the UI can react (show an unread badge, append proactive
                     // automation results, etc.) instead of being silently dropped.
+                    // message_complete / generation_stopped / the attachment index family are
+                    // whitelisted because their handlers do per-session BOOKKEEPING first and
+                    // gate every visible mutation on the active session themselves. Dropping
+                    // them here is what froze sessionLoadingStates at "generating" forever:
+                    // the terminal event for a chat raced the switch away from it, lost, and
+                    // the stale flag re-armed the stop button on every later visit.
                     const crossSessionAllowed = (
                         data.type === 'session_list' ||
                         data.type === 'history_update' ||
                         data.type === 'contact_reply_pending' ||
                         data.type === 'session_unread' ||
-                        data.type === 'agent_message_append'
+                        data.type === 'agent_message_append' ||
+                        data.type === 'message_complete' ||
+                        data.type === 'generation_stopped' ||
+                        data.type === 'attachment_indexing' ||
+                        data.type === 'attachment_indexed' ||
+                        data.type === 'attachment_index_error' ||
+                        data.type === 'attachment_index_cancelled'
                     );
                     if (!crossSessionAllowed) {
                         console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
@@ -4558,7 +4655,17 @@ function VAFDashboardContent() {
                         };
                     }
                     const activeSessionId = currentSessionIdRef.current;
-                    if (!data.sessionId || data.sessionId === activeSessionId) {
+                    const completeIsActiveSession = !data.sessionId || data.sessionId === activeSessionId;
+                    if (!completeIsActiveSession) {
+                        // A chat the user is not looking at finished its turn: mark it
+                        // unread so the sidebar says so, and change nothing on screen.
+                        setUnreadSessions(prev => new Set(prev).add(data.sessionId));
+                    }
+                    if (completeIsActiveSession) {
+                        // The turn is over: loader too, not only the stop button. A turn
+                        // that never streamed (system-log-only reply) otherwise leaves the
+                        // dots running with nothing later to clear them.
+                        setLoading(false);
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
                         // Final-answer punctuation reaction: a trailing '?' replays the "permission" asking
@@ -4596,9 +4703,11 @@ function VAFDashboardContent() {
                             return pending.filter(f => !ready.includes(f));
                         });
                     }
-                    // Completion sound: play when model has finished (Web UI only)
+                    // Completion sound: play when model has finished (Web UI only).
+                    // Active session only - this event now crosses the session filter for
+                    // bookkeeping, and a background chat finishing must not ding this one.
                     // Use same-origin relative URL so it works through HTTPS proxy (no mixed content)
-                    try {
+                    if (completeIsActiveSession) try {
                         const soundUrl = '/sounds/tts01.mp3';
                         const audio = new Audio(soundUrl);
                         audio.volume = 0.6;
@@ -4612,8 +4721,8 @@ function VAFDashboardContent() {
                     } catch {
                         // ignore if Audio or play fails
                     }
-                    // Auto-TTS: Speak the response if enabled
-                    if (config.tts_auto_speak && config.speech_tts_enabled && data.content) {
+                    // Auto-TTS: Speak the response if enabled (active session only, same reason)
+                    if (completeIsActiveSession && config.tts_auto_speak && config.speech_tts_enabled && data.content) {
                         // Don't auto-speak if already playing/loading
                         if (playingMessageId === null && loadingMessageId === null) {
                             ws?.send(JSON.stringify({
@@ -4749,6 +4858,9 @@ function VAFDashboardContent() {
                     loadWorkflow({
                         id: data.workflowId || 'wf-' + Date.now(),
                         name: data.name || 'Workflow',
+                        // The run's chat: the store is global, so this is what lets the
+                        // panel and the stop button stay out of every other chat.
+                        sessionId: data.sessionId || activeSessionId || null,
                         steps: data.steps || [],
                         currentStepId: null,
                         status: 'running'
@@ -5267,11 +5379,19 @@ function VAFDashboardContent() {
 
                     // Restore active state
                     const isActive = !!data.isActive;
-                    // Race guard: a local turn can already be in-flight while backend history
-                    // still reports isActive=false (e.g. reconnect/load snapshot during stream).
-                    // In that case, avoid replacing local chat state with an incomplete snapshot.
+                    // Race guard, NARROW on purpose: the server's isActive is answered by
+                    // the queue per session and is the truth. The one honest gap is the
+                    // enqueue race - the user just pressed send and this snapshot was
+                    // computed before the chat frame reached the queue - so the local
+                    // "generating" flag only counts within a short window after a local
+                    // send (the ref is zeroed on every session switch). The former
+                    // unconditional `isActive || local flag` was a workaround for the old
+                    // always-false backend signal, and it made a stale flag for a
+                    // backgrounded chat re-arm the stop button on every visit, forever.
                     const prevLocalState = sessionLoadingStates.current[data.sessionId];
-                    const hadLocalGenerating = !!prevLocalState?.isGenerating;
+                    const recentLocalSend = lastUserSendTimeRef.current > 0 &&
+                        (Date.now() - lastUserSendTimeRef.current) < 15000;
+                    const hadLocalGenerating = recentLocalSend && !!prevLocalState?.isGenerating;
                     const effectiveActive = isActive || hadLocalGenerating;
                     const status = data.currentStatus && isActive ? `Agent: ${data.currentStatus}` : '';
                     setLoading(effectiveActive);
@@ -5280,12 +5400,14 @@ function VAFDashboardContent() {
                     syncedSessions.current.add(data.sessionId);
                     setHistoryLoading(false);  // history snapshot arrived (active OR idle/empty) → stop the load spinner
 
-                    // Update per-session loading state tracking
+                    // Update per-session loading state tracking. loadingMessageId is the
+                    // TTS spinner's index into the LOCAL message list; the server's message
+                    // count indexes a differently built array, so it is never carried over.
                     sessionLoadingStates.current[data.sessionId] = {
                         loading: effectiveActive,
                         isGenerating: effectiveActive,
                         statusMessage: status,
-                        loadingMessageId: effectiveActive ? (data.messages?.length || 0) : null
+                        loadingMessageId: null
                     };
 
                     // Parse server messages and preserve server order (index) so sort is stable
@@ -9125,12 +9247,13 @@ function VAFDashboardContent() {
                     )}
                 </div>
             </div>
-            {/* Active Tools Panel Moved Inline */}
-            <VAFWorkflowRuntime />
+            {/* Active Tools Panel Moved Inline. Only in the chat the run belongs to:
+                the store is global, and A's runtime panel has no business over B. */}
+            {workflowBelongsHere && <VAFWorkflowRuntime />}
 
             {/* Browser live view, tiled to the LEFT of the Workflow Runtime window (which is
                 ~500px wide on lg) so the two visual windows sit side by side instead of overlapping. */}
-            {workflowPanelOpen && !browserTileClosed && (
+            {workflowBelongsHere && workflowPanelOpen && !browserTileClosed && (
                 <BrowserLiveTile
                     frame={subAgentState.browserFrame}
                     url={subAgentState.browserUrl}

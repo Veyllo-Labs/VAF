@@ -2540,6 +2540,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         )
                     except Exception:
                         pass
+                    try:
+                        # Close the turn for the browser: without this, a failed
+                        # chat_step leaves the stop button and loader armed until
+                        # the user acts (every other exit path emits this). Empty
+                        # content on purpose - the error is in the timeline via
+                        # new_log, and empty skips the Auto-TTS read-out.
+                        get_web_interface().emit_message_complete(
+                            content="",
+                            session_id=task.session_id,
+                        )
+                    except Exception:
+                        pass
                     # If task came from Telegram or Discord, send error reply so user sees something
                     try:
                         task_source_err = getattr(task, "source", None)

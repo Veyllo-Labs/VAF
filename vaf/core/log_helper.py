@@ -290,6 +290,65 @@ def append_usage_log(message: str) -> None:
         pass
 
 
+def append_crash_log(label: str, text: str) -> Optional[Path]:
+    """Append one '--- <timestamp> (<label>) ---' block to crash_YYYY-MM-DD.log.
+
+    THE writer for the dated crash log; call sites must not hand-roll the
+    open/mkdir/format themselves (a guard test pins this - two lanes already
+    had byte-similar copies before this existed). NOT gated on
+    debug_logs_enabled: crash evidence a settings switch can turn off is not
+    evidence - same polarity as append_usage_log above, and the same standing
+    exception docs/DEBUGGING.md already documents for crash_*.log. Returns the
+    path so a UI lane can tell the user where the traceback went, or None if
+    even logging failed (never raises; a broken crash writer must not add a
+    second crash).
+    """
+    try:
+        path = get_dated_log_path("crash", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.now().isoformat()} ({label}) ---\n")
+            f.write(text if text.endswith("\n") else text + "\n")
+        return path
+    except Exception:
+        return None
+
+
+def install_thread_excepthook() -> None:
+    """Route uncaught background-thread exceptions into crash_YYYY-MM-DD.log.
+
+    CPython's default threading.excepthook prints to stderr and returns: the
+    thread dies, the process lives, and in a terminal lane the only record
+    scrolls away - no log file, nothing in the UI. (Live case: a thread killed
+    by CPython bpo-15108 left its traceback nowhere on disk.) This hook writes
+    the same traceback through append_crash_log first, then delegates to the
+    hook that was installed before it, so stderr behavior and any hook an
+    embedder installed earlier are preserved. SystemExit is not logged (the
+    default hook ignores it as a routine thread exit; delegation keeps that).
+    Idempotent - installing twice keeps one hook.
+    """
+    import threading
+
+    if getattr(threading.excepthook, "_vaf_crash_hook", False):
+        return
+    prev = threading.excepthook
+
+    def _vaf_thread_excepthook(args) -> None:
+        try:
+            if args.exc_type is not SystemExit:
+                import traceback
+                name = args.thread.name if args.thread is not None else "<unknown>"
+                text = "".join(traceback.format_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback))
+                append_crash_log(f"uncaught in thread {name}", text)
+        except Exception:
+            pass  # logging must never raise; the delegation below still runs
+        prev(args)
+
+    _vaf_thread_excepthook._vaf_crash_hook = True
+    threading.excepthook = _vaf_thread_excepthook
+
+
 def log_attachment(event: str, **kwargs) -> None:
     """
     Attachment diagnostic log → attach_YYYY-MM-DD.log when debug_logs_enabled.

@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.cli.ui import UI
-from vaf.core.log_helper import get_dated_log_path
+from vaf.core.log_helper import append_crash_log, get_dated_log_path
 import threading
 
 
@@ -2256,15 +2256,11 @@ Created: {current_session.created_at}
         except Exception as e:
             tui.error(f"Error in interaction loop: {e}")
             import traceback
-            # Save traceback to log for debugging (crash_YYYY-MM-DD.log)
-            try:
-                crash_path = get_dated_log_path("crash", "log")
-                crash_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(crash_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n--- {datetime.now().isoformat()} ---\n")
-                    f.write(traceback.format_exc())
+            # Save traceback to crash_YYYY-MM-DD.log via the one crash writer
+            crash_path = append_crash_log("vaf run, classic lane", traceback.format_exc())
+            if crash_path:
                 tui.info(f"Traceback saved to {crash_path}")
-            except Exception:
+            else:
                 # If logging fails, just print traceback
                 traceback.print_exc()
 

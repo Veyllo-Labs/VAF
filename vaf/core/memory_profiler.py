@@ -131,22 +131,28 @@ class MemoryProfiler:
             for line in top_allocations:
                 self._log(f"  {line}")
         else:
-            gc.collect()
-            obj_counts = self._get_object_counts()
+            # No object-type census here, deliberately: it needed gc.get_objects(),
+            # and gc.get_objects() on THIS background thread briefly holds a strong
+            # reference to every tracked object - including a tuple another thread
+            # is still mid-build (tuple(<genexp>) allocates GC-tracked, then shrinks
+            # via _PyTuple_Resize, which demands refcount exactly 1). One extra
+            # reference in that window kills the BUILDING thread with "SystemError:
+            # bad argument to internal function" (CPython bpo-15108). The victim is
+            # whichever thread builds tuples most often; in practice rich's spinner
+            # refresh thread died mid-tool-call, silently for the user. RSS plus
+            # the growth warning above are this line's documented job (see
+            # docs/DEBUGGING.md) and need no heap walk.
             snapshot = {
                 "timestamp": datetime.now().isoformat(),
                 "memory_mb": memory_mb,
                 "delta_mb": delta,
-                "objects": obj_counts,
             }
             self._snapshots.append(snapshot)
 
             if len(self._snapshots) > 100:
                 self._snapshots = self._snapshots[-100:]
 
-            top_objects = sorted(obj_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-            obj_str = ", ".join([f"{k}:{v}" for k, v in top_objects])
-            self._log(f"Memory: {memory_mb:.0f}MB (Δ{delta:+.0f}MB){warning} | Top: {obj_str}")
+            self._log(f"Memory: {memory_mb:.0f}MB (Δ{delta:+.0f}MB){warning}")
 
         # Auto-cleanup if memory is high
         if memory_mb > 4000:
@@ -159,24 +165,6 @@ class MemoryProfiler:
             return psutil.Process().memory_info().rss / (1024 * 1024)
         except ImportError:
             return 0.0
-
-    def _get_object_counts(self) -> Dict[str, int]:
-        """Get counts of objects by type (leak suspects)."""
-        counts: Dict[str, int] = {}
-
-        # Count specific types that are common leak suspects
-        suspects = [
-            "dict", "list", "tuple", "str", "bytes",
-            "function", "method", "frame", "cell",
-            "Message", "Session", "Chunk", "Memory",
-        ]
-
-        for obj in gc.get_objects():
-            type_name = type(obj).__name__
-            if type_name in suspects:
-                counts[type_name] = counts.get(type_name, 0) + 1
-
-        return counts
 
     def _emergency_cleanup(self):
         """Emergency memory cleanup when usage is high."""
@@ -247,10 +235,6 @@ class MemoryProfiler:
             lines.append("Top allocations:")
             for line in current["top_allocations"]:
                 lines.append(f"  {line}")
-        else:
-            lines.append("Top object types:")
-            for name, count in sorted(current["objects"].items(), key=lambda x: x[1], reverse=True)[:10]:
-                lines.append(f"  {name}: {count:,}")
 
         return "\n".join(lines)
 
@@ -268,34 +252,3 @@ def stop_profiler():
 def get_memory_report() -> str:
     """Get current memory report."""
     return MemoryProfiler.get_instance().get_report()
-
-
-# Track object growth between calls
-_last_counts: Dict[str, int] = {}
-
-
-def log_object_growth():
-    """Log which object types are growing (call periodically)."""
-    global _last_counts
-    gc.collect()
-
-    current_counts: Dict[str, int] = {}
-    for obj in gc.get_objects():
-        type_name = type(obj).__name__
-        current_counts[type_name] = current_counts.get(type_name, 0) + 1
-
-    if _last_counts:
-        growth = []
-        for name, count in current_counts.items():
-            prev = _last_counts.get(name, 0)
-            delta = count - prev
-            if delta > 100:  # Only report significant growth
-                growth.append((name, delta, count))
-
-        if growth:
-            growth.sort(key=lambda x: x[1], reverse=True)
-            append_domain_log("memory", "[PROFILER] Object growth:")
-            for name, delta, total in growth[:10]:
-                append_domain_log("memory", f"[PROFILER]   {name}: +{delta} (total: {total})")
-
-    _last_counts = current_counts

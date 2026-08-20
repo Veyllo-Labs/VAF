@@ -1380,6 +1380,18 @@ Three companion pages cover the operational side of embedding:
   lifecycle, the `chat_step`/`complete`/`execute_tool` contracts, and the
   concurrency rules.
 
+**Background-thread crashes:** the framework starts threads on your behalf
+(bounded tool runs, sub-agent IPC), and an uncaught exception in a thread
+does not reach your call stack - CPython's default `threading.excepthook`
+prints it to stderr and returns, so in most deployments the only trace
+scrolls away. Call `vaf.install_thread_excepthook()` once at startup to route
+every uncaught thread exception into `crash_<date>.log` in the VAF log store
+(always written, regardless of `debug_logs_enabled`; see
+[DEBUGGING.md](DEBUGGING.md)). It chains: a hook you installed before it
+still runs, and stderr printing is preserved. VAF's own entry points install
+it on every lane; as a library it is opt-in, because a process-global hook is
+yours to decide.
+
 **Concurrency contract (short version):** one `Agent` is one conversation and
 is effectively single-threaded - drive it from one thread at a time. For
 parallelism, create multiple `Agent` instances (each in its own thread is
@@ -1494,6 +1506,10 @@ Stable public surface (safe to build on):
   (missing binary, missing language data, timeout) instead of the result
   looking like an empty document. Needs the `vaf[pdf]` extra at call time;
   `import vaf` stays cheap.
+- `vaf.install_thread_excepthook()` - route uncaught background-thread
+  exceptions into `crash_<date>.log` (see "Background-thread crashes" above).
+  The promise: chains the previously installed hook, idempotent, never raises,
+  writes regardless of `debug_logs_enabled`, does not log `SystemExit`.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
@@ -1503,9 +1519,10 @@ Two that are easy to mistake for surface because this page names them:
 Both are engine-internal by design: VAF exposes no session enumeration on the
 façade, and no embedder has asked for one. If you need it, say so - the export is
 one lazy branch away, and it is not being added on speculation.
-`vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver` and
-`vaf.extract_pdf_markdown` are the deliberate exceptions: they live in `vaf.core`
-but are re-exported on the façade, and the façade names are the ones to import.
+`vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
+`vaf.extract_pdf_markdown` and `vaf.install_thread_excepthook` are the deliberate
+exceptions: they live in `vaf.core` but are re-exported on the façade, and the
+façade names are the ones to import.
 
 ### Breaking-change tests you can run in your own CI
 

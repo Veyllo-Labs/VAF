@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     # API to the real classes so `from vaf import Agent` autocompletes and type-checks.
     # No runtime import here — `import vaf` stays cheap (the real loading is in
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
+    from .core.log_helper import install_thread_excepthook
     from .core.pdf_extract import extract_pdf_markdown
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver, set_confirmation_bypass_resolver
@@ -24,7 +25,7 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "UploadVerdict", "VoiceTurnEngine",
            "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
            "fold_room_tasks", "fold_room_votes", "inspect_upload",
-           "joined_rooms", "markers",
+           "install_thread_excepthook", "joined_rooms", "markers",
            "participant_key", "record_threat", "room_invitation",
            "set_account_allowlist_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
@@ -44,6 +45,15 @@ def __getattr__(name):
         # costs nothing on the slim base.
         from .tools.base import BaseTool
         return BaseTool
+    if name == "install_thread_excepthook":
+        # Uncaught exceptions in background threads otherwise die on stderr with no
+        # on-disk trace: CPython's default threading.excepthook prints and returns.
+        # This routes them into crash_<date>.log in the VAF log store, chaining any
+        # hook installed before it. Exported because the framework starts threads on
+        # an embedder's behalf (bounded runs, sub-agent IPC) - the embedder has the
+        # same blind spot - and log_helper itself is internal (see docs/EMBEDDING.md).
+        from .core.log_helper import install_thread_excepthook
+        return install_thread_excepthook
     if name == "user_jail":
         # Confine one tool run to the caller's own files. Declaring identity_kwargs tells
         # the dispatcher WHO is calling; this turns that answer into an actual boundary.

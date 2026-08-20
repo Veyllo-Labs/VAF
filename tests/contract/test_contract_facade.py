@@ -37,6 +37,7 @@ EXPORTED = [
     "fold_room_tasks",
     "fold_room_votes",
     "inspect_upload",
+    "install_thread_excepthook",
     "joined_rooms",
     "markers",
     "participant_key",

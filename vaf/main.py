@@ -274,6 +274,17 @@ def bootstrap():
 
 bootstrap()
 
+# Keep the evidence when a background thread dies. CPython's default
+# threading.excepthook prints to stderr and returns, so in a terminal lane the
+# only trace of a crashed thread scrolls away (live case: a thread killed by
+# CPython bpo-15108 left nothing on disk). Installed at this funnel because
+# every process lane the product starts passes through this module - console
+# script, tray/web, subagent children (same coverage argument as the resolver
+# registration below). Embedders never reach this line; they opt in via the
+# facade export `vaf.install_thread_excepthook`.
+from vaf.core.log_helper import install_thread_excepthook
+install_thread_excepthook()
+
 # The harness's account-allowlist resolvers (tools AND saved workflows), registered on
 # EVERY process lane that passes through this module: the console script (pyproject
 # [project.scripts] vaf = "vaf.main:main"), tray/web (tray_command below; systemd and

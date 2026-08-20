@@ -80,7 +80,7 @@ gates the domain logs, queue metrics, timeline, and channel logs. Notes:
 | `timeline_*.jsonl` | Hash-chained event timeline (`tool_start`/`tool_end`, sub-agent and thinking runs); served with chain verification via `GET /api/logs/timeline/events` |
 | `vaf_think_*.log` | Proactive/thinking runs, one human-readable block per run |
 | `startup_trace_*.txt`, `tray_startup_*.txt`, `tray_debug_*.log` | Startup sequencing; tray issues |
-| `crash_*.log`, `faulthandler.log` | Unhandled exceptions in the CLI loop; native crashes (SIGSEGV etc.) |
+| `crash_*.log`, `faulthandler.log` | Unhandled exceptions in the CLI loop; uncaught exceptions from background threads (a process-wide `threading.excepthook` is installed on every product lane - without it a crashed thread's traceback only ever reaches stderr; embedders opt in via `vaf.install_thread_excepthook`); native crashes (SIGSEGV etc.) |
 | `telegram_reply_*` / `discord_reply_*` / `whatsapp_*` | Channel bridge send/receive diagnostics |
 | `security_*.log`, `security_events_*.jsonl` | Who was blocked or rejected: non-LAN IPs, tokenless/invalid-token requests, failed logins/2FA, rejected WebSocket handshakes, rejected channel senders, skill blocks/quarantines. The `.jsonl` is the structured source of truth (served via `GET /api/security/events`); the `.log` is its human-readable mirror. Always on, flood-throttled per source, entries never contain secrets |
 | `logs/debug/<agent_type>/<task_id>/events.jsonl` | Per-sub-agent-run structured event stream (sanitized args/results with length/sha256/preview); swept after 14 days by the writer itself, but the periodic GC removes them after `gc_max_age_hours` (48h) in a running app |

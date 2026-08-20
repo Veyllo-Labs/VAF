@@ -66,6 +66,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **A background bookkeeping task could kill the tool spinner, silently.** Every
+  30 seconds a debug profiler counted all objects in memory to watch for leaks.
+  That census briefly touches objects other threads are still in the middle of
+  building, which is a way to make Python abort whichever thread is building
+  them (CPython issue `bpo-15108`). In practice the victim was the terminal
+  spinner shown during a tool call: it froze mid-run with no error anywhere but
+  the terminal's own error stream. The census is gone; the profiler still logs
+  memory usage and its growth warnings, which is what the log line is for. And
+  because that crash left no trace in any log file, uncaught errors from
+  background threads are now written to `crash_<date>.log` on every lane the
+  app starts, always, regardless of the debug-logs switch. Embedders get the
+  same via `vaf.install_thread_excepthook()`.
 - **Deleting a chat cannot skip its confirmation any more.** The trash icon in
   the sidebar deletes a chat that is genuinely empty without asking, which is
   right: there is nothing to decide about a chat nobody used. Whether it was

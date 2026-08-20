@@ -134,22 +134,15 @@ def _inline_attachments(text: str, on_error=None) -> str:
 def _write_crash_log():
     """Append the current traceback to the dated crash log; return its path.
 
-    The classic loop did this for every unexpected turn error (the same
-    `get_dated_log_path("crash", "log")` file). In app mode a printed traceback
-    is worse than useless - it lands under the alternate screen - so the file
-    IS the artifact, and only its path goes into the transcript.
+    The classic loop does this for every unexpected turn error (the same
+    crash_<date>.log file, through the same append_crash_log writer). In app
+    mode a printed traceback is worse than useless - it lands under the
+    alternate screen - so the file IS the artifact, and only its path goes
+    into the transcript. Returns None if even logging failed.
     """
     import traceback
-    try:
-        from vaf.core.log_helper import get_dated_log_path
-        path = get_dated_log_path("crash", "log")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(f"\n--- {time.strftime('%Y-%m-%dT%H:%M:%S')} (vaf run, app lane) ---\n")
-            fh.write(traceback.format_exc())
-        return path
-    except Exception:
-        return None
+    from vaf.core.log_helper import append_crash_log
+    return append_crash_log("vaf run, app lane", traceback.format_exc())
 
 
 def _bind_owner(agent) -> None:

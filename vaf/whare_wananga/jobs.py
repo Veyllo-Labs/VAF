@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 _lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}  # tool -> status dict
@@ -72,6 +72,30 @@ def is_running(tool: str) -> bool:
     with _lock:
         s = _jobs.get(tool)
         return bool(s and s.get("state") == "running")
+
+
+def active_runs() -> List[Dict[str, Any]]:
+    """Every training run in flight right now, for callers that do NOT know which
+    tool is training.
+
+    get_status/is_running both make the caller name the tool first, which is fine
+    for the dashboard of one tool and useless for anything asking "is anything
+    training at all" - that caller would have to poll once per installed tool.
+    Four lanes can start a run (the web route, the eager worker, the retrain
+    drain, the teacher), so one reader beats four poll loops.
+
+    Filtering on state is load-bearing, not cosmetic: a finished job is rewritten
+    in place and never removed from _jobs, so the whole dict is a history, not a
+    work list. `events` is dropped because get_status hands out a SHALLOW copy
+    whose event list is the same object the worker thread keeps appending to, and
+    an aggregate gets serialized by its callers outside this lock.
+
+    Process-local like the rest of this module: a `vaf ww train` run in another
+    shell is invisible here.
+    """
+    with _lock:
+        return [{k: v for k, v in status.items() if k != "events"}
+                for status in _jobs.values() if status.get("state") == "running"]
 
 
 def start_training(agent, tool: str, **train_kwargs) -> Dict[str, Any]:

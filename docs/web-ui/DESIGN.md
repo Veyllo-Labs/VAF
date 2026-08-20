@@ -371,7 +371,8 @@ These patterns are explicitly forbidden to maintain design consistency:
 | `text-white` on light backgrounds | `text-gray-900` |
 | `bg-indigo-600` for primary buttons | `bg-gray-900` |
 | `bg-blue-600` for primary actions | `bg-gray-900` |
-| Dark mode patterns | Light mode only |
+| Editing a base class so dark mode looks right | Leave light byte-identical and add a `dark:` override - see [DARKMODE.md](DARKMODE.md) |
+| A hand-picked `dark:` value on a utility that already folds (`bg-white`, `bg-gray-50..400`, `text-gray-400..900`, accent tints) | Nothing - the palette swap themes it; only raw hex, inline styles and JS palettes need a dark half |
 | `rounded-sm` or `rounded` | `rounded-lg` or `rounded-xl` |
 | Hard shadows (`shadow-2xl` on cards) | `shadow-sm` or `shadow-md` |
 

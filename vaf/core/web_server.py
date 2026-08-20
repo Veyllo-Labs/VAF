@@ -1898,6 +1898,25 @@ async def whare_wananga_training_status(name: str):
         return {"ok": False, "tool": name, "status": None, "error": str(e)}
 
 
+@app.get("/api/whare_wananga/active_runs")
+async def whare_wananga_active_runs():
+    """Every Whare Wananga training run in flight, for the tools modal header.
+
+    The sibling route above answers for ONE named tool, which is the wrong shape
+    for a header that does not know the name: it would have to poll once per
+    installed tool. This one consumes the framework reader instead of filtering
+    the job table here, so the two can never disagree.
+
+    Process-local, like the job table it reads: a `vaf ww train` run started in a
+    separate shell is invisible to this route by construction.
+    """
+    try:
+        from vaf.whare_wananga import active_runs
+        return {"ok": True, "runs": active_runs()}
+    except Exception as e:
+        return {"ok": False, "runs": [], "error": str(e)}
+
+
 @app.post("/api/subagent/stream")
 async def receive_subagent_stream(update: SubAgentStreamUpdate):
     """

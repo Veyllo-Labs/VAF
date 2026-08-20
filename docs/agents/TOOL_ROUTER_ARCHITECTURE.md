@@ -475,6 +475,18 @@ Two adjacent systems build on the tool layer described here:
     that connection is set up (resolved in `vaf/whare_wananga/preconditions.py` from the
     existing `telegram_config` / `discord_config` / `whatsapp_config` / `email_config`).
 
+  `learned_state` is also read in aggregate, not only per row: the Settings tools modal
+  folds it into three header counters (Total / Learned / Unlearned), counted over the full
+  tools array rather than the search-filtered grid, so they agree with the "N modules
+  installed" line beside them. The fold is strict equality on `learned`, with unlearned as
+  the REMAINDER (`tools.length - learned`), so the two always sum to the total.
+  Deliberate: `_attach_learned_states` is best-effort and swallows its failures in a single
+  `try/except`, so an entry can reach the browser with no `learned_state` field at all, and
+  a direct test for `unlearned` would then count that tool on neither side. `stale` folds
+  into the unlearned counter for the reason `store.invalidate_stale` states itself - an
+  invalidated record is no longer delivered or counted as learned until the tool is
+  re-trained - while the per-tool `Stale` badge keeps its own wording and is unaffected.
+
   The Declarative Tool Contract's `side_effect_class` (Section 9) is also the basis for
   Whare Wananga's safety gating (probe-safe read-only tools vs side-effecting ones, which
   may only be learned via the error/validation path).

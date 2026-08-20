@@ -29,6 +29,7 @@ import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
 import UpdateRepairModal from './settings/UpdateRepairModal';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
@@ -1230,6 +1231,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [mcpServerEditor, setMcpServerEditor] = useState<{ server: McpServerInfo | null } | null>(null);
     const [mcpSearch, setMcpSearch] = useState('');
     const mcpConnectedCount = mcpServers.filter((s) => s.connected).length;
+    // Tools modal header counters. Strict equality on the LEARNED side with
+    // unlearned as the remainder, so the two always sum to the total: the
+    // backend annotator swallows its failures in one try/except and can leave
+    // learned_state absent entirely, and `=== 'unlearned'` would then count
+    // none of them. `stale` folds into unlearned on the framework's own wording,
+    // where an invalidated record is no longer counted as learned until the tool
+    // is re-trained (vaf/whare_wananga/store.py, invalidate_stale).
+    const toolsLearnedCount = tools.filter((t) => t.learned_state === 'learned').length;
+    const toolsUnlearnedCount = tools.length - toolsLearnedCount;
     // Workflow creator state: null = closed; { workflowId: null } = create; { workflowId: "x" } = edit
     const [workflowCreator, setWorkflowCreator] = useState<{
         workflowId: string | null;
@@ -1306,6 +1316,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [trainStatus, setTrainStatus] = useState<string | null>(null);
     const [trainingDashboard, setTrainingDashboard] = useState<string | null>(null);
     const [trainStateOverrides, setTrainStateOverrides] = useState<Record<string, string>>({});
+    // Tool name waiting on the "train this now?" answer; null = no dialog open.
+    const [trainConfirm, setTrainConfirm] = useState<string | null>(null);
+    // Whatever Whare Wananga is training right now, from the framework's own
+    // set-level reader. Four lanes can start a run (the web route, the eager
+    // worker, the retrain drain, the teacher), so the header cannot infer this
+    // from its own clicks. Process-local by construction: a `vaf ww train` in a
+    // separate shell does not light this up.
+    const [activeRuns, setActiveRuns] = useState<Array<{ tool: string; phase?: string; attempt?: number }>>([]);
     
     // Memory System State
     const [memoryStats, setMemoryStats] = useState<{ memories: number; chunks: number; connections: number; db_connected: boolean } | null>(null);
@@ -1840,6 +1858,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setSkillsEditor(null);
     }, [skillSavedTick]);
 
+    // Whare Wananga runs in flight, polled while the tools modal is open.
+    // Deliberate: a polled route rather than a WebSocket frame. This indicator
+    // lives inside a modal the reader has deliberately opened, not a machine-wide
+    // banner, and a new live-view frame would cost a late-joiner handshake plus
+    // the wire-type guards for a view that is invisible almost all of the time.
+    useEffect(() => {
+        if (!showToolsModal) { setActiveRuns([]); return; }
+        const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+        let alive = true;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const poll = async () => {
+            try {
+                const r = await fetch(`${base}/api/whare_wananga/active_runs`, { credentials: 'include' });
+                const d = r.ok ? await r.json() : null;
+                if (alive) setActiveRuns(Array.isArray(d?.runs) ? d.runs : []);
+            } catch { /* the header simply stays empty */ }
+            if (alive) timer = setTimeout(poll, 2000);
+        };
+        poll();
+        return () => { alive = false; if (timer) clearTimeout(timer); };
+    }, [showToolsModal, apiBase]);
+
     // Stacked Escape Key Handling
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -1876,6 +1916,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                // ConfirmDialog is absent from this stack on purpose: it binds
+                // Escape itself in the CAPTURE phase and stops propagation, so it
+                // always answers before this bubble-phase handler. A branch here
+                // would be dead code that reads like a live one.
                 // Check topmost modal first
                 if (codeModal) {
                     setCodeModal(null);
@@ -5301,11 +5345,31 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
-                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                        <div className="relative h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div>
                                 <h2 className="text-2xl font-bold text-gray-800">{tModals('tools.title')}</h2>
                                 <p className="text-sm text-gray-500">{tModals('tools.modulesInstalled', { count: tools.length })}</p>
                             </div>
+                            {/* Absolutely positioned, not a third flex child: the bar is
+                                justify-between with exactly two children, so a third one
+                                in flow would re-space the title and the buttons whenever
+                                no run is in flight. Hidden on mobile, where the close X
+                                needs the width more (docs/web-ui/MOBILE_UI.md); the
+                                counter row below carries the same information. */}
+                            {activeRuns.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => setTrainingDashboard(activeRuns[0].tool)}
+                                    title={tModals('tools.activeRunHint')}
+                                    className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors max-md:hidden"
+                                >
+                                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                                    {tModals('tools.activeRun', { tool: activeRuns[0].tool })}
+                                    {activeRuns.length > 1 && (
+                                        <span className="opacity-70">+{activeRuns.length - 1}</span>
+                                    )}
+                                </button>
+                            )}
                             <div className="flex items-center gap-2">
                                 {onRefreshTools && (
                                     <button onClick={onRefreshTools} className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100 transition-colors" title={tModals('tools.refresh')}>
@@ -5318,9 +5382,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         </div>
                         
-                        {/* Search Bar */}
-                        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
-                            <div className="relative max-w-md">
+                        {/* Search Bar + learned-state counters */}
+                        <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between gap-6 max-md:flex-col max-md:items-stretch max-md:gap-4">
+                            <div className="relative w-full max-w-md shrink">
                                 <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     type="text"
@@ -5329,6 +5393,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     onChange={(e) => setToolsSearch(e.target.value)}
                                     className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
                                 />
+                            </div>
+                            {/* Counted over the FULL tools array, not the filtered grid,
+                                so the numbers agree with "{count} modules installed"
+                                above instead of tracking the search box. */}
+                            <div className="flex items-center gap-3 shrink-0 max-md:justify-between">
+                                {([
+                                    [tools.length, tModals('tools.counterTotal'), 'text-gray-800', 'border-gray-200'],
+                                    [toolsLearnedCount, tModals('tools.counterLearned'), 'text-emerald-700', 'border-emerald-200'],
+                                    [toolsUnlearnedCount, tModals('tools.counterUnlearned'), 'text-gray-500', 'border-gray-200'],
+                                ] as const).map(([value, label, tone, edge]) => (
+                                    <div key={label} className={`px-4 py-2 rounded-xl bg-white border ${edge} shadow-sm text-center min-w-[92px] max-md:flex-1`}>
+                                        <div className={`text-lg font-semibold leading-none ${tone}`}>{value}</div>
+                                        <div className="text-[11px] text-gray-500 mt-1 whitespace-nowrap">{label}</div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
@@ -5547,7 +5626,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     if (_notConfigured) {
                                         return (
                                             <span
-                                                title="Connection not configured — set it up first"
+                                                title="Connection not configured - set it up first"
                                                 className="px-3 py-1.5 text-xs font-semibold rounded-md bg-rose-500/90 text-white select-none cursor-not-allowed"
                                             >
                                                 Tool not configured
@@ -5567,7 +5646,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     }
                                     return (
                                         <button
-                                            onClick={() => { handleTrainTool(_name); setTrainingDashboard(_name); }}
+                                            onClick={() => setTrainConfirm(_name)}
                                             disabled={trainStatus === 'requesting'}
                                             className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-amber-500 dark:hover:bg-[#f5f5f5] dark:shadow-none disabled:opacity-60 transition-colors"
                                         >
@@ -5597,6 +5676,33 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     onStateChange={(tool, st) => setTrainStateOverrides(p => ({ ...p, [tool]: st }))}
                 />
             )}
+
+            {/* "Train tool now" asks first (z-[80]: above the code viewer that
+                opened it, below the dashboard that opens next). The warning says
+                only what the runner verifiably does - it does NOT claim that
+                automations or other agent work are blocked, because they are not:
+                start_training refuses a second run of the SAME tool and nothing
+                else (vaf/whare_wananga/jobs.py). */}
+            <ConfirmDialog
+                open={trainConfirm !== null}
+                title={tModals('tools.trainConfirmTitle', { tool: trainConfirm ?? '' })}
+                body={(
+                    <>
+                        <p>{tModals('tools.trainConfirmCost')}</p>
+                        <p>{tModals('tools.trainConfirmNoStop')}</p>
+                    </>
+                )}
+                confirmLabel={tCommon('yes')}
+                cancelLabel={tCommon('no')}
+                onCancel={() => setTrainConfirm(null)}
+                onConfirm={() => {
+                    const name = trainConfirm;
+                    setTrainConfirm(null);
+                    if (!name) return;
+                    handleTrainTool(name);
+                    setTrainingDashboard(name);
+                }}
+            />
 
             {/* ── Workflow Creator (z-[80], above code viewer / tool editor) ── */}
             {workflowCreator !== null && (

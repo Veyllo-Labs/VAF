@@ -90,6 +90,15 @@ Big modal headers overflow a 360px row. Make them compact:
 - Trim noisy actions on mobile: hide button text labels (`<span className="max-md:hidden">`),
   drop non-essential buttons (`max-md:hidden`) so the close `X` always fits, shrink
   wide controls (e.g. a date `<select>` gets `max-md:max-w-[120px]`).
+- Worked example, the **Available Tools** header: the centred "Active learning run" pill
+  is `max-md:hidden`, because the close `X` needs that width more. The counters row
+  underneath is its mobile substitute - it stays visible and carries the same
+  learned-state picture, minus the name of the tool currently running - and the row it
+  sits in becomes a column (`max-md:flex-col max-md:items-stretch max-md:gap-4`) with
+  Total / Learned / Unlearned spread as equal-width cells (`max-md:justify-between` on
+  the group, `max-md:flex-1` on each). Desktop stays byte-identical: the pill is
+  absolutely positioned, so the two-child `justify-between` bar never re-spaces, and
+  every added class is `max-md:`.
 
 ### Inline-styled panes (Logs timeline, Overview dashboard)
 

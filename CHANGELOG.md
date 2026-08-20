@@ -12,6 +12,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The tools window now says how much of your toolbox VAF has learned.** Settings
+  -> Available Tools counts the installed tools along the top: how many there
+  are in total, how many VAF has trained itself on, and how many it has not.
+  The numbers cover every installed tool, not only the ones matching the search
+  box, so they agree with the "modules installed" line beside them. A tool whose
+  training was invalidated because the tool itself changed counts as not learned
+  until it is trained again, while its own card keeps saying "Stale". The header
+  also names the tool that is being trained right now, whichever part of VAF
+  started that run, and clicking the name opens the run's training window. A run
+  started by a `vaf` command in its own terminal belongs to that process and is
+  not shown here.
 - **Around sixty mail providers now come pre-configured.** Adding an IMAP
   account no longer needs server settings typed by hand for GMX, WEB.DE,
   mail.com, T-Online, IONOS, 1&1, freenet, Posteo, mailbox.org, Zoho, Fastmail,
@@ -38,6 +49,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   characters used to smuggle instructions. Anything found is noted next to the
   file and on the dashboard, and the file is delivered as normal. Legitimate
   scripts do these things too, so this is information, not a refusal.
+
+### Changed
+- **"Train tool now" asks before it starts, and says what the run costs.** The
+  button used to begin training the moment it was clicked, with nothing said
+  about what that means. It now asks first, and the question states what was
+  measured: training runs the tool for real dozens of times and makes dozens of
+  model calls to learn from the results, and those calls count towards usage
+  like any other; a run cannot be stopped once it has started and has no time
+  limit; and if it is interrupted, the tool falls back to "Learning" until it is
+  trained again. The safe answer carries the emphasis, because it is the one
+  that costs nothing. What training does not do is hold anything else up: the
+  agent, automations and other runs carry on beside it, and the only thing
+  refused while a run is in flight is a second run of the same tool. Tools whose
+  effect cannot be taken back - anything that sends a message - are never run
+  during training at all.
 
 ### Fixed
 - **A rejected mail login now says what to do about it.** Connecting a GMX

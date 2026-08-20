@@ -71,6 +71,7 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | Component | Dark-mode classes |
 |---|---|
 | Primary / emphasis button (Save, Connect, CTA) | `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none` |
+| Confirm dialog, the emphasis INVERTED (`web/components/ui/ConfirmDialog.tsx`) | safe answer takes the emphasis fill `dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:border-transparent`; confirming answer keeps `bg-gray-900 hover:bg-black text-white` with **no `dark:` fill at all** and adds `dark:border-[#3a3a3a]` |
 | Toggle ON track | `dark:bg-[#d9d9d9]` |
 | Toggle OFF track | `dark:bg-[#333333]` |
 | Toggle knob (state-dependent, must contrast the track) | ON `dark:bg-[#1a1a1a]`, OFF `dark:bg-[#e8e8e8]` |
@@ -80,6 +81,22 @@ The active/emphasis system is one **light neutral** (no blue, no amber):
 | User chat bubble | `dark:bg-[#242424]` |
 | Sub-agent window surfaces (`WIN_SHELL` / `WIN_CANVAS` / `WIN_CANVAS_ALT` / `WIN_BAR` in `web/components/SubAgentWindow.tsx`) | shell and toolbar `dark:bg-[#202020]`, recessed canvas `dark:bg-[#181818]`, file-row hairline `dark:border-[#262626]`. Raw hex, so nothing folds for them; the constants exist because seventeen sites shared four values and some were bound to be missed (they were - the librarian window shipped with near-white panels). Note the inversion: in light the chrome is the paler surface and the canvas recedes darker, in dark the chrome is the LIGHTER card and the canvas recedes to the page |
 | Thinking-process block | flat `dark:from-[#1e1e1e] dark:to-[#1e1e1e]` (no gradient), header `dark:text-gray-300` |
+
+**The inverted confirm pair, and why it needs almost no classes.** In a costly or
+irreversible confirmation the emphasis fill `#e6e6e6` sits on the SAFE answer, not on
+the confirming one, because the confirmed action costs real work. The fold is what makes
+that cheap instead of a fight with the palette: `gray-500..950` and `black` are **not**
+folded on surfaces and `text-white` is **not** folded on text, so `bg-gray-900
+hover:bg-black text-white` is already right in both themes and the confirming button
+needs no `dark:` fill - only `dark:border-[#3a3a3a]`, the hairline that keeps a black
+button from vanishing into the `#181818` card. `bg-white` **is** folded (to `#202020`),
+which is why the safe button has to state both halves as literals (`dark:bg-[#e6e6e6]`
+for the fill, `dark:text-[#181818]` for the ink - `dark:text-gray-900` would render
+light, see the first trap below).
+
+The inversion is scoped to costly or irreversible confirmations and is **not** a change
+to the primary-button rule above: an ordinary Save / Connect / CTA keeps the emphasis on
+the action you want taken.
 
 **Three traps (all caused real bugs):**
 - `dark:text-gray-900` renders **light** (`#ececec`) because the text ramp folds - never

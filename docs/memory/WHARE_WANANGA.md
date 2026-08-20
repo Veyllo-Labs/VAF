@@ -72,18 +72,60 @@ The Settings tool list shows each tool's learned state as a neutral badge
 attached to the tools list the backend sends (`web_server.py` `_attach_learned_states`).
 Until a tool has been trained, it shows "Not learned".
 
+The Available Tools modal header carries the same field as a **set**: `Total` / `Learned` /
+`Unlearned` counters beside the search box, reduced client-side from the `learned_state` the
+backend already attached to every entry. They count the FULL tools array, not the
+search-filtered grid, so the numbers agree with the "N modules installed" line above them
+instead of tracking the search box. `Learned` is strict equality on `learned` and `Unlearned`
+is the remainder, so the two always add up to `Total`. That shape is deliberate: the backend
+annotator swallows its failures in one `try/except` and can leave `learned_state` absent
+entirely, which a `=== "unlearned"` test would count as neither. `stale` therefore folds into
+`Unlearned`, matching this subsystem's own wording in `store.invalidate_stale` (an invalidated
+record is "no longer delivered or counted as learned until the tool is re-trained"); the
+per-tool **Stale** badge keeps its own text and is unaffected.
+
 The tool detail (code viewer) shows one of three buttons depending on the tool's state:
 red **"Tool not configured"** (a connection that isn't set up; does not open the dashboard),
 green **"Tool trained"** (already learned; opens the dashboard to view metrics), or amber
-**"Train tool now"** (configured + not yet learned; POSTs `/api/whare_wananga/train/{name}`,
-which starts the predict-then-verify background job, and opens the dashboard). The button
-flips to green as soon as training confirms the tool. Training depth is adaptive (see the
-learning loop below): a tool whose behaviour is predictable confirms in one validation round
-(~15 probes, roughly 1 minute, LLM latency dominates); a flaky tool runs further rounds up to
-a cap.
+**"Train tool now"** (configured + not yet learned). The amber button **asks first**: it opens a
+confirm dialog (the shared `web/components/ui/ConfirmDialog.tsx`), and only a **Yes** POSTs
+`/api/whare_wananga/train/{name}` - which starts the predict-then-verify background job - and
+opens the dashboard. **No** does nothing at all. The two sibling branches are unchanged: the red
+label still refuses, and the green button still only opens the dashboard without training. The
+button flips to green as soon as training confirms the tool.
 
-That button opens a **training dashboard** (`web/components/TrainingDashboard.tsx`) -- a
-large panel that reads `GET /api/whare_wananga/tool_knowledge/{name}` and shows the tool's
+The dialog states exactly two things, and both are true of the code:
+
+1. **It costs real work.** Training runs the tool for real, dozens of times, and makes dozens of
+   model calls to learn from the results; those model calls count towards usage like any other.
+   Measured: about 33 real tool executions and 49 model calls on a clean confirming run, up to
+   85 executions and 151 model calls on the longest path.
+2. **It cannot be stopped.** Nothing in `vaf/whare_wananga/` offers a cancel/abort/stop, the job
+   thread is a daemon, and there is no time limit. `runner.py` sets the record's status to
+   `learning` at the start of a run, so an interrupted run leaves the tool showing "Learning"
+   until it is trained again.
+
+**What the dialog deliberately does NOT say, because it was checked and is false: that training
+blocks automations or other runs.** `jobs.start_training` refuses only a second run of the SAME
+tool (`_jobs.get(tool)`); there is zero coupling to the task queue, the headless runner,
+automations, thinking mode or the workflow engine, and a training run holds none of them up. Do
+not add that claim back to the dialog or to this doc. What IS guaranteed is narrower and lives in
+the runner: irreversible tools (every `send_*`, payments, deletion) are refused with
+`skipped=True` before any call, so a training run can never send a message or cause an
+irreversible effect.
+
+Training depth is adaptive (see the learning loop below), and its size comes from the runner's
+constants rather than an estimate: a tool whose behaviour is predictable confirms in one
+validation round - `LEARN_N` 21 probes + `VALIDATE_N` 9 + `CHALLENGE_PASS` 3 = 33 real calls -
+while a flaky tool adds a `REFINE_N` 6 batch and a fresh batch of 9 per round up to `MAX_ROUNDS`
+4, and may spend up to `CHALLENGE_MAX_FAILS` 10 failed challenges on top (85 calls at the cap).
+Wall-clock duration is bounded by nothing in the code and is therefore not stated here; LLM
+latency dominates it.
+
+Two entry points open the **training dashboard** (`web/components/TrainingDashboard.tsx`): the
+amber button, after a confirmed Yes, and the **active-run indicator** in the Available Tools
+modal header (see below), which opens the dashboard of whichever tool is training right now.
+It is a large panel that reads `GET /api/whare_wananga/tool_knowledge/{name}` and shows the tool's
 status, error rate, predictions, and the three baskets (Aronui / Tuatea / Tuarua). While a
 training job runs, the metric cards and the predict-then-verify grid update live from the
 job's streamed events (confidence, error rate, correct/total, run duration) rather than only at
@@ -98,12 +140,54 @@ In the UI, a not-yet-configured connection tool shows a red **"Tool not configur
 instead of the training button, and does not open the dashboard. (calendar / github / cloud
 currently default to configured; their checks can be added to the resolver later.)
 
+### Knowing that a run is in flight: `active_runs()` (built)
+
+`vaf/whare_wananga/jobs.py` exposes `active_runs() -> List[Dict[str, Any]]`, the **set-level**
+reader for callers that do NOT already know which tool is training. `get_status(tool)` and
+`is_running(tool)` both make the caller name the tool first, which is right for one tool's
+dashboard and useless for a header asking "is anything training at all" - that caller would have
+to poll once per installed tool. Four lanes can start a run (the web route, the eager worker, the
+re-training drain, the Teacher), so one reader beats four poll loops.
+
+Two properties are load-bearing and easy to lose in a rewrite:
+
+- **It filters on `state == "running"`.** A finished job is rewritten in place and never removed
+  from `_jobs`, so the job table is a history, not a work list; without the filter the header
+  would light up for every tool ever trained in this process.
+- **It strips `events`.** `get_status` hands out a SHALLOW copy whose event list is the same
+  object the worker thread keeps appending to, and an aggregate gets serialized by its callers
+  outside the module lock.
+
+On top of it, `GET /api/whare_wananga/active_runs` returns `{"ok": true, "runs": [...]}` with the
+same auth shape as the three sibling `whare_wananga` routes, and consumes the framework reader
+instead of filtering the job table a second time, so the two can never disagree. The Available
+Tools modal polls it every 2s while it is open and shows "Active learning run for `<tool>`" in
+its header; clicking that opens that tool's training dashboard. Deliberate: a polled route and
+not a WebSocket frame, because the indicator lives inside a modal the reader deliberately opened
+rather than being a machine-wide banner, and a live-view frame would cost a late-joiner handshake
+plus the wire-type guards for a view that is invisible almost all of the time.
+
+**Cross-process caveat** (the same one the re-training queue carries below). Job status is
+process-local, so `active_runs()` only ever sees runs started inside the calling process: a
+`vaf ww train` in a shell never lights the modal header, and the app's own run is invisible to
+that shell.
+
+Two NAMED BOUNDARIES, so neither is re-opened by accident:
+
+- **No top-level facade export.** `vaf/__init__.py` is deliberately not touched. The only
+  consumer is `vaf/core/web_server.py`, which already imports the subpackage directly, so a
+  re-export would add an adapter rather than delete one.
+- **The CLI is deliberately not wired to `active_runs()`.** A separate shell's job table is
+  always empty (see the caveat above), so a `vaf ww` command reporting "nothing is training"
+  would be printing a lie, not a status.
+
 ## Learning loop
 
 The **core predict-then-verify loop is built** (`vaf/whare_wananga/runner.py`,
 `train_tool()`) for probe-safe tools, verified live, and **wired to the UI**: the
-"Train tool now" button POSTs `train/{name}`, which starts a background job
-(`vaf/whare_wananga/jobs.py`); the dashboard polls `training_status/{name}`, shows the live
+"Train tool now" button POSTs `train/{name}` once its confirm dialog is answered Yes, which
+starts a background job (`vaf/whare_wananga/jobs.py`); the dashboard polls
+`training_status/{name}`, shows the live
 predict-then-verify attempts (stats update during the run, not only at the end), and
 refreshes the record on completion (badge -> "Learned").
 
@@ -193,9 +277,10 @@ irreversible effect. A sandboxed/ephemeral **executor** can opt out of the error
 declaring `whare_wananga_full_probe = True` (e.g. `python_sandbox`: Docker-isolated, the host
 bridge `with_vaf_tools` is opt-in) -- the error path is wrong for a tool whose whole job is to
 *accept and run* input (it would halt the instant a probe is accepted), so it is probed in full
-with harmless, self-contained snippets that leave nothing permanent. Still pending: the online Teacher, and (optional) real-success observation
-for file-writing tools via an isolated context. Training currently runs on the shared agent
-instance.
+with harmless, self-contained snippets that leave nothing permanent. Still pending: (optional)
+real-success observation for file-writing tools via an isolated context. (The online Teacher is
+no longer pending - it is built and opt-in; see "Teacher/Noho co-learning" below.) Training
+currently runs on the shared agent instance.
 
 How a record gets filled:
 
@@ -347,7 +432,7 @@ bypassed and probes reach the tool's own validation.
 |------|------|
 | `vaf/whare_wananga/store.py` | `tool_knowledge` store + schema (built) |
 | `vaf/whare_wananga/runner.py` | adaptive predict-then-verify loop + LLM judge (built) |
-| `vaf/whare_wananga/jobs.py` | background training jobs + live status (built) |
+| `vaf/whare_wananga/jobs.py` | background training jobs + live status, per tool (`get_status`, `is_running`) and set-level (`active_runs`) (built) |
 | `vaf/whare_wananga/preconditions.py` | trainability + class sandbox resolver (built) |
 | `vaf/whare_wananga/cli.py` | training CLI (runs the loop synchronously in the foreground) |
 | `vaf/whare_wananga/delivery.py` | delivery read-path: gated lookups for runtime injection -- `tool_pitfalls` (proactive), `tool_knowhow` + `known_pitfall_hit` (reactive) |
@@ -359,6 +444,7 @@ bypassed and probes reach the tool's own validation.
 | `vaf/whare_wananga/__init__.py` | package exports |
 | `web/components/TrainingDashboard.tsx` | dashboard + live training stage (agent/tool/judge) |
 | `web/components/AgentAvatar.tsx` | shared living-white-dot agent avatar |
+| `web/components/ui/ConfirmDialog.tsx` | shared yes/no dialog; gates the "Train tool now" button |
 | `docs/agents/ACTION_TAG.md` | the `<Action>` tag and the delivery side |
 
 ## Related
@@ -372,4 +458,4 @@ bypassed and probes reach the tool's own validation.
 
 ---
 
-*Last updated: 2026-06-04*
+*Last updated: 2026-08-20*

@@ -3,10 +3,16 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Whare Wananga -- VAF tool self-learning subsystem.
 
-Currently only the tool_knowledge store (persistence + schema). The learning loop
-(predict-then-verify sandbox practice) and Action-Tag know-how injection build on top.
+The tool_knowledge store (persistence + schema) plus the loop that fills it: the
+predict-then-verify runner, the background job manager, the eager and teacher
+workers, the retrain queue, and Action-Tag know-how delivery.
+
+Re-exported here is what other subsystems consume: the store readers, and
+`active_runs()` for anything that needs to know a run is in flight without
+already knowing which tool it is for.
 """
 
+from vaf.whare_wananga.jobs import active_runs
 from vaf.whare_wananga.store import (
     SCHEMA_VERSION,
     new_record,
@@ -26,6 +32,7 @@ from vaf.whare_wananga.store import (
 
 __all__ = [
     "SCHEMA_VERSION",
+    "active_runs",
     "new_record",
     "compute_tool_hash",
     "load",

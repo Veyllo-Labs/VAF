@@ -19,6 +19,51 @@ import {
 } from 'lucide-react';
 import { getApiBase } from '@/lib/utils';
 
+// What a refused IMAP login comes back with. The guidance arrives in PARTS so
+// the panel renders it in the reader's language; the backend also sends `hint`
+// as English prose for callers without a message catalogue, and the panel uses
+// that only when there are no parts to compose from.
+type HintDetail = {
+    provider: string | null;
+    auth: string;
+    enable_imap: boolean;
+    help_url: string | null;
+    text: string;
+};
+type LoginFail = { error?: string; hint?: string | null; hint_detail?: HintDetail | null };
+
+const AUTH_MESSAGE: Record<string, string> = {
+    password: 'authHintPassword',
+    app_password: 'authHintAppPassword',
+    mail_password: 'authHintMailPassword',
+    oauth: 'authHintOauth',
+    bridge: 'authHintBridge',
+    none: 'authHintNoImap',
+    unknown: 'authHintUnknown',
+};
+
+function AuthHint({ detail }: { detail: HintDetail }) {
+    const t = useTranslations('mailV2');
+    const key = AUTH_MESSAGE[detail.auth];
+    const provider = detail.provider ?? '';
+    return (
+        <>
+            {/* An auth kind this build has no wording for still says something:
+                the backend's English sentence beats an empty line. */}
+            <p className="text-[#c8c8c8]">{key ? t(key, { provider }) : detail.text}</p>
+            {detail.enable_imap && (
+                <p className="text-[#c8c8c8]">{t('authHintEnableImap', { provider })}</p>
+            )}
+            {detail.help_url && (
+                <a href={detail.help_url} target="_blank" rel="noopener noreferrer"
+                    className="inline-block text-[#7aa7d9] hover:underline">
+                    {t('authHintHelp', { provider })}
+                </a>
+            )}
+        </>
+    );
+}
+
 const api = (p: string) => `${getApiBase()}${p.startsWith('/') ? p : `/${p}`}`;
 const jfetch = async (p: string, init?: RequestInit) => {
     const r = await fetch(api(p), { credentials: 'include', ...init });
@@ -313,7 +358,7 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
     const [smtpHost, setSmtpHost] = useState('');
     const [smtpPort, setSmtpPort] = useState('');
     const [state, setState] = useState<'idle' | 'testing' | 'saving'>('idle');
-    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+    const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string; detail?: HintDetail } | null>(null);
 
     const payload = () => ({
         email: email.trim(), password,
@@ -325,11 +370,21 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
         ...(advanced && smtpPort.trim() ? { smtp_port: Number(smtpPort) } : {}),
     });
 
+    // The server's own words stay on the first line: they are the ground truth
+    // for what happened. hint_detail turns that into something actionable, and
+    // when the backend sent none (an OAuth collision, say) the plain hint is
+    // appended instead of being swallowed.
+    const failure = (r: LoginFail, fallback: string) => ({
+        kind: 'err' as const,
+        text: [r.error, r.hint_detail ? null : r.hint].filter(Boolean).join(' ') || fallback,
+        detail: r.hint_detail ?? undefined,
+    });
+
     const test = async () => {
         setState('testing'); setMsg(null);
         try {
             const r = await jsend('api/mail/accounts/test', payload());
-            setMsg(r.ok ? { kind: 'ok', text: t('testOk') } : { kind: 'err', text: r.hint || r.error || t('testFail') });
+            setMsg(r.ok ? { kind: 'ok', text: t('testOk') } : failure(r, t('testFail')));
         } catch { setMsg({ kind: 'err', text: t('testFail') }); }
         finally { setState('idle'); }
     };
@@ -339,7 +394,7 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
         try {
             const r = await jsend('api/mail/accounts', { ...payload(), label: label.trim() });
             if (r.ok) { setEmail(''); setPassword(''); setLabel(''); onAdded(); }
-            else setMsg({ kind: 'err', text: r.hint || r.error || t('addFail') });
+            else setMsg(failure(r, t('addFail')));
         } catch { setMsg({ kind: 'err', text: t('addFail') }); }
         finally { setState('idle'); }
     };
@@ -385,7 +440,10 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
                 </div>
             )}
             {msg && (
-                <p className={`text-xs ${msg.kind === 'ok' ? 'text-[#7bbf7b]' : 'text-[#e08c8c]'}`}>{msg.text}</p>
+                <div className={`text-xs space-y-1 ${msg.kind === 'ok' ? 'text-[#7bbf7b]' : 'text-[#e08c8c]'}`}>
+                    <p>{msg.text}</p>
+                    {msg.detail && <AuthHint detail={msg.detail} />}
+                </div>
             )}
             <div className="flex gap-2 pt-1">
                 <button type="button" onClick={test} disabled={!canSubmit}

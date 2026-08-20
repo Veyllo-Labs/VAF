@@ -154,8 +154,22 @@ Deliberately deferred, listed so nobody looks for them in the code:
   boundary: a malformed message must never abort a folder sync), nh3 (MIT) for
   HTML sanitization, zstandard for blob compression. aioimaplib is rejected
   (GPL-3.0). bleach is EOL - never adopt it.
-- Auth lanes: (1) password / app password (GMX, web.de, T-Online, iCloud, Yahoo,
-  consumer Gmail) with provider presets and help texts; (2) Google OAuth-IMAP via
+- Auth lanes: (1) password / app password (GMX, WEB.DE, mail.com, T-Online,
+  iCloud, Yahoo, AOL, consumer Gmail, Zoho, Fastmail, mailbox.org, Yandex,
+  Mail.ru and the European access providers) served by ONE provider table,
+  `MAIL_PROVIDERS` in `vaf/core/email_accounts.py`. It carries the server
+  settings AND the reason a login gets refused, and `IMAP_SMTP_DEFAULTS` is
+  DERIVED from it, so a provider can no longer arrive with hosts but without
+  guidance - which is exactly how thirteen preset domains ended up sharing two
+  help texts. `auth_failure_hint()` answers for every domain, known or not: an
+  unknown one gets the generic "check the password and the provider's own IMAP
+  settings" advice rather than nothing. `test_imap_login` attaches it only when
+  the SERVER refused the login, and the account route additionally returns it in
+  parts (`hint_detail`: provider, auth kind, whether IMAP has to be switched on,
+  the help page) so the panel renders it in the reader's language instead of
+  English prose. Providers with no server of their own (Proton behind Bridge,
+  Tuta without IMAP) are in the table but out of the host presets, so nothing
+  defaults them to a foreign host; (2) Google OAuth-IMAP via
   XOAUTH2 (`https://mail.google.com/`, a restricted scope) - the mail connect
   requests it up front as a UNION that still contains calendar, so ONE consent
   yields a working account and the shared token keeps Calendar alive;

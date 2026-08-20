@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Around sixty mail providers now come pre-configured.** Adding an IMAP
+  account no longer needs server settings typed by hand for GMX, WEB.DE,
+  mail.com, T-Online, IONOS, 1&1, freenet, Posteo, mailbox.org, Zoho, Fastmail,
+  AOL, Yandex, Mail.ru, Vodafone, Bluewin, A1, Orange, La Poste, Libero and
+  Seznam, alongside the Gmail, Outlook, Yahoo and iCloud entries that were
+  already there. Every host was checked against the live server before it was
+  added.
 - **A dangerous file is now recognised everywhere, not just once.** When an
   administrator deletes a quarantined skill, VAF keeps the verdict: it records
   the fingerprint of the bundle and of the files that earned the block in a
@@ -33,6 +40,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   scripts do these things too, so this is information, not a refusal.
 
 ### Fixed
+- **A rejected mail login now says what to do about it.** Connecting a GMX
+  account with two-factor authentication switched on failed with nothing but
+  "authentication failed", which named no action: IMAP has no step where a
+  six-digit code can be entered, so the mailbox password can never work once
+  2FA is on, and GMX additionally ships POP3/IMAP access switched off. VAF now
+  answers a refused login with what that provider actually needs - an
+  app-specific password, a separate mail-program password, a sign-in instead of
+  a password, or a local bridge - whether IMAP has to be switched on first, and
+  a link to the provider's own page for it, in the language of the interface.
+  An unknown provider gets the general advice rather than nothing. Guidance
+  appears only when the server refused the login, so a name-resolution failure
+  is no longer answered with password advice. An address with no known server
+  and no host typed in is now refused with that instruction instead of being
+  quietly tried against Gmail's servers.
 - **Sending a room message no longer shows it twice.** The pending copy was
   matched against the delivered message by exact text, but the server trims
   what it stores - one trailing space (a phone's autocomplete) and the copy

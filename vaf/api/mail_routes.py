@@ -634,6 +634,21 @@ async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
     } for a in rows]}
 
 
+def _login_failure(email: str, err: str, hint: Optional[str]) -> Dict[str, Any]:
+    """The body both account endpoints return for a refused IMAP login.
+
+    hint_detail carries the guidance in PARTS (provider, auth kind, whether IMAP
+    has to be switched on, the provider's help page) so the UI renders it in the
+    reader's language instead of the English `hint`. It rides along only when
+    test_imap_login produced a hint, which is only when the server refused the
+    login - a DNS failure must not be answered with app-password advice."""
+    from vaf.core.email_accounts import auth_failure_hint
+    body: Dict[str, Any] = {"ok": False, "error": err, "hint": hint}
+    if hint:
+        body["hint_detail"] = auth_failure_hint(email)
+    return body
+
+
 @router.post("/accounts/test")
 async def accounts_test(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
     """Try an IMAP login; nothing is saved."""
@@ -644,7 +659,7 @@ async def accounts_test(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] 
         raise HTTPException(status_code=422, detail="email and password are required")
     ok, err, hint = await asyncio.to_thread(
         lambda: test_imap_login(email, password, body.get("imap_host"), body.get("imap_port")))
-    return {"ok": ok, "error": err, "hint": hint}
+    return {"ok": True, "error": "", "hint": None} if ok else _login_failure(email, err, hint)
 
 
 @router.post("/accounts")
@@ -678,7 +693,7 @@ async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] =
     smtp_port = int(body.get("smtp_port") or d.get("smtp_port") or 587)
     ok, err, hint = await asyncio.to_thread(lambda: test_imap_login(email, password, imap_host, imap_port))
     if not ok:
-        return {"ok": False, "error": err, "hint": hint}
+        return _login_failure(email, err, hint)
     await asyncio.to_thread(lambda: set_email_imap_password(email, password, cred_username, user_scope_id=scope))
     await asyncio.to_thread(lambda: add_account({
         "account_id": email, "email": email, "provider": "imap", "enabled": True,

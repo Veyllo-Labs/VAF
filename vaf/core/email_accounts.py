@@ -200,28 +200,247 @@ def upsert_sender_rule(
 
 
 # ── IMAP/SMTP presets + connection probe (relocated from email_routes, P4.1) ──
+#
+# ONE table, deliberately. Hosts and "why was my password refused" used to be
+# two separate things: IMAP_SMTP_DEFAULTS knew thirteen domains, the failure
+# hint knew two of them (Gmail, Outlook). Every other provider answered a
+# refused login with the bare server string and nothing the user could act on,
+# although the reason is nearly always one of a handful of known ones. Hosts
+# are DERIVED from this table below, so a provider can no longer arrive with
+# server settings but without guidance.
+#
+# `auth` names the credential the server actually accepts:
+#   "password"       the mailbox password; a provider with 2FA may still issue a
+#                    separate app password, which the wording for this case says
+#   "app_password"   a generated credential. Once 2FA is on the mailbox password
+#                    is refused by construction: IMAP has no second-factor round,
+#                    so there is no way for the client to present the code
+#   "mail_password"  a distinct mail-program password that exists WITHOUT 2FA
+#   "oauth"          basic auth retired; only the provider sign-in works
+#   "bridge"         IMAP served only by a local bridge application
+#   "none"           the provider offers no IMAP at all
+# `enable_imap` marks providers that ship IMAP switched off. The United Internet
+# family also switches it back off after a long idle period, which turns a
+# working account into an authentication failure with no user action at all.
+#
+# Every host here answered a TLS IMAP/SMTP greeting on 993/587 when it was
+# entered; every alias domain resolves to its operator's MX records.
 
-IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "gmail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
-    "googlemail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
-    "outlook.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "hotmail.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "live.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "yahoo.com": {"imap_host": "imap.mail.yahoo.com", "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com", "smtp_port": 587},
-    "icloud.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
-    "me.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
-    "outlook.de": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "gmx.de": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
-    "gmx.net": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
-    "web.de": {"imap_host": "imap.web.de", "imap_port": 993, "smtp_host": "smtp.web.de", "smtp_port": 587},
-    "t-online.de": {"imap_host": "secureimap.t-online.de", "imap_port": 993, "smtp_host": "securesmtp.t-online.de", "smtp_port": 587},
+_PROVIDER_RECORDS = (
+    (("gmail.com", "googlemail.com"),
+     {"name": "Gmail", "auth": "app_password",
+      "help_url": "https://support.google.com/accounts/answer/185833",
+      "imap_host": "imap.gmail.com", "smtp_host": "smtp.gmail.com"}),
+    (("outlook.com", "outlook.de", "hotmail.com", "hotmail.de",
+      "live.com", "live.de", "msn.com"),
+     {"name": "Outlook.com", "auth": "oauth",
+      "help_url": "https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online",
+      "imap_host": "outlook.office365.com", "smtp_host": "smtp.office365.com"}),
+    # Yahoo and AOL share one stack; both refuse the account password outright.
+    (("yahoo.com", "yahoo.de", "yahoo.co.uk", "yahoo.fr", "ymail.com", "rocketmail.com"),
+     {"name": "Yahoo Mail", "auth": "app_password",
+      "help_url": "https://help.yahoo.com/kb/SLN15241.html",
+      "imap_host": "imap.mail.yahoo.com", "smtp_host": "smtp.mail.yahoo.com"}),
+    (("aol.com", "aol.de"),
+     {"name": "AOL Mail", "auth": "app_password",
+      "help_url": "https://help.aol.com/articles/create-and-manage-app-password",
+      "imap_host": "imap.aol.com", "smtp_host": "smtp.aol.com"}),
+    (("icloud.com", "me.com", "mac.com"),
+     {"name": "iCloud Mail", "auth": "app_password",
+      "help_url": "https://support.apple.com/en-us/102654",
+      "imap_host": "imap.mail.me.com", "smtp_host": "smtp.mail.me.com"}),
+    # United Internet family: an app password AND an IMAP switch, and the switch
+    # turns itself off again when the account is not polled for a long time.
+    (("gmx.de", "gmx.net", "gmx.at", "gmx.ch", "gmx.com"),
+     {"name": "GMX", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://hilfe.gmx.net/sicherheit/2fa/anwendungsspezifisches-passwort.html",
+      "imap_host": "imap.gmx.net", "smtp_host": "mail.gmx.net"}),
+    (("web.de",),
+     {"name": "WEB.DE", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://hilfe.web.de/sicherheit/2fa/anwendungsspezifisches-passwort.html",
+      "imap_host": "imap.web.de", "smtp_host": "smtp.web.de"}),
+    (("mail.com",),
+     {"name": "mail.com", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://support.mail.com/pop-imap/index.html",
+      "imap_host": "imap.mail.com", "smtp_host": "smtp.mail.com"}),
+    # Telekom issues a mail-program password that exists without any 2FA, and
+    # entering the customer-centre password instead is the usual cause here.
+    (("t-online.de",),
+     {"name": "Telekom", "auth": "mail_password",
+      "help_url": "https://www.telekom.de/hilfe/apps-dienste/e-mail/app-programm-passwort",
+      "imap_host": "secureimap.t-online.de", "smtp_host": "securesmtp.t-online.de"}),
+    (("ionos.de",),
+     {"name": "IONOS", "auth": "password",
+      "help_url": "https://www.ionos.de/hilfe/e-mail/",
+      "imap_host": "imap.ionos.de", "smtp_host": "smtp.ionos.de"}),
+    (("1und1.de",),
+     {"name": "1&1", "auth": "password",
+      "help_url": "https://www.ionos.de/hilfe/e-mail/",
+      "imap_host": "imap.1und1.de", "smtp_host": "smtp.1und1.de"}),
+    (("freenet.de",),
+     {"name": "freenet", "auth": "password",
+      "help_url": "https://kundenservice.freenet.de/",
+      "imap_host": "mx.freenet.de", "smtp_host": "mx.freenet.de"}),
+    (("posteo.de", "posteo.net", "posteo.eu"),
+     {"name": "Posteo", "auth": "password",
+      "help_url": "https://posteo.de/en/help",
+      "imap_host": "posteo.de", "smtp_host": "posteo.de"}),
+    (("mailbox.org",),
+     {"name": "mailbox.org", "auth": "app_password",
+      "help_url": "https://kb.mailbox.org/",
+      "imap_host": "imap.mailbox.org", "smtp_host": "smtp.mailbox.org"}),
+    (("zoho.com",),
+     {"name": "Zoho Mail", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://www.zoho.com/mail/help/imap-access.html",
+      "imap_host": "imap.zoho.com", "smtp_host": "smtp.zoho.com"}),
+    (("zoho.eu",),
+     {"name": "Zoho Mail", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://www.zoho.com/mail/help/imap-access.html",
+      "imap_host": "imap.zoho.eu", "smtp_host": "smtp.zoho.eu"}),
+    (("fastmail.com", "fastmail.fm"),
+     {"name": "Fastmail", "auth": "app_password",
+      "help_url": "https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords",
+      "imap_host": "imap.fastmail.com", "smtp_host": "smtp.fastmail.com"}),
+    # Yandex refuses the account password over IMAP even with 2FA switched off.
+    (("yandex.com", "yandex.ru", "ya.ru"),
+     {"name": "Yandex Mail", "auth": "app_password", "enable_imap": True,
+      "help_url": "https://yandex.com/support/yandex-360/customers/mail/en/mail-clients/others",
+      "imap_host": "imap.yandex.com", "smtp_host": "smtp.yandex.com"}),
+    (("mail.ru", "inbox.ru", "bk.ru", "list.ru"),
+     {"name": "Mail.ru", "auth": "app_password",
+      "help_url": "https://help.mail.ru/mail/login/mailer/",
+      "imap_host": "imap.mail.ru", "smtp_host": "smtp.mail.ru"}),
+    # No host defaults on purpose: Proton's IMAP endpoint is the Bridge on
+    # localhost, so there is no server for us to guess. Whoever runs Bridge
+    # types 127.0.0.1 under Advanced, and everyone else gets told why.
+    (("proton.me", "protonmail.com", "protonmail.ch", "pm.me"),
+     {"name": "Proton Mail", "auth": "bridge",
+      "help_url": "https://proton.me/support/protonmail-bridge-install"}),
+    (("tuta.com", "tutanota.com", "tutanota.de", "tutamail.com", "keemail.me"),
+     {"name": "Tuta", "auth": "none",
+      "help_url": "https://tuta.com/support"}),
+    (("vodafone.de", "arcor.de", "kabelmail.de"),
+     {"name": "Vodafone", "auth": "password",
+      "help_url": "https://www.vodafone.de/privat/hilfe.html",
+      "imap_host": "imap.vodafone.de", "smtp_host": "smtp.vodafone.de"}),
+    (("ok.de",),
+     {"name": "ok.de", "auth": "password",
+      "help_url": "https://www.ok.de/",
+      "imap_host": "imap.ok.de", "smtp_host": "smtp.ok.de"}),
+    (("bluewin.ch",),
+     {"name": "Bluewin", "auth": "password",
+      "help_url": "https://www.swisscom.ch/de/privatkunden/hilfe/e-mail.html",
+      "imap_host": "imaps.bluewin.ch", "smtp_host": "smtpauths.bluewin.ch"}),
+    (("a1.net", "aon.at"),
+     {"name": "A1", "auth": "password",
+      "help_url": "https://www.a1.net/kontakt",
+      "imap_host": "imap.a1.net", "smtp_host": "smtp.a1.net"}),
+    (("orange.fr", "wanadoo.fr"),
+     {"name": "Orange", "auth": "password",
+      "help_url": "https://assistance.orange.fr/",
+      "imap_host": "imap.orange.fr", "smtp_host": "smtp.orange.fr"}),
+    (("laposte.net",),
+     {"name": "La Poste", "auth": "password",
+      "help_url": "https://aide.laposte.net/",
+      "imap_host": "imap.laposte.net", "smtp_host": "smtp.laposte.net"}),
+    (("libero.it", "iol.it", "inwind.it"),
+     {"name": "Libero", "auth": "password",
+      "help_url": "https://aiuto.libero.it/",
+      "imap_host": "imapmail.libero.it", "smtp_host": "smtp.libero.it"}),
+    (("seznam.cz", "email.cz"),
+     {"name": "Seznam", "auth": "password",
+      "help_url": "https://o-seznam.cz/napoveda/",
+      "imap_host": "imap.seznam.cz", "smtp_host": "smtp.seznam.cz"}),
+)
+
+MAIL_PROVIDERS: Dict[str, Dict[str, Any]] = {
+    domain: {"imap_port": 993, "smtp_port": 587, "enable_imap": False, **record}
+    for domains, record in _PROVIDER_RECORDS for domain in domains
 }
+
+_HOST_FIELDS = ("imap_host", "imap_port", "smtp_host", "smtp_port")
+
+# Derived, never hand-maintained: the host half of MAIL_PROVIDERS for the
+# callers that only want server settings. Providers with no reachable server of
+# their own (Proton behind Bridge, Tuta without IMAP) are absent by design, so a
+# caller defaulting from this dict gets nothing to connect to rather than a
+# wrong host.
+IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    domain: {field: provider[field] for field in _HOST_FIELDS}
+    for domain, provider in MAIL_PROVIDERS.items() if provider.get("imap_host")
+}
+
+_AUTH_GUIDANCE = {
+    "password": ("Check the password for {provider}. With two-factor authentication on, the "
+                 "provider may issue a separate app password for mail programs."),
+    "app_password": ("{provider} requires an app-specific password once two-factor authentication "
+                     "is on. IMAP has no second-factor step, so the normal password is refused."),
+    "mail_password": ("{provider} uses a separate password for mail programs, not the account "
+                      "password."),
+    "oauth": "{provider} no longer accepts a password over IMAP. Use the provider sign-in instead.",
+    "bridge": "{provider} serves IMAP only through its local Bridge application.",
+    "none": "{provider} offers no IMAP access at all.",
+}
+
+_GENERIC_GUIDANCE = (
+    "Check the password, and check the provider's own settings for what IMAP needs there: many "
+    "providers require an app-specific password once two-factor authentication is on, and some "
+    "ship IMAP access switched off."
+)
+
+_ENABLE_IMAP_GUIDANCE = "IMAP access has to be switched on in the {provider} settings first."
+
+AUTH_KINDS = tuple(_AUTH_GUIDANCE) + ("unknown",)
+
+
+def auth_failure_hint(address: str) -> Dict[str, Any]:
+    """What to tell a user whose IMAP login was refused, for the domain of
+    `address` (a full email address or a bare domain).
+
+    This always answers. An unknown domain gets the generic advice rather than
+    nothing, because "authentication failed" straight from the server names no
+    action the reader can take, and the two causes behind almost every case
+    (an app-specific password, an IMAP switch that is off) are invisible from
+    the client side.
+
+    The parts are returned separately - provider, auth, enable_imap, help_url -
+    so a localized UI composes its own sentence instead of showing English
+    prose; `text` is that same guidance rendered in English for callers that
+    only have room for a string.
+    """
+    domain = (address or "").strip().lower().rsplit("@", 1)[-1]
+    provider = MAIL_PROVIDERS.get(domain)
+    if not provider:
+        return {"provider": None, "auth": "unknown", "enable_imap": False,
+                "help_url": None, "text": _GENERIC_GUIDANCE}
+    name = provider["name"]
+    parts = [_AUTH_GUIDANCE[provider["auth"]].format(provider=name)]
+    if provider["enable_imap"]:
+        parts.append(_ENABLE_IMAP_GUIDANCE.format(provider=name))
+    parts.append(provider["help_url"])
+    return {"provider": name, "auth": provider["auth"],
+            "enable_imap": provider["enable_imap"], "help_url": provider["help_url"],
+            "text": " ".join(parts)}
+
+
+def _imap_error_text(exc: Exception) -> str:
+    """The server's reply, without imaplib's wrapping. imaplib raises with the
+    raw bytes, so str(e) reads b'Authentication failed.' - the b and the quotes
+    are noise in a panel that is otherwise showing the provider's own words."""
+    text = str(exc).strip()
+    unwrapped = re.fullmatch(r"b(['\"])(.*)\1", text, re.S)
+    return (unwrapped.group(2) if unwrapped else text).strip()
 
 
 def test_imap_login(email: str, password: str, imap_host: Optional[str] = None,
                     imap_port: Optional[int] = None) -> tuple:
     """Try an IMAP login with the given credentials; saves nothing. Returns
-    (success, error_message, hint). hint is 2FA/app-password guidance."""
+    (success, error_message, hint).
+
+    hint is auth_failure_hint()'s guidance for the address domain, and it rides
+    along only when the SERVER refused the login. A DNS, TLS or timeout failure
+    is not an app-password problem, and answering one with app-password advice
+    sends the reader to the wrong settings page."""
     import imaplib
     import ssl as _ssl
 
@@ -229,18 +448,18 @@ def test_imap_login(email: str, password: str, imap_host: Optional[str] = None,
     email = (email or "").strip().lower()
     domain = email.split("@")[-1] if "@" in email else ""
     defaults = IMAP_SMTP_DEFAULTS.get(domain, {})
-    host = (imap_host or "").strip() or defaults.get("imap_host", "imap.gmail.com")
+    host = (imap_host or "").strip() or defaults.get("imap_host") or ""
     port = imap_port if imap_port is not None else defaults.get("imap_port", 993)
-    hint = None
-    if domain in ("gmail.com", "googlemail.com"):
-        hint = "Gmail with 2FA requires an App Password. Create one at: https://myaccount.google.com/apppasswords"
-    elif domain in ("outlook.com", "hotmail.com", "live.com", "live.de", "msn.com", "outlook.de", "office365.com"):
-        hint = ("Outlook.com no longer supports IMAP with app passwords (Microsoft retired Basic auth in 2024). "
-                "Use 'Sign in with Microsoft' instead - an admin must configure the OAuth client first.")
+    hint = auth_failure_hint(domain)["text"]
+    if not host:
+        # This used to fall back to imap.gmail.com for every unknown domain, so a
+        # Proton, Tuta or self-hosted address was probed against a server it was
+        # never going to authenticate on and the error came back naming Google.
+        return False, "No IMAP server is known for this address. Enter one under Advanced.", hint
     try:
         assert_safe_remote_host(host, allow_private=bool(Config.get("email_allow_private_hosts", False)))
     except ValueError as e:
-        return False, str(e), hint
+        return False, str(e), None
     try:
         conn = imaplib.IMAP4_SSL(host, port=port, ssl_context=_ssl.create_default_context(), timeout=30)
         conn.login(email, password)
@@ -248,9 +467,9 @@ def test_imap_login(email: str, password: str, imap_host: Optional[str] = None,
         conn.logout()
         return True, "", None
     except imaplib.IMAP4.error as e:
-        return False, (str(e).strip() or "IMAP login failed"), hint
+        return False, (_imap_error_text(e) or "IMAP login failed"), hint
     except Exception as e:
-        return False, (str(e).strip() or "Connection failed"), hint
+        return False, (str(e).strip() or "Connection failed"), None
 
 
 # ── account-config CRUD (P4.1): the /api/mail account endpoints build on these ──

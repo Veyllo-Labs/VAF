@@ -83,6 +83,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **The agent's avatar stays in one piece while it works in a chat's action
+  timeline.** During a tool call the timeline's walking dot used to switch to
+  the wide tool scene built for the free-standing loading bubble - a magnifier
+  and particles more than a hundred pixels wide, in a gutter that has the tool
+  cards directly to its right. The scene was clipped under the cards and its
+  layout lean pushed the dot far off its rail, so the reader saw scattered
+  fragments (a stray dot here, a lens handle there) instead of an agent. The
+  timeline now keeps the plain living dot on the rail, the way it was designed;
+  a running web search shows as the figure's own looking-around motion and
+  other tools as its working pulse. The same fallback also animates the mobile
+  avatar during tool calls, which used to freeze to a still dot there.
 - **Each chat now keeps its own working state; switching no longer bleeds one
   chat into another.** With the agent busy in one chat, opening another showed
   that chat's stop button too, and coming back to the first could leave its

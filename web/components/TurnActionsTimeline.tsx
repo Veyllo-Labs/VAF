@@ -126,7 +126,11 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 ref={avaRef}
                 className="shrink-0 self-start transition-transform duration-300 ease-out will-change-transform"
             >
-                <AgentAvatar mode={avatarMode} dim={avatarDim} />
+                {/* noScene: the rail gutter has cards directly to the right, so the wide
+                    tool/away scenes (magnifier, globe, ...) would be clipped under them and
+                    their lean would shove the walking dot far left - the design here is the
+                    plain living dot on the rail; scene modes fall back to in-place motion. */}
+                <AgentAvatar mode={avatarMode} dim={avatarDim} noScene />
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col">

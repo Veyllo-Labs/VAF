@@ -193,7 +193,7 @@ const LITE: Partial<Record<AvatarMode, string>> = {
     confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
 };
 
-export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, tint, eyePulseRef }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; tint?: { body?: string; dot?: string }; eyePulseRef?: React.Ref<HTMLSpanElement> }) {
+export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, noScene = false, tint, eyePulseRef }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; noScene?: boolean; tint?: { body?: string; dot?: string }; eyePulseRef?: React.Ref<HTMLSpanElement> }) {
     // Settle-to-neutral transition (docs/web-ui/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
@@ -205,23 +205,32 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // Dark mode flips only the SURROUNDING inks (overlays, dim/outline tones) — the brand body
     // (#111827 square) and its white dot are identity and stay UNCHANGED in both themes.
     const isDark = useThemeStore((s) => s.theme === 'dark');
+    // Where scenes cannot render (the narrow mobile column, or a caller that opted out via
+    // `noScene` - the actions-timeline gutter), a WIDE scene mode is normalized to its
+    // in-place equivalent BEFORE the settle machinery: web search keeps searching ('search',
+    // the persistent figure's own looking-around animation), everything else works ('working').
+    // Without this the fallback branch rendered a plain dot with NO animation - an agent that
+    // is doing something looked frozen exactly while it was busiest.
+    const effMode: AvatarMode = (isMobile || noScene) && (TOOL_SCENES[mode] || AWAY_SCENES[mode])
+        ? (mode === 'searching' ? 'search' : 'working')
+        : mode;
     // Settle-to-neutral, but STARVATION-PROOF. One in-flight 200ms timer always lands on the LATEST
     // requested mode; subsequent rapid changes do NOT restart it. The old code cleared+rescheduled the
     // timeout on every mode change, so a burst of flips faster than 200ms (e.g. thinking<->web_search
     // around a tool call) meant setShown never fired: `settling` stayed true, and for a scene mode like
     // web_search the cross-dissolve `opacity:0` (sceneFade) got stuck -> the avatar vanished.
-    const latestMode = React.useRef(mode);
-    latestMode.current = mode;
+    const latestMode = React.useRef(effMode);
+    latestMode.current = effMode;
     const settleTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     React.useEffect(() => {
-        if (mode === shown || settleTimer.current != null) return;   // settled, or a settle already in flight
+        if (effMode === shown || settleTimer.current != null) return;   // settled, or a settle already in flight
         setSettling(true);                            // 1) drop animation -> ease to neutral
         settleTimer.current = setTimeout(() => {
             settleTimer.current = null;
             setShown(latestMode.current);             // 2) swap to the LATEST mode at rest
             setSettling(false);                       // 3) start the new animation from neutral
         }, 200);
-    }, [mode, shown]);
+    }, [effMode, shown]);
     React.useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current); }, []);
 
     // The "living" Working satellite: while Working is shown, a rAF loop eases its angular speed toward a
@@ -300,8 +309,13 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // DESKTOP only: the wide tool/away scenes (web_search magnifier, browse globe, away stages …) extend far
     // to the right. On the narrow mobile column they would push/clip the whole content row, so we suppress
     // them there and fall back to the plain 36px avatar dot (see the !toolScene body branch below).
-    const toolScene = isMobile ? undefined : TOOL_SCENES[shown];
-    const awayScene = isMobile ? undefined : AWAY_SCENES[shown];
+    // `noScene` is the same suppression by the CALLER: the actions-timeline gutter has cards directly to
+    // the avatar's right, so a wide scene ends up clipped under them while the lean shoves the agent far
+    // left - the reader sees scattered fragments (a lens handle here, a particle there) instead of an
+    // agent. The timeline's design is the plain living dot walking the rail, so it opts out of scenes.
+    const sceneAllowed = !isMobile && !noScene;
+    const toolScene = sceneAllowed ? TOOL_SCENES[shown] : undefined;
+    const awayScene = sceneAllowed ? AWAY_SCENES[shown] : undefined;
     // A tool scene (or delegate) extends a prop to the agent's RIGHT. Reserving that as layout WIDTH would
     // shove the whole content column (timeline / bubble) rightward every time a tool runs. Instead keep the
     // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
@@ -309,12 +323,13 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // margin-box so nothing to the RIGHT moves. Margins transition (not per-frame) → leak-safe.
     // Only when the scene is actually drawn: a DIMMED bubble (non-latest) renders just the plain 36px figure,
     // so it must NOT lean — otherwise the dim dot gets shoved ~74-94px left, detached from its bubble.
-    const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (!isMobile && shown === 'delegate' ? 88 : 0));
+    const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (sceneAllowed && shown === 'delegate' ? 88 : 0));
     const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
     // Cross-dissolve transitions that involve a scene mode (e.g. thinking → web search): during the settle
     // window the whole content fades OUT, the DOM swaps while invisible, then the new scene/body fades IN —
     // so the separate .tsc/.asc DOM no longer pops. Normal↔normal keeps its in-place morph (no fade here).
-    const sceneFade = !isMobile && settling && (isSceneMode(shown) || isSceneMode(mode));
+    // With scenes suppressed there is no separate DOM to swap, so no dissolve either.
+    const sceneFade = sceneAllowed && settling && (isSceneMode(shown) || isSceneMode(mode));
 
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';

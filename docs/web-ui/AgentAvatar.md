@@ -210,7 +210,7 @@ Older messages: `dim` prop → light gray box, gray static dot.
 
 **File:** `web/components/AgentAvatar.tsx` - component `AgentAvatar` (imported by `web/app/page.tsx`)  
 **Keyframes:** defined in `web/app/globals.css` (always available on first paint - no runtime injection)  
-**Props:** `mode` (all 18 modes; default `'idle'`), `dim: boolean` (default `false`), `invert: boolean` (dark dot on light container, for the judge)  
+**Props:** `mode` (all 18 modes; default `'idle'`), `dim: boolean` (default `false`), `invert: boolean` (dark dot on light container, for the judge), `noScene: boolean` (default `false`; suppress the WIDE tool/away scenes the way the mobile column does - for callers whose layout has content directly to the avatar's right, e.g. the actions timeline's rail gutter, where a 108px magnifier scene would be clipped under the cards and its leftward lean would detach the walking dot from its rail. A suppressed scene mode falls back to an in-place animation: `searching` to the figure's own `search` look-around, other scenes to `working` - never to a frozen dot)  
 **Interactive reference:** `docs/animations/agent_avatar/` - standalone single-file HTML showcases of every
 state (base, emotions, away-scenes, activity) plus the transition player. Open
 `animations/agent_avatar/agent-all-animations.html` to see everything in one place; no build step. These

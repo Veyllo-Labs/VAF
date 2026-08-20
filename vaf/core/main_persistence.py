@@ -338,7 +338,9 @@ class MainPersistenceManager:
         filename = f"{task_id}_result.md"
         path = self.results_dir / filename
         path.write_text(content, encoding="utf-8")
-        return str(path.relative_to(self.base_dir))
+        # POSIX form: the path is persisted, and `base_dir / "a/b"` re-joins on
+        # every OS while a stored "a\\b" only re-joins on Windows.
+        return path.relative_to(self.base_dir).as_posix()
 
     # --- WORKING MEMORY ---
 

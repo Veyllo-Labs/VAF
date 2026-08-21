@@ -167,11 +167,18 @@ def _mail_v2(locale):
     return json.loads((_REPO / "web" / "messages" / f"{locale}.json").read_bytes())["mailV2"]
 
 
+# CRLF-tolerant on purpose: without .gitattributes coverage for .tsx, a Windows
+# checkout (autocrlf) ends every line in \r\n, and a bare `$` anchor after the
+# comma then matches nothing - findall came back EMPTY on the Windows CI leg
+# while the same file parsed fine everywhere else.
+_AUTH_MAP_RE = r"^\s{4}(\w+): '(authHint\w+)',\r?$"
+
+
 def test_every_auth_kind_has_wording_in_every_locale():
     # Rule 2: the auth kinds are a registry with a copy in the message
     # catalogues. Adding a kind without wording renders a blank line.
     tsx = (_REPO / "web" / "components" / "connections" / "MailAccounts.tsx").read_bytes().decode("utf-8")
-    mapped = dict(re.findall(r"^\s{4}(\w+): '(authHint\w+)',$", tsx, re.M))
+    mapped = dict(re.findall(_AUTH_MAP_RE, tsx, re.M))
     assert set(mapped) == set(ea.AUTH_KINDS), "MailAccounts.tsx AUTH_MESSAGE drifted from AUTH_KINDS"
     for locale in ("en", "de"):
         catalogue = _mail_v2(locale)
@@ -179,6 +186,13 @@ def test_every_auth_kind_has_wording_in_every_locale():
             assert key in catalogue, f"{locale}.json is missing {key} for auth kind {kind}"
         for key in ("authHintEnableImap", "authHintHelp"):
             assert key in catalogue, f"{locale}.json is missing {key}"
+
+
+def test_the_auth_map_regex_survives_a_crlf_checkout():
+    """The class, executable on Linux: the Windows shape is a literal sample."""
+    crlf_sample = "    imap: 'authHintPassword',\r\n    oauth: 'authHintOauth',\r\n"
+    assert dict(re.findall(_AUTH_MAP_RE, crlf_sample, re.M)) == {
+        "imap": "authHintPassword", "oauth": "authHintOauth"}
 
 
 def test_provider_placeholder_is_present_wherever_the_backend_supplies_one():

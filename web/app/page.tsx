@@ -7448,20 +7448,18 @@ function VAFDashboardContent() {
         }
     }, [subAgentState.isOpen, showSubAgentPanel]);
 
-    // WHERE the conversation sits depends on ONE thing: is a panel open on the
-    // right. With the chat alone on screen it is centred, exactly as it always
-    // was - an always-left column reads as broken on a wide monitor, with the
-    // whole right half empty (shipped once, measured on the owner's screen).
-    // With a dock open (browser, worker view, any viewer/editor) the column is
-    // narrow, and there the old double centring - the container centred as a
-    // block AND every message row centred again inside it, on top of the 85%
-    // row cap - wasted the left edge while the text starved. So only then:
-    // container left (mr-auto), rows left (justify-start). Alignment lives in
-    // THESE variables and nowhere else; the call sites add no alignment of
-    // their own (tailwind-merge would let their literal win).
-    const chatWidthClass = anyDockPanelOpen ? 'max-w-3xl mr-auto' : 'max-w-4xl mx-auto';
-    const messagesAreaWidthClass = anyDockPanelOpen ? 'max-w-5xl mr-auto' : 'max-w-6xl mx-auto';
-    const botRowAlign = anyDockPanelOpen ? 'justify-start' : 'justify-center';
+    // The conversation container is ALWAYS centred; these are reading-width
+    // caps, and which cap applies is the only thing a docked panel changes.
+    // Whether the message ROWS centre inside it or take the left edge is not
+    // decided here at all: that follows the column's real width via the
+    // .vaf-msg-row container query in globals.css - a dock can be open on a
+    // wide monitor with plenty of column left (centre), or the column can be
+    // genuinely tight (left). Two earlier cuts keyed alignment on a dock flag
+    // and each was wrong in one direction on the owner's screen. Alignment
+    // never appears as a literal at the call sites: tailwind-merge would let
+    // a later literal silently win over these variables.
+    const chatWidthClass = anyDockPanelOpen ? 'max-w-3xl mx-auto' : 'max-w-4xl mx-auto';
+    const messagesAreaWidthClass = anyDockPanelOpen ? 'max-w-5xl mx-auto' : 'max-w-6xl mx-auto';
 
     if (authChecking) {
         return (
@@ -8008,7 +8006,7 @@ function VAFDashboardContent() {
                                 </div>
                             );
                         })()}
-                        <div className={cn("flex-1 overflow-y-auto p-6 max-md:p-3", voiceCallActive && "voice-call-hide-avatars")} ref={containerRef}>
+                        <div className={cn("vaf-chat-col flex-1 overflow-y-auto p-6 max-md:p-3", voiceCallActive && "voice-call-hide-avatars")} ref={containerRef}>
                             {/* The conversation slides up to make room for the vote panel and
                                 back down when it goes - a transition on the padding, so the
                                 messages move with the panel instead of being hidden behind it.
@@ -8163,7 +8161,7 @@ function VAFDashboardContent() {
                                                         const _wakeDone = _afterWake.some(m => m.role === 'user')
                                                             || (_afterWake.some(m => m.role === 'assistant' && String(m.content ?? '').trim().length > 0) && !isGenerating);
                                                         return (
-                                                            <div className={cn("flex gap-4 pt-4", botRowAlign)}>
+                                                            <div className={"flex gap-4 pt-4 vaf-msg-row"}>
                                                                 <div className="w-full max-w-[85%] flex gap-4 items-start">
                                                                     {/* Avatar: the real agent avatar. ACTIVE → dark + amber clock badge; DONE → dim + no badge. */}
                                                                     <div className="relative shrink-0">
@@ -8224,7 +8222,7 @@ function VAFDashboardContent() {
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolLower);
                                                         const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
-                                                            <div className={cn("flex", botRowAlign, "animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                            <div className={cn("flex vaf-msg-row animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
@@ -8257,7 +8255,7 @@ function VAFDashboardContent() {
                                                     // Render Workflow Messages
                                                     if (msg.role === 'workflow') {
                                                         return (
-                                                            <div key={`workflow-${trueIndex}`} className={cn("flex gap-4 pt-4", botRowAlign)}>
+                                                            <div key={`workflow-${trueIndex}`} className={"flex gap-4 pt-4 vaf-msg-row"}>
                                                                 <div className={cn(
                                                                     "flex gap-4 max-w-[85%] w-full items-start rounded-xl transition-all duration-300",
                                                                     stopHovered && isWorkflowRunning && trueIndex === messages.length - 1
@@ -8660,7 +8658,7 @@ function VAFDashboardContent() {
                                                     );
 
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? botRowAlign : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "vaf-msg-row" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 hasTimeline ? (
                                                                     <div className={cn(
@@ -8714,7 +8712,7 @@ function VAFDashboardContent() {
                                     phase (loops continuously, only the text updates; system rows are suppressed
                                     above). Shown while the latest message is a system step during an active turn. */}
                                 {!historyLoading && (loading || isGenerating) && visibleMessages[visibleMessages.length - 1]?.role === 'system' && (
-                                    <div className={cn("flex gap-4 pt-4", botRowAlign)}>
+                                    <div className={"flex gap-4 pt-4 vaf-msg-row"}>
                                         <div className="w-full max-w-[85%]">
                                             <SetupLine message={String(visibleMessages[visibleMessages.length - 1].content ?? '')} />
                                         </div>
@@ -8728,7 +8726,7 @@ function VAFDashboardContent() {
                                     // Or when last message is a system step (RAG, Router, Final tools, etc.) – no redundant avatar + dots row
                                     messages[messages.length - 1].role === 'system'
                                 ) && (
-                                    <div className={cn("flex gap-4 pt-4", botRowAlign)}>
+                                    <div className={"flex gap-4 pt-4 vaf-msg-row"}>
                                         <div className="w-full max-w-[85%] flex gap-4">
                                             <AgentAvatar mode="plan" />
                                             <div className="flex flex-col gap-1">

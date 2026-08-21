@@ -499,6 +499,25 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    up and vanishes reads as a splash of our own. The hint fades in only after the
    wait has become unusual. Pure CSS, so nothing has to run a timer. */
 @keyframes vafBrowserConnectHint { to { opacity: 1 } }
+
+/* Chat rows centre themselves for as long as the COLUMN has room, and shift
+   left only when it is genuinely tight - a container query on the scroller,
+   not a flag on "is a panel open": a dock can be open on a wide monitor and
+   the column still has plenty of width, and there a left-hugging chat reads
+   as broken (measured twice on the owner's screen, in both directions).
+   Hand-written rather than a Tailwind plugin: v3 has no container queries.
+   The threshold matches the panel-open reading cap (64rem): once the column
+   cannot hold that cap, centring has nothing left to give and the rows take
+   the left edge instead. Small screens keep the centred look they always
+   had; the width caps there make both alignments identical anyway. */
+.vaf-chat-col { container-type: inline-size; }
+.vaf-msg-row { justify-content: flex-start; }
+@container (min-width: 64rem) {
+  .vaf-msg-row { justify-content: center; }
+}
+@media (max-width: 767px) {
+  .vaf-msg-row { justify-content: center; }
+}
 /* The browser window's change-of-hands veil (person -> agent and back). Fades
    in, holds long enough to be read, fades out - and while it is up it also
    covers the stream iframe's ticket swap and reconnect, so the handover reads

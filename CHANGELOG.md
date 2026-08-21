@@ -12,13 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
-- **The chat gives its text more room when a panel is open.** With a window
-  docked on the right (browser, worker view, a viewer or editor) the chat
-  column used to centre its content twice over - once as a block and once per
-  message row - leaving a wide empty margin on the left while the text starved
-  against the panel. In that situation messages, composer and banners now line
-  up on the left and use the space. With no panel open the conversation stays
-  centred exactly as before. The sidebar's hover expansion also floats over
+- **The chat centres its text for as long as there is room, and only shifts
+  left when the column gets tight.** The conversation used to centre twice
+  over - the container as a block and every message row again inside it - so
+  in a narrow column (a browser window or viewer docked on the right) a wide
+  empty margin sat on the left while the text starved. The rows now follow
+  the column's actual width: plenty of room means centred exactly as always,
+  even with a panel open on a wide monitor; a genuinely tight column moves
+  the text to the left edge and gives it the space - live, including while
+  the panel is being resized. The sidebar's hover expansion also floats over
   the conversation now instead of pushing it sideways.
 - **Every user can get a browser of their own, in parallel.** Setting
   `VAF_BROWSER_POOL_MAX` above zero gives each user their own browser

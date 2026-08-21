@@ -117,6 +117,101 @@ def test_all_agent_mint_sites_use_the_stamp():
         assert not re.search(r'f"extracted_\{int\(time', src), mod.__file__
 
 
+def test_downgrade_carries_reasoning_content_when_present():
+    """MUTATION: the fold must hand reasoning back, dynamically.
+
+    The thinking contract is symmetric: no reasoning produced -> no field sent
+    and none demanded; reasoning produced -> it MUST ride the folded assistant
+    message. The fold used to rebuild from content alone - the field the
+    DeepSeek-family repair had just restored was dropped, and Veyllo (stateful,
+    it knew the exchange had reasoning) answered 400 "The reasoning_content in
+    the thinking mode must be passed back" (live incident 2026-08-21: a
+    text-recovered web_search inside a thinking turn).
+    """
+    messages = [
+        {"role": "user", "content": "wetter morgen?"},
+        {"role": "assistant", "content": "checking the forecast",
+         "reasoning_content": "user wants tomorrow's weather, search first",
+         "tool_calls": [{"id": "call_synth_ab12cd34", "type": "function",
+                         "function": {"name": "web_search", "arguments": '{"q": "wetter"}'}}]},
+        {"role": "tool", "tool_call_id": "call_synth_ab12cd34",
+         "name": "web_search", "content": "rain, 20 C"},
+    ]
+    out = _downgrade_synthetic_tool_exchanges(messages)
+    asst = [m for m in out if m["role"] == "assistant"][0]
+    assert asst["reasoning_content"] == "user wants tomorrow's weather, search first"
+    assert asst["content"] == "checking the forecast"
+    assert "tool_calls" not in asst
+
+
+def test_downgrade_keeps_a_reasoning_only_assistant_turn():
+    """The think block was the message's WHOLE content: after the repair moved
+    it into reasoning_content, content is empty - and the old `if text:` guard
+    made the assistant turn vanish outright. It must survive with an empty
+    content string (the API requires content to be a non-null string)."""
+    messages = [
+        {"role": "assistant", "content": "",
+         "reasoning_content": "thinking only, then straight to the tool",
+         "tool_calls": [{"id": "call_synth_ab12cd34", "type": "function",
+                         "function": {"name": "web_search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_synth_ab12cd34",
+         "name": "web_search", "content": "result"},
+    ]
+    out = _downgrade_synthetic_tool_exchanges(messages)
+    assts = [m for m in out if m["role"] == "assistant"]
+    assert len(assts) == 1
+    assert assts[0]["content"] == ""
+    assert assts[0]["reasoning_content"] == "thinking only, then straight to the tool"
+
+
+def test_downgrade_sends_no_reasoning_field_when_none_exists():
+    """The dynamic other half: a turn that never reasoned must not grow the
+    field, and an empty tc-message without reasoning stays dropped."""
+    messages = [
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "call_synth_ab12cd34", "type": "function",
+                         "function": {"name": "mail_inbox", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_synth_ab12cd34",
+         "name": "mail_inbox", "content": "2 mails"},
+    ]
+    out = _downgrade_synthetic_tool_exchanges(messages)
+    assert not any(m.get("role") == "assistant" for m in out)
+    assert not any("reasoning_content" in m for m in out)
+
+
+def test_prepare_messages_repair_and_fold_compose_for_veyllo():
+    """The WIRING, end to end: an inline <think> assistant message with a
+    synthetic tool call goes through _prepare_messages and comes out as ONE
+    assistant message carrying reasoning_content, no tool_calls - the repair
+    runs first, the fold second, and the fold must not undo the repair."""
+    from vaf.core.agent import Agent
+
+    class _Stub:
+        _thinking_reply_context = None
+        filename = "api"
+        model_display_name = ""
+        config = {}
+        provider = "veyllo"
+
+        def _consolidate_system_messages(self, messages):
+            return messages
+
+    out = Agent._prepare_messages(_Stub(), [
+        {"role": "user", "content": "wetter morgen?"},
+        {"role": "assistant", "content": "<think>search first</think>",
+         "tool_calls": [{"id": "call_synth_ab12cd34", "type": "function",
+                         "function": {"name": "web_search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_synth_ab12cd34",
+         "name": "web_search", "content": "rain"},
+    ])
+    assts = [m for m in out if m["role"] == "assistant"]
+    assert len(assts) == 1
+    assert assts[0].get("reasoning_content") == "search first"
+    assert assts[0]["content"] == ""
+    assert "tool_calls" not in assts[0]
+    assert not any(m.get("role") == "tool" for m in out)
+
+
 def test_the_deepseek_family_gets_reasoning_content_passed_back():
     """MUTATION: restore reasoning_content for provider "deepseek" only.
 

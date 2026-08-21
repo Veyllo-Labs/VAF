@@ -434,6 +434,17 @@ def _downgrade_synthetic_tool_exchanges(messages):
     earlier version put it into the assistant message - the model then
     PARROTED "[Context: ...]" blocks as its own answer style, and a live call
     read one aloud. The assistant message keeps only its real prose (if any).
+
+    reasoning_content RIDES ALONG when the message carries one, and only then.
+    The thinking-mode contract is dynamic on both sides: a turn that produced
+    no reasoning sends no field and the API demands none, but a turn that DID
+    reason must hand it back. The fold used to rebuild the assistant message
+    from content alone, dropping the field the DeepSeek-family repair had just
+    restored - and when the think block was the message's whole content, the
+    assistant turn vanished outright. Veyllo is stateful, knew the exchange
+    had reasoning, and answered 400 "The reasoning_content in the thinking
+    mode must be passed back" (live incident: a text-recovered web_search in
+    a thinking turn; the sibling turn without a recovered call ran clean).
     """
     out = []
     synth_calls = {}  # id -> "name(args)" of downgraded calls awaiting results
@@ -446,8 +457,12 @@ def _downgrade_synthetic_tool_exchanges(messages):
                     args = str(fn.get("arguments") or "")[:300]
                     synth_calls[tc.get("id")] = f"{fn.get('name')}({args})"
                 text = str(msg.get("content") or "").strip()
-                if text:
-                    out.append({"role": "assistant", "content": text})
+                reasoning = str(msg.get("reasoning_content") or "").strip()
+                if text or reasoning:
+                    folded = {"role": "assistant", "content": text}
+                    if reasoning:
+                        folded["reasoning_content"] = reasoning
+                    out.append(folded)
                 continue
         if msg.get("role") == "tool" and msg.get("tool_call_id") in synth_calls:
             call = synth_calls.pop(msg["tool_call_id"])

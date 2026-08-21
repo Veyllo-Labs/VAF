@@ -83,6 +83,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **A thinking turn with a text-recovered tool call no longer dies with a
+  Veyllo 400.** Some models occasionally write a tool call as text instead of
+  a structured call; VAF recovers those and, for Veyllo, replays them as plain
+  context because the gateway refuses tool-call ids it did not issue itself.
+  That replay rebuilt the assistant message from its text alone and dropped
+  the model's reasoning - and Veyllo's thinking mode, which knows the turn had
+  reasoning, rejected the whole request ("The reasoning_content in the
+  thinking mode must be passed back"). The rebuilt message now carries the
+  reasoning when there is any and survives even when thinking was all the
+  model said; a turn that never reasoned sends no such field, and none is
+  demanded.
 - **The agent's avatar stays in one piece while it works in a chat's action
   timeline.** During a tool call the timeline's walking dot used to switch to
   the wide tool scene built for the free-standing loading bubble - a magnifier

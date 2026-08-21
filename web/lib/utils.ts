@@ -4,7 +4,19 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
 
-/** 
+/**
+ * Strip <think>...</think> blocks (and a trailing unclosed <think>) from an
+ * assistant message. For views that show a transcript as the conversation the
+ * user actually received: think content is never delivered to the channel.
+ */
+export function stripThinkBlocks(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "")
+    .trim();
+}
+
+/**
  * API base URL for fetch calls.
  * Returns empty string to use the Next.js proxy (/api/...) on the same port.
  * This avoids CORS and SSL issues by using the internal Port 8005 channel.

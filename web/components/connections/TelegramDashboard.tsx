@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { X, ExternalLink, MessageSquare, UserCheck, UserPlus, Trash2, Bot, User } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { X, ExternalLink, MessageSquare, UserCheck, UserPlus, Trash2, Bot, User, Search, ChevronUp, ChevronDown } from 'lucide-react';
+import { cn, stripThinkBlocks } from '@/lib/utils';
 import MessagesChart from './MessagesChart';
+import HighlightedText from './HighlightedText';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -47,12 +47,55 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-    const [sessionHistoryPopoutChatId, setSessionHistoryPopoutChatId] = useState<string | null>(null);
     const [sessionHistory, setSessionHistory] = useState<Array<{ role: string; content: string; timestamp?: string }>>([]);
     const [historyCompaction, setHistoryCompaction] = useState<{ user_turn_count: number; compaction_interval: number; last_compaction_at_turn: number } | null>(null);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [relayAddId, setRelayAddId] = useState('');
     const [relayAddUsername, setRelayAddUsername] = useState('');
+    const [chatSearch, setChatSearch] = useState('');
+    const [chatSearchIdx, setChatSearchIdx] = useState(0);
+    const inlineChatRef = useRef<HTMLDivElement | null>(null);
+
+    const chatMessages = useMemo(
+        () =>
+            sessionHistory
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({
+                    role: m.role,
+                    timestamp: m.timestamp,
+                    text: (m.role === 'assistant' ? stripThinkBlocks(m.content || '') : m.content) || '—',
+                })),
+        [sessionHistory]
+    );
+
+    const searchMatches = useMemo(() => {
+        const q = chatSearch.trim().toLowerCase();
+        if (!q) return [] as number[];
+        return chatMessages.reduce<number[]>((acc, m, i) => {
+            if (m.text.toLowerCase().includes(q)) acc.push(i);
+            return acc;
+        }, []);
+    }, [chatMessages, chatSearch]);
+
+    useEffect(() => {
+        setChatSearchIdx(0);
+    }, [chatSearch, selectedChatId]);
+
+    // Keep the inline conversation pinned to the newest message (unless a search is active).
+    useEffect(() => {
+        if (chatSearch.trim()) return;
+        const el = inlineChatRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    }, [sessionHistory, selectedChatId, chatSearch]);
+
+    // Bring the current search match into view.
+    useEffect(() => {
+        if (!chatSearch.trim() || searchMatches.length === 0) return;
+        const target = searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)];
+        inlineChatRef.current
+            ?.querySelector(`[data-msg-idx="${target}"]`)
+            ?.scrollIntoView({ block: 'center' });
+    }, [chatSearch, chatSearchIdx, searchMatches]);
 
     useEffect(() => {
         if (isOpen) fetchDashboard();
@@ -64,8 +107,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
-                if (sessionHistoryPopoutChatId) {
-                    setSessionHistoryPopoutChatId(null);
+                if (chatSearch) {
+                    setChatSearch('');
                 } else {
                     onClose();
                 }
@@ -73,10 +116,10 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         };
         window.addEventListener('keydown', handleKeyDown, true);
         return () => window.removeEventListener('keydown', handleKeyDown, true);
-    }, [isOpen, onClose, sessionHistoryPopoutChatId]);
+    }, [isOpen, onClose, chatSearch]);
 
     useEffect(() => {
-        const chatId = sessionHistoryPopoutChatId ?? selectedChatId;
+        const chatId = selectedChatId;
         if (!chatId || !isOpen) {
             setSessionHistory([]);
             setHistoryCompaction(null);
@@ -99,7 +142,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 setHistoryCompaction(null);
             })
             .finally(() => setHistoryLoading(false));
-    }, [sessionHistoryPopoutChatId, selectedChatId, isOpen]);
+    }, [selectedChatId, isOpen]);
 
     const fetchDashboard = async () => {
         setLoading(true);
@@ -179,7 +222,20 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 onClick={e => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
-                    <h3 className="text-lg font-semibold text-gray-900 max-md:text-lg truncate">Telegram</h3>
+                    <div className="flex items-center gap-3 min-w-0">
+                        <h3 className="text-lg font-semibold text-gray-900 max-md:text-lg truncate">Telegram</h3>
+                        {data?.bot_link && (
+                            <a
+                                href={data.bot_link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors text-sm shrink-0"
+                            >
+                                <ExternalLink className="w-4 h-4" />
+                                Open in Telegram
+                            </a>
+                        )}
+                    </div>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
@@ -201,10 +257,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                                         <li key={s.chat_id}>
                                             <button
                                                 type="button"
-                                                onClick={() => {
-                                                    setSelectedChatId(s.chat_id);
-                                                    setSessionHistoryPopoutChatId(s.chat_id);
-                                                }}
+                                                onClick={() => setSelectedChatId(s.chat_id)}
                                                 className={cn(
                                                     'w-full text-left px-3 py-2.5 flex flex-col gap-0.5 transition-colors border-l-2',
                                                     selectedChatId === s.chat_id
@@ -238,52 +291,154 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     </div>
 
                     {/* Main content */}
-                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0 max-md:shrink-0">
+                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 flex flex-col max-md:min-h-0 max-md:shrink-0">
                     {loading ? (
                         <div className="py-8 text-center text-gray-500">Loading…</div>
                     ) : data ? (
                         <>
-                            {/* Test link */}
-                            <div>
-                                <p className="text-sm font-medium text-gray-700 mb-2">Chat with bot</p>
-                                {data.bot_link ? (
-                                    <a
-                                        href={data.bot_link}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors text-sm"
-                                    >
-                                        <ExternalLink className="w-4 h-4" />
-                                        Open in Telegram
-                                    </a>
-                                ) : (
-                                    <p className="text-sm text-gray-500">Bot link not available.</p>
-                                )}
-                            </div>
-
-                            {/* Line chart: messages per 4-hour interval */}
+                            {/* Line chart: messages per 4-hour interval; the bot link lives in the dialog header */}
                             <MessagesChart buckets={data?.stats_4h ?? []} chartId="telegram-messages-chart" />
 
-                            {/* Activity: all or for selected session; when a chat is selected, whole block opens same DIN A4 history popup on click */}
-                            <div
-                                role={selectedChatId ? 'button' : undefined}
-                                tabIndex={selectedChatId ? 0 : undefined}
-                                onClick={selectedChatId ? () => setSessionHistoryPopoutChatId(selectedChatId) : undefined}
-                                onKeyDown={selectedChatId ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSessionHistoryPopoutChatId(selectedChatId); } } : undefined}
-                                className={cn(selectedChatId && 'cursor-pointer hover:bg-gray-50/80 rounded-lg transition-colors -m-1 p-1')}
-                            >
-                                <p className="text-sm font-medium text-gray-700 mb-2">
-                                    {selectedChatId ? 'Activity for this chat' : 'Recent activity'}
-                                </p>
-                                <div className="rounded-lg border border-gray-200 bg-gray-50/50 h-[12.5rem] overflow-y-auto">
-                                    {data.activity.length === 0 ? (
+                            {/* Conversation for the selected chat, inline (oldest at top, pinned to newest); the search field works like Ctrl+F over the chat */}
+                            <div className="flex-1 min-h-0 flex flex-col">
+                                <div className="flex items-center justify-between gap-3 mb-2 shrink-0">
+                                    <div className="flex items-baseline gap-2 min-w-0">
+                                        <p className="text-sm font-medium text-gray-700 shrink-0">
+                                            {selectedChatId ? 'Conversation' : 'Recent activity'}
+                                        </p>
+                                        {selectedChatId && historyCompaction && (() => {
+                                            const interval = Math.max(1, Number(historyCompaction.compaction_interval) || 15);
+                                            const sinceLast = Math.max(
+                                                0,
+                                                Number(historyCompaction.user_turn_count || 0) - Number(historyCompaction.last_compaction_at_turn || 0)
+                                            );
+                                            const progress = sinceLast % interval;
+                                            return (
+                                                <span className="text-xs text-gray-500 truncate">
+                                                    <span className="text-gray-400">- </span>
+                                                    <span className="font-medium text-violet-700">{progress}</span>
+                                                    <span> / {interval} messages until Memory Learning</span>
+                                                    <span className="text-gray-400"> · </span>
+                                                    <span>
+                                                        {historyCompaction.last_compaction_at_turn === 0
+                                                            ? 'Last Memory Learning: none yet'
+                                                            : `Last Memory Learning: after turn ${historyCompaction.last_compaction_at_turn}`}
+                                                    </span>
+                                                </span>
+                                            );
+                                        })()}
+                                    </div>
+                                    {selectedChatId && (
+                                        <div className="flex items-center gap-1.5">
+                                            {chatSearch.trim() !== '' && (
+                                                <>
+                                                    <span className="text-xs text-gray-400 tabular-nums">
+                                                        {searchMatches.length === 0
+                                                            ? '0 / 0'
+                                                            : `${Math.min(chatSearchIdx, searchMatches.length - 1) + 1} / ${searchMatches.length}`}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setChatSearchIdx((i) => (i - 1 + searchMatches.length) % searchMatches.length)}
+                                                        disabled={searchMatches.length === 0}
+                                                        className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-40 transition-colors"
+                                                        title="Previous match"
+                                                    >
+                                                        <ChevronUp className="w-4 h-4" />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setChatSearchIdx((i) => (i + 1) % searchMatches.length)}
+                                                        disabled={searchMatches.length === 0}
+                                                        className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-40 transition-colors"
+                                                        title="Next match"
+                                                    >
+                                                        <ChevronDown className="w-4 h-4" />
+                                                    </button>
+                                                </>
+                                            )}
+                                            <div className="relative">
+                                                <Search className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                                <input
+                                                    type="text"
+                                                    value={chatSearch}
+                                                    onChange={(e) => setChatSearch(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' && searchMatches.length > 0) {
+                                                            e.preventDefault();
+                                                            setChatSearchIdx((i) =>
+                                                                e.shiftKey
+                                                                    ? (i - 1 + searchMatches.length) % searchMatches.length
+                                                                    : (i + 1) % searchMatches.length
+                                                            );
+                                                        }
+                                                    }}
+                                                    placeholder="Search chat"
+                                                    className="w-80 max-w-[45vw] rounded border border-gray-300 pl-8 pr-2 py-1.5 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div ref={inlineChatRef} className="rounded-lg border border-gray-200 bg-gray-50/50 flex-1 min-h-[12.5rem] overflow-y-auto">
+                                    {selectedChatId ? (
+                                        historyLoading && sessionHistory.length === 0 ? (
+                                            <p className="text-sm text-gray-500 p-3">Loading history…</p>
+                                        ) : chatMessages.length === 0 ? (
+                                            <p className="text-sm text-gray-500 p-3">No messages in this session yet.</p>
+                                        ) : (
+                                            <div className="p-3 space-y-2">
+                                                {chatMessages.map((msg, i) => {
+                                                    const isBot = msg.role === 'assistant';
+                                                    const isCurrentMatch =
+                                                        searchMatches.length > 0 &&
+                                                        searchMatches[Math.min(chatSearchIdx, searchMatches.length - 1)] === i;
+                                                    return (
+                                                        <div
+                                                            key={`${msg.timestamp || 'no-ts'}-${i}`}
+                                                            data-msg-idx={i}
+                                                            className={cn('flex gap-2', isBot ? 'justify-start' : 'justify-end')}
+                                                        >
+                                                            {isBot && (
+                                                                <div className="w-6 h-6 rounded-lg bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center text-white shrink-0">
+                                                                    <Bot className="w-3.5 h-3.5" />
+                                                                </div>
+                                                            )}
+                                                            <div className={cn('max-w-[80%] flex flex-col', isBot ? 'items-start' : 'items-end')}>
+                                                                <div
+                                                                    className={cn(
+                                                                        'px-3 py-1.5 rounded-xl text-sm leading-relaxed',
+                                                                        isBot
+                                                                            ? 'bg-white text-gray-800 rounded-tl-none border border-gray-200'
+                                                                            : 'bg-gray-800 text-white rounded-tr-none',
+                                                                        isCurrentMatch && 'ring-2 ring-amber-400'
+                                                                    )}
+                                                                >
+                                                                    <p className="whitespace-pre-wrap break-words">
+                                                                        <HighlightedText text={msg.text} query={chatSearch.trim()} />
+                                                                    </p>
+                                                                </div>
+                                                                {msg.timestamp && (
+                                                                    <span className="text-[10px] text-gray-400 mt-0.5">{msg.timestamp}</span>
+                                                                )}
+                                                            </div>
+                                                            {!isBot && (
+                                                                <div className="w-6 h-6 rounded-lg bg-white border border-gray-200 flex items-center justify-center text-gray-500 shrink-0">
+                                                                    <User className="w-3.5 h-3.5" />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )
+                                    ) : data.activity.length === 0 ? (
                                         <p className="text-sm text-gray-500 p-3">No activity yet.</p>
                                     ) : (
                                         <ul className="divide-y divide-gray-200">
                                             {[...data.activity]
-                                                .filter((a) => !selectedChatId || a.chat_id === selectedChatId)
                                                 .reverse()
-                                                .slice(0, 20)
+                                                .slice(0, 50)
                                                 .map((a, i) => (
                                                 <li key={i} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600">
                                                     <MessageSquare className="w-4 h-4 text-gray-400 shrink-0" />
@@ -382,111 +537,6 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
 
             </div>
         </div>
-
-        {/* Session history as a standalone popup (portal on document.body), larger/taller than the dashboard */}
-        {typeof document !== 'undefined' &&
-            sessionHistoryPopoutChatId &&
-            createPortal(
-                <div
-                    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 max-md:p-0"
-                    onClick={() => setSessionHistoryPopoutChatId(null)}
-                >
-                    <div
-                        className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw] max-md:max-w-none max-md:w-full max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:min-h-0"
-                        onClick={e => e.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-                            <h4 className="text-sm font-semibold text-gray-900">
-                                @{data?.sessions?.find(s => s.chat_id === sessionHistoryPopoutChatId)?.telegram_username || sessionHistoryPopoutChatId}
-                            </h4>
-                            <button
-                                type="button"
-                                onClick={() => setSessionHistoryPopoutChatId(null)}
-                                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            >
-                                <X className="w-4 h-4 text-gray-500" />
-                            </button>
-                        </div>
-                        {/* Memory Learning: X/Y until next, plus last time */}
-                        {historyCompaction && (
-                            <div className="shrink-0 px-4 py-2 bg-violet-50/80 border-b border-violet-100 text-xs text-gray-700 flex flex-wrap items-center gap-x-4 gap-y-1">
-                                {(() => {
-                                    const interval = Math.max(1, Number(historyCompaction.compaction_interval) || 15);
-                                    const sinceLast = Math.max(
-                                        0,
-                                        Number(historyCompaction.user_turn_count || 0) - Number(historyCompaction.last_compaction_at_turn || 0)
-                                    );
-                                    const progress = sinceLast % interval;
-                                    return (
-                                        <span>
-                                            <span className="font-medium text-violet-700">{progress}</span>
-                                            <span className="text-gray-500"> / </span>
-                                            <span className="font-medium">{interval}</span>
-                                            {' '}messages until Memory Learning
-                                        </span>
-                                    );
-                                })()}
-                                <span className="text-gray-500">
-                                    {historyCompaction.last_compaction_at_turn === 0
-                                        ? 'Last Memory Learning: none yet'
-                                        : `Last Memory Learning: after turn ${historyCompaction.last_compaction_at_turn}`}
-                                </span>
-                            </div>
-                        )}
-                        <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50/50">
-                            {historyLoading ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">Loading history…</p>
-                            ) : sessionHistory.length === 0 ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">No messages in this session yet.</p>
-                            ) : (
-                                <div className="space-y-2 max-w-2xl mx-auto">
-                                    {sessionHistory
-                                        .filter((m) => m.role === 'user' || m.role === 'assistant')
-                                        .slice()
-                                        .reverse()
-                                        .map((msg, i) => {
-                                            const isBot = msg.role === 'assistant';
-                                            const text = msg.content || '—';
-                                            return (
-                                                <div
-                                                    key={`${msg.timestamp || 'no-ts'}-${i}`}
-                                                    className={cn('flex gap-3 pt-4', isBot ? 'justify-start' : 'justify-end')}
-                                                >
-                                                    {isBot && (
-                                                        <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center text-white shadow-sm shrink-0">
-                                                            <Bot className="w-[18px] h-[18px]" />
-                                                        </div>
-                                                    )}
-                                                    <div className={cn('max-w-[85%] flex flex-col', isBot ? 'items-start' : 'items-end shrink-0')}>
-                                                        <div
-                                                            className={cn(
-                                                                'px-5 py-3 rounded-2xl shadow-sm text-sm leading-relaxed',
-                                                                isBot
-                                                                    ? 'bg-white text-gray-800 rounded-tl-none border border-gray-200'
-                                                                    : 'bg-gray-800 text-white rounded-tr-none'
-                                                            )}
-                                                        >
-                                                            <p className="whitespace-pre-wrap break-words">{text}</p>
-                                                        </div>
-                                                        {msg.timestamp && (
-                                                            <span className="text-[10px] text-gray-400 mt-1">{msg.timestamp}</span>
-                                                        )}
-                                                    </div>
-                                                    {!isBot && (
-                                                        <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0">
-                                                            <User className="w-[18px] h-[18px]" />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>,
-                document.body
-            )}
     </>
     );
 }

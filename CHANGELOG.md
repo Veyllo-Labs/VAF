@@ -83,6 +83,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   scripts do these things too, so this is information, not a refusal.
 
 ### Changed
+- **The Telegram and WhatsApp dashboards show the conversation inline.**
+  Selecting a chat now shows the actual conversation (user and bot bubbles,
+  oldest at the top, auto-scrolled to the newest message) directly in the
+  dashboard instead of a short "Incoming/Outgoing" list that needed a click to
+  open a popup; the separate history popup is gone. Internal `<think>` blocks
+  are stripped from this view since they are never sent to the channel. A
+  search field on the conversation header works like Ctrl+F over the chat:
+  matches are highlighted, Enter / Shift+Enter (or the arrow buttons) jump
+  between them, Escape clears the search. The Memory Learning progress line
+  now sits in the conversation header next to the title. The panel grows to fill the window height,
+  so the Full access / Relay contacts panels sit at the bottom instead of
+  floating above empty space. In the Telegram dashboard the "Open in Telegram"
+  link moved into the dialog header next to the title, freeing the former
+  "Chat with bot" block's space for the chart and the conversation.
 - **The soul's Continuity section now names the agent's real memory lane.**
   The default soul text (the onboarding wizard's suggestions and the fallback
   soul) told the agent to "read your memory files" - but the agent's long-term

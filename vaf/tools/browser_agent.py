@@ -1025,15 +1025,29 @@ class BrowserAgentTool(BaseTool):
             # Park the shared container: stopping our session leaves its tabs
             # rendering, and an animated page then burns CPU for as long as the
             # container lives. In the executor - urllib is blocking.
+            #
+            # NOT when a give-back is pending: the run evicted a person, and
+            # the moment it ends their window re-enters the interactive mode -
+            # they take the browser over exactly where the agent stopped,
+            # finished, failed or was stopped mid-task. Parking here would
+            # blank the very state being handed back. The CPU concern does not
+            # go uncovered: agent_run_ended arms a one-shot parker that fires
+            # only if nobody claims the browser within a short grace.
             try:
-                await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(
-                        None, self._park_browser_idle,
-                        cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")),
-                    timeout=10.0,
-                )
+                from vaf.core.browser_interactive import give_back_pending
+                _skip_park = give_back_pending(container_name)
             except Exception:
-                pass
+                _skip_park = False
+            if not _skip_park:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.get_running_loop().run_in_executor(
+                            None, self._park_browser_idle,
+                            cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")),
+                        timeout=10.0,
+                    )
+                except Exception:
+                    pass
 
         return self._extract_result(history)
 

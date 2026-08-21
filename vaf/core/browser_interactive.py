@@ -568,6 +568,41 @@ class InteractiveBrowserManager:
             # An interactive-manager failure must never fail an agent run.
             pass
 
+    def give_back_pending(self) -> bool:
+        """Is an evicted person waiting to get this browser back?
+
+        The run's end-of-task parking asks before it blanks the tabs: a
+        browser about to be handed back must keep its state - the person
+        continues exactly where the agent stopped, finished or was stopped."""
+        with self._lock:
+            return self._pre_agent_holder is not None
+
+    UNCLAIMED_PARK_S = 20.0
+
+    def _park_if_unclaimed(self) -> bool:
+        """Park the browser unless somebody claimed it meanwhile.
+
+        The give-back skips the run's own parking so the person can continue
+        where the agent stopped - but if nobody takes the browser back (the
+        window was closed mid-run, or the resume was refused), the animating
+        page the run left behind burns CPU with nobody watching (the 1027%
+        incident). This is the fallback the skip relies on."""
+        with self._lock:
+            if self._lease is not None or self._agent_active:
+                return False
+        try:
+            park_browser_idle(self.cdp_base())
+        except Exception:
+            pass
+        return True
+
+    def _arm_unclaimed_parker(self) -> None:
+        def _later():
+            time.sleep(self.UNCLAIMED_PARK_S)
+            self._park_if_unclaimed()
+        threading.Thread(target=_later, daemon=True,
+                         name="browser-giveback-parker").start()
+
     HANDOVER_TTL_S = 180.0
 
     def take_agent_handover(self, user_scope_id: Optional[str] = None) -> Optional[dict]:
@@ -686,6 +721,9 @@ class InteractiveBrowserManager:
             self._emit({"status": "stopped", "reason": "agent_done",
                         "saving": False, "streamPath": "", "resumable": True},
                        holder[1])
+            # The run's parking stood down for this give-back; make sure an
+            # unclaimed browser still gets parked (window closed mid-run).
+            self._arm_unclaimed_parker()
         elif sid:
             self._emit({"status": "stopped", "reason": "agent_done",
                         "saving": False, "streamPath": "", "resumable": False}, sid)
@@ -1265,6 +1303,15 @@ def take_agent_handover(user_scope_id: Optional[str] = None,
         return _manager_for_run(container_name).take_agent_handover(user_scope_id)
     except Exception:
         return None
+
+
+def give_back_pending(container_name: Optional[str] = None) -> bool:
+    """Hook for BrowserAgentTool's end-of-run parking: keep the browser's
+    state when an evicted person is about to take it back. Never raises."""
+    try:
+        return _manager_for_run(container_name).give_back_pending()
+    except Exception:
+        return False
 
 
 def agent_stream_started(session_id: Optional[str],

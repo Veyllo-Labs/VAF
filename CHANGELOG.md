@@ -229,7 +229,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   told which page you were on and continues there - your tab stays open, your
   logins stay live - instead of opening the site again in a tab of its own.
   A takeover run also no longer wipes the session it was handed, even when it
-  would normally start with a clean browser.
+  would normally start with a clean browser. The way back mirrors it: whether
+  the run finishes, fails or is stopped, you get the browser back exactly as
+  the agent left it - tabs included - instead of a blanked window, with the
+  same handover animation in both directions.
 - **Closing the side panel finally plays its animation.** If the panel's
   width had ever been adjusted by dragging its edge (the choice is
   remembered), every close snapped shut instantly instead of sliding: the

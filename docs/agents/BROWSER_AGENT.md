@@ -418,7 +418,15 @@ stands down for such a continuation, because it would log out the very session i
 handed (measured live: asked to take over an open marketplace session, the run opened
 the site fresh in its own tab instead). A person re-opening the browser themselves
 outdates the pending handover. The per-turn browser context block teaches the model to
-phrase takeover tasks as continuations; pinned by `tests/test_browser_interactive.py`. The refusal is not blind for the
+phrase takeover tasks as continuations; pinned by `tests/test_browser_interactive.py`.
+
+**And the way back mirrors it.** However the run ends - finished, failed, or stopped by
+the person - the same finally path fires the give-back, and the end-of-run parking
+STANDS DOWN while that give-back is pending (`give_back_pending`): the person's window
+re-enters the interactive mode on the browser exactly as the agent left it, tabs and
+all, with the handover veil marking the change of hands. The CPU concern parking exists
+for is not dropped: `agent_run_ended` arms a one-shot fallback that parks the browser
+only if nobody claims it within a short grace (window closed mid-run, resume refused). The refusal is not blind for the
 run's own session: it carries the run's watch-only stream, so opening the window during a
 run shows the live browser rather than nothing. The window flips to the agent view (live
 stream or screenshots, plus task, actions, history, activity) the moment agent data

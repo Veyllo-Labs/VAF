@@ -485,6 +485,27 @@ def test_a_continuing_run_never_scrubs_the_session_it_was_handed(mgr, monkeypatc
     mgr.agent_run_ended()
 
 
+def test_give_back_keeps_the_browser_unparked_until_claimed(mgr, monkeypatch):
+    """The person continues where the agent stopped, in BOTH directions: the
+    run's end-of-task parking stands down while a give-back is pending, and
+    the fallback parker fires only if nobody claims the browser."""
+    _no_ipc_tasks(monkeypatch)
+    parked = []
+    monkeypatch.setattr(bi, "park_browser_idle", lambda base: parked.append(base))
+    mgr._arm_unclaimed_parker = lambda: None      # no sleeping threads in unit tests
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    assert mgr.give_back_pending() is True        # the run's parking must skip
+    mgr.agent_run_ended()
+    assert mgr.give_back_pending() is False       # consumed with the give-back
+    # Unclaimed: nobody took the browser back -> the fallback parks it.
+    assert mgr._park_if_unclaimed() is True and len(parked) == 1
+    # Claimed: the person's window resumed -> their state stays untouched.
+    mgr.start("scope-a", "sess-1")
+    assert mgr._park_if_unclaimed() is False and len(parked) == 1
+    mgr.stop("user", requester_scope="scope-a")
+
+
 def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():
     """The manager half above is useless unless the tool consumes it: the run
     must take the handover, let it veto the clean-start scrub (continuing=),
@@ -503,6 +524,11 @@ def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():
     assert "task=_agent_task" in body, (
         "the enriched task must reach the Agent; the plain task stays for the live view"
     )
+    # The return direction: end-of-run parking must ask give_back_pending and
+    # stand down, or the person resumes into a blanked browser.
+    assert "give_back_pending(" in body
+    assert body.index("give_back_pending(") < body.index("self._park_browser_idle")
+    assert "if not _skip_park:" in body
 
 
 def test_fresh_lease_clears_a_pending_give_back(mgr, monkeypatch):

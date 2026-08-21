@@ -631,6 +631,25 @@ def test_workspace_mirror_walk_caps_and_signature(monkeypatch, tmp_path):
     assert any(c[0] == "cp" for c in calls)
 
 
+def test_mirror_relatives_are_posix_even_on_a_windows_host(monkeypatch, tmp_path):
+    """The pinned str(PurePath) serialization class, at this lane's seam:
+    os.path.relpath answers with backslashes on a Windows host, and these
+    relatives become CONTAINER paths (the upload whitelist) - a Linux run can
+    never reproduce it because os.sep is already the slash, so the Windows
+    shape is injected through the seam (the Windows CI leg caught the live
+    instance; this makes the class fail here instead)."""
+    root = tmp_path / "ws"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "notes.txt").write_bytes(b"x")
+    real_relpath = bi.os.path.relpath
+    monkeypatch.setattr(bi.os.path, "relpath",
+                        lambda full, base: real_relpath(full, base).replace("/", "\\"))
+    monkeypatch.setattr(bi.os, "sep", "\\", raising=False)
+    files = bi._eligible_workspace_files(root)
+    rels = [rel for rel, _s, _m in files]
+    assert rels == ["sub/notes.txt"], rels
+
+
 def test_the_run_hands_browser_use_the_upload_whitelist():
     """Static wiring: the run mirrors the owner's files and hands their
     container paths to browser-use as available_file_paths - upload_file

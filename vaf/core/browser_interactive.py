@@ -455,7 +455,14 @@ def _eligible_workspace_files(root) -> List[tuple]:
                 if total + st.st_size > _WS_SYNC_TOTAL_MAX:
                     return out
                 total += st.st_size
-                out.append((os.path.relpath(full, base), st.st_size, st.st_mtime_ns))
+                # POSIX separators at the source: these relatives become
+                # CONTAINER paths (the upload whitelist), and os.path.relpath
+                # answers with backslashes on a Windows host - the pinned
+                # str(PurePath) serialization class (Windows CI red; Linux can
+                # never reproduce it because os.sep is already "/"). The
+                # host-side staging join below accepts the mixed form.
+                rel = os.path.relpath(full, base).replace(os.sep, "/")
+                out.append((rel, st.st_size, st.st_mtime_ns))
     except Exception:
         pass
     return out

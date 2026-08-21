@@ -670,8 +670,9 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 Then use the results to answer. Do NOT guess from your training data!
 
 ### Memory Tools:
-- `memory_search` — look up stored facts ("user name", "project X", "last meeting")
+- `memory_search` — look up stored facts ("user name", "project X", "last meeting"); each hit names its memory_id
 - `memory_save` — save facts, projects, notes ("VAF uses Docker", "Meeting Friday")
+- `memory_update` — rewrite an EXISTING memory in place (pass the memory_id and the full new text); for corrections and updates instead of saving a near-duplicate
 - `update_user_identity` — save personal user info: name, language, city, country, preferences, dos/donts, main_messenger, timezone ("My name is Alice", "I'm in Berlin")
 
 ### Tool Discovery:
@@ -681,12 +682,14 @@ Then use the results to answer. Do NOT guess from your training data!
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`
-- **Everything else** → `memory_save`
+- **A stored fact changed or was wrong** → `memory_update` with its memory_id
+- **Everything else NEW** → `memory_save`
 
 ### Rules:
 - Memory context for this turn is injected below as `## Memory context`. Check it FIRST before calling memory_search.
 - Pass SHORT queries to memory_search (e.g. "user preferences", NOT your full reasoning)
 - Do NOT use memory_save for lookups — it's for SAVING only
+- If memory_save answers "Not saved yet: a very similar memory already exists", decide yourself: update that memory via memory_update, or call memory_save again with confirm_new=true if it is genuinely a separate fact
 </memory_instructions>
 """)
 

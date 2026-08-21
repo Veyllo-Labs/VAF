@@ -12,6 +12,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The agent can now update a memory instead of saving it twice.** A new
+  `memory_update` tool rewrites an existing long-term memory in place - the
+  same operation the Memory page has always offered, now available to the
+  agent itself. And `memory_save` checks first: when a nearly identical memory
+  already exists, it does not write a twin but answers with the existing
+  memory and its id, and the agent decides - update it, or insist on a
+  separate save. Memory search results now name each memory's id so the agent
+  can refer to one. The duplicate check is deliberately careful in the other
+  direction too: if it cannot run (memory database down), saving simply
+  proceeds, so a check never stands between "remember this" and the save.
+  Learned documents are protected: a section of a learned PDF is a record of
+  what that source says, so `memory_update` refuses it and points to the
+  honest lanes instead - learn the newer document version, or save a
+  correcting note that is retrieved alongside the section. Nothing valuable
+  can be silently overwritten that way.
 - **Tools are grouped into bundles instead of one long wall of cards.** Settings
   -> Available Tools now shows one card per integration or area - GitHub,
   WhatsApp, Telegram, Email, Calendar and so on - with the number of tools in

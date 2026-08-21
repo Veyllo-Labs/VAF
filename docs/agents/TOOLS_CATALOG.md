@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 120 tools, counted from a freshly
+[vaf/core/agent.py](../../vaf/core/agent.py)); 121 tools, counted from a freshly
 constructed agent rather than from this list's own history. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
@@ -52,8 +52,9 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `memory_save` | write | Save information to long-term RAG memory. |
-| `memory_search` | read | Search long-term RAG memory, and the caller's other chats for where a topic was discussed (two labelled sections; the chat half needs no database and still answers during an outage). |
+| `memory_save` | write | Save information to long-term RAG memory. Refuses a near-duplicate once, naming the existing memory: the model then updates it via `memory_update` or insists with `confirm_new=true`. |
+| `memory_update` | write | Update an existing long-term memory in place (full new text, re-embedded); the id comes from `memory_search` or `memory_save`'s duplicate notice. |
+| `memory_search` | read | Search long-term RAG memory, and the caller's other chats for where a topic was discussed (two labelled sections; the chat half needs no database and still answers during an outage). Each memory snippet names its `memory_id` for `memory_update`. |
 | `add_memory` | write | Add a note to short-term session memory. |
 | `learn_document` | write | Learn a document into long-term memory. |
 | `learn_attached_knowledge` | write | Persist attached Web UI documents into memory. |

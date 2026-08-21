@@ -481,6 +481,7 @@ class MemorySearchTool(BaseTool):
         "It does NOT hold live data: to read the user's actual EMAILS use mail_inbox (NEVER memory_search), "
         "for TELEGRAM use telegram_inbox, for the CALENDAR use the calendar tools. Never call memory_search to look up emails or messages. "
         "Returns matching snippets from the vector database plus, separately, excerpts from other chats with the chat name. "
+        "Each memory snippet carries its memory_id - pass that id to memory_update to change that stored memory. "
         "If nothing found, tell user you have no stored info yet."
     )
     parameters = {
@@ -539,8 +540,11 @@ class MemorySearchTool(BaseTool):
 
         try:
             from vaf.memory.rag import run_memory_search_sync
+            # include_ids: the tool lane shows each snippet's memory_id so the model
+            # can hand one to memory_update; the per-turn prompt injection does not.
             result = run_memory_search_sync(
-                query=query, k=k, user_scope_id=user_scope_id, caller="tool"
+                query=query, k=k, user_scope_id=user_scope_id, caller="tool",
+                include_ids=True,
             )
             if result and result.strip():
                 return f"{result}\n\n---\n\n{chat_section}" if chat_section else result
@@ -574,6 +578,37 @@ class MemorySearchTool(BaseTool):
             return f"Error searching memory: {e}"
 
 
+# Near-duplicate bar for memory_save's pre-save check, on PURE COSINE chunk
+# similarity (search(hybrid=False) - the hybrid fusion returns rank values no
+# threshold can read). 0.90 is deliberately strict: the check exists to catch
+# saving the same fact again, not to interrogate every save - a bar that fires
+# on merely related memories would put a question between the user's "remember
+# this" and the save on every turn (the plan-gate friction lesson).
+_DUPLICATE_SIMILARITY = 0.90
+
+
+def _find_similar_memories(content: str, user_scope_id, k: int = 3):
+    """Top near-duplicates of `content` in the caller's long-term memory.
+
+    Returns a list of RagSource (cosine-scored). Best-effort by design: the
+    caller treats ANY failure as "no duplicates" - a duplicate check must never
+    stand between the user and a save the way a dead database would.
+    """
+    async def _search():
+        from vaf.memory.database import get_db
+        from vaf.memory.rag import RagPipeline
+        async with get_db(user_scope_id=user_scope_id) as db:
+            pipeline = RagPipeline(db)
+            return await pipeline.search(
+                content,
+                k=k,
+                threshold=_DUPLICATE_SIMILARITY,
+                user_scope_id=user_scope_id,
+                hybrid=False,
+            )
+    return _run_async_in_new_loop(_search())
+
+
 class MemorySaveTool(BaseTool):
     """
     Save a NEW fact, note, or preference in long-term memory (RAG).
@@ -589,6 +624,8 @@ class MemorySaveTool(BaseTool):
         "💾 SAVE new information to your long-term memory database (RAG). "
         "USE THIS when user explicitly asks: 'remember that...', 'make a note of...', 'save this...', 'store this...'. "
         "This stores facts, preferences, notes permanently in the vector database for future retrieval. "
+        "If a very similar memory already exists, the tool answers with that memory instead of saving; "
+        "then either update it via memory_update, or call memory_save again with confirm_new=true to store both. "
         "Do NOT use for lookups - use memory_search to retrieve stored information."
     )
     parameters = {
@@ -606,6 +643,11 @@ class MemorySaveTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "One or more tags to categorize this memory (e.g. ['user', 'preference'] or ['project', 'decision']). Required — at least one tag must be provided."
+            },
+            "confirm_new": {
+                "type": "boolean",
+                "description": "Set true ONLY to store this as a separate new memory although a very similar one already exists (the tool told you so). Default false.",
+                "default": False
             }
         },
         "required": ["content", "tags"]
@@ -640,6 +682,40 @@ class MemorySaveTool(BaseTool):
                 user_scope_id = UUID(str(_admin_scope()))
             except Exception:
                 return "Error: could not resolve a user scope for memory_save."
+        # Duplicate gate: unless the model explicitly confirmed a separate save,
+        # look for a near-identical existing memory first and hand the DECISION
+        # back instead of writing a twin - update the old one, or insist on new.
+        # Best-effort on purpose: any failure here saves anyway, because a
+        # duplicate check must never stand between the user and a save the way
+        # a dead database would.
+        if not bool(kwargs.get("confirm_new")):
+            try:
+                similar = _find_similar_memories(content, user_scope_id) or []
+            except Exception:
+                similar = []
+            if similar:
+                # search returns chunk hits; two chunks of one memory are one answer.
+                best_by_memory = {}
+                for s in similar:
+                    prev = best_by_memory.get(s.memory_id)
+                    if prev is None or s.score > prev.score:
+                        best_by_memory[s.memory_id] = s
+                lines = []
+                for s in sorted(best_by_memory.values(), key=lambda x: x.score, reverse=True)[:2]:
+                    snippet = " ".join(str(s.text or "").split())
+                    if len(snippet) > 300:
+                        snippet = snippet[:300] + "..."
+                    lines.append(f"- memory_id: {s.memory_id} (similarity {s.score:.0%}): {snippet}")
+                return (
+                    "Not saved yet: a very similar memory already exists.\n"
+                    + "\n".join(lines)
+                    + "\n\nDecide yourself: if the new information replaces, corrects or extends "
+                    "one of these, call memory_update(memory_id=\"...\", content=\"...\") with the "
+                    "full updated text instead of saving a duplicate. Only if this is genuinely a "
+                    "separate fact worth keeping alongside, call memory_save again with "
+                    "confirm_new=true."
+                )
+
         title = (kwargs.get("title") or "").strip() or None
         metadata = {"source": "memory_save", "type": "note"}
         if title:
@@ -664,3 +740,151 @@ class MemorySaveTool(BaseTool):
             return _run_async_in_new_loop(_ingest())
         except Exception as e:
             return f"Error storing memory: {e}"
+
+
+def _memory_update_refusal(meta: dict) -> Optional[str]:
+    """Why this memory may NOT be rewritten in place, or None if it may.
+
+    Document memories (learn_document / learn_attached_knowledge, recognized by
+    their doc_tag) are RECORDS of what a source says, chunked per section. An
+    in-place edit would replace source text with model prose while the section
+    keeps wearing the document's name - a falsified record - and the original
+    cannot be reconstructed once overwritten (no version history, and the PDF
+    may be gone). Outdated documents are refreshed by learning the new version,
+    not by editing the record of the old one; a correction can stand alongside
+    as its own memory, which retrieval returns together with the section.
+    """
+    meta = meta or {}
+    doc_tag = str(meta.get("doc_tag") or "").strip()
+    if doc_tag:
+        return (
+            f"Not updated: this memory is a section of the learned document '{doc_tag}' - "
+            "a record of what that source says, not a note. Editing it in place would "
+            "falsify the record, and the original text cannot be restored afterwards. "
+            "Instead: if the source itself has a newer version, learn it with "
+            "learn_document; to correct or add context, save a note with memory_save "
+            "(it is retrieved alongside the document section). Outdated documents can "
+            "be removed on the Memory page."
+        )
+    if str(meta.get("source") or "").strip() == "attachment_ephemeral":
+        return (
+            "Not updated: this entry belongs to the ephemeral attachment lane (it expires "
+            "with the chat's attachments and is not long-term memory). To keep corrected "
+            "knowledge from an attachment permanently, use learn_attached_knowledge or "
+            "memory_save."
+        )
+    return None
+
+
+class MemoryUpdateTool(BaseTool):
+    """
+    Update an EXISTING long-term memory in place instead of saving a duplicate.
+    The id comes from memory_search results or from memory_save's duplicate notice.
+    Document memories (learn_document) are records of a source and are refused.
+    """
+    name = "memory_update"
+    category    = "memory"
+    identity_kwargs = ("user_scope_id",)
+    permission_level = "write"
+    # Irreversible like memory_save: the previous content is overwritten and
+    # re-embedded; there is no version history to roll back to.
+    side_effect_class = "irreversible"
+    description = (
+        "✏️ UPDATE an existing memory in your long-term memory database (RAG) in place. "
+        "USE THIS instead of memory_save when a stored memory should be corrected, extended, or replaced - "
+        "e.g. after memory_save told you a very similar memory already exists, or after memory_search "
+        "showed an outdated fact. Pass the memory_id from those results and the FULL new text "
+        "(it replaces the old content entirely, so include everything that should remain true). "
+        "Do NOT use this to store a genuinely new fact - that is memory_save."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "memory_id": {
+                "type": "string",
+                "description": "The id of the memory to update, exactly as shown by memory_search or memory_save (a UUID)."
+            },
+            "content": {
+                "type": "string",
+                "description": "The complete new text of the memory. Replaces the old content entirely."
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional new short title for this memory."
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional new tags; when given they replace the memory's tags."
+            }
+        },
+        "required": ["memory_id", "content"]
+    }
+
+    def run(self, **kwargs) -> str:
+        content = (kwargs.get("content") or "").strip()
+        if not content:
+            return "Error: content is required and cannot be empty."
+        try:
+            memory_id = UUID(str(kwargs.get("memory_id") or "").strip())
+        except (ValueError, TypeError):
+            return (
+                "Error: memory_id must be the UUID shown by memory_search or memory_save "
+                "(e.g. memory_id: 1b2c...). Search first if you do not have one."
+            )
+        user_scope_id = kwargs.get("user_scope_id")
+        if user_scope_id is not None and isinstance(user_scope_id, str):
+            try:
+                user_scope_id = UUID(user_scope_id)
+            except (ValueError, TypeError):
+                return "Error: Invalid user_scope_id."
+        # USER ISOLATION: same resolution as memory_save - updating is scoped writing.
+        # In server mode a missing scope is denied; single-user mode floors to the
+        # local-admin scope. update_memory() then matches BOTH id and owner, so a
+        # guessed foreign id updates nothing.
+        if user_scope_id is None:
+            try:
+                from vaf.core.config import Config as _Cfg, get_local_admin_scope_id as _admin_scope
+                if bool(_Cfg.get("local_network_enabled", False)):
+                    return "Error: cannot update a memory without an authenticated user in server mode."
+                user_scope_id = UUID(str(_admin_scope()))
+            except Exception:
+                return "Error: could not resolve a user scope for memory_update."
+        title = (kwargs.get("title") or "").strip() or None
+        tags = kwargs.get("tags")
+        metadata = {}
+        if title:
+            metadata["title"] = title
+        if tags and isinstance(tags, list) and any(str(t).strip() for t in tags):
+            metadata["tags"] = tags
+
+        async def _update() -> str:
+            from vaf.memory.database import get_db
+            from vaf.memory.rag import RagPipeline
+            async with get_db(user_scope_id=user_scope_id) as db:
+                pipeline = RagPipeline(db)
+                existing = await pipeline.get_memory(
+                    memory_id, decrypt=False, user_scope_id=user_scope_id
+                )
+                if existing is None:
+                    raise ValueError(f"Memory {memory_id} not found")
+                refusal = _memory_update_refusal(existing.get("metadata") or {})
+                if refusal:
+                    return refusal
+                await pipeline.update_memory(
+                    memory_id,
+                    content=content,
+                    metadata=metadata or None,
+                    user_scope_id=user_scope_id,
+                )
+            return f"Memory {memory_id} updated."
+
+        try:
+            return _run_async_in_new_loop(_update())
+        except ValueError:
+            return (
+                f"Error: no memory with id {memory_id} exists for this user. "
+                "Use memory_search to find the right id, or memory_save to store a new memory."
+            )
+        except Exception as e:
+            return f"Error updating memory: {e}"

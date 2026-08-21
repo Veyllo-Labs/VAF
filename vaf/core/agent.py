@@ -2277,7 +2277,7 @@ class Agent:
     # room's leader (the two people a worker takes instructions from). Everything else
     # said in the room is still learned - by the compaction that runs on the room's
     # frames afterwards, which reads the whole conversation and stamps its source.
-    _ROOM_AUTHORITY_TOOLS = frozenset({"memory_save"})
+    _ROOM_AUTHORITY_TOOLS = frozenset({"memory_save", "memory_update"})
 
     def _room_mode_gate_decision(self, name, tool_instance):
         """Gate (d): a message that arrived from a room is a MESSAGE, not a warrant.
@@ -3272,6 +3272,7 @@ class Agent:
                         _rk_automation = self._run_kind == "automation"
                         if _rk_thinking:
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
+                                                 "memory_update",
                                                  "update_user_identity", "set_timer", "schedule_reminder",
                                                  "write_file"):
                                 continue
@@ -8825,7 +8826,10 @@ class Agent:
                 tools_set = set(selected_tools)
                 
                 # Add core tools
-                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity", "set_timer"):
+                # memory_update rides with memory_save on purpose: the save's duplicate
+                # notice tells the model to call it, so it must be callable in the SAME
+                # restricted set without another router round trip.
+                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "memory_update", "update_user_identity", "set_timer"):
                     if name in self.tools:
                         tools_set.add(name)
                 

@@ -145,6 +145,9 @@ NEWLY_IDENTIFIED = {
     "github_update_file": ('user_scope_id', 'username'),
     "learn_attached_knowledge": ('user_scope_id',),
     "learn_document": ('user_role', 'user_scope_id'),
+    # Added 2026-08-21 with the tool itself (memory_save's update sibling): a workflow
+    # step updates the WORKFLOW OWNER's memory, never an unscoped row.
+    "memory_update": ('user_scope_id',),
     "librarian_agent": ('user_role', 'user_scope_id'),
     "list_automations": ('user_role', 'user_scope_id'),
     "list_files": ('user_role', 'user_scope_id'),

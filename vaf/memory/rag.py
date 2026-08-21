@@ -373,7 +373,8 @@ class RagPipeline:
         k: int = 5,
         threshold: float = 0.3,  # Lowered from 0.5 to allow more matches
         metadata_filter: Optional[Dict[str, Any]] = None,
-        user_scope_id: Optional[UUID] = None
+        user_scope_id: Optional[UUID] = None,
+        hybrid: Optional[bool] = None,
     ) -> List[RagSource]:
         """
         Search for relevant memories using vector similarity.
@@ -384,6 +385,11 @@ class RagPipeline:
             threshold: Minimum similarity threshold (0-1)
             metadata_filter: Optional metadata filter
             user_scope_id: Optional user scope filter
+            hybrid: None follows the memory_hybrid_enabled config (the normal
+                retrieval path). Pass False for a pure vector search whose
+                scores stay COSINE similarities - the hybrid fusion returns
+                rank-based RRF values, which no similarity threshold can read.
+                The memory_save duplicate check is the consumer this exists for.
 
         Returns:
             List of RagSource objects
@@ -450,7 +456,7 @@ class RagPipeline:
         # 18/26 together with the scan-cap lift - e5 ranks tight fact
         # clusters within a narrow similarity band, so the damage
         # concentrated there.
-        hybrid_enabled = bool(Config.get("memory_hybrid_enabled"))
+        hybrid_enabled = bool(Config.get("memory_hybrid_enabled")) if hybrid is None else bool(hybrid)
         vector_fetch = max(k * 4, 20) if hybrid_enabled else k
         stmt = select(
             Chunk,
@@ -1858,6 +1864,7 @@ def run_memory_search_sync(
     k: int = 5,
     user_scope_id: Optional[UUID] = None,
     caller: Optional[str] = None,
+    include_ids: bool = False,
 ) -> str:
     """
     Run RAG search synchronously for use from sync code (e.g. headless runner).
@@ -1866,6 +1873,10 @@ def run_memory_search_sync(
     or empty string if memory is disabled, no results, or on error.
 
     caller: "headless" | "tool" | None – for logging who triggered the RAG call.
+    include_ids: append each snippet's memory_id to its header. The memory_search
+        TOOL asks for this so the model can NAME a memory to memory_update; the
+        per-turn prompt injection deliberately does not - ids there are noise the
+        model would copy into answers.
     """
     import time as _time
     _t0 = _time.time()
@@ -1982,7 +1993,12 @@ def run_memory_search_sync(
                 return ""
             parts = []
             for i, s in enumerate(sources):
-                parts.append(f"[Source {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
+                if include_ids:
+                    parts.append(
+                        f"[Source {i+1}] (Relevance: {s.score:.0%}, memory_id: {s.memory_id})\n{s.text}"
+                    )
+                else:
+                    parts.append(f"[Source {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
             return "\n\n---\n\n".join(parts)
 
     _RAG_TIMEOUT = 15.0  # seconds; avoid blocking chat if DB is down or slow

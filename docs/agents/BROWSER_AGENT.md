@@ -681,6 +681,31 @@ must never ride into the next person's workspace. `off` is enforced in the brows
 itself (`Browser.setDownloadBehavior deny` at every handover), not in our chrome.
 Pinned by `tests/test_browser_interactive.py`.
 
+### Uploads: the workspace, mirrored in
+
+```bash
+# .env  (or system environment before starting VAF)
+VAF_BROWSER_WORKSPACE_SYNC=on   # default; "off" mirrors nothing
+```
+
+The reverse of the download sweep, for the same reason: a website's file picker (and
+browser-use's `upload_file` action) can only see the CONTAINER filesystem, so
+"upload my PDF" is impossible unless the file exists in there. The holder's file area
+(`VAF_Projects/<uid8>/`) is mirrored one-way into `/home/browser/Workspace` - at lease
+start, on every janitor tick (signature-gated: an unchanged workspace costs a
+directory walk and nothing else, so a file the agent just produced becomes uploadable
+within seconds), and at an agent run's start. Hidden files stay out, single files over
+64 MB stay out, and the mirror stops at 512 MB total - it is a convenience, not a
+backup, and the host always wins.
+
+The container's file dialog is ANCHORED to it: the entrypoint sets the XDG Documents
+dir, a GTK sidebar bookmark and the picker's start directory to the Workspace folder -
+the only place in the container that holds anything of the person's. Agent runs get
+the mirrored paths as browser-use's `available_file_paths` whitelist, so `upload_file`
+can attach exactly the owner's files and nothing else. On a scope change the mirror is
+purged unread together with the downloads folder, and the full profile scrub wipes it
+too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
+
 ### Handover scrub depth
 
 ```bash

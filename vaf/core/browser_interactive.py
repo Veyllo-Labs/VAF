@@ -399,18 +399,122 @@ def _set_download_behavior(cdp_base: str, allow: bool) -> None:
 
 
 def _purge_container_downloads(container_name: str) -> None:
-    """Delete whatever sits in the container's download folder, unread.
+    """Delete both transfer folders in the container, unread.
 
-    Called on a scope CHANGE: residue a previous (or unknown) holder left
-    behind must never be delivered into the NEXT person's workspace, and
-    leaving it standing would do exactly that on the first sweep. Best-effort;
-    the full profile scrub wipes the same folder as part of its job."""
+    Called on a scope CHANGE: download residue a previous (or unknown) holder
+    left behind must never be delivered into the NEXT person's workspace, and
+    the previous holder's synced WORKSPACE copy must never be readable (or
+    uploadable to a website) by the next person. Best-effort; the full profile
+    scrub wipes the same folders as part of its job."""
     try:
         from vaf.core.browser_pool import _docker
         _docker(["exec", container_name, "sh", "-c",
-                 "rm -rf /home/browser/Downloads/* 2>/dev/null || true"], timeout=20)
+                 "rm -rf /home/browser/Downloads/* /home/browser/Workspace/* 2>/dev/null || true"],
+                timeout=30)
     except Exception:
         pass
+
+
+def workspace_sync_mode() -> str:
+    """Whether the owner's files are mirrored INTO the browser for uploads.
+
+    "on" (default): the holder's VAF_Projects tree appears (size-capped) at
+    /home/browser/Workspace - the folder the file picker is anchored to, and
+    the whitelist agent runs may upload from. "off": nothing is mirrored.
+    An env knob like its siblings; anything unrecognized means on."""
+    return "off" if os.environ.get("VAF_BROWSER_WORKSPACE_SYNC", "").strip().lower() == "off" else "on"
+
+
+_WS_SYNC_FILE_MAX = 64 * 1024 * 1024
+_WS_SYNC_TOTAL_MAX = 512 * 1024 * 1024
+_WS_CONTAINER_DIR = "/home/browser/Workspace"
+
+
+def _eligible_workspace_files(root) -> List[tuple]:
+    """(relative_path, size, mtime_ns) of every file the mirror carries.
+
+    Hidden entries are skipped (dotfiles are tool state, not upload material),
+    single files over the per-file cap are skipped, and the walk stops adding
+    once the total cap is reached - a mirror is a convenience, not a backup."""
+    out: List[tuple] = []
+    total = 0
+    try:
+        base = os.fspath(root)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in sorted(dirnames) if not d.startswith(".")]
+            for fn in sorted(filenames):
+                if fn.startswith("."):
+                    continue
+                full = os.path.join(dirpath, fn)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if st.st_size > _WS_SYNC_FILE_MAX:
+                    continue
+                if total + st.st_size > _WS_SYNC_TOTAL_MAX:
+                    return out
+                total += st.st_size
+                out.append((os.path.relpath(full, base), st.st_size, st.st_mtime_ns))
+    except Exception:
+        pass
+    return out
+
+
+def _sync_workspace_to_container(container_name: str, user_scope_id: str,
+                                 prev_sig) -> tuple:
+    """Mirror the owner's files into the browser. Returns (signature, paths).
+
+    The reverse of the download sweep: a website's file picker (and the
+    agent's upload_file action) can only see the CONTAINER filesystem, so
+    uploading "my PDF" is impossible unless the file exists in there. The
+    mirror is one-way (host wins, container copy is disposable), bulk (one
+    docker cp of a staged tree, not one exec per file), and signature-gated:
+    an unchanged workspace costs a directory walk and nothing else. `paths`
+    always lists every mirrored file's container path - the agent's upload
+    whitelist - whether or not a copy happened this round. BLOCKING: call off
+    the event loop. Never raises."""
+    paths: List[str] = []
+    try:
+        from vaf.core.browser_pool import _docker
+        from vaf.core.session import get_user_projects_root
+
+        root = get_user_projects_root(user_scope_id)
+        if root is None or not os.path.isdir(root):
+            return prev_sig, paths
+        files = _eligible_workspace_files(root)
+        paths = [f"{_WS_CONTAINER_DIR}/{rel}" for rel, _s, _m in files]
+        sig = (len(files), sum(s for _r, s, _m in files),
+               max((m for _r, _s, m in files), default=0))
+        if sig == prev_sig:
+            return sig, paths
+
+        import shutil
+        import tempfile
+        staging = tempfile.mkdtemp(prefix="vaf-browser-ws-")
+        try:
+            for rel, _s, _m in files:
+                dest = os.path.join(staging, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(os.path.join(os.fspath(root), rel), dest)
+            _docker(["exec", "-u", "root", container_name, "sh", "-c",
+                     f"mkdir -p {_WS_CONTAINER_DIR} && chown -R browser:browser {_WS_CONTAINER_DIR}"],
+                    timeout=20)
+            r = _docker(["cp", f"{staging}/.", f"{container_name}:{_WS_CONTAINER_DIR}/"],
+                        timeout=300)
+            if r.returncode != 0:
+                return prev_sig, paths
+            _docker(["exec", "-u", "root", container_name, "sh", "-c",
+                     f"chown -R browser:browser {_WS_CONTAINER_DIR}"], timeout=20)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        append_domain_log("webui",
+                          f"[browser_interactive] workspace mirrored into browser: "
+                          f"{len(files)} file(s)")
+        return sig, paths
+    except Exception as e:
+        append_domain_log("webui", f"[browser_interactive] workspace sync failed: {e}")
+        return prev_sig, paths
 
 
 _DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024
@@ -657,6 +761,10 @@ class InteractiveBrowserManager:
         # profile volume exists to keep.
         self._dedicated_scope = dedicated_scope
         self._last_cookie_scope: Optional[str] = dedicated_scope
+        # Workspace-mirror freshness: what was last synced into the container,
+        # for whom. Reset on a scope change so the next holder gets a full
+        # mirror of THEIR files rather than a stale signature match.
+        self._ws_sig = None
         self._janitor_alive = False
 
     # -- environment -------------------------------------------------------
@@ -831,8 +939,9 @@ class InteractiveBrowserManager:
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
                 # Same rule as the interactive handover: a previous holder's
-                # undelivered downloads never ride into another scope's sweep.
+                # transfer folders never ride into another scope's session.
                 _purge_container_downloads(self._container_name)
+                self._ws_sig = None
             elif not persistent and not continuing:
                 # Same scope, but the run promised a clean start: quick scrub
                 # only - the person's own logins are already exported and come
@@ -853,6 +962,20 @@ class InteractiveBrowserManager:
         if downloads_mode() == "off" or not user_scope_id:
             return []
         return _sweep_container_downloads(self._container_name, str(user_scope_id))
+
+    def sync_workspace(self, user_scope_id: Optional[str]) -> List[str]:
+        """Mirror the holder's files into the browser for uploads; returns the
+        mirrored container paths (the agent's upload whitelist). Mode-gated,
+        signature-cheap when nothing changed, BLOCKING, never raises."""
+        if workspace_sync_mode() == "off" or not user_scope_id:
+            return []
+        with self._lock:
+            prev = self._ws_sig
+        sig, paths = _sync_workspace_to_container(
+            self._container_name, str(user_scope_id), prev)
+        with self._lock:
+            self._ws_sig = sig
+        return paths
 
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
@@ -971,11 +1094,16 @@ class InteractiveBrowserManager:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
-                # Residue in the download folder belongs to the PREVIOUS
-                # holder; delivering it to the next person's workspace on the
-                # first sweep would be a cross-user hand-off. It dies here.
+                # Residue in the transfer folders belongs to the PREVIOUS
+                # holder; delivering it onward (or letting the next person
+                # upload it) would be a cross-user hand-off. It dies here,
+                # and the mirror starts over for the new holder.
                 _purge_container_downloads(self._container_name)
+                self._ws_sig = None
             _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
+            # The person's files appear in the browser's file picker from the
+            # first moment of their session.
+            self.sync_workspace(user_scope_id)
             if save:
                 cookies = _load_storage_cookies(
                     browser_storage_state_path(user_scope_id, session_name))
@@ -1247,8 +1375,12 @@ class InteractiveBrowserManager:
                 # Deliver finished downloads promptly (one janitor tick, ~5s,
                 # after the browser completes them), not only at session end:
                 # "it downloaded, but where?" is answered by the file simply
-                # appearing in the person's own Downloads folder.
+                # appearing in the person's own Downloads folder. The reverse
+                # mirror stays fresh the same way - a file that just landed in
+                # the workspace becomes uploadable within a tick, and an
+                # unchanged workspace costs a directory walk, nothing more.
                 self.sweep_downloads(lease.user_scope_id)
+                self.sync_workspace(lease.user_scope_id)
                 if tick % self._LIVENESS_EVERY_TICKS == 0:
                     try:
                         import urllib.request as _req
@@ -1498,6 +1630,18 @@ def take_agent_handover(user_scope_id: Optional[str] = None,
         return _manager_for_run(container_name).take_agent_handover(user_scope_id)
     except Exception:
         return None
+
+
+def sync_workspace_for_run(user_scope_id: Optional[str] = None,
+                           container_name: Optional[str] = None) -> List[str]:
+    """Hook for BrowserAgentTool: mirror the run owner's files into the run's
+    browser and return their container paths - the upload whitelist the agent
+    hands to browser-use. Never raises."""
+    try:
+        return _manager_for_run(container_name).sync_workspace(
+            resolve_browser_scope(user_scope_id))
+    except Exception:
+        return []
 
 
 def give_back_pending(container_name: Optional[str] = None) -> bool:

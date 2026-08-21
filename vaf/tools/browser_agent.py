@@ -1005,6 +1005,16 @@ class BrowserAgentTool(BaseTool):
                                     container_name=container_name,
                                     continuing=_handover is not None),
         )
+        # The owner's files, mirrored into this browser: the container paths
+        # double as browser-use's upload whitelist, so "fill the form and
+        # attach my report.pdf" actually can - the file picker and the
+        # upload_file action only ever see the container filesystem.
+        from vaf.core.browser_interactive import sync_workspace_for_run
+        _ws_files = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: sync_workspace_for_run(user_scope_id=user_scope_id,
+                                           container_name=container_name),
+        )
         # The enrichment goes to the AGENT only; the live view's Task panel
         # keeps showing the person's own words.
         _agent_task = task
@@ -1115,8 +1125,15 @@ class BrowserAgentTool(BaseTool):
             # The nudge: the good tools were always there (find_text jumps to
             # content, scroll pages=10 reaches the bottom, collect_page_text
             # reads a whole page in one step) - a model that is not told about
-            # them scrolls blind one viewport per LLM round trip.
-            extend_system_message=_browser_guidance(_vision_tier),
+            # them scrolls blind one viewport per LLM round trip. When the
+            # owner's files are mirrored in, say so - upload_file refuses
+            # paths outside the whitelist, and a model that does not know
+            # where the files LIVE cannot name one.
+            extend_system_message=_browser_guidance(_vision_tier) + (
+                " The user's own files are available for uploads under "
+                "/home/browser/Workspace (use upload_file with one of the "
+                "provided available file paths)." if _ws_files else ""),
+            available_file_paths=_ws_files or None,
             enable_planning=False,
             use_thinking=False,
             register_new_step_callback=_human_step_pause,

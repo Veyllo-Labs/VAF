@@ -547,7 +547,11 @@ uses, so its isolation is a lease, not a partition:
   the profile or the container is recreated. Downloads are no longer part of this
   residual: finished ones are swept to their owner's `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), and a scope change purges the
-  container folder unread instead of delivering a previous holder's files onward.
+  container folder unread instead of delivering a previous holder's files onward. The
+  workspace MIRROR (`/home/browser/Workspace`, the upload lane) is treated the same
+  way: it is the holder's own files by construction, it is purged unread on a scope
+  change so the next person can neither read nor upload it, and the full scrub wipes
+  it with the profile.
 - **The genuine partition is the per-user pool** (`VAF_BROWSER_POOL_MAX`, see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
   browser container with its own profile volume AND its own docker network, so nothing

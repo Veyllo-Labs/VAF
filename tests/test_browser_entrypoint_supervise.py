@@ -95,7 +95,13 @@ def test_profile_scrub_marker_is_honoured_between_launches():
     filesystem survives restarts), so the wipe lives here or nowhere."""
     src = _script()
     assert ".scrub-profile" in src
-    assert "rm -rf /home/browser/.config/chromium /home/browser/Downloads" in src
+    assert "rm -rf /home/browser/.config/chromium /home/browser/Downloads /home/browser/Workspace" in src
+    # The file picker is anchored to the transfer folders: XDG dirs plus a GTK
+    # bookmark plus the seeded start directory - without them "upload from my
+    # workspace" begins in the container's empty home.
+    assert 'XDG_DOCUMENTS_DIR="/home/browser/Workspace"' in src
+    assert "file:///home/browser/Workspace" in src
+    assert '"selectfile"' in src
     # The wipe must run inside start_chromium (both the first launch and every
     # supervisor relaunch pass through it), before Chromium comes up.
     body = src.split("start_chromium() {", 1)[1].split("\n}", 1)[0]

@@ -178,9 +178,25 @@ start_chromium() {
     # and downloaded files. The content blocker comes back by itself: the
     # external-extensions provider reinstalls it into the fresh profile.
     if [ -f /home/browser/.scrub-profile ]; then
-        rm -rf /home/browser/.config/chromium /home/browser/Downloads
+        rm -rf /home/browser/.config/chromium /home/browser/Downloads /home/browser/Workspace
         rm -f /home/browser/.scrub-profile
         echo "Profile scrubbed for user handover"
+    fi
+
+    # The two transfer folders, and the file picker anchored to them. VAF
+    # mirrors the holder's files into Workspace (uploads) and drains Downloads
+    # the other way; the XDG dirs plus the GTK bookmark put both one click away
+    # in Chromium's file dialog, and the seeded last_directory makes the picker
+    # OPEN in the workspace - the only folder in this container that holds
+    # anything of the person's.
+    mkdir -p /home/browser/Workspace /home/browser/Downloads /home/browser/.config/gtk-3.0
+    printf 'XDG_DOCUMENTS_DIR="/home/browser/Workspace"\nXDG_DOWNLOAD_DIR="/home/browser/Downloads"\n' \
+        > /home/browser/.config/user-dirs.dirs
+    printf 'file:///home/browser/Workspace Workspace\nfile:///home/browser/Downloads Downloads\n' \
+        > /home/browser/.config/gtk-3.0/bookmarks
+    PREFS=/home/browser/.config/chromium/Default/Preferences
+    if [ -f "$PREFS" ] && ! grep -q '"selectfile"' "$PREFS"; then
+        sed -i 's/^{/{"selectfile":{"last_directory":"\/home\/browser\/Workspace"},/' "$PREFS" 2>/dev/null || true
     fi
 
     # Never restore the previous session. The supervisor below kills Chromium with

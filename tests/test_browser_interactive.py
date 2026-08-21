@@ -37,6 +37,9 @@ def mgr(monkeypatch, tmp_path):
     dl_sweeps = []
     monkeypatch.setattr(bi, "_sweep_container_downloads",
                         lambda name, scope: (dl_sweeps.append((name, scope)) or []))
+    ws_syncs = []
+    monkeypatch.setattr(bi, "_sync_workspace_to_container",
+                        lambda name, scope, prev: (ws_syncs.append((name, scope)) or (("sig",), [])))
     cookie_calls = []
 
     def fake_cookie_op(base, op, cookies=None):
@@ -56,6 +59,7 @@ def mgr(monkeypatch, tmp_path):
     m._test_dl_policy = dl_policy
     m._test_dl_purges = dl_purges
     m._test_dl_sweeps = dl_sweeps
+    m._test_ws_syncs = ws_syncs
     m._test_emitted = emitted
     return m
 
@@ -557,6 +561,87 @@ def test_downloads_off_denies_in_the_browser_and_never_sweeps(mgr, monkeypatch):
     assert mgr._test_dl_policy[-1] is False         # deny, enforced browser-side
     mgr.stop("user", requester_scope="scope-a")
     assert mgr._test_dl_sweeps == []
+
+
+def test_workspace_mirrors_in_at_lease_start_and_resets_on_scope_change(mgr, monkeypatch):
+    """The reverse lane: the holder's files appear in the browser from the
+    first moment, the mirror belongs to the jar owner, and a scope change
+    starts it over (after the purge) instead of trusting a stale signature."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    assert ("vaf-browser", "scope-a") in mgr._test_ws_syncs
+    assert mgr._ws_sig == ("sig",)
+    mgr.stop("user", requester_scope="scope-a")
+    mgr.start("scope-b", "sess-2")                  # change of hands
+    # The reset happened before the new sync stored its own signature.
+    assert ("vaf-browser", "scope-b") in mgr._test_ws_syncs
+    mgr.stop("user", requester_scope="scope-b")
+
+
+def test_workspace_sync_off_mirrors_nothing(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setenv("VAF_BROWSER_WORKSPACE_SYNC", "off")
+    mgr.start("scope-a", "sess-1")
+    assert mgr._test_ws_syncs == []
+    mgr.stop("user", requester_scope="scope-a")
+
+
+def test_workspace_mirror_walk_caps_and_signature(monkeypatch, tmp_path):
+    """The module half: hidden files stay out, oversized files stay out, the
+    total cap stops the walk, an unchanged tree costs no copy, and the paths
+    list (the agent's upload whitelist) is answered either way. Without the
+    mgr fixture - it stubs this very function."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import types as _types
+    import vaf.core.browser_pool as bp
+    import vaf.core.session as session_mod
+
+    root = tmp_path / "P" / "ab12cd34"
+    (root / "sub").mkdir(parents=True)
+    (root / "report.pdf").write_bytes(b"x" * 100)
+    (root / "sub" / "notes.txt").write_bytes(b"y" * 50)
+    (root / ".hidden").write_bytes(b"z")
+    big = root / "huge.bin"
+    big.write_bytes(b"0")
+    import os as _os
+    _os.truncate(big, bi._WS_SYNC_FILE_MAX + 1)
+
+    calls = []
+
+    def fake_docker(args, timeout=60):
+        calls.append(list(args))
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bp, "_docker", fake_docker)
+    monkeypatch.setattr(session_mod, "get_user_projects_root", lambda scope: root)
+
+    sig, paths = bi._sync_workspace_to_container("vaf-browser", "scope-a", None)
+    assert sorted(paths) == ["/home/browser/Workspace/report.pdf",
+                             "/home/browser/Workspace/sub/notes.txt"]
+    assert any(c[0] == "cp" for c in calls)
+    # Unchanged tree: the signature short-circuits, no second copy.
+    calls.clear()
+    sig2, paths2 = bi._sync_workspace_to_container("vaf-browser", "scope-a", sig)
+    assert sig2 == sig and sorted(paths2) == sorted(paths)
+    assert not any(c[0] == "cp" for c in calls)
+    # A new file changes the signature and triggers a copy again.
+    (root / "new.md").write_bytes(b"n" * 10)
+    sig3, paths3 = bi._sync_workspace_to_container("vaf-browser", "scope-a", sig)
+    assert sig3 != sig and "/home/browser/Workspace/new.md" in paths3
+    assert any(c[0] == "cp" for c in calls)
+
+
+def test_the_run_hands_browser_use_the_upload_whitelist():
+    """Static wiring: the run mirrors the owner's files and hands their
+    container paths to browser-use as available_file_paths - upload_file
+    refuses everything else, so a missing wire means no uploads at all."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "tools"
+           / "browser_agent.py").read_text(encoding="utf-8")
+    body = src.split("async def _run_browser", 1)[1]
+    assert "sync_workspace_for_run(" in body
+    assert body.index("sync_workspace_for_run(") < body.index("agent = Agent(")
+    assert "available_file_paths=_ws_files or None" in body
 
 
 def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):

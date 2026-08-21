@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Uploading in the browser starts from your own files.** The sandbox
+  browser's file picker used to open into an empty container home - your
+  files simply did not exist in there. Your file area is now mirrored into
+  the browser (kept fresh within seconds, size-capped), the picker opens in
+  it with a Workspace bookmark in the sidebar, and agent runs can attach
+  exactly those files through their upload action - nothing else. A change
+  of user wipes the mirror unread; `VAF_BROWSER_WORKSPACE_SYNC=off` turns
+  the mirroring off entirely.
 - **Browser downloads land in your files, not in the sandbox.** A file
   downloaded in the sandbox browser - by you or by the agent - used to exist
   only inside the browser container, where nobody could reach it. Finished

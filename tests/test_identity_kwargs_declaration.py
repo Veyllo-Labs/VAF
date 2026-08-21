@@ -503,7 +503,7 @@ REMAINING_LITERAL_NAME_SOURCES = {
         "traffic - 980 rows carried TWO distinct bodies, one of them 653 times, i.e. test "
         "pollution. The real store held 116 rows, 114 of them distinct. So the code path is "
         "real and its damage is not demonstrated; do not quote a row count for it.",
-    "vaf/core/system_prompt.py:610":
+    "vaf/core/system_prompt.py:627":
         "get_user_workspace('admin') is hardcoded and runs on EVERY prompt build, reading "
         "identity.json and soul.md from the literal's workspace - and creating it. The persona "
         "editor writes the owner's. Nothing here involves an assigner at all.",

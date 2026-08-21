@@ -21,6 +21,21 @@ from vaf.core.platform import Platform
 from vaf.core.config import Config
 from vaf.core.log_helper import append_domain_log, append_domain_log_block
 
+# Code-owned continuity addendum, appended to the persona block AFTER the soul
+# (and after the fallback identity when no soul exists). Deliberate repetition:
+# the binding memory contract lives in <memory_instructions>, but the soul is
+# where the model reads WHO it is - a consistent, condensed echo there means the
+# lane is named in two different prompt parts and cannot be overlooked, and it
+# holds no matter what a user wrote (or deleted) in their editable soul.md.
+# It must never CONTRADICT <memory_instructions>, only condense it.
+SOUL_CONTINUITY_ADDENDUM = (
+    "\n### Continuity (always in effect)\n"
+    "Your long-term memory is real and lives in your tools: recall with "
+    "memory_search before you ask or guess, save NEW facts with memory_save, "
+    "and correct or extend an EXISTING memory with memory_update instead of "
+    "saving a twin. A fact you never saved is gone next session.\n"
+)
+
 
 class SystemPromptManager:
     """
@@ -634,6 +649,9 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                 )
                 persona_parts.append("## Your Personality & Rules (Soul)\n")
                 persona_parts.append(soul)
+                # Always appended, invisible in soul.md and not user-editable:
+                # the memory lane must hold even for a soul that never mentions it.
+                persona_parts.append(SOUL_CONTINUITY_ADDENDUM)
                 persona_parts.extend(_technical_instructions())
                 parts.append("<identity>\n" + "\n".join(persona_parts) + "\n</identity>")
                 persona_loaded = True
@@ -652,7 +670,9 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                 _identity = _re.sub(
                     r'\n## Action Declaration \(when you use a tool\)[\s\S]*?Omit it when you reply without using a tool\.',
                     '', _identity)
-            parts.append("<identity>\n" + _identity + "\n</identity>")
+            # Same continuity addendum as the soul path: a missing soul.md must
+            # not also cost the persona its memory lane.
+            parts.append("<identity>\n" + _identity + "\n" + SOUL_CONTINUITY_ADDENDUM + "\n</identity>")
 
         # Memory Recall instructions
         parts.append("""

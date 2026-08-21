@@ -56,6 +56,16 @@ Tone and style (e.g. concise, formal). Defined in the Soul markdown and applied 
 
 The Soul can be updated over time (manually in Settings or by the agent suggesting edits). Stored in `soul.md`. The default Continuity text (wizard suggestions and the backend fallback soul) names the agent's REAL persistence lane explicitly: recall via the `memory_search` tool, persist via `memory_save`. It deliberately does not speak of "memory files" - there is no such file (see RAG Maintenance below), and a soul that points at files sends the agent looking for something that does not exist instead of calling its tools.
 
+The lane does not DEPEND on the soul's text: `build_prompt` appends a code-owned
+continuity addendum (`SOUL_CONTINUITY_ADDENDUM` in `vaf/core/system_prompt.py`) to the
+persona block after the soul content, on the soul path and the no-soul fallback path
+alike. It is invisible in `soul.md` and not user-editable, so a soul whose author removed
+(or never chose) the continuity lines still carries the memory contract - as a condensed,
+never-contradicting echo of the `<memory_instructions>` block, deliberately repeated in
+the section the model reads as its identity so it cannot be overlooked. The embedder
+persona override deliberately does NOT carry it: an override replaces the persona
+wholesale, and an embedder may not even register these tools.
+
 ---
 
 ## 4. API Specifications

@@ -40,6 +40,29 @@ def test_blank_override_falls_back_to_soul():
     assert "## Technical Instructions" in p
 
 
+def test_soul_continuity_addendum_is_always_in_the_persona():
+    """The memory lane must hold no matter what a user wrote (or deleted) in
+    their editable soul.md: the code-owned addendum rides the persona block on
+    the soul path AND the fallback path - a deliberate, consistent echo of the
+    memory_instructions block inside the section the model reads as WHO it is.
+    The embedder override deliberately does not carry it: an override replaces
+    the persona wholesale, and the embedder may not even register these tools."""
+    from vaf.core.system_prompt import SOUL_CONTINUITY_ADDENDUM
+    for tool in ("memory_search", "memory_save", "memory_update"):
+        assert tool in SOUL_CONTINUITY_ADDENDUM, f"the echo must name {tool}"
+
+    p = _build(None)          # soul path (or the fallback when no soul.md exists)
+    ident = p.split("<identity>", 1)[1].split("</identity>", 1)[0]
+    assert "Continuity (always in effect)" in ident, (
+        "the addendum is not in the persona block - a soul without memory lines "
+        "would lose the lane entirely"
+    )
+
+    p_override = _build(_OVERRIDE)
+    ident_override = p_override.split("<identity>", 1)[1].split("</identity>", 1)[0]
+    assert "Continuity (always in effect)" not in ident_override
+
+
 def test_core_agent_stores_override():
     from vaf.core.agent import Agent as CoreAgent
     a = CoreAgent(system_prompt=_OVERRIDE, register_signals=False)

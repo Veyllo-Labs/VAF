@@ -90,7 +90,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   recall with `memory_search` before asking or guessing, persist what matters
   with `memory_save`, because a fact that was never saved is gone next
   session. Existing souls are not rewritten; the wording changes for new
-  setups and for anyone re-running the Soul Wizard.
+  setups and for anyone re-running the Soul Wizard. The lane also no longer
+  depends on the soul's text at all: the system prompt appends a short,
+  fixed continuity note to the personality section that cannot be edited or
+  removed with the soul, so an agent whose soul never mentions memory still
+  knows its memory tools.
 - **"Train tool now" asks before it starts, and says what the run costs.** The
   button used to begin training the moment it was clicked, with nothing said
   about what that means. It now asks first, and the question states what was

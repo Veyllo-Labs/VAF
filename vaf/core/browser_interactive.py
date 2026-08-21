@@ -327,6 +327,31 @@ def _export_storage_cookies(path: str, cookies: List[dict]) -> None:
         pass
 
 
+def _current_page(cdp_base: str) -> Optional[dict]:
+    """URL and title of the page a person is most likely looking at.
+
+    The HTTP target list on purpose (no websocket): one bounded GET, usable
+    from the blocking takeover hook. Same tab heuristic as snapshot_context:
+    prefer a real page over parked about: blanks. CDP does not say which tab
+    has focus, so "first real page" is the best available answer - and for the
+    handover it only has to name where the person was, not win a tie between
+    multiple open pages."""
+    import urllib.request as _req
+    try:
+        with _req.urlopen(cdp_base.rstrip("/") + "/json/list", timeout=3) as resp:
+            targets = json.loads(resp.read())
+        pages = [t for t in targets if t.get("type") == "page"]
+        if not pages:
+            return None
+        page = next((t for t in pages
+                     if not str(t.get("url", "")).startswith("about:")), None)
+        if page is None:
+            return None
+        return {"url": str(page.get("url", "")), "title": str(page.get("title", ""))[:200]}
+    except Exception:
+        return None
+
+
 def scrub_mode() -> str:
     """The handover scrub depth: "quick" (CDP sweep, default) or "full" (adds a
     profile wipe with a Chromium relaunch). An env knob like its siblings
@@ -446,6 +471,15 @@ class InteractiveBrowserManager:
         # that session, whose window then re-enters the interactive mode
         # instead of closing; any freshly started lease clears it.
         self._pre_agent_holder: Optional[tuple] = None
+        # The page the evicted person was on when an agent run took the
+        # browser: {scope, url, title, at}. This is what turns a takeover into
+        # a HANDOVER - the run is told to carry on there instead of opening
+        # the site fresh in a new tab (measured live: asked to take over an
+        # open marketplace session, the run navigated a new tab and left the
+        # person's tab standing). Consumed once by the run of the same scope,
+        # expires quickly, and a person re-opening the browser themselves
+        # clears it - their return outdates the handover.
+        self._handover: Optional[dict] = None
         self._last_session_id: str = ""
         # Whose cookies currently sit in the shared container jar. Survives the
         # lease so a scope handover can clear the jar even after a stop.
@@ -519,14 +553,46 @@ class InteractiveBrowserManager:
             lease = self._lease
             self._pre_agent_holder = ((lease.user_scope_id, lease.session_id)
                                       if lease else None)
+        if lease is not None:
+            # Capture WHERE the person is before the eviction, so the run can
+            # continue there. Best-effort and bounded; a takeover of an idle
+            # browser (no lease) has nobody to hand anything over.
+            page = _current_page(self.cdp_base())
+            if page and page.get("url"):
+                with self._lock:
+                    self._handover = {"scope": lease.user_scope_id,
+                                      "at": time.time(), **page}
         try:
             self.stop("agent_takeover", force=True)
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
 
+    HANDOVER_TTL_S = 180.0
+
+    def take_agent_handover(self, user_scope_id: Optional[str] = None) -> Optional[dict]:
+        """The page the evicted person was on, for the run that takes over.
+
+        Consume-once and scope-gated: only the run of the SAME scope may learn
+        where somebody was browsing, and only the first one - a later,
+        unrelated run must not inherit a stale 'continue here'. The TTL covers
+        the remaining staleness (a run that spent minutes in the queue)."""
+        scope = resolve_browser_scope(user_scope_id)
+        with self._lock:
+            h = self._handover
+            if h is None:
+                return None
+            if time.time() - h.get("at", 0) > self.HANDOVER_TTL_S:
+                self._handover = None
+                return None
+            if h.get("scope") != scope:
+                return None
+            self._handover = None
+            return dict(h)
+
     def hand_jar_to_run(self, user_scope_id: Optional[str] = None,
-                        persistent: bool = False) -> None:
+                        persistent: bool = False,
+                        continuing: bool = False) -> None:
         """Hand the browser's cookie jar over to the run that is about to use it.
 
         Called AFTER the concurrency gate, by the process that actually drives
@@ -563,10 +629,13 @@ class InteractiveBrowserManager:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
-            elif not persistent:
+            elif not persistent and not continuing:
                 # Same scope, but the run promised a clean start: quick scrub
                 # only - the person's own logins are already exported and come
                 # back on their next interactive lease or persistent run.
+                # `continuing` overrides the promise: a run that takes over the
+                # person's LIVE session exists to carry it on, and scrubbing
+                # would log out the very session it was handed.
                 _cookie_op(self.cdp_base(), "scrub")
             with self._lock:
                 self._last_cookie_scope = scope
@@ -720,7 +789,9 @@ class InteractiveBrowserManager:
             self._last_session_id = session_id
             # A fresh (or refreshed) lease supersedes any pending give-back
             # from an earlier agent takeover: the browser has an owner again.
+            # The person returning also outdates any captured handover page.
             self._pre_agent_holder = None
+            self._handover = None
             # A stream is being handed out, so a viewer is about to draw its picture
             # from scratch and will show its own splash while doing so. The count of
             # what the PREVIOUS viewer received says nothing about that, and leaving
@@ -1174,14 +1245,26 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
 
 def hand_jar_to_run(user_scope_id: Optional[str] = None,
                     persistent: bool = False,
-                    container_name: Optional[str] = None) -> None:
+                    container_name: Optional[str] = None,
+                    continuing: bool = False) -> None:
     """Hook for BrowserAgentTool.run(), AFTER the concurrency gate: hand the
     browser's jar to this run's scope. Never raises."""
     try:
         _manager_for_run(container_name).hand_jar_to_run(
-            user_scope_id=user_scope_id, persistent=persistent)
+            user_scope_id=user_scope_id, persistent=persistent,
+            continuing=continuing)
     except Exception:
         pass
+
+
+def take_agent_handover(user_scope_id: Optional[str] = None,
+                        container_name: Optional[str] = None) -> Optional[dict]:
+    """Hook for BrowserAgentTool: the page the evicted person was on, once,
+    for the run of the same scope on the same browser. Never raises."""
+    try:
+        return _manager_for_run(container_name).take_agent_handover(user_scope_id)
+    except Exception:
+        return None
 
 
 def agent_stream_started(session_id: Optional[str],

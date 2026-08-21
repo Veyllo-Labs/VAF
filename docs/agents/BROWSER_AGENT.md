@@ -407,7 +407,18 @@ reason.
 interactive lease at its very start (for both the in-process and the spawned-child lane,
 since the hook runs before the spawn branch), and an interactive start is refused with
 `agent_active` while a run is underway - the in-process flag covers the first, an IPC
-scan for a live `browser_agent` task covers the second. The refusal is not blind for the
+scan for a live `browser_agent` task covers the second.
+
+**A takeover of a live session is a HANDOVER, not a fresh start.** When the eviction
+found a person driving, the page they were on is captured (`_current_page`, HTTP target
+list, best-effort) and handed to the run of the same scope, exactly once and with a
+short TTL: the run's task gains the instruction to CONTINUE there - their tab is still
+open, their logins are live - and the clean-start scrub of a `persistent=false` run
+stands down for such a continuation, because it would log out the very session it was
+handed (measured live: asked to take over an open marketplace session, the run opened
+the site fresh in its own tab instead). A person re-opening the browser themselves
+outdates the pending handover. The per-turn browser context block teaches the model to
+phrase takeover tasks as continuations; pinned by `tests/test_browser_interactive.py`. The refusal is not blind for the
 run's own session: it carries the run's watch-only stream, so opening the window during a
 run shows the live browser rather than nothing. The window flips to the agent view (live
 stream or screenshots, plus task, actions, history, activity) the moment agent data

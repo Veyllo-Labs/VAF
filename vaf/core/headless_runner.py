@@ -1674,6 +1674,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                   "browser: it takes over from the user for the length of the run "
                                   "and hands control back when it finishes, and it sees whatever "
                                   "the user is logged into.\n"
+                                + "Taking over CONTINUES the user's session: the run is told which "
+                                  "page they were on, their tab stays open and their logins stay "
+                                  "live. Phrase the task as continuing there (e.g. 'continue on the "
+                                  "open page and ...'), not as opening the site fresh.\n"
                                 + "---\n\n"
                             )
                             effective_input = bc_block + effective_input

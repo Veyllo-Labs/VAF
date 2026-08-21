@@ -853,13 +853,42 @@ class BrowserAgentTool(BaseTool):
         # the handover opens its own CDP connection and waits up to 30s for a
         # browser that is not answering - which is exactly the phase a person
         # presses Stop, and a stop pressed then must still be seen.
-        from vaf.core.browser_interactive import hand_jar_to_run
+        #
+        # SESSION HANDOVER first: if this run evicted the person's interactive
+        # lease, the page they were on was captured at the takeover. Consuming
+        # it here decides two things at once - the clean-start scrub stands
+        # down (a run that takes over a live session must not log it out), and
+        # the task gains the instruction to CONTINUE there. Without it the run
+        # opened the site fresh in a tab of its own while the person's tab
+        # stood right beside it (measured live on a marketplace session).
+        from vaf.core.browser_interactive import hand_jar_to_run, take_agent_handover
+        _handover = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: take_agent_handover(user_scope_id=user_scope_id,
+                                        container_name=container_name),
+        )
         await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: hand_jar_to_run(user_scope_id=user_scope_id,
                                     persistent=persistent,
-                                    container_name=container_name),
+                                    container_name=container_name,
+                                    continuing=_handover is not None),
         )
+        # The enrichment goes to the AGENT only; the live view's Task panel
+        # keeps showing the person's own words.
+        _agent_task = task
+        if _handover and _handover.get("url"):
+            _ho_title = (_handover.get("title") or "").strip()
+            _agent_task = (
+                f"{task}\n\n"
+                "[Session handover] The person was just browsing in THIS browser and "
+                "handed their session over to you. They were on: "
+                f"{_handover['url']}" + (f" ({_ho_title})" if _ho_title else "") + ". "
+                "Their tab is still open and their logins are live. Continue from "
+                "where they stopped - switch to that tab, or navigate to that URL - "
+                "instead of starting fresh, unless the task above explicitly says to "
+                "go somewhere else."
+            )
 
         # Resolve the full WebSocket debugger URL from the CDP base endpoint.
         # Chromium requires the full path (ws://.../devtools/browser/{uuid}), not just the base.
@@ -935,7 +964,7 @@ class BrowserAgentTool(BaseTool):
                 pass
 
         agent = Agent(
-            task=task,
+            task=_agent_task,
             llm=_build_vaf_bridge(session_id=_session_id),
             browser_session=browser,
             controller=_build_browser_controller(),

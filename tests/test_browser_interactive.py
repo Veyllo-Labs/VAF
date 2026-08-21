@@ -26,6 +26,7 @@ def mgr(monkeypatch, tmp_path):
     monkeypatch.delenv("VAF_BROWSER_SCRUB", raising=False)
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub/devtools/browser/x")
     monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
+    monkeypatch.setattr(bi, "_current_page", lambda base: None)
     cookie_calls = []
 
     def fake_cookie_op(base, op, cookies=None):
@@ -425,6 +426,85 @@ def test_full_mode_wipes_the_profile_only_on_a_scope_change(mgr, monkeypatch):
     assert len(wipes) == 2                       # same scope: quick scrub only
 
 
+def test_takeover_hands_the_persons_page_to_the_runs_scope(mgr, monkeypatch):
+    """A takeover of a live session is a HANDOVER: the run learns where the
+    person was, once, and only the run of the same scope."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "_current_page",
+                        lambda base: {"url": "https://shop.example/cart", "title": "Cart"})
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    # A foreign scope learns nothing - and does not consume it either.
+    assert mgr.take_agent_handover("scope-b") is None
+    h = mgr.take_agent_handover("scope-a")
+    assert h is not None and h["url"] == "https://shop.example/cart"
+    # Consume-once: a later unrelated run must not inherit "continue here".
+    assert mgr.take_agent_handover("scope-a") is None
+    mgr.agent_run_ended()
+
+
+def test_handover_expires_and_an_idle_takeover_has_none(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    # No lease: nobody handed anything over.
+    mgr.stop_for_agent_run()
+    assert mgr.take_agent_handover("scope-a") is None
+    mgr.agent_run_ended()
+    monkeypatch.setattr(bi, "_current_page",
+                        lambda base: {"url": "https://shop.example/", "title": ""})
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    with mgr._lock:
+        mgr._handover["at"] -= mgr.HANDOVER_TTL_S + 1
+    assert mgr.take_agent_handover("scope-a") is None
+    mgr.agent_run_ended()
+
+
+def test_the_person_returning_outdates_the_handover(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "_current_page",
+                        lambda base: {"url": "https://shop.example/", "title": ""})
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    mgr.agent_run_ended()
+    mgr.start("scope-a", "sess-1")      # the person came back themselves
+    mgr.stop("user", requester_scope="scope-a")
+    mgr.stop_for_agent_run()            # an idle takeover much later
+    assert mgr.take_agent_handover("scope-a") is None
+    mgr.agent_run_ended()
+
+
+def test_a_continuing_run_never_scrubs_the_session_it_was_handed(mgr, monkeypatch):
+    """The clean-start promise yields to the handover: a run that takes over a
+    live session must not log out the very session it is continuing."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    before = len(mgr._test_cookie_calls)
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False, continuing=True)
+    assert "scrub" not in [op for op, _ in mgr._test_cookie_calls[before:]]
+    mgr.agent_run_ended()
+
+
+def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():
+    """The manager half above is useless unless the tool consumes it: the run
+    must take the handover, let it veto the clean-start scrub (continuing=),
+    and hand the enriched task to the AGENT while the live view keeps showing
+    the person's own words. Static, because the wiring lives deep inside the
+    async run path; each assert names the revert it catches."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "tools"
+           / "browser_agent.py").read_text(encoding="utf-8")
+    assert "take_agent_handover(" in src
+    assert "continuing=_handover is not None" in src
+    body = src.split("async def _run_browser", 1)[1]
+    # consume BEFORE the jar decision, or continuing can never be true
+    assert body.index("take_agent_handover(") < body.index("hand_jar_to_run(")
+    assert "[Session handover]" in body
+    assert "task=_agent_task" in body, (
+        "the enriched task must reach the Agent; the plain task stays for the live view"
+    )
+
+
 def test_fresh_lease_clears_a_pending_give_back(mgr, monkeypatch):
     """Spawn lane: the holder survives the marker return (notify=False), but a
     lease the person starts by hand supersedes it - the browser has an owner
@@ -745,6 +825,11 @@ def test_the_browser_context_block_says_what_can_be_done_with_it():
     assert "takes over" in block and "hands control back" in block, (
         "the hand-over must be stated: the model has to know the user loses and regains "
         "control, or it cannot judge whether acting is appropriate"
+    )
+    assert "CONTINUES" in block, (
+        "the block must say a takeover continues the user's session on their page - "
+        "without it the model phrases tasks as opening the site fresh, and the run "
+        "ignores the tab the person handed over (measured live on a marketplace session)"
     )
 
 

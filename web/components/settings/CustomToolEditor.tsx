@@ -83,7 +83,10 @@ function readCategory(source: string): string {
   return match ? match[1] : 'general';
 }
 
-function writeCategory(source: string, key: string): string {
+function writeCategory(source: string, rawKey: string): string {
+  // An empty field means "no bundle"; the loader turns "general" into the plain
+  // "custom" bundle, so the tool is still listed, just not beside a built-in one.
+  const key = rawKey || 'general';
   if (CATEGORY_RE.test(source)) {
     return source.replace(CATEGORY_RE, (_m, indent) => `${indent}category    = "${key}"`);
   }
@@ -241,27 +244,38 @@ export default function CustomToolEditor({
               </div>
             )}
 
-            {/* Bundle picker. Writes the declaration into the code, so the
-                source stays the single truth about the tool. */}
+            {/* Bundle. A free text field with suggestions, not a dropdown: the
+                vocabulary is open at runtime, so a tool may name a bundle that
+                does not exist yet. A closed list would claim otherwise and would
+                take away the one thing the open vocabulary is FOR. Writes the
+                declaration into the code, so the source stays the single truth
+                about the tool. */}
             <div className="px-4 pt-3 pb-2 border-b border-white/10 shrink-0">
               <label className="block text-xs text-gray-400 mb-1">
                 Bundle&nbsp;
                 <span className="text-gray-500">
-                  (yours are always listed under &quot;Custom …&quot;, never inside a built-in bundle)
+                  (type any name, existing ones are suggested; yours are always
+                  listed under &quot;Custom …&quot;, never inside a built-in bundle)
                 </span>
               </label>
-              <select
-                value={readCategory(code)}
-                onChange={e => setCode(writeCategory(code, e.target.value))}
-                className="w-full bg-[#2d2d2d] text-white text-sm px-3 py-2 rounded-lg border
-                  border-white/20 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
-              >
-                {TOOL_BUNDLE_ORDER.filter(k => k !== 'custom').map(key => (
-                  <option key={key} value={key}>
-                    {key === 'general' ? 'No bundle (Custom tools)' : `Custom ${key}`}
-                  </option>
+              <input
+                type="text"
+                list="vaf-tool-bundles"
+                value={readCategory(code) === 'general' ? '' : readCategory(code)}
+                onChange={e => setCode(writeCategory(
+                  code,
+                  e.target.value.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''),
                 ))}
-              </select>
+                placeholder="none (listed under Custom tools)"
+                className="w-full bg-[#2d2d2d] text-white text-sm px-3 py-2 rounded-lg border
+                  border-white/20 focus:outline-none focus:ring-1 focus:ring-blue-500
+                  transition-colors font-mono"
+              />
+              <datalist id="vaf-tool-bundles">
+                {TOOL_BUNDLE_ORDER.filter(k => k !== 'custom' && k !== 'general').map(key => (
+                  <option key={key} value={key} />
+                ))}
+              </datalist>
             </div>
 
             {/* Monaco code editor */}

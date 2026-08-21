@@ -4,6 +4,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from vaf.tools.filesystem import _resolve_folder_alias
 
 HOME = str(Path.home())
@@ -30,6 +32,10 @@ def test_alias_prefix_without_separator_is_not_rerouted():
 
 # ── temp exemption from the blocked-dir screen ────────────────────────────
 
+@pytest.mark.skipif(os.name == "nt", reason=(
+    "the class is a POSIX temp-dir spelling; on Windows abspath prefixes a "
+    "drive letter, so '/var/...' never matches the absolute-root screens at "
+    "all and both asserts test nothing real there"))
 def test_macos_temp_spelling_passes_the_blocked_prefix_screen(monkeypatch):
     """macOS hands out temp paths in the /var/folders SYMLINK spelling, which
     the absolute /var entry in BLOCKED_DIRS refused - every staging lane

@@ -124,6 +124,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **An automation's saved file now follows its message to the messenger.** A
+  prompt-based automation that sends its summary itself in-run (say, a morning
+  weather text via Telegram) produces its output file only after the run, so
+  that message could never carry the file - and the post-run push, the only
+  lane that attaches it, was skipped entirely by the double-delivery guard.
+  The guard now suppresses only the duplicate text: the produced file is still
+  handed over as a follow-up document with a filename caption, on Telegram,
+  WhatsApp and Discord alike. Workflow runs whose send step already attached
+  the document stay at one copy - the second send is recognized and skipped.
 - **The tool self-learning loop no longer goes quiet for the tools you use
   most.** Three repairs in the Whare Wananga lane. A tool whose definition
   changed (marked stale) was excluded from the proactive pitfall injection AND

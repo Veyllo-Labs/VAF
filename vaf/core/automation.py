@@ -232,8 +232,15 @@ def _wait_for_abandoned_run(chat_done: dict, grace_seconds: float = _TIMEOUT_GRA
         return False
 
 
-def _delivered_via_agent_history(history) -> bool:
-    """True if a send tool confirmed delivery during a prompt-based agent run.
+# Success PREFIX the send tools emit when a document went out with the message
+# ("Message and document <name> sent to the user via <channel>."). Prefix-keyed,
+# so the end-of-turn squash's snippet truncation cannot hide it; a text-only
+# success reads "Message sent to the user via ..." and never matches.
+_DOCUMENT_SUCCESS_PREFIX = "message and document"
+
+
+def _iter_agent_history_send_successes(history):
+    """Yield the result text of every confirmed send-tool success in a prompt run's history.
 
     Prompt-based automations deliver in-run via tool calls. TWO history shapes
     must be recognized: live role='tool' entries (turn still running), and the
@@ -242,9 +249,7 @@ def _delivered_via_agent_history(history) -> bool:
     <snippet>' lines (agent.py turn finalize). The dedup reads the history
     AFTER the turn ended, so the squashed form is the one that matters (live
     2026-07-13 15:52: a real send_to_user delivery was missed and the user got
-    the push on top). Same conservative contract as _delivered_via_send_step:
-    only an explicit send-tool SUCCESS suppresses the post-run push - a
-    duplicate message beats a lost one.
+    the push on top).
     """
     try:
         from vaf.core.context import TURN_CONTEXT_PREFIX as _CTX_PREFIX
@@ -260,38 +265,66 @@ def _delivered_via_agent_history(history) -> bool:
             and m.get("name") in _SEND_STEP_TOOLS
             and "sent to the user via" in content.lower()
         ):
-            return True
-        if role == "system" and content.startswith(_CTX_PREFIX):
+            yield content
+        elif role == "system" and content.startswith(_CTX_PREFIX):
             for line in content.splitlines():
                 line = line.strip()
                 if not line.startswith("- ") or " → OK: " not in line:
                     continue
                 name, _, rest = line[2:].partition(" → OK: ")
                 if name.strip() in _SEND_STEP_TOOLS and "sent to the user via" in rest.lower():
-                    return True
-    return False
+                    yield rest
+
+
+def _delivered_via_agent_history(history) -> bool:
+    """True if a send tool confirmed delivery during a prompt-based agent run.
+
+    Same conservative contract as _delivered_via_send_step: only an explicit
+    send-tool SUCCESS suppresses the post-run push - a duplicate message beats
+    a lost one.
+    """
+    return any(True for _ in _iter_agent_history_send_successes(history))
+
+
+def _file_delivered_via_agent_history(history) -> bool:
+    """True if an in-run send during a prompt run already carried a document attachment."""
+    return any(
+        _DOCUMENT_SUCCESS_PREFIX in s.lower() for s in _iter_agent_history_send_successes(history)
+    )
+
+
+def _iter_send_step_successes(step_results):
+    """Yield the result text of every send step that confirmed delivery to the user.
+
+    Keys on the shared success phrase of the send tools ("sent to the user via
+    ...").
+    """
+    for sr in step_results or []:
+        if sr.get("tool") in _SEND_STEP_TOOLS and sr.get("status") == "success":
+            result = str(sr.get("result") or "")
+            if "sent to the user via" in result.lower():
+                yield result
 
 
 def _delivered_via_send_step(step_results) -> bool:
     """True if a send step in this run confirmed delivery to the user.
 
-    Keys on the shared success phrase of the send tools ("sent to the user via
-    ..."). Deliberately conservative: an unrecognized or failed send result
-    keeps the post-run push ON - a duplicate message beats a lost one.
+    Deliberately conservative: an unrecognized or failed send result keeps the
+    post-run push ON - a duplicate message beats a lost one.
     """
-    for sr in step_results or []:
-        if (
-            sr.get("tool") in _SEND_STEP_TOOLS
-            and sr.get("status") == "success"
-            and "sent to the user via" in str(sr.get("result") or "").lower()
-        ):
-            return True
-    return False
+    return any(True for _ in _iter_send_step_successes(step_results))
+
+
+def _file_delivered_via_send_step(step_results) -> bool:
+    """True if a send step already delivered a document attachment in-run."""
+    return any(
+        _DOCUMENT_SUCCESS_PREFIX in s.lower() for s in _iter_send_step_successes(step_results)
+    )
 
 
 def _push_result_to_web_ui(
     task: "AutomationTask", status: str, summary: str, output_file: Optional[str] = None,
-    deliver_messenger: bool = True,
+    deliver_messenger: bool = True, file_delivered_in_run: bool = False,
 ) -> bool:
     """Push automation result to Web UI and, if configured, to the user's messenger.
 
@@ -299,8 +332,13 @@ def _push_result_to_web_ui(
     whether they have Telegram/WhatsApp/Discord configured.
     When ``output_file`` is given (the automation produced a file), it is referenced in the Web UI
     message AND delivered as an attachment on the messenger.
-    ``deliver_messenger=False`` skips only the messenger push - used when a workflow
-    send step already delivered the content in-run (no double delivery).
+    ``deliver_messenger=False`` skips only the messenger TEXT push - used when a workflow
+    send step or the prompt run's agent already delivered the content in-run (no double
+    delivery). A produced ``output_file`` is then still sent as an attachment-only follow-up,
+    UNLESS ``file_delivered_in_run`` says an in-run send already carried a document: in the
+    prompt lane the file is written after the run, so an in-run send can never have attached
+    it (live 2026-08-21: a weather automation's Telegram text arrived without the produced
+    report file).
     Returns True if at least the Web UI push succeeded.
     """
     status_icon = "\u2705" if status == "success" else "\u274c"
@@ -358,16 +396,24 @@ def _push_result_to_web_ui(
     except Exception as _e:
         append_domain_log("backend", f"[AUTOMATION] Web UI delivery failed: {_e}")
 
-    # 2. Messenger — send proactively if a main messenger is configured, via the ONE canonical
+    # 2. Messenger - send proactively if a main messenger is configured, via the ONE canonical
     # "reach the user on their main channel" helper (single source of truth, shared with thinking
     # mode). It resolves the per-channel chat id/jid, attaches the output file (Telegram/WhatsApp/
     # Discord all support it), and never raises. The username is resolved to the TASK OWNER (not the
     # local admin) so a per-user automation result never leaks onto the admin's messenger.
-    if deliver_messenger:
+    # With the text push suppressed (in-run send), a produced file still goes out: empty text makes
+    # the adapter deliver attachment-only (just the document with a filename caption) - otherwise
+    # the file would reach nobody on the messenger, since only THIS push can attach it.
+    push_file_only = bool(output_file) and not deliver_messenger and not file_delivered_in_run
+    if deliver_messenger or push_file_only:
         try:
             from vaf.core.messaging_connections import send_to_main_messenger
             username = _resolve_username(task.user_scope_id)
-            send_to_main_messenger(task.user_scope_id, username, msg, file_path=output_file)
+            send_to_main_messenger(
+                task.user_scope_id, username,
+                msg if deliver_messenger else "",
+                file_path=output_file,
+            )
         except Exception as _e:
             append_domain_log("backend", f"[AUTOMATION] Messenger delivery failed: {_e}")
 
@@ -1308,6 +1354,9 @@ vaf automation delete <id>   # Delete task
         # send tool (confirmed by the tool result). Drives the same double-delivery
         # dedup the workflow lane has; survives to the delivery call below.
         prompt_delivered_in_run = False
+        # Companion: True when that in-run send already carried a document attachment
+        # (then the post-run file follow-up must not send a second one).
+        prompt_file_delivered_in_run = False
         # True when a prompt run hit the time limit AND did not finish within the
         # grace window: no partial stream as result, no legacy file wrap - the user
         # gets one honest timeout note instead (live 2026-07-13: the half stream was
@@ -1507,6 +1556,7 @@ vaf automation delete <id>   # Delete task
                     _push_result_to_web_ui(
                         task, "success", short_summary, output_file=real_file,
                         deliver_messenger=not _delivered_via_send_step(step_results),
+                        file_delivered_in_run=_file_delivered_via_send_step(step_results),
                     )
                     return result
             else:
@@ -1820,6 +1870,7 @@ vaf automation delete <id>   # Delete task
                 append_domain_log_always("backend", f"Automation '{task.name}' ({task.id}) frequency is 'once' - deleted after run.")
 
             prompt_delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
+            prompt_file_delivered_in_run = _file_delivered_via_agent_history(getattr(agent, "history", None))
             agent.shutdown()
             
         except Exception as e:
@@ -1868,11 +1919,15 @@ vaf automation delete <id>   # Delete task
             status = "error" if (result or "").strip().startswith("Error:") else "success"
             # For prompt-based tasks the result IS the summary (already clean text).
             # saved_output_path is None for chat-only runs (no file produced) -> text-only delivery.
-            # A confirmed in-run send suppresses only the messenger push (live 2026-07-14:
-            # the calendar check messaged the user twice); Web UI + notification stay.
+            # A confirmed in-run send suppresses only the messenger TEXT push (live 2026-07-14:
+            # the calendar check messaged the user twice); Web UI + notification stay, and a
+            # produced file is still delivered attachment-only - it is written post-run, so the
+            # in-run send cannot have carried it (live 2026-08-21: the report file never
+            # reached the messenger).
             _push_result_to_web_ui(
                 task, status, result or "Completed", output_file=saved_output_path,
                 deliver_messenger=not prompt_delivered_in_run,
+                file_delivered_in_run=prompt_file_delivered_in_run,
             )
         except Exception:
             pass

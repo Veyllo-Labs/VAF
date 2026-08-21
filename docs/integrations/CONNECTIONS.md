@@ -412,6 +412,10 @@ however, is channel-agnostic and exists exactly once:
   the single dispatch point mapping `main_messenger` to a concrete channel send
   (Telegram/WhatsApp/Discord today). The text send decides success; a file is
   attached best-effort as a separate message (avoids per-channel caption limits).
+  An EMPTY text with an existing file delivers attachment-only - the document goes
+  out as the only message (filename caption) and its send decides success; the
+  automation result lane uses this to hand over a produced file when an in-run
+  send already delivered the text.
   When no messenger is reachable, delivery falls back to the Web UI (notification
   preview, and for automations the result lane) - content is never dropped silently.
 - **Explicit platform requests** stay on the per-channel tools: "send this via

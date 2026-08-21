@@ -240,3 +240,155 @@ def test_resolve_username_admin_scope_returns_admin(monkeypatch):
     assert auto._resolve_username(admin_scope) == (get_local_admin_username() or "admin")
     # empty scope (single-user/local) also resolves to admin
     assert auto._resolve_username(None) == (get_local_admin_username() or "admin")
+
+
+# ── attachment-only adapter mode: empty text + file delivers just the document ───────────────────
+# (live 2026-08-21: an in-run send delivered the text, the post-run push was deduped away,
+#  and the produced report file never reached the messenger)
+
+def test_send_to_main_messenger_attachment_only_telegram(monkeypatch, tmp_path):
+    import vaf.core.messaging_connections as mc
+    import vaf.core.telegram_reply as tr
+    f = tmp_path / "report.html"
+    f.write_text("<html></html>")
+    monkeypatch.setattr(mc, "get_messaging_connections", lambda **k: {"main_messenger": "telegram"})
+    monkeypatch.setattr(mc, "get_telegram_chat_id", lambda *a, **k: "12345")
+    calls = []
+    monkeypatch.setattr(tr, "send_telegram_reply",
+                        lambda chat_id, text, **kw: (calls.append((text, kw)), True)[1])
+    ok, ch = mc.send_to_main_messenger("scope", "user", "", file_path=str(f))
+    assert ok is True and ch == "telegram"
+    assert len(calls) == 1                                   # ONE message: the document itself
+    assert calls[0][1].get("file_path") == str(f)
+    assert "report.html" in calls[0][0]                      # caption names the file
+
+
+def test_send_to_main_messenger_refuses_empty_text_without_file(monkeypatch):
+    import vaf.core.messaging_connections as mc
+    import vaf.core.telegram_reply as tr
+    monkeypatch.setattr(mc, "get_messaging_connections", lambda **k: {"main_messenger": "telegram"})
+    monkeypatch.setattr(mc, "get_telegram_chat_id", lambda *a, **k: "12345")
+    calls = []
+    monkeypatch.setattr(tr, "send_telegram_reply",
+                        lambda chat_id, text, **kw: (calls.append(text), True)[1])
+    assert mc.send_to_main_messenger("scope", "user", "", file_path=None) == (False, None)
+    # a file_path that does not exist on disk cannot rescue an empty text either
+    assert mc.send_to_main_messenger("scope", "user", "   ", file_path="/nonexistent/x.html") == (False, None)
+    assert calls == []                                       # nothing may go out
+
+
+def test_send_to_main_messenger_attachment_only_discord(monkeypatch, tmp_path):
+    import vaf.core.messaging_connections as mc
+    import vaf.core.discord_send as ds
+    from vaf.core.config import Config
+    f = tmp_path / "report.html"
+    f.write_text("x")
+    monkeypatch.setattr(mc, "get_messaging_connections", lambda **k: {"main_messenger": "discord"})
+    monkeypatch.setattr(mc, "get_discord_user_id", lambda *a, **k: "uid-1")
+    orig_get = Config.get
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, key, default=None: {"bot_token": "tok"} if key == "discord_config" else orig_get(key, default)
+    ))
+    calls = []
+    monkeypatch.setattr(ds, "send_discord_dm",
+                        lambda token, uid, text, **kw: (calls.append((text, kw)), True)[1])
+    ok, ch = mc.send_to_main_messenger("scope", "user", "", file_path=str(f))
+    assert ok is True and ch == "discord"
+    assert len(calls) == 1
+    assert calls[0][1].get("file_path") == str(f)
+
+
+def test_send_to_main_messenger_attachment_only_whatsapp(monkeypatch, tmp_path):
+    import vaf.core.messaging_connections as mc
+    import vaf.core.whatsapp_reply as wr
+    f = tmp_path / "report.html"
+    f.write_text("x")
+    monkeypatch.setattr(mc, "get_messaging_connections", lambda **k: {"main_messenger": "whatsapp"})
+    monkeypatch.setattr(mc, "get_whatsapp_chat_jid", lambda *a, **k: "jid@s.whatsapp.net")
+    text_sends = []
+    monkeypatch.setattr(wr, "send_whatsapp_reply",
+                        lambda user, jid, text, **kw: (text_sends.append(text), True)[1])
+    captured = {}
+    fake_bridge = types.ModuleType("vaf.api.whatsapp_bridge")
+    def _swc(username, jid, text, document_path=None, **kw):
+        captured.update(text=text, document_path=document_path)
+        return "Document sent via WhatsApp."
+    fake_bridge.send_whatsapp_with_confirmation = _swc
+    monkeypatch.setitem(sys.modules, "vaf.api.whatsapp_bridge", fake_bridge)
+    ok, ch = mc.send_to_main_messenger("scope", "user", "", file_path=str(f))
+    assert ok is True and ch == "whatsapp"
+    assert text_sends == []                                  # no separate text message
+    assert captured.get("document_path") == str(f)
+
+
+def test_send_to_main_messenger_whatsapp_error_string_is_failure(monkeypatch, tmp_path):
+    import vaf.core.messaging_connections as mc
+    f = tmp_path / "report.html"
+    f.write_text("x")
+    monkeypatch.setattr(mc, "get_messaging_connections", lambda **k: {"main_messenger": "whatsapp"})
+    monkeypatch.setattr(mc, "get_whatsapp_chat_jid", lambda *a, **k: "jid@s.whatsapp.net")
+    fake_bridge = types.ModuleType("vaf.api.whatsapp_bridge")
+    fake_bridge.send_whatsapp_with_confirmation = (
+        lambda *a, **k: "WhatsApp could not deliver the message: timeout")
+    monkeypatch.setitem(sys.modules, "vaf.api.whatsapp_bridge", fake_bridge)
+    # the bridge reports outcomes as prose strings - an error string is NOT a delivery
+    assert mc.send_to_main_messenger("scope", "user", "", file_path=str(f)) == (False, None)
+
+
+# ── lane: suppressed text push still hands over the produced file ────────────────────────────────
+
+def _push_env(monkeypatch):
+    """Silence Web UI + notifications; capture messenger sends."""
+    import vaf.core.web_interface as wifc
+    sends = []
+    monkeypatch.setattr("vaf.core.messaging_connections.send_to_main_messenger",
+                        lambda scope, username, text, file_path=None:
+                        (sends.append({"scope": scope, "text": text, "file_path": file_path}),
+                         (True, "telegram"))[1])
+    monkeypatch.setattr("vaf.core.user_notifications.append_notification", lambda *a, **k: {})
+    monkeypatch.setattr(wifc, "get_web_interface", lambda: (_ for _ in ()).throw(RuntimeError("no web")))
+    return sends
+
+
+def test_push_result_file_follow_up_when_text_suppressed(monkeypatch, tmp_path):
+    import vaf.core.automation as auto
+    f = tmp_path / "out.html"
+    f.write_text("<html>")
+    sends = _push_env(monkeypatch)
+    task = types.SimpleNamespace(name="My Task", user_scope_id="scope-xyz")
+    auto._push_result_to_web_ui(task, "success", "Summary body",
+                                output_file=str(f), deliver_messenger=False)
+    assert len(sends) == 1
+    assert sends[0]["file_path"] == str(f)       # the produced file still reaches the messenger
+    assert sends[0]["text"] == ""                # attachment-only: no duplicate summary text
+
+
+def test_push_result_suppressed_without_file_stays_silent(monkeypatch):
+    import vaf.core.automation as auto
+    sends = _push_env(monkeypatch)
+    task = types.SimpleNamespace(name="My Task", user_scope_id="scope-xyz")
+    auto._push_result_to_web_ui(task, "success", "Summary body",
+                                output_file=None, deliver_messenger=False)
+    assert sends == []                           # live 2026-07-14 dedup unchanged: nothing pushed
+
+
+def test_push_result_no_second_document_when_file_sent_in_run(monkeypatch, tmp_path):
+    import vaf.core.automation as auto
+    f = tmp_path / "out.html"
+    f.write_text("<html>")
+    sends = _push_env(monkeypatch)
+    task = types.SimpleNamespace(name="My Task", user_scope_id="scope-xyz")
+    auto._push_result_to_web_ui(task, "success", "Summary body", output_file=str(f),
+                                deliver_messenger=False, file_delivered_in_run=True)
+    assert sends == []                           # a workflow send step already attached the document
+
+
+def test_run_task_wires_file_dedup_flags():
+    # Wiring guard: both lanes must PASS the file-dedup flag - the stage alone
+    # (tested above) cannot prove the call sites thread it through.
+    import inspect
+    import vaf.core.automation as auto
+    src = inspect.getsource(auto.AutomationManager.run_task)
+    assert src.count("file_delivered_in_run=") == 2          # workflow lane + prompt lane
+    assert "_file_delivered_via_send_step(step_results)" in src
+    assert "file_delivered_in_run=prompt_file_delivered_in_run" in src

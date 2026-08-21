@@ -317,3 +317,40 @@ def test_squashed_failed_or_foreign_lines_keep_the_push():
         "content": "docs say: Message sent to the user via Telegram.",
     }])
     assert _delivered_via_agent_history(foreign) is False
+
+
+# ── file-level dedup: did an in-run send already carry a document? ───────────
+
+def test_file_dedup_detects_document_send_in_steps_and_history():
+    from vaf.core.automation import (
+        _file_delivered_via_agent_history,
+        _file_delivered_via_send_step,
+    )
+    doc = "Message and document report.html sent to the user via Telegram."
+    text_only = "Message sent to the user via Telegram."
+    assert _file_delivered_via_send_step(
+        [{"tool": "send_to_user", "status": "success", "result": doc}]) is True
+    assert _file_delivered_via_send_step(
+        [{"tool": "send_to_user", "status": "success", "result": text_only}]) is False
+    assert _file_delivered_via_send_step(None) is False
+    assert _file_delivered_via_agent_history(
+        [{"role": "tool", "tool_call_id": "1", "name": "send_telegram", "content": doc}]) is True
+    assert _file_delivered_via_agent_history(
+        [{"role": "tool", "tool_call_id": "1", "name": "send_telegram", "content": text_only}]) is False
+
+
+def test_file_dedup_survives_squash_and_ignores_warning_paths():
+    from vaf.core.automation import _file_delivered_via_agent_history
+    squashed = _squash([{
+        "role": "tool", "tool_call_id": "1", "name": "send_to_user",
+        "content": "Message and document tagesbericht_1552.html sent to the user via Telegram.",
+    }])
+    assert _file_delivered_via_agent_history(squashed) is True
+    # a text-only success whose WARNING tail mentions a path containing "document"
+    # must NOT count as a delivered file (the detection keys on the success PREFIX)
+    warn = _squash([{
+        "role": "tool", "tool_call_id": "1", "name": "send_to_user",
+        "content": ("Message sent to the user via Telegram."
+                    " WARNING: attachment skipped - file not found: /home/user/documents/x.pdf"),
+    }])
+    assert _file_delivered_via_agent_history(warn) is False

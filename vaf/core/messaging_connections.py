@@ -438,18 +438,22 @@ def send_to_main_messenger(
     best-effort: overall success is decided by the text send, so a too-large/failed attachment
     never reports the whole delivery as failed (the Web UI still carries the file link).
 
+    ``text`` may be EMPTY when ``file_path`` names an existing file: the delivery is then
+    attachment-only - the document goes out as the only message (filename caption) and its
+    send decides success. Used by the automation result lane to hand over a produced file
+    when an in-run send already delivered the text.
+
     ``record`` (default True): mirror the delivered text into the channel session history
     so the channel main agent has context when the user replies to it. Thinking-mode
     callers pass ``record=False`` - their tracked requests are reconstructed scope-keyed
     at reply time, and a session append would duplicate the question in context.
     """
     text = (text or "").strip()
-    if not text:
-        return False, None
-
     import os as _os
     attach = file_path if (file_path and _os.path.isfile(file_path)) else None
     caption = ("\U0001F4CE " + _os.path.basename(attach)) if attach else ""
+    if not text and not attach:
+        return False, None
 
     try:
         conn = get_messaging_connections(
@@ -460,14 +464,19 @@ def send_to_main_messenger(
             chat_id = get_telegram_chat_id(user_scope_id, username)
             if chat_id:
                 from vaf.core.telegram_reply import send_telegram_reply
-                if send_telegram_reply(chat_id, text):
-                    if attach:
+                if text:
+                    delivered = bool(send_telegram_reply(chat_id, text))
+                    if delivered and attach:
                         try:
                             send_telegram_reply(chat_id, caption, file_path=attach)
                         except Exception:
                             pass
+                else:
+                    # Attachment-only: the document IS the message, so its send decides success.
+                    delivered = bool(send_telegram_reply(chat_id, caption, file_path=attach))
+                if delivered:
                     if record:
-                        _record_outbound("telegram", str(chat_id), text, username, user_scope_id, attach)
+                        _record_outbound("telegram", str(chat_id), text or caption, username, user_scope_id, attach)
                     return True, "telegram"
         elif main == "whatsapp":
             jid = get_whatsapp_chat_jid(user_scope_id, username)
@@ -476,8 +485,9 @@ def send_to_main_messenger(
                 # send_whatsapp_reply returns False when the bridge is down (callback unset), so a dead
                 # bridge correctly degrades to (False, None) -> the caller falls back to the Web UI,
                 # instead of falsely reporting success and silently swallowing the message.
-                if send_whatsapp_reply((username or "admin"), jid, text, user_scope_id=user_scope_id):
-                    if attach:
+                if text:
+                    delivered = bool(send_whatsapp_reply((username or "admin"), jid, text, user_scope_id=user_scope_id))
+                    if delivered and attach:
                         try:
                             from vaf.api.whatsapp_bridge import send_whatsapp_with_confirmation
                             send_whatsapp_with_confirmation(
@@ -485,8 +495,17 @@ def send_to_main_messenger(
                             )
                         except Exception:
                             pass
+                else:
+                    # Attachment-only: the bridge returns a prose result string, never raises the
+                    # outcome - only its three "... sent via WhatsApp." forms count as success.
+                    from vaf.api.whatsapp_bridge import send_whatsapp_with_confirmation
+                    _wa_result = send_whatsapp_with_confirmation(
+                        (username or "admin"), jid, caption, document_path=attach
+                    )
+                    delivered = "sent via whatsapp" in str(_wa_result or "").lower()
+                if delivered:
                     if record:
-                        _record_outbound("whatsapp", str(jid), text, username, user_scope_id, attach)
+                        _record_outbound("whatsapp", str(jid), text or caption, username, user_scope_id, attach)
                     return True, "whatsapp"
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
@@ -495,14 +514,19 @@ def send_to_main_messenger(
                 bot_token = (discord_config.get("bot_token") or "").strip()
                 if bot_token:
                     from vaf.core.discord_send import send_discord_dm
-                    if send_discord_dm(bot_token, user_id, text, chunk=True):
-                        if attach:
+                    if text:
+                        delivered = bool(send_discord_dm(bot_token, user_id, text, chunk=True))
+                        if delivered and attach:
                             try:
                                 send_discord_dm(bot_token, user_id, caption, file_path=attach)
                             except Exception:
                                 pass
+                    else:
+                        # Attachment-only: the document IS the message, so its send decides success.
+                        delivered = bool(send_discord_dm(bot_token, user_id, caption, file_path=attach))
+                    if delivered:
                         if record:
-                            _record_outbound("discord", str(user_id), text, username, user_scope_id, attach)
+                            _record_outbound("discord", str(user_id), text or caption, username, user_scope_id, attach)
                         return True, "discord"
     except Exception:
         pass

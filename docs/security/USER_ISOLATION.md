@@ -533,12 +533,16 @@ uses, so its isolation is a lease, not a partition:
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
   lane is: the credential is in the request itself.
-- **Named residual:** localStorage, IndexedDB and the HTTP cache live in the container's
-  single profile and are NOT cleared on handover - the same shared-sandbox limitation the
-  known-limitations table records for the Docker sandbox. Cookies (the part that carries
-  logins) are handled; the rest is shared state between everyone who uses the one
-  container, and multi-tenant deployments that need more should run per-user browser
-  containers.
+- **Named residual:** everything else in the container's single Chromium profile is NOT
+  cleared on handover - the same shared-sandbox limitation the known-limitations table
+  records for the Docker sandbox. That is more than caches: localStorage, IndexedDB and
+  the HTTP cache, but also browsing HISTORY (chrome://history shows the previous
+  holder's pages), passwords saved via Chromium's own password manager (Login Data,
+  offered back to the next holder by autofill), autofill entries, bookmarks, and files
+  downloaded into the container. Cookies (the part that carries logins) are handled;
+  the rest is shared state between everyone who uses the one container, it survives
+  until the container is recreated, and multi-tenant deployments that need more should
+  run per-user browser containers.
 
 ## 6. Connection-Level Isolation
 

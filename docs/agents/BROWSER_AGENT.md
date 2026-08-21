@@ -308,7 +308,7 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 
 When `browser_agent` is running, the **SubAgent Window** in the WebUI opens automatically and shows a live browser view: the streamed Chromium itself on top (the same KasmVNC stream the interactive lane uses, watch-only), and the run's dock below (task, action plan, visited URLs, activity).
 
-**The viewport is the real browser.** At run start the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`): the window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run.
+**The viewport is the real browser.** At run start the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`): the window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. Watch-only is enforced at the RELAY, not in the page: both of those live in the browser, so the stream proxy drops everything travelling from client to container on an agent grant (the RFB protocol needs no client frames to deliver a picture). Pinned by `tests/test_browser_pool.py`. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run.
 
 **Screenshots stay.** The ~1.5s JPEG screenshot loop keeps running regardless - it feeds vision, the workflow tile, and the fallback view for the lanes without a stream grant (a spawned child validates tickets against the wrong process, so the child lane deliberately makes no grant and keeps the rebuilt chrome bar over screenshots). While the stream draws its first picture, the latest screenshot doubles as the connecting cover.
 
@@ -601,12 +601,22 @@ VAF_BROWSER_POOL_IDLE_S=900       # stop an unused instance after this long (dat
 With the pool on, each user scope gets a browser CONTAINER of their own
 (`vaf/core/browser_pool.py`): their own profile volume - history, browser-saved
 passwords and downloads become legitimately per-user instead of state the handover
-scrub has to wipe - their own CDP and stream endpoints, and therefore PARALLEL use:
-two users browse (or run `browser_agent`) at the same time in two different browsers,
-and "busy" between users disappears. Instances are cloned from the shared container's
-image and network, published loopback-only on ephemeral ports, and named by a scope
-hash so a container listing never says who uses the machine. The stream ticket names
-the instance: the VNC proxy routes each window to the browser that issued its ticket.
+scrub has to wipe (a dedicated instance is never scrubbed and never profile-wiped) -
+their own CDP and stream endpoints, and therefore PARALLEL use: two users browse (or
+run `browser_agent`) at the same time in two different browsers, and "busy" between
+users disappears. Instances are cloned from the shared container's image, published
+loopback-only on ephemeral ports, and named by a scope hash so a container listing
+never says who uses the machine. The stream ticket names the instance: the VNC proxy
+routes each window to the browser that issued its ticket.
+
+**Each instance gets a network of its own**, never the shared browser's. Inside the
+container Chromium's CDP proxy listens on `0.0.0.0:9222` and KasmVNC on `0.0.0.0:6901`
+with authentication deliberately off - safe only because the host publishes them on
+loopback and the VAF server is the only door. On a shared bridge network that stops
+being true between containers: a page in one user's browser could dial another user's
+container IP and drive it. A per-instance network leaves each browser with no peer at
+all. The filtering DNS resolvers compose gives the shared container are passed to each
+instance too, so the DNS hardening applies there as well.
 
 The pool only ever ADDS isolation: whenever it cannot serve - disabled (the default),
 at capacity, free memory below the floor, docker unreachable - the caller falls back
@@ -642,6 +652,15 @@ the container and relaunches Chromium; the supervisor wipes the profile between
 launches). The content blocker reinstalls itself into the fresh profile automatically.
 A non-persistent `browser_agent` run always gets at least the quick scrub, even for the
 same user - a clean start is that lane's documented promise.
+
+**When the handover happens** is part of the contract, not an implementation detail: it
+runs after the run has passed the concurrency gate and after its stop watchdog is armed
+(`hand_jar_to_run`, in the executor). Before the gate it would scrub a browser another
+run is still driving, logging that run out of every site mid-task; before the watchdog
+it would swallow a Stop for as long as an unresponsive browser makes it wait. A spawned
+child does its own handover behind its own gate rather than having the parent do it.
+Both orderings are pinned by `tests/test_browser_pool.py`. A per-user instance is exempt
+from the scope-change half entirely - its profile belongs to one person.
 
 ### Custom CDP port
 

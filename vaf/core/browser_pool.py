@@ -42,6 +42,7 @@ from vaf.core.log_helper import append_domain_log
 
 _NAME_PREFIX = "vaf-browser-u-"
 _VOLUME_PREFIX = "vaf-browser-profile-"
+_NETWORK_PREFIX = "vaf-browser-net-"
 
 
 def pool_max() -> int:
@@ -214,13 +215,31 @@ class BrowserPool:
             append_domain_log("webui", "[browser_pool] no template (is the shared vaf-browser "
                                        "container present?); using shared browser")
             return None
-        image, network = template
+        image, _shared_network = template
         volume = _VOLUME_PREFIX + _scope_hash(scope)
+        # ONE NETWORK PER INSTANCE, never the shared browser's. Inside the
+        # container Chromium's CDP proxy listens on 0.0.0.0:9222 and KasmVNC on
+        # 0.0.0.0:6901 with authentication deliberately switched off - both are
+        # safe only because the host publishes them on loopback and the VAF
+        # server is the only reachable door. On a SHARED bridge network that
+        # stops being true between containers: a page in user A's browser can
+        # dial user B's container IP directly and drive it, which is exactly
+        # the isolation the pool exists to provide. A per-instance network
+        # leaves each browser with no peer at all.
+        network = self._ensure_network(scope)
+        if network is None:
+            append_domain_log("webui", "[browser_pool] could not create an isolated network; "
+                                       "using shared browser")
+            return None
         args = [
             "run", "-d", "--name", name,
             "--restart", "no",
             "--shm-size", "1g", "--memory", "2g",
             "--network", network,
+            # The shared container gets these from compose; a pooled instance is
+            # created by us, so the filtering resolvers have to be passed here or
+            # the DNS half of the browser hardening silently stops applying.
+            "--dns", "1.1.1.2", "--dns", "1.0.0.2",
             "-p", "127.0.0.1::9222", "-p", "127.0.0.1::6901",
             "-e", f"TZ={os.environ.get('VAF_BROWSER_TZ', 'Europe/Berlin')}",
             "-v", f"{volume}:/home/browser",
@@ -234,6 +253,26 @@ class BrowserPool:
             append_domain_log("webui", f"[browser_pool] docker run failed: {(r.stderr or '').strip()[:300]}")
             return None
         return self._read_endpoints(scope, name)
+
+    def _ensure_network(self, scope: str) -> Optional[str]:
+        """The instance's own bridge network, created once per scope.
+
+        `docker network create` on an existing name fails harmlessly, so the
+        existence check and the create are not a race worth locking: either
+        way the name exists afterwards, which is all the run needs."""
+        net = _NETWORK_PREFIX + _scope_hash(scope)
+        try:
+            r = _docker(["network", "inspect", net, "--format", "{{.Name}}"], timeout=20)
+            if r.returncode == 0 and net in (r.stdout or ""):
+                return net
+            c = _docker(["network", "create", "--driver", "bridge", net], timeout=30)
+            if c.returncode == 0:
+                return net
+            # Lost a race against another thread creating the same network?
+            r2 = _docker(["network", "inspect", net, "--format", "{{.Name}}"], timeout=20)
+            return net if r2.returncode == 0 else None
+        except Exception:
+            return None
 
     def _read_endpoints(self, scope: str, name: str) -> Optional[BrowserInstance]:
         def host_port(container_port: str) -> Optional[str]:

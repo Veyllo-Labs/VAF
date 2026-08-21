@@ -12,7 +12,8 @@ the two things the stream cannot decide for itself:
   silently joined to someone else's cookie jar. There is one manager PER
   BROWSER: the shared container's (the default and fallback), plus one for
   each per-user instance the pool hands out (vaf/core/browser_pool.py) - the
-  registry at the bottom routes by scope, by stream ticket and by session;
+  registry at the bottom routes by scope, by stream ticket, by session, and
+  by the container a run pinned at its start;
 - the LOGINS: cookies are loaded and exported per user scope through the same
   storage-state files the browser agent's persistent sessions use, so a login
   performed by hand is a login the agent has on its next run, and vice versa.
@@ -422,7 +423,8 @@ class InteractiveBrowserManager:
 
     def __init__(self, cdp_base_url: Optional[str] = None,
                  vnc_base_url: Optional[str] = None,
-                 container_name: str = "vaf-browser") -> None:
+                 container_name: str = "vaf-browser",
+                 dedicated_scope: Optional[str] = None) -> None:
         # Which browser this manager arbitrates. The default (None, None,
         # "vaf-browser") is the SHARED container with its env-overridable
         # endpoints - the only browser that exists unless the pool is on.
@@ -447,7 +449,14 @@ class InteractiveBrowserManager:
         self._last_session_id: str = ""
         # Whose cookies currently sit in the shared container jar. Survives the
         # lease so a scope handover can clear the jar even after a stop.
-        self._last_cookie_scope: Optional[str] = None
+        # On a DEDICATED (pooled) browser the answer is known from the start
+        # and cannot change: only that scope is ever routed here. Without this
+        # the manager would read its own user's profile as a stranger's jar on
+        # the first use after every process start and scrub it - in full mode
+        # deleting the very history, passwords and downloads the per-user
+        # profile volume exists to keep.
+        self._dedicated_scope = dedicated_scope
+        self._last_cookie_scope: Optional[str] = dedicated_scope
         self._janitor_alive = False
 
     # -- environment -------------------------------------------------------
@@ -492,26 +501,19 @@ class InteractiveBrowserManager:
 
     def stop_for_agent_run(self, user_scope_id: Optional[str] = None,
                            persistent: bool = False) -> None:
-        """The agent is about to use the browser: evict any interactive lease,
-        then hand the shared jar over to the run's own scope.
+        """The agent is about to use the browser: evict any interactive lease.
 
         Whoever held the lease is remembered: the agent may take the browser,
         but a window the person opened themselves gets it back when the run
         ends (agent_run_ended announces that as resumable) instead of being
         closed over their head. No lease means nothing to give back.
 
-        The JAR half exists because the agent lane shares the one cookie jar
-        with everyone (browser_use works in the default browser context,
-        browser-level Storage.setCookies - measured, no createBrowserContext
-        anywhere in it), so without a handover a run browses with whatever the
-        previous holder left behind. Ordering is load-bearing: the eviction
-        above EXPORTS the holder's cookies to their per-scope file before the
-        scrub wipes the jar. A non-persistent run is scrubbed even for the
-        same scope - "starts with a clean browser" is the tool's documented
-        promise. The handover runs in the web-server parent for both lanes
-        (this hook fires before the spawn branch); in a spawned child the jar
-        was already handed over, so the child skips it rather than scrubbing
-        a second time mid-start."""
+        Deliberately NO jar work here. This hook fires at the very top of
+        run(), before the spawn branch and before the concurrency gate, so a
+        scrub in here lands on a browser another run may still be driving -
+        it would log that run out of every site mid-task, and in full mode
+        kill its Chromium outright. hand_jar_to_run() does that half, after
+        the gate."""
         with self._lock:
             self._agent_active = True
             lease = self._lease
@@ -522,13 +524,42 @@ class InteractiveBrowserManager:
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
-        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
-            return
+
+    def hand_jar_to_run(self, user_scope_id: Optional[str] = None,
+                        persistent: bool = False) -> None:
+        """Hand the browser's cookie jar over to the run that is about to use it.
+
+        Called AFTER the concurrency gate, by the process that actually drives
+        the browser (a spawned child does its own, once it holds its own gate) -
+        never before, see stop_for_agent_run above.
+
+        The jar half exists because the agent lane shares one cookie jar with
+        everyone: browser_use works in the default browser context and calls
+        browser-level Storage.setCookies (measured - no createBrowserContext
+        anywhere in it), so without a handover a run browses with whatever the
+        previous holder left behind. The eviction in stop_for_agent_run has
+        already EXPORTED that holder's cookies to their per-scope file, so the
+        scrub wipes nothing that is not saved. A non-persistent run is scrubbed
+        even for the same scope: "starts with a clean browser" is the tool's
+        documented promise.
+
+        Named boundary: the gate is a per-process semaphore, so two VAF
+        processes (a chat run and a workflow child) can still reach the same
+        SHARED container at once. That race predates this lane - it is what
+        VAF_BROWSER_MAX_PARALLEL has always been - and the pool is the answer
+        to it: a per-user instance is only ever driven by that user's runs."""
         try:
             scope = resolve_browser_scope(user_scope_id)
             with self._lock:
                 jar_scope = self._last_cookie_scope
-            if jar_scope != scope:
+                dedicated = self._dedicated_scope
+            if dedicated is not None:
+                # A per-user instance: the profile IS this user's, and nobody
+                # else's state can be in it. Only the clean-start promise of a
+                # non-persistent run still applies, and never a profile wipe.
+                if not persistent:
+                    _cookie_op(self.cdp_base(), "scrub")
+            elif jar_scope != scope:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
@@ -639,14 +670,16 @@ class InteractiveBrowserManager:
         # Jar handover, before the person starts browsing. A scope CHANGE gets
         # the scrub, not just a cookie clear: the previous holder's
         # localStorage/IndexedDB carry logins on token-based sites just as
-        # cookies do. None counts as a change - after a server restart the
-        # tracker is empty while the container may still hold anyone's state,
-        # and trusting that gap is how residue crosses users. Only the same
-        # scope refreshing keeps its state.
+        # cookies do. On the SHARED browser an unknown owner counts as a change -
+        # after a server restart the tracker is empty while the container may
+        # still hold anyone's state, and trusting that gap is how residue
+        # crosses users. A DEDICATED instance is exempt: only its own user is
+        # ever routed to it, so its profile is theirs to keep.
         try:
             with self._lock:
                 jar_scope = self._last_cookie_scope
-            if jar_scope != user_scope_id:
+                dedicated = self._dedicated_scope
+            if dedicated is None and jar_scope != user_scope_id:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
@@ -1039,6 +1072,7 @@ def _manager_for_instance(inst) -> InteractiveBrowserManager:
                 cdp_base_url=inst.cdp_base,
                 vnc_base_url=inst.vnc_base,
                 container_name=inst.container_name,
+                dedicated_scope=inst.user_scope_id,
             )
             _pool_managers[inst.container_name] = mgr
         return mgr
@@ -1075,18 +1109,22 @@ def get_manager_for_scope(user_scope_id: Optional[str]) -> InteractiveBrowserMan
     return get_interactive_manager()
 
 
-def _manager_for_run(user_scope_id: Optional[str]) -> InteractiveBrowserManager:
-    """Peek-only variant for the run hooks: the run resolved its instance at
-    its very start, so the cached answer is authoritative - and a docker
-    hiccup in a finally block must never route a run-ended signal to the
-    WRONG manager, which would leave the real one's agent flag stuck."""
-    try:
-        from vaf.core.browser_pool import get_browser_pool
-        inst = get_browser_pool().peek(resolve_browser_scope(user_scope_id))
-        if inst is not None:
-            return _manager_for_instance(inst)
-    except Exception:
-        pass
+def _manager_for_run(container_name: Optional[str] = None) -> InteractiveBrowserManager:
+    """The manager of the browser a run PINNED at its start.
+
+    Addressed by container name, never re-resolved by scope: the pool's
+    scope-to-instance map is shared and mutable, so a scope lookup can answer
+    differently at the end of a run than it did at the start (the instance was
+    idle-stopped, or the capacity gate sent the run to the shared browser and
+    an instance appeared later). That mismatch would clear `_agent_active` on a
+    manager that never set it and leave the real one flagged forever, so every
+    interactive start on that browser would be refused for the life of the
+    process. An unknown name answers with the shared manager - the same browser
+    the run itself falls back to."""
+    if container_name and container_name != "vaf-browser":
+        mgr = peek_manager_for_container(container_name)
+        if mgr is not None:
+            return mgr
     return get_interactive_manager()
 
 
@@ -1125,31 +1163,41 @@ def get_manager_for_stop(user_scope_id: Optional[str],
     return get_interactive_manager()
 
 
-def stop_for_agent_run(user_scope_id: Optional[str] = None,
-                       persistent: bool = False) -> None:
-    """Hook for BrowserAgentTool.run(): evict the interactive lease and hand
-    the jar to the run's scope, on the run's own browser. Never raises."""
+def stop_for_agent_run(container_name: Optional[str] = None) -> None:
+    """Hook for BrowserAgentTool.run(): evict the interactive lease on the
+    run's own browser. No jar work - see hand_jar_to_run. Never raises."""
     try:
-        _manager_for_run(user_scope_id).stop_for_agent_run(
+        _manager_for_run(container_name).stop_for_agent_run()
+    except Exception:
+        pass
+
+
+def hand_jar_to_run(user_scope_id: Optional[str] = None,
+                    persistent: bool = False,
+                    container_name: Optional[str] = None) -> None:
+    """Hook for BrowserAgentTool.run(), AFTER the concurrency gate: hand the
+    browser's jar to this run's scope. Never raises."""
+    try:
+        _manager_for_run(container_name).hand_jar_to_run(
             user_scope_id=user_scope_id, persistent=persistent)
     except Exception:
         pass
 
 
 def agent_stream_started(session_id: Optional[str],
-                         user_scope_id: Optional[str] = None) -> None:
+                         container_name: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run()'s in-process lane: grant the run's own
     window a watch-only live stream of the run's own browser. Never raises."""
     try:
-        _manager_for_run(user_scope_id).agent_stream_started(session_id)
+        _manager_for_run(container_name).agent_stream_started(session_id)
     except Exception:
         pass
 
 
 def agent_run_ended(notify: bool = True,
-                    user_scope_id: Optional[str] = None) -> None:
+                    container_name: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run()'s finally. Never raises."""
     try:
-        _manager_for_run(user_scope_id).agent_run_ended(notify=notify)
+        _manager_for_run(container_name).agent_run_ended(notify=notify)
     except Exception:
         pass

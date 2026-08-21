@@ -2050,7 +2050,7 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
     Every open pipe counts as viewer presence for the lease janitor; the last
     disconnect starts the grace timer that eventually releases the lease.
     """
-    from vaf.core.browser_interactive import get_manager_by_ticket
+    from vaf.core.browser_interactive import get_manager_by_ticket, AgentStream
     mgr = get_manager_by_ticket(ticket)
     if mgr is None:
         # Accept-then-close: a close before accept surfaces as a handshake
@@ -2058,6 +2058,15 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
         await websocket.accept()
         await websocket.close(code=4403)
         return
+    # WATCH-ONLY IS ENFORCED HERE, not in the viewer. A run's grant carries
+    # view_only in the client's URL settings and the window puts pointer-events
+    # off on top of it, but both live in the page: anything that speaks this
+    # socket could still send RFB PointerEvent and KeyEvent frames and drive the
+    # browser the agent is working in. The relay therefore drops everything
+    # travelling client-to-container on an agent grant - the protocol needs no
+    # client frames to deliver a picture (the server pushes framebuffer updates
+    # on its own), so a silent drop costs the viewer nothing.
+    watch_only = isinstance(mgr.validate_ticket(ticket), AgentStream)
 
     # Mirror the client's offered subprotocol (the KasmVNC client offers
     # "binary"); inventing or dropping it makes some browsers abort the socket.
@@ -2093,6 +2102,10 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
                     msg = await websocket.receive()
                     if msg.get("type") == "websocket.disconnect":
                         return
+                    if watch_only:
+                        # Keep reading (the socket must stay drained and the
+                        # disconnect must still be seen), forward nothing.
+                        continue
                     if msg.get("bytes") is not None:
                         await upstream.send(msg["bytes"])
                     elif msg.get("text") is not None:

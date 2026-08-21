@@ -11,7 +11,6 @@ scope HASH rather than the scope, and the manager registry hands out one
 manager per instance with tickets routing to the right one.
 """
 
-import threading
 import types
 
 import pytest
@@ -25,12 +24,21 @@ class _FakeDocker:
 
     def __init__(self):
         self.containers = {}      # name -> state ("running"|"exited")
+        self.networks = set()
         self.calls = []
         self.next_ports = {"9222/tcp": "49222", "6901/tcp": "46901"}
 
     def __call__(self, args, timeout=60):
         self.calls.append(list(args))
         cmd = args[0]
+        if cmd == "network":
+            if args[1] == "create":
+                self.networks.add(args[-1])
+                return _done(0, args[-1])
+            if args[1] == "inspect":
+                name = args[2]
+                return _done(0, name) if name in self.networks else _done(1, "", "no such network")
+            return _done(1, "", f"unhandled network verb: {args}")
         if cmd == "inspect":
             name = args[1]
             if args[-1].startswith("{{.Config.Image}}"):
@@ -95,6 +103,24 @@ def test_instance_is_created_with_hashed_name_and_loopback_ports(pool, monkeypat
     assert "127.0.0.1::9222" in run_call and "127.0.0.1::6901" in run_call
     # per-user profile volume, also hashed
     assert any(a.startswith("vaf-browser-profile-") and ":/home/browser" in a for a in run_call)
+    # the filtering resolvers compose gives the shared container are passed here too
+    assert "1.1.1.2" in run_call and "1.0.0.2" in run_call
+
+
+def test_each_instance_gets_a_network_of_its_own(pool, monkeypatch):
+    """Inside the container CDP and KasmVNC listen on 0.0.0.0 with no auth -
+    safe only because nothing can reach them. On one shared bridge network a
+    page in A's browser could dial B's container IP and drive it, which is the
+    isolation the pool is sold as providing."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    a = pool.resolve("scope-a")
+    b = pool.resolve("scope-b")
+    nets = [c[c.index("--network") + 1] for c in pool._test_docker.calls if c[0] == "run"]
+    assert len(nets) == 2 and nets[0] != nets[1]
+    assert all(n.startswith("vaf-browser-net-") for n in nets)
+    # never the shared browser's own network
+    assert "vaf_vaf-browser-network" not in nets
+    assert a.container_name != b.container_name
 
 
 def test_capacity_gate_answers_shared_fallback(pool, monkeypatch):
@@ -244,16 +270,92 @@ def test_stop_resolution_never_starts_a_container(registry, monkeypatch):
     assert bi.get_manager_for_stop("scope-x", None) is bi.get_interactive_manager()
 
 
-def test_run_hooks_route_to_the_runs_instance(registry, monkeypatch):
+def test_run_hooks_route_by_the_container_the_run_pinned(registry, monkeypatch):
+    """Addressed by CONTAINER, never re-resolved by scope: the pool's
+    scope-to-instance map is mutable, so a scope lookup can answer differently
+    at the end of a run than at its start - and clearing _agent_active on the
+    wrong manager leaves the real one flagged for the life of the process."""
     registry.instances["scope-a"] = _inst("scope-a", "vaf-browser-u-aaa")
     m_a = _quiet(bi._manager_for_instance(registry.instances["scope-a"]))
-    bi.stop_for_agent_run(user_scope_id="scope-a", persistent=True)
+    bi.stop_for_agent_run(container_name="vaf-browser-u-aaa")
     assert m_a._agent_active is True
     assert bi.get_interactive_manager()._agent_active is False
-    bi.agent_stream_started("sess-a", user_scope_id="scope-a")
+    bi.agent_stream_started("sess-a", container_name="vaf-browser-u-aaa")
     assert m_a._agent_stream is not None
-    bi.agent_run_ended(user_scope_id="scope-a")
+    # The pool forgets the instance mid-run (idle stop, capacity change): the
+    # end hook must still land on the manager that was flagged.
+    registry.instances.pop("scope-a")
+    bi.agent_run_ended(container_name="vaf-browser-u-aaa")
     assert m_a._agent_active is False and m_a._agent_stream is None
+
+
+def test_a_dedicated_instance_is_never_scrubbed_as_a_stranger(registry, monkeypatch):
+    """A pooled manager starts life knowing whose browser it is. Without that
+    its own user reads as an unknown jar on the first use after every process
+    start - and in full mode the profile wipe would delete the history,
+    passwords and downloads the per-user volume exists to keep."""
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    wipes, ops = [], []
+    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: wipes.append(a))
+    monkeypatch.setattr(bi, "_cookie_op", lambda base, op, cookies=None: ops.append(op))
+    registry.instances["scope-a"] = _inst("scope-a", "vaf-browser-u-aaa")
+    mgr = _quiet(bi._manager_for_instance(registry.instances["scope-a"]))
+    assert mgr._dedicated_scope == "scope-a"
+    # Half one of the fix: a fresh manager already knows whose browser this is,
+    # so its own user cannot read as an unknown jar on the first use.
+    assert mgr._last_cookie_scope == "scope-a"
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+    assert wipes == [] and ops == []
+    # The clean-start promise of a non-persistent run still holds, without a wipe.
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)
+    assert wipes == [] and ops == ["scrub"]
+    # Half two: the guard itself. Even asked for a scope that is not this
+    # browser's, a dedicated instance is never profile-wiped - the volume holds
+    # one person's history, passwords and downloads, and nobody else's.
+    ops.clear()
+    mgr.hand_jar_to_run(user_scope_id="scope-somebody-else", persistent=True)
+    assert wipes == []
+
+
+def test_the_jar_handover_sits_after_the_gate_and_after_the_watchdog():
+    """Two orderings this lane got wrong in one round, both static and both
+    cheap to pin: a handover BEFORE the concurrency gate scrubs a browser
+    another run is still driving, and a handover before the stop watchdog is
+    armed swallows a Stop for as long as an unresponsive browser makes it wait
+    (up to the 30s CDP deadline)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent
+           / "vaf" / "tools" / "browser_agent.py").read_text(encoding="utf-8")
+    run_body = src.split("    def run(self, **kwargs) -> str:", 1)[1]
+    run_body = run_body.split("    async def _run_browser", 1)[0]
+    assert "hand_jar_to_run" not in run_body, \
+        "the handover must not run before the concurrency gate"
+    inner = src.split("    async def _run_browser", 1)[1]
+    assert "hand_jar_to_run" in inner
+    assert inner.index("browser-stop-watchdog") < inner.index("hand_jar_to_run"), \
+        "the stop watchdog must be armed before the handover can block"
+    # and it must not block the event loop while it waits
+    handover = inner[inner.index("hand_jar_to_run") - 400:inner.index("hand_jar_to_run") + 200]
+    assert "run_in_executor" in handover
+
+
+def test_watch_only_is_enforced_by_the_relay_not_by_the_viewer():
+    """A run's grant carries view_only in the client's URL and the window puts
+    pointer-events off on top of it, but both live in the PAGE: anything that
+    speaks the stream socket could still send RFB pointer and key events and
+    drive the browser the agent is working in. The relay must therefore drop
+    client-to-container traffic on an agent grant. Static guard, because the
+    check lives in a closure inside the websocket route."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent
+           / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    route = src.split('@app.websocket("/api/browser-vnc/t/{ticket}/websockify")', 1)[1]
+    route = route.split("\n@app.", 1)[0]
+    assert "watch_only = isinstance(" in route and "AgentStream" in route
+    upstream = route.split("async def _to_upstream", 1)[1].split("async def _to_client", 1)[0]
+    assert "if watch_only:" in upstream
+    # and it must not fall through to a send on that branch
+    assert upstream.index("if watch_only:") < upstream.index("upstream.send")
 
 
 def test_reaper_asks_the_registry_about_activity(registry):

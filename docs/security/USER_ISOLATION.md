@@ -547,10 +547,14 @@ uses, so its isolation is a lease, not a partition:
   survive until a `full`-mode handover wipes the profile or the container is recreated.
 - **The genuine partition is the per-user pool** (`VAF_BROWSER_POOL_MAX`, see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
-  browser container with its own profile volume, so nothing is shared with anyone and
-  users browse in PARALLEL; hand-over scrubbing then only guards the shared fallback
-  container the pool degrades to at capacity. Container and volume names carry a scope
-  hash, never the scope.
+  browser container with its own profile volume AND its own docker network, so nothing
+  is shared with anyone and users browse in PARALLEL; hand-over scrubbing then only
+  guards the shared fallback container the pool degrades to at capacity, and a dedicated
+  instance is never scrubbed or profile-wiped. The per-instance network is load-bearing
+  rather than tidiness: inside the container CDP and the KasmVNC socket listen on
+  0.0.0.0 without authentication (safe only because the host publishes them on loopback),
+  so on one shared bridge a page in user A's browser could dial user B's container
+  directly. Container, volume and network names carry a scope hash, never the scope.
 
 ## 6. Connection-Level Isolation
 

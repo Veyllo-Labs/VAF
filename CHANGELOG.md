@@ -14,12 +14,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 - **Every user can get a browser of their own, in parallel.** Setting
   `VAF_BROWSER_POOL_MAX` above zero gives each user their own browser
-  container with its own persistent profile: history, saved passwords and
-  downloads become genuinely per-user, "busy" between users disappears, and
-  two people (or their agents) browse at the same time. The pool is off by
-  default, refuses new instances when memory runs low, parks idle browsers
-  after a while (keeping their data), and always falls back to the shared
-  browser with its handover scrub when it cannot serve.
+  container with its own persistent profile and its own container network:
+  history, saved passwords and downloads become genuinely per-user, no user's
+  browser can reach another's, "busy" between users disappears, and two people
+  (or their agents) browse at the same time. The pool is off by default,
+  refuses new instances when memory runs low, parks idle browsers after a
+  while (keeping their data), and always falls back to the shared browser with
+  its handover scrub when it cannot serve.
 - **The shared browser forgets the previous user when it changes hands.** On
   any change of user - an interactive session, an agent run, or an unknown
   state after a server restart - the sandbox browser now scrubs cookies and

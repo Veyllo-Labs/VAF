@@ -678,14 +678,12 @@ class BrowserAgentTool(BaseTool):
         # The agent's run always wins its browser: evict a person's
         # interactive lease BEFORE the spawn branch, so the eviction happens in
         # the web-server parent process for both lanes (in the spawned child
-        # the manager singleton is empty and this is a no-op). The hook also
-        # hands the shared cookie jar over to THIS run's scope (scrubbing a
-        # previous holder's residue; always scrubbing for a non-persistent run,
-        # which promises a clean start) - which is why it needs to know whose
-        # run this is and whether it is persistent. Never raises.
+        # the manager singleton is empty and this is a no-op). The eviction
+        # only - the cookie-jar handover waits for the concurrency gate below,
+        # because here another run may still be driving this browser and a
+        # scrub would log it out mid-task. Never raises.
         from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
-        stop_for_agent_run(user_scope_id=kwargs.get("user_scope_id"),
-                           persistent=bool(kwargs.get("persistent") or False))
+        stop_for_agent_run(container_name=_container)
 
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
@@ -721,7 +719,7 @@ class BrowserAgentTool(BaseTool):
                     # notification: the run is only STARTING, and from here
                     # is_agent_active() answers through the IPC scan of the
                     # spawned task, which lives exactly as long as the child.
-                    agent_run_ended(notify=False, user_scope_id=kwargs.get("user_scope_id"))
+                    agent_run_ended(notify=False, container_name=_container)
                     return spawned.marker
                 # spawn failed (task already cancelled) -> fall through to in-process
             except Exception:
@@ -760,7 +758,7 @@ class BrowserAgentTool(BaseTool):
         # itself stands down inside a spawned child, where the ticket would
         # validate against the wrong process. Never raises.
         from vaf.core.browser_interactive import agent_stream_started
-        agent_stream_started(_session_id, user_scope_id=kwargs.get("user_scope_id"))
+        agent_stream_started(_session_id, container_name=_container)
         try:
             return _run_async_in_new_loop(
                 self._run_browser(
@@ -792,7 +790,7 @@ class BrowserAgentTool(BaseTool):
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
             _browser_semaphore(_container).release()
-            agent_run_ended(user_scope_id=kwargs.get("user_scope_id"))
+            agent_run_ended(container_name=_container)
 
     # ── Internal async implementation ─────────────────────────────────────────
 
@@ -845,6 +843,23 @@ class BrowserAgentTool(BaseTool):
             daemon=True,
             name="browser-stop-watchdog",
         ).start()
+
+        # ── Cookie-jar handover for THIS run ─────────────────────────────────
+        # Placed after the concurrency gate (in run(), which is what got us
+        # here) and after the watchdog is ARMED, in the executor. Both halves
+        # of that sentence are load-bearing. After the gate, because a scrub
+        # before it lands on a browser another run may still be driving and
+        # logs it out mid-task. After the watchdog and off the loop, because
+        # the handover opens its own CDP connection and waits up to 30s for a
+        # browser that is not answering - which is exactly the phase a person
+        # presses Stop, and a stop pressed then must still be seen.
+        from vaf.core.browser_interactive import hand_jar_to_run
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: hand_jar_to_run(user_scope_id=user_scope_id,
+                                    persistent=persistent,
+                                    container_name=container_name),
+        )
 
         # Resolve the full WebSocket debugger URL from the CDP base endpoint.
         # Chromium requires the full path (ws://.../devtools/browser/{uuid}), not just the base.

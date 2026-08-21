@@ -5714,18 +5714,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     background: `color-mix(in srgb, ${accent} 7%, rgb(var(--sfc-white)))`,
                                                                 }}
                                                             >
+                                                                {/* The cards are not animated at all. The shelf clips its
+                                                                    overflow, so a growing shelf uncovers them and a shrinking
+                                                                    one takes them back, the way a drawer works. Fading them
+                                                                    alongside read as two phases even at identical timings,
+                                                                    because half opacity looks half gone while half height
+                                                                    still looks like a box. One animated thing, so there is
+                                                                    nothing left that could fall out of step. */}
                                                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                                                                    {bundle.tools.map((tool, idx) => (
-                                                                        <motion.div
-                                                                            key={tool.name}
-                                                                            initial={{ opacity: 0 }}
-                                                                            animate={{ opacity: 1 }}
-                                                                            exit={{ opacity: 0, transition: { duration: closeMs(rows) / 1000, ease: EASE_ACCELERATE } }}
-                                                                            transition={{ duration: openMs(rows) / 1000, ease: EASE_EMPHASIZED }}
-                                                                        >
-                                                                            {renderToolCard(tool, idx)}
-                                                                        </motion.div>
-                                                                    ))}
+                                                                    {bundle.tools.map(renderToolCard)}
                                                                 </div>
                                                             </div>
                                                         </motion.div>

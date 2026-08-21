@@ -41,6 +41,7 @@ RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-insta
     tzdata \
     curl \
     socat \
+    unzip \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
@@ -76,6 +77,67 @@ RUN set -e; \
     apt-get install -y --no-install-recommends /tmp/kasmvncserver.deb; \
     rm -f /tmp/kasmvncserver.deb; rm -rf /var/lib/apt/lists/*
 COPY kasmvnc.yaml /etc/kasmvnc/kasmvnc.yaml
+
+# uBlock Origin Lite: content/ad blocking for everything this browser loads,
+# person-driven and agent-driven alike - fewer trackers, fewer malicious ad
+# payloads, less bandwidth. The MV3 declarativeNetRequest build, so blocking is
+# rule-based inside the browser with no extension process observing page
+# content. Fetched as the official, unmodified release zip from the project's
+# GitHub releases (NOT scraped out of the Chrome Web Store, whose terms do not
+# cover automated downloads), version-pinned with a verified checksum.
+#
+# HOW IT IS INSTALLED, because the obvious route is dead: Chromium 150 IGNORES
+# --load-extension without a word (measured in this container: flag on the
+# command line, files readable, no log line, no extension). The supported lane
+# is the one Linux distros use for their packaged extensions: a CRX plus a
+# descriptor in /usr/share/chromium/extensions/<id>.json, which the external-
+# extensions provider installs and enables on profile startup. Chromium itself
+# packs the CRX here at build time with a throwaway key; the extension id is
+# derived from that key (sha256 of the DER public key, first 16 bytes, hex
+# mapped to a-p), so it is computed rather than hardcoded, and the key is
+# deleted afterwards - it signs nothing of lasting meaning. The provider is
+# alive only because the entrypoint does NOT pass --disable-default-apps:
+# that flag kills exactly this install lane (bisected in this container).
+#
+# Licence: GPL-3.0. Same boundary as KasmVNC above: the image is built on the
+# user's own machine from the unmodified vendor artifact, an aggregate with no
+# code linkage into VAF. Publishing a prebuilt image would make Veyllo the
+# distributor of this GPL binary too, with the source obligations that carries.
+ARG UBOL_VERSION=2026.820.1159
+ARG UBOL_SHA256=45642289ed7c2c46dc8a3a20e801e452a1d180a9718be9a1074021d3d5b94205
+RUN set -e; \
+    curl -fsSL -o /tmp/ubol.zip \
+      "https://github.com/uBlockOrigin/uBOL-home/releases/download/${UBOL_VERSION}/uBOLite_${UBOL_VERSION}.chromium.zip"; \
+    echo "$UBOL_SHA256  /tmp/ubol.zip" | sha256sum -c -; \
+    mkdir -p /tmp/ubol-src; \
+    unzip -q /tmp/ubol.zip -d /tmp/ubol-src; \
+    grep -q "\"version\": \"${UBOL_VERSION}\"" /tmp/ubol-src/manifest.json; \
+    openssl genrsa -out /tmp/ubol-key.pem 2048; \
+    HOME=/tmp /usr/lib/chromium/chromium --no-sandbox \
+      --pack-extension=/tmp/ubol-src --pack-extension-key=/tmp/ubol-key.pem; \
+    test -s /tmp/ubol-src.crx; \
+    mv /tmp/ubol-src.crx /opt/ublock-origin-lite.crx; \
+    chmod 644 /opt/ublock-origin-lite.crx; \
+    EXT_ID=$(openssl rsa -in /tmp/ubol-key.pem -pubout -outform DER \
+      | sha256sum | cut -c1-32 | tr '0123456789abcdef' 'abcdefghijklmnop'); \
+    mkdir -p /usr/share/chromium/extensions; \
+    printf '{\n  "external_crx": "/opt/ublock-origin-lite.crx",\n  "external_version": "%s"\n}\n' \
+      "$UBOL_VERSION" > "/usr/share/chromium/extensions/${EXT_ID}.json"; \
+    rm -rf /tmp/ubol.zip /tmp/ubol-src /tmp/ubol-key.pem
+
+# DNS over HTTPS to Cloudflare's SECURITY resolver (malware/phishing blocking).
+# Deliberately the 1.1.1.2 security variant and NOT the 1.1.1.3 family variant:
+# malware filtering is wanted, content censorship is not - this browser is for
+# adults. Mode "automatic" with an explicit template: encrypted Cloudflare DNS
+# whenever it is reachable, fallback to the container's resolver otherwise
+# (which docker-compose points at the same 1.1.1.2, so both lanes end at the
+# filtering resolver and a network that blocks DoH degrades instead of dying).
+# A managed policy rather than a launch flag: DoH has no stable command-line
+# switch, and /etc/chromium/policies/managed is Chromium's documented policy
+# path on Linux.
+RUN mkdir -p /etc/chromium/policies/managed && \
+    printf '{\n  "DnsOverHttpsMode": "automatic",\n  "DnsOverHttpsTemplates": "https://security.cloudflare-dns.com/dns-query"\n}\n' \
+      > /etc/chromium/policies/managed/vaf-dns.json
 
 # Non-root user for security
 RUN groupadd -r browser && useradd -r -g browser -m browser

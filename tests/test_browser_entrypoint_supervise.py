@@ -58,3 +58,49 @@ def test_clean_shutdown_trap_present():
     # `docker stop` hangs for the full grace period before SIGKILL
     src = _script()
     assert "trap cleanup TERM INT" in src
+
+
+# ── container hardening: content blocking and DNS filtering ───────────────
+
+DOCKERFILE = ENTRYPOINT.parent / "Dockerfile"
+COMPOSE = ENTRYPOINT.parent.parent.parent / "docker-compose.memory.yml"
+
+
+def test_ublock_origin_lite_pinned_in_image_and_installable_at_launch():
+    """The blocker ships as a version-pinned, checksum-verified release artifact,
+    packed to a CRX at build time and registered for Chromium's external-
+    extensions provider - the ONLY install lane this Chromium still honours.
+    The launch flags decide whether that provider runs at all, both measured in
+    the container: --load-extension is silently ignored by Chromium 150 (a dead
+    flag that looks load-bearing must not return), and --disable-default-apps /
+    --disable-extensions each kill the install lane outright."""
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    assert "UBOL_VERSION=" in docker
+    assert "UBOL_SHA256=" in docker
+    assert "sha256sum -c" in docker
+    assert "uBOL-home/releases/download" in docker      # official releases, not the Web Store
+    assert "--pack-extension=" in docker
+    assert "/usr/share/chromium/extensions" in docker
+    assert "external_crx" in docker
+    code = "\n".join(ln for ln in _script().splitlines() if not ln.lstrip().startswith("#"))
+    assert "--load-extension" not in code
+    assert "--disable-default-apps" not in code
+    assert "--disable-extensions" not in code
+
+
+def test_dns_filtering_is_the_security_variant_never_the_family_one():
+    """Deliberate: Cloudflare's 1.1.1.2/security lane blocks malware and phishing
+    domains; the 1.1.1.3/family lane additionally censors adult content, which
+    this browser must not do. Both halves are pinned - the DoH policy in the
+    image and the fallback resolvers in compose - so neither can drift to the
+    censoring variant on its own."""
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    assert '"DnsOverHttpsMode": "automatic"' in docker
+    assert "security.cloudflare-dns.com" in docker
+    assert "family.cloudflare-dns.com" not in docker
+    # ignore comment lines: the deliberate exclusion is explained in comments
+    # that name the family variant on purpose
+    compose = "\n".join(ln for ln in COMPOSE.read_text(encoding="utf-8").splitlines()
+                        if not ln.lstrip().startswith("#"))
+    assert "1.1.1.2" in compose and "1.0.0.2" in compose
+    assert "1.1.1.3" not in compose and "1.0.0.3" not in compose

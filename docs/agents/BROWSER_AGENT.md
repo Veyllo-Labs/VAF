@@ -530,6 +530,15 @@ The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to 
 
 The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname - a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
 
+### Content blocking and DNS filtering
+
+The browser ships hardened against the web it browses, for the person and the agent alike:
+
+- **uBlock Origin Lite** (GPL-3.0) is baked into the image and installs itself into the profile on browser startup. It blocks ads, trackers and malicious ad payloads via MV3 declarativeNetRequest rules - filtering happens inside the browser's network stack, no extension process reads page content. The artifact is the official, unmodified release zip from the project's GitHub releases (not scraped from the Chrome Web Store, whose terms do not cover automated downloads), version-pinned with a verified checksum in `docker/browser/Dockerfile`. The install lane is the one Linux distros use (a CRX packed at image build plus a descriptor in `/usr/share/chromium/extensions`), because Chromium 150 silently ignores `--load-extension`; the Dockerfile documents the mechanism, and the entrypoint must never reintroduce `--disable-default-apps` or `--disable-extensions`, each of which kills this lane (all three facts measured in the container and pinned by `tests/test_browser_entrypoint_supervise.py`). To update the blocker, bump `UBOL_VERSION`/`UBOL_SHA256` and rebuild. The same local-build licence boundary as KasmVNC applies: publishing a prebuilt image would make Veyllo the distributor of this GPL binary too.
+- **Cloudflare security DNS** (the 1.1.1.2 malware/phishing-blocking resolver) is wired in twice: as Chromium's DNS-over-HTTPS resolver via a managed policy (`DnsOverHttpsMode: automatic` + the `security.cloudflare-dns.com` template, `/etc/chromium/policies/managed/vaf-dns.json`), and as the container's plain-DNS upstream in `docker-compose.memory.yml` - so filtered resolution holds even on networks that block DoH, and encrypted resolution is used wherever it is reachable. Deliberately NOT the 1.1.1.3 family variant: malware filtering is wanted, content censorship is not. Both halves are pinned by `tests/test_browser_entrypoint_supervise.py`.
+
+Both changes live in the image and need a rebuild to take effect (see [Rebuild after Dockerfile or entrypoint changes](#rebuild-after-dockerfile-or-entrypoint-changes)).
+
 ### Domain restriction
 
 Use `allowed_domains` whenever the task scope is known:

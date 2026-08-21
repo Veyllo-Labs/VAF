@@ -237,6 +237,15 @@ services:
     # Headed Chromium needs more shared memory than headless to avoid
     # renderer crashes on heavy pages.
     shm_size: "1gb"
+    # Cloudflare's SECURITY resolvers (malware/phishing blocking) as the
+    # container's upstream DNS - the fallback lane behind Chromium's
+    # DNS-over-HTTPS policy to the same provider (see docker/browser/Dockerfile),
+    # so filtered resolution holds even where DoH is blocked. Deliberately the
+    # 1.1.1.2 variant and NOT the 1.1.1.3 family variant: malware filtering is
+    # wanted, content censorship is not.
+    dns:
+      - 1.1.1.2
+      - 1.0.0.2
     environment:
       # Timezone the browser reports (keep it consistent with the locale; the
       # browser_agent overrides this per-session via CDP when a proxy is used).

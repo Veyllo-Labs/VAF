@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The sandbox browser blocks ads and malware domains.** uBlock Origin Lite
+  (the official release build, version-pinned and checksum-verified at image
+  build) now rides in the browser container and filters ads, trackers and
+  malicious ad payloads for hand-driven and agent-driven browsing alike. DNS
+  resolution goes through Cloudflare's security resolver (1.1.1.2, malware and
+  phishing blocking - deliberately not the family variant, which censors
+  content): encrypted via DNS-over-HTTPS where reachable, with the container's
+  plain DNS pointed at the same resolver as the fallback. Takes effect after a
+  browser image rebuild.
 - **Watching the agent browse now shows the real browser.** During a
   `browser_agent` run started from a chat, the browser window streams the
   sandbox Chromium itself - real tab strip, real omnibox, live - instead of a

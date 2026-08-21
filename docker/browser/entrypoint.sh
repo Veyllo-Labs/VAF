@@ -148,6 +148,26 @@ echo "UA: $USER_AGENT"
 # changed, the X damage it reports does not cover the rest, and the stream keeps
 # showing stale rectangles of an older frame. WebGL keeps working through
 # SwiftShader, so the fingerprint surface is unchanged.
+#
+# uBlock Origin Lite arrives WITHOUT a flag: it is installed by Chromium's
+# external-extensions provider from /usr/share/chromium/extensions (the CRX and
+# its descriptor are baked in by the Dockerfile, which also explains why).
+# Two flags decide whether that works, and both were measured in this container:
+#   - --load-extension is silently IGNORED by Chromium 150 - it must not come
+#     back, a dead flag that looks load-bearing is worse than none;
+#   - --disable-default-apps KILLS the external-extensions provider on Linux
+#     (it is the same install lane) - it must stay out. Nothing else was using
+#     it: Debian ships no default apps, so the only thing it ever disabled here
+#     is the blocker.
+# The former --disable-extensions stays out for the same reason. Fingerprint-
+# wise the blocker puts this browser in the largest of all cohorts (adblock
+# users); no navigator surface changes.
+#
+# --mute-audio stays OUT: the container has no audio device, so there is no
+# output either way, and a browser that claims to play audio like any desktop
+# does is the more ordinary-looking one. Removing the mute changes no
+# fingerprint surface (AudioContext rendering is computational and was never
+# muted), it only stops declaring "this browser wants no sound".
 start_chromium() {
     # Never restore the previous session. The supervisor below kills Chromium with
     # SIGKILL, which marks the profile as crashed, and a crashed profile REOPENS the
@@ -173,13 +193,10 @@ start_chromium() {
         --window-position=0,0 \
         --window-size=1920,1080 \
         --force-dark-mode \
-        --disable-extensions \
         --disable-background-networking \
-        --disable-default-apps \
         --disable-sync \
         --disable-translate \
         --metrics-recording-only \
-        --mute-audio \
         --no-default-browser-check \
         --disable-search-engine-choice-screen \
         --search-engine-choice-country=US \

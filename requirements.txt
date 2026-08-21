@@ -33,7 +33,7 @@ anthropic>=0.18.0
 google-genai>=1.0.0  # new unified SDK; google-generativeai is EOL
 
 # Browser Automation (optional — run `playwright install --with-deps chromium` after pip install)
-browser-use>=0.12.9; python_version >= "3.11"
+browser-use>=0.13.8; python_version >= "3.11"
 playwright>=1.49.0; python_version >= "3.11"
 
 # Automation

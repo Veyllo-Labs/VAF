@@ -66,6 +66,31 @@ def is_vacuous_pitfall(pitfall: Any) -> bool:
         return False
 
 
+def is_duplicate_pitfall(new: Any, existing_texts: List[str]) -> bool:
+    """True if `new` substantially duplicates one of `existing_texts` (cheap
+    normalized containment / token overlap). Shared by the runtime re-learn
+    append and the training run's runtime-pitfall carry-over, so the two lanes
+    cannot disagree about what counts as "already known". Empty text counts as
+    a duplicate (there is nothing to add)."""
+    n = " ".join(str(new or "").split()).lower()
+    if not n:
+        return True
+    ntok = set(re.findall(r"[a-z0-9']{3,}", n))
+    for ex in existing_texts:
+        e = " ".join(str(ex or "").split()).lower()
+        if not e:
+            continue
+        if n in e or e in n:
+            return True
+        if ntok:
+            etok = set(re.findall(r"[a-z0-9']{3,}", e))
+            # 0.6, byte-for-byte the bar runtime._is_dup always used - this
+            # helper replaces that private one, it must not drift from it.
+            if etok and len(ntok & etok) / len(ntok) >= 0.6:
+                return True
+    return False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

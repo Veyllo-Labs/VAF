@@ -123,6 +123,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   are finally visible: a re-fed know-how, a newly learned pitfall, and
   know-how going stale (with how to retrain) now appear in the log timeline
   instead of only in a debug file nobody reads.
+- **Nothing a tool learned from real use is silently forgotten anymore.** Two
+  quiet loss lanes: when a tool's pitfall list was full, the newest lesson -
+  the one just learned from a live failure - was the entry that got dropped;
+  and a retraining run started all knowledge baskets empty, wiping the
+  lessons learned from real incidents along with the retrainable ones. Now
+  the cap evicts by replaceability (entries a training run can re-derive go
+  first, live-incident lessons only as a last resort, the newest lesson is
+  always kept), and a retraining run carries the live-incident lessons over
+  and re-attaches them after every distillation pass. Every eviction and
+  every carry-over is logged.
 - **A thinking turn with a text-recovered tool call no longer dies with a
   Veyllo 400.** Some models occasionally write a tool call as text instead of
   a structured call; VAF recovers those and, for Veyllo, replays them as plain

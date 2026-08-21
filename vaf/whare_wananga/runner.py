@@ -132,6 +132,60 @@ def _force_invalid(args: Any, params: Any) -> dict:
     return a
 
 
+# How many runtime-learned pitfalls a retrain carries over at most. On top of the
+# distilled ten the store can briefly hold fifteen; the schema injection caps at
+# three per tool anyway (delivery._DEFAULT_MAX_PITFALLS), so the prompt never
+# grows with the store.
+_RUNTIME_CARRY_MAX = 5
+
+
+def _harvest_runtime_pitfalls(rec: dict, cap: int = _RUNTIME_CARRY_MAX) -> List[dict]:
+    """The runtime-learned pitfalls of a record, newest first, vacuous dropped.
+
+    These are the lessons distilled from REAL failures in live use - the one
+    part of a record a fresh training run cannot re-derive, because the
+    incident (real arguments, real environment) may never occur in a sandbox
+    probe. Everything else in the baskets is legitimately rebuilt from this
+    run's own probes.
+    """
+    try:
+        pits = (rec.get("tuatea") or {}).get("pitfalls") or []
+        runtime_pits = [
+            p for p in pits
+            if isinstance(p, dict) and p.get("source") == "runtime"
+            and not store.is_vacuous_pitfall(p.get("text"))
+        ]
+        return runtime_pits[-cap:]          # newest lessons win the carry slots
+    except Exception:
+        return []
+
+
+def _carry_runtime_pitfalls(tool_name: str, fresh: List[dict], preserved: List[dict]) -> List[dict]:
+    """Append the preserved runtime lessons to a freshly distilled pitfall list,
+    deduplicated against it (the fresh probes may have re-derived the same
+    trap). Fresh entries stay FIRST: they describe the current contract and are
+    what the schema injection (top three) should lead with; the runtime lessons
+    still ride every reactive re-feed."""
+    if not preserved:
+        return fresh
+    try:
+        fresh_texts = [str(p.get("text") or "") for p in fresh if isinstance(p, dict)]
+        carried = [p for p in preserved
+                   if not store.is_duplicate_pitfall(p.get("text"), fresh_texts)]
+        if carried:
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log(
+                    "backend",
+                    f"[WW-PRESERVE] {tool_name}: carried {len(carried)} runtime "
+                    f"pitfall(s) over the retrain")
+            except Exception:
+                pass
+        return fresh + carried
+    except Exception:
+        return fresh
+
+
 def _seed_context() -> str:
     """Dynamic, tool-agnostic environment hints for FULL-probe prediction prompts, so the model
     uses inputs that are actually VALID for THIS live system instead of inventing wrong-OS values
@@ -256,11 +310,18 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
 
     rec = store.load(tool_name) or store.new_record(
         tool_name, side_effect_class=sec, tool_schema_hash=schema_hash, source="whare_wananga")
+    # Lessons learned from REAL runtime failures survive the retrain: a live
+    # incident's pitfall is irreplaceable (fresh probes may never reproduce the
+    # incident), while whare_wananga-sourced entries are re-derived from this
+    # run's own probes and lose nothing by starting over. Harvested BEFORE the
+    # wipe below and re-attached by every _distil pass.
+    preserved_runtime = _harvest_runtime_pitfalls(rec)
     rec["tool_schema_hash"] = schema_hash
     rec["status"] = "learning"
     # Each training run is a fresh assessment: start the predict-then-verify catalogue AND the
     # three baskets empty so a re-train doesn't mix in (or pile up, e.g. the halt warning) a
-    # previous run's results. The baskets are re-distilled from scratch on a clean run.
+    # previous run's results. The baskets are re-distilled from scratch on a clean run;
+    # the harvested runtime lessons above are the one deliberate exception.
     rec["predict_records"] = []
     rec["uses"] = rec["success"] = rec["fail"] = 0
     rec["aronui"] = {"when_to_use": "", "output_shape": "", "notes": []}
@@ -467,6 +528,11 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             rec["tuatea"]["pitfalls"] = [
                 {"text": _safe(p, 200), "source": "whare_wananga", "seen": 1}
                 for p in d["tuatea"]["pitfalls"][:10] if not store.is_vacuous_pitfall(p)]
+            # Re-attach the harvested runtime lessons AFTER every overwrite (the
+            # distil runs mid-run and per refinement round; a carry done once at
+            # the start would be wiped again by the second pass).
+            rec["tuatea"]["pitfalls"] = _carry_runtime_pitfalls(
+                tool_name, rec["tuatea"]["pitfalls"], preserved_runtime)
         if isinstance(d.get("tuarua"), dict):
             t = d["tuarua"]
             if isinstance(t.get("procedure"), list):

@@ -378,6 +378,21 @@ CURRENT observation is valid for the current tool by construction; the record st
 retraining is still owed. The new pitfall then flows back into proactive (A, once re-trained) and
 reactive (B, immediately as UNVERIFIED) delivery, closing the learn-from-use loop.
 
+**Retention: nothing learned is silently forgotten.** Two rules, split by REPLACEABILITY.
+(1) The pitfall cap (10) evicts by source, always admitting the newest lesson: the oldest
+`whare_wananga`-sourced entry goes first (the next training run re-derives those from fresh
+probes), a `runtime`-sourced entry only as the last resort (a live incident's lesson may never
+be reproduced by a sandbox probe). The old rule was `pits[:10]` - keep the first ten - so on a
+full list the one entry guaranteed to drop was the lesson just learned. Every eviction is logged
+(`[WW-EVICT]`). (2) A training run still starts the baskets empty (a fresh assessment is the
+right authority for the CURRENT contract, and old distillates may describe the old schema), but
+it harvests the `runtime`-sourced pitfalls FIRST and re-attaches them - deduplicated against the
+fresh distillate via the shared `store.is_duplicate_pitfall` rule - after EVERY distil pass (the
+distil runs mid-run and per refinement round; a carry done once would be wiped by the second
+pass). At most 5 carry over (`_RUNTIME_CARRY_MAX`), newest first; fresh distilled entries stay
+in front, because the top-3 schema injection should lead with the current contract while the
+carried lessons still ride every reactive re-feed. Log marker: `[WW-PRESERVE]`.
+
 **Visibility.** The learning events are logged twice: the debug markers (`[WW-INJECT]`,
 `[WW-SURPRISE]`, `[WW-REACTIVE]`, `[WW-RELEARN]`, `[WW-STALE]`) go to `backend.log`, and the
 OWNER-relevant ones - a reactive re-feed, a runtime re-learn, and know-how going stale (with the

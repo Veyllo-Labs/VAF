@@ -58,22 +58,42 @@ def _norm(s) -> str:
 
 
 def _is_dup(new: str, existing: List[str]) -> bool:
-    """True if `new` substantially duplicates an existing pitfall (cheap normalized overlap)."""
-    n = _norm(new).lower()
-    if not n:
-        return True
-    ntok = set(re.findall(r"[a-z0-9']{3,}", n))
-    for ex in existing:
-        e = _norm(ex).lower()
-        if not e:
-            continue
-        if n in e or e in n:
-            return True
-        if ntok:
-            etok = set(re.findall(r"[a-z0-9']{3,}", e))
-            if etok and len(ntok & etok) / len(ntok) >= 0.6:
-                return True
-    return False
+    """True if `new` substantially duplicates an existing pitfall. Thin delegate:
+    the rule moved to store.is_duplicate_pitfall so the training run's
+    carry-over and this lane cannot disagree about "already known"."""
+    return store.is_duplicate_pitfall(new, existing)
+
+
+def _evict_over_cap(tool: str, pits: List[Any], cap: int = None) -> List[Any]:
+    """Enforce the pitfall cap by REPLACEABILITY, always admitting the newest.
+
+    The old rule was `pits[:cap]`: keep the first entries - which meant the one
+    pitfall guaranteed to be dropped on a full list was the lesson just learned
+    from a live failure. Never forget the fresh lesson for the old ones' sake:
+    evict the oldest whare_wananga-sourced entry first (the next training run
+    re-derives those from fresh probes), and the oldest runtime-sourced entry
+    only as the last resort (a live incident's lesson may never be reproduced).
+    Every eviction is logged; silence was the defect.
+    """
+    cap = _MAX_PITFALLS if cap is None else cap
+    out = list(pits)
+    while len(out) > cap:
+        victim = next(
+            (p for p in out if not (isinstance(p, dict) and p.get("source") == "runtime")),
+            out[0],
+        )
+        out.remove(victim)
+        try:
+            from vaf.core.log_helper import append_domain_log
+            is_runtime = isinstance(victim, dict) and victim.get("source") == "runtime"
+            vt = victim.get("text") if isinstance(victim, dict) else victim
+            kind = "oldest runtime (last resort)" if is_runtime else "re-derivable trained"
+            append_domain_log(
+                "backend",
+                f"[WW-EVICT] {tool}: pitfall cap reached, dropped {kind} entry: {str(vt)[:120]!r}")
+        except Exception:
+            pass
+    return out
 
 
 def _extract_json(text: str):
@@ -206,7 +226,7 @@ def _relearn(agent, tool: str, args: Any, error: str) -> None:
             pits = (rec.get("tuatea") or {}).get("pitfalls") or []
             for p in added:
                 pits.append({"text": p, "source": "runtime"})
-            rec.setdefault("tuatea", {})["pitfalls"] = pits[:_MAX_PITFALLS]
+            rec.setdefault("tuatea", {})["pitfalls"] = _evict_over_cap(tool, pits)
             rec["runtime_refreshed_at"] = time.time()
             store.save(rec)
             try:

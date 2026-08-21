@@ -60,6 +60,10 @@ OPTIONAL_PACKAGES = (
     "playwright",        # browser automation
     "sentence_transformers",
     "pytesseract",
+    # requirements marker python_version >= "3.11": absent on the 3.10 CI
+    # runner, present on every dev machine - the exact gap that shipped an
+    # unguarded import (test_browser_agent_vision_lane, the controller test).
+    "browser_use",
 )
 
 _BLOCKER = '''

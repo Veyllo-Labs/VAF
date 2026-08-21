@@ -13,6 +13,8 @@ into the browser-use Agent.
 
 from pathlib import Path
 
+import pytest
+
 import vaf.tools.browser_agent as ba
 
 
@@ -126,6 +128,12 @@ def test_the_agent_gets_the_tier_not_a_hardcoded_false():
 
 
 def test_collect_page_text_is_a_registered_action():
+    # browser-use carries a python_version >= "3.11" marker in requirements,
+    # so on the 3.10 CI runner it simply is not installed - building the
+    # controller there is an ImportError, not a finding (shipped once: the
+    # only red of an otherwise green 3.10 run). Locally the same shape is
+    # pinned by scripts/hostile_env.py hiding browser_use.
+    pytest.importorskip("browser_use", exc_type=ImportError)
     controller = ba._build_browser_controller()
     names = list(controller.registry.registry.actions.keys())
     assert "collect_page_text" in names

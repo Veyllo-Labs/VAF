@@ -12,6 +12,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The browser agent can see now - and it browses smarter.** With a
+  vision-capable model, browser runs take screenshots on demand and stop
+  scrolling blind: scroll and layout decisions finally have eyes. Without
+  one, nothing breaks - a configured vision model describes screenshots on
+  request, and with no vision at all the run simply continues on the page
+  text as before. A new "Browser agent model" setting (Settings, AI & Model)
+  gives browser runs a dedicated strong vision model without changing your
+  chat model. Runs are also coached to navigate efficiently (jump to matching
+  text instead of scrolling one screen per reasoning step), and a new
+  one-step action reads a whole page at once, lazy-loaded content included.
+  The underlying browser-use engine moved from 0.13.1 to 0.13.8.
 - **The chat centres its text for as long as there is room, and only shifts
   left when the column gets tight.** The conversation used to centre twice
   over - the container as a block and every message row again inside it - so

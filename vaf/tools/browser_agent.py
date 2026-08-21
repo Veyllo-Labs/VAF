@@ -204,6 +204,58 @@ def _build_browser_controller():
         except Exception as e:
             return f"CAPTCHA analysis failed: {e}"
 
+    @controller.action(
+        "Read the WHOLE current page in one step: scrolls through it top to "
+        "bottom (triggering lazy loading) and returns the page's full visible "
+        "text. Use this instead of scrolling repeatedly whenever the goal is "
+        "to find, read or summarize content on the page."
+    )
+    async def collect_page_text(browser_session) -> str:  # type: ignore[misc]
+        # A composite action on purpose: every plain scroll costs a full LLM
+        # round trip (DOM re-extract, reasoning step, action), so "scroll until
+        # you find it" was many slow blind hops. One action does the whole
+        # sweep in the page and hands back everything readable. The scroll
+        # pass is not decoration - innerText alone misses what lazy loading
+        # has not fetched yet. Same CDP idiom browser-use uses internally.
+        try:
+            cdp_session = await browser_session.get_or_create_cdp_session()
+            await cdp_session.cdp_client.send.Runtime.evaluate(
+                params={
+                    "expression": (
+                        "(async () => {"
+                        " const step = Math.max(400, window.innerHeight * 0.9);"
+                        " let last = -1;"
+                        " for (let i = 0; i < 40; i++) {"
+                        "   window.scrollBy(0, step);"
+                        "   await new Promise(r => setTimeout(r, 120));"
+                        "   if (window.scrollY === last) break;"
+                        "   last = window.scrollY;"
+                        " }"
+                        "})()"
+                    ),
+                    "awaitPromise": True,
+                },
+                session_id=cdp_session.session_id,
+            )
+            res = await cdp_session.cdp_client.send.Runtime.evaluate(
+                params={
+                    "expression": "document.body ? document.body.innerText : ''",
+                    "returnByValue": True,
+                },
+                session_id=cdp_session.session_id,
+            )
+            text = (((res or {}).get("result") or {}).get("value") or "").strip()
+            if not text:
+                return "The page has no readable text content."
+            if len(text) > 12000:
+                text = text[:12000] + (
+                    "\n[... truncated - the page text continues; use find_text "
+                    "to jump to a specific part ...]"
+                )
+            return f"[Full page text, after scrolling through the page]\n{text}"
+        except Exception as e:
+            return f"collect_page_text failed: {e}"
+
     return controller
 
 
@@ -524,17 +576,37 @@ class VAFLLMBridge:
 
 # ── 5. Factory ────────────────────────────────────────────────────────────────
 
+def _resolve_browser_lane() -> tuple:
+    """(provider, model_override) for browser runs.
+
+    The browser_agent_provider/browser_agent_model keys (vision_provider
+    pattern) let browser runs use a dedicated strong vision model without
+    changing the chat model. Empty keys = ride the main provider, exactly as
+    before. model_override is None when the lane model should be resolved
+    from the provider's own config chain."""
+    from vaf.core.config import Config
+    lane_provider = (Config.get("browser_agent_provider", "") or "").strip()
+    lane_model = (Config.get("browser_agent_model", "") or "").strip()
+    if not lane_provider:
+        return "", (lane_model or None)
+    return lane_provider, (lane_model or None)
+
+
 def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
     """
     Read VAF config and return a configured VAFLLMBridge.
     Mirrors the model-selection logic in BaseTool.query_llm() and
-    APIBackendManager.chat_completion() (api_backend.py:472-484).
+    APIBackendManager.chat_completion() (api_backend.py:472-484), with the
+    browser lane's own provider/model taking precedence when configured.
     """
     from vaf.core.config import Config
     config = Config.load()
-    provider = config.get("provider", "local")
+    lane_provider, lane_model = _resolve_browser_lane()
+    provider = lane_provider or config.get("provider", "local")
 
-    if provider == "local":
+    if lane_model:
+        model = lane_model
+    elif provider == "local":
         model = config.get("model", "llama3")
     else:
         model = config.get(f"api_model_{provider}", "")
@@ -552,6 +624,65 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
         model = Config.get_default_model(provider) or "gpt-4o"
 
     return VAFLLMBridge(model=model, provider_name=provider, session_id=session_id)
+
+
+def _browser_vision_mode(provider: str, model: str):
+    """How this run gets to SEE, as (use_vision, tier).
+
+    ('auto', 'native')     - the lane model takes screenshots itself when the
+                             page needs seeing; browser-use's 'auto' hands it
+                             a screenshot tool instead of paying vision tokens
+                             on every step.
+    (False, 'described')   - the lane model is text-only but a vision_provider
+                             is configured: describe_page_visually turns
+                             screenshots into text on demand (today's lane).
+    (False, 'blind')       - no vision anywhere: the run continues DOM-only,
+                             and the guidance below tells it not to waste
+                             steps asking for pictures nobody can take.
+    Never raises - an undecidable registry answer degrades to 'described' or
+    'blind', which always work."""
+    try:
+        if _model_supports_vision(provider, model):
+            return "auto", "native"
+    except Exception:
+        pass
+    try:
+        from vaf.core.config import Config
+        if (Config.get("vision_provider", "") or "").strip():
+            return False, "described"
+    except Exception:
+        pass
+    return False, "blind"
+
+
+def _browser_guidance(tier: str) -> str:
+    """Extra system guidance for the run: name the tools that beat blind
+    scrolling, and be honest about what this setup can see."""
+    base = (
+        "Navigation efficiency: to find specific content, PREFER the "
+        "find_text action (it scrolls straight to matching text) over "
+        "repeated scrolling. To reach the end of a page use scroll with "
+        "pages=10. To read or summarize a whole page, call collect_page_text "
+        "once instead of scrolling viewport by viewport - every scroll costs "
+        "a full reasoning step."
+    )
+    if tier == "native":
+        return base + (
+            " You can request a screenshot when layout or visual state "
+            "matters; text-only steps are cheaper, so look only when it helps."
+        )
+    if tier == "described":
+        return base + (
+            " You cannot see the page directly. When you are stuck on a "
+            "visual question (layout, images, a challenge), call "
+            "describe_page_visually once and work from its description."
+        )
+    return base + (
+        " No vision is available in this setup: do NOT call "
+        "describe_page_visually (it cannot answer). Work from the extracted "
+        "page text, find_text and collect_page_text - they are sufficient "
+        "for text-based tasks."
+    )
 
 
 # ── 6. BrowserAgentTool ───────────────────────────────────────────────────────
@@ -963,13 +1094,29 @@ class BrowserAgentTool(BaseTool):
             except Exception:
                 pass
 
+        # Vision tier of THIS run's model, decided once: a vision-capable lane
+        # model gets use_vision='auto' (browser-use hands it a screenshot tool
+        # it calls when the page needs seeing - scroll and layout decisions are
+        # spatial, and DOM text alone is why "scroll until X" used to be blind
+        # hops). Everything below that tier keeps use_vision=False and the run
+        # CONTINUES: with a vision_provider, screenshots become text on demand
+        # through describe_page_visually; with no vision anywhere, the run is
+        # told so and works the extracted text - never an error, never a stop.
+        _bridge = _build_vaf_bridge(session_id=_session_id)
+        _use_vision, _vision_tier = _browser_vision_mode(_bridge.provider, _bridge.model)
+
         agent = Agent(
             task=_agent_task,
-            llm=_build_vaf_bridge(session_id=_session_id),
+            llm=_bridge,
             browser_session=browser,
             controller=_build_browser_controller(),
             max_failures=3,
-            use_vision=False,       # screenshots go only through describe_page_visually action
+            use_vision=_use_vision,
+            # The nudge: the good tools were always there (find_text jumps to
+            # content, scroll pages=10 reaches the bottom, collect_page_text
+            # reads a whole page in one step) - a model that is not told about
+            # them scrolls blind one viewport per LLM round trip.
+            extend_system_message=_browser_guidance(_vision_tier),
             enable_planning=False,
             use_thinking=False,
             register_new_step_callback=_human_step_pause,

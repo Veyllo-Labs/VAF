@@ -3348,6 +3348,67 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     );
                                 })()}
 
+                                {/* Browser-agent LLM lane: a dedicated (ideally vision-capable)
+                                    model only for browser_agent runs - the browser loop needs
+                                    strict structured output on every step and gains more from
+                                    NATIVE vision than chat does (scrolling and layout are
+                                    spatial decisions). Empty = ride the main model, as before. */}
+                                {(() => {
+                                    const selectedBrowserProvider = localConfig.browser_agent_provider || '';
+                                    return (
+                                        <Section title={tAi('browserAgentModel')}>
+                                            <p className="text-xs text-gray-400 mb-3">{tAi('browserAgentProviderDesc')}</p>
+                                            <Select
+                                                label={tAi('browserAgentProvider')}
+                                                value={selectedBrowserProvider}
+                                                onChange={(v: string) => {
+                                                    handleChange('browser_agent_provider', v);
+                                                    handleChange('browser_agent_model', '');
+                                                }}
+                                                options={[
+                                                    { value: '', label: tAi('browserAgentMain') },
+                                                    { value: 'veyllo', label: 'Veyllo' },
+                                                    ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
+                                                ]}
+                                            />
+                                            {selectedBrowserProvider && (
+                                                <div className="mt-3">
+                                                    <div className="flex gap-2 items-end">
+                                                        <div className="flex-1">
+                                                            <Select
+                                                                label={tAi('browserAgentModelLabel')}
+                                                                value={localConfig.browser_agent_model || ''}
+                                                                onChange={(v: string) => handleChange('browser_agent_model', v)}
+                                                                options={(() => {
+                                                                    const fetched = apiModels[selectedBrowserProvider] || [];
+                                                                    const seen = new Set<string>();
+                                                                    return [
+                                                                        { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('browserAgentModelDesc') },
+                                                                        ...fetched
+                                                                            .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
+                                                                            .map(m => ({ value: m, label: m }))
+                                                                    ];
+                                                                })()}
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleFetchModels(selectedBrowserProvider)}
+                                                            className={cn(
+                                                                "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                                                                fetchingProvider === selectedBrowserProvider && "animate-pulse"
+                                                            )}
+                                                            title={tAi('fetchModels')}
+                                                            disabled={!providerHasKey(selectedBrowserProvider)}
+                                                        >
+                                                            <RefreshCw size={18} className={cn(fetchingProvider === selectedBrowserProvider && "animate-spin")} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </Section>
+                                    );
+                                })()}
+
                                 {/* OCR for scanned PDFs: Tesseract (free, local) or the vision
                                     model above (one model call PER PAGE - real spend). */}
                                 <Section title={tAi('ocrEngine')}>

@@ -110,7 +110,7 @@ Once the agent calls `browser_agent`, the following happens:
 4. Screenshot loop starts (parallel task):
    │   Every 1.5 s: take_screenshot() → emit browser_frame_update → WebUI live view
    │
-5. browser-use Agent loop starts (use_vision='auto'):
+5. browser-use Agent loop starts (vision tier decided from the lane model):
    │
    ├── Capture DOM snapshot of current page
    ├── If page is unclear / CAPTCHA detected: also attach screenshot
@@ -257,7 +257,7 @@ Session files contain login cookies in plain text. They are stored per user unde
 
 ## LLM Bridge
 
-`browser_agent` does **not** use a separate AI service. It routes all reasoning through VAF's own configured LLM - the same model used for everything else (local Ollama, OpenAI, Anthropic, DeepSeek, etc.).
+`browser_agent` does **not** use a separate AI service. It routes all reasoning through VAF's own LLM infrastructure - by default the same model used for everything else. The `browser_agent_provider` / `browser_agent_model` keys (Settings → AI & Model, "Browser agent model"; vision_provider pattern) give browser runs a dedicated model without changing the chat model - worth doing, because the browser loop needs strict structured output on every step and gains more from a strong NATIVE-vision model than chat does. Empty keys = ride the main provider, exactly as before.
 
 ```
 browser-use internal loop
@@ -275,19 +275,24 @@ browser-use internal loop
 
 The bridge (`VAFLLMBridge`) implements browser-use's `BaseChatModel` protocol and delegates every LLM call to `APIBackendManager` - the same class used by all other VAF tools.
 
-### On-demand vision
+### Vision tiers
 
-The browser agent uses **`use_vision='auto'`** - browser-use decides per-step whether to attach a screenshot. Screenshots are only sent to the LLM when the page cannot be understood from DOM text alone (e.g. image-heavy pages, CAPTCHAs, visual challenges).
+How a run gets to SEE is decided once at its start (`_browser_vision_mode`), from the
+lane's model, and every tier RUNS - a setup with no vision anywhere degrades to
+DOM-only work instead of failing:
 
-When a screenshot is sent, `VAFLLMBridge` handles it based on the configured provider:
+| Tier | When | Behaviour |
+|---|---|---|
+| `native` | The lane model is vision-capable (provider registry) | `use_vision='auto'`: browser-use hands the model a screenshot tool it calls when the page needs seeing - scroll and layout decisions are spatial, and this is the biggest single jump for them. Text-only steps stay cheap. |
+| `described` | Text-only lane model, but a `vision_provider` is configured | `use_vision=False`; the `describe_page_visually()` action turns a screenshot into text on demand (e.g. a CAPTCHA, an unclear layout). |
+| `blind` | No vision anywhere | `use_vision=False`; the run continues on extracted DOM text, and its guidance tells it NOT to call `describe_page_visually` (it cannot answer) and to lean on `find_text` and `collect_page_text` instead. |
 
-| Main provider | Vision handling |
-|---|---|
-| Anthropic, Google, GPT-4o | Screenshot passed natively - provider sees the image directly |
-| DeepSeek, non-vision models | Screenshot sent to `vision_provider` (configured in Settings → AI & Model) → text description injected into the message |
-| No vision provider configured | Screenshot skipped - DOM-only fallback |
-
-The agent also has a `describe_page_visually()` action it can call explicitly when stuck - for example, if it detects a CAPTCHA in the DOM and needs to understand what type it is before deciding how to proceed. Vision cost is only paid when actually needed - not on every step.
+Every tier also receives navigation guidance (`extend_system_message`): prefer
+`find_text` over blind scrolling, `scroll pages=10` for the bottom of a page, and the
+VAF-added `collect_page_text` action - one step that scrolls through the whole page
+(triggering lazy loading) and returns its full visible text, instead of paying a full
+LLM round trip per viewport. Tiers, guidance and wiring are pinned by
+`tests/test_browser_agent_vision_lane.py`.
 
 ### LLM model recommendation
 
@@ -852,7 +857,7 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 
 | Limitation | Notes |
 |---|---|
-| **On-demand vision** | Vision is used only when browser-use determines it's needed (`use_vision='auto'`). Configure a Vision Model in Settings → AI & Model for providers that don't support vision natively (e.g. DeepSeek). |
+| **On-demand vision** | A vision-capable browser-lane model takes screenshots itself when needed (see [Vision tiers](#vision-tiers)). For text-only models, configure a Vision Model in Settings → AI & Model; with no vision at all the run continues DOM-only. |
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |

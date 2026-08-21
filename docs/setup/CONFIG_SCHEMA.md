@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (320 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (322 keys).
 
 ## How configuration is set
 
@@ -97,6 +97,8 @@ print(agent.run("In one sentence, what is Python?"))
 | `vision_provider` | `""` | Provider used for vision (base description + `analyze_image`). Empty = use the main provider if it is vision-capable, else none. Set an API id (e.g. `google`) to use a different provider for seeing, or `local`: the llama server launches with the model's mmproj projector and sees images itself (no cloud). |
 | `vision_model` | `""` | Model for the vision provider; empty = that provider's default. Unused for `local` (the loaded GGUF sees). |
 | `vision_local_mmproj` | `""` | Local vision projector ref `owner/repo/file.gguf` (admin-only: server launch argument). Empty = derived from the model's known repo (`mmproj-F16.gguf`, e.g. from `unsloth/Qwen3.5-4B-GGUF`). |
+| `browser_agent_provider` | `""` | LLM lane for `browser_agent` runs (vision_provider pattern). Empty = ride the main provider. Any API provider id = browser runs use that provider regardless of the chat model - the browser loop needs strict structured output and gains more from native vision than chat does. A vision-capable lane model makes runs SEE (screenshots on demand, `use_vision` auto); a text-only one degrades gracefully to `vision_provider` descriptions or DOM-only. |
+| `browser_agent_model` | `""` | Model for the browser lane; empty = that provider's default chain. Only read together with `browser_agent_provider` (alone it overrides the model on the main provider). |
 | `voice_agent_provider` | `""` | LLM lane for the live-call voice agent (admin-only). Empty = ride the main provider (local main = time-share the one llama server). `local` = a dedicated local voice GGUF: the ONE server swaps models (voice model during the call, main model while a delegated task runs) - never two servers. Any API provider id = the call runs on that API regardless of the main provider. |
 | `voice_agent_model` | `""` | For `local`: a downloaded model filename from `models/`, picked in Settings > Voice (empty = the recommended default in `voice_model.py`, Gemma 4 E4B, fetched on selection). A full GGUF ref `owner/repo/file.gguf` is still accepted (back-compat). For an API provider: model name (empty = provider default). |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |

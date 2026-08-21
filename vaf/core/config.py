@@ -134,6 +134,19 @@ class Config:
         # Local vision projector ref "owner/repo/file.gguf"; empty = derived from the
         # model's known repo (mmproj-F16.gguf). Admin-only: it is a server LAUNCH argument.
         "vision_local_mmproj": "",
+        # Browser-agent LLM lane - vision_provider pattern: "" = ride the main
+        # provider and its model. Any API provider id = browser runs use that
+        # provider (with browser_agent_model, empty = that provider's default)
+        # regardless of the chat model. The browser loop needs strict
+        # structured output on every step and gains more from NATIVE vision
+        # than chat does (scrolling and layout are spatial decisions): a
+        # dedicated strong vision model here upgrades browser work without
+        # changing what the person chats with. Vision-capable lane model =
+        # the run sees screenshots (use_vision auto); otherwise the run
+        # degrades gracefully: vision_provider describes screenshots on
+        # demand, and with no vision at all it continues DOM-only.
+        "browser_agent_provider": "",
+        "browser_agent_model": "",
         # Voice-agent LLM lane (live call first layer) - vision_provider pattern:
         # "" = ride the main provider (local main = time-share the one llama server);
         # "local" = a DEDICATED local GGUF for the call (the one server SWAPS models:

@@ -2095,10 +2095,20 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
                     elif msg.get("text") is not None:
                         await upstream.send(msg["text"])
 
+            # Report relayed bytes until the picture is up: an open socket is not a
+            # picture, and the window's connecting cover waits for THIS, not for the
+            # accept above. Stops reporting on the first True, so a running stream
+            # costs nothing.
+            _pixels_up = False
+
             async def _to_client():
+                nonlocal _pixels_up
                 async for frame in upstream:
                     if isinstance(frame, (bytes, bytearray)):
-                        await websocket.send_bytes(bytes(frame))
+                        raw = bytes(frame)
+                        if not _pixels_up:
+                            _pixels_up = mgr.stream_bytes(ticket, len(raw))
+                        await websocket.send_bytes(raw)
                     else:
                         await websocket.send_text(frame)
 

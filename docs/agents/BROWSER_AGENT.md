@@ -443,6 +443,20 @@ short CDP snapshot (`snapshot_context` in `vaf/core/browser_interactive.py`), an
 for the chat session that holds the lease - other sessions get nothing. A small "Browser"
 chip next to the workspace chip says the context is riding along.
 
+**The connecting cover, and why it waits for pixels.** The stream viewer brings its own
+branded loading screen, and the window covers it with its own until the picture is up -
+covering rather than patching the vendor client, which is what keeps the licence
+boundary above intact. The trigger is the subtlety: an open socket is NOT a picture. The
+viewer opens its websocket immediately and then shows that splash for the whole protocol
+handshake, so lifting the cover on the accept revealed the splash instead of hiding it.
+The server therefore counts bytes relayed from the display server and reports the
+crossing once (`stream_bytes` in `vaf/core/browser_interactive.py`). The threshold is
+measured, not guessed: the entire RFB handshake is 45 bytes (greeting 12, security types
+2, result 4, ServerInit 27) and the first framebuffer update is 49132, so 4 KB cannot be
+reached by handshake traffic and cannot be missed by a real frame. The window keeps its
+own rule on top - the cover is for the FIRST picture only, so a later reconnect never
+blanks a page somebody is reading.
+
 With no run behind it and no interactive stream, the window shows an honest empty state
 ("No browser session yet") instead of a starting banner; `presence` separates a hand-opened
 window from a run whose data is on its way. While another sub-agent is actually RUNNING,

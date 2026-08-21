@@ -409,30 +409,81 @@ def test_only_the_stream_viewer_may_be_framed():
         assert not p.startswith(M._FRAMEABLE_PREFIX), f"{p} must keep DENY"
 
 
-def test_viewer_connected_flag_tracks_the_stream_socket(mgr, monkeypatch):
-    """The window covers the third-party viewer's own loading screen until pixels
-    really flow, and only the server knows that moment. Emitted on the first
-    attach and on the last detach, not on every reconnect in between."""
+def test_viewer_connected_waits_for_pixels_not_for_the_socket(mgr, monkeypatch):
+    """An open socket is not a picture, and the difference was visible.
+
+    The viewer opens its websocket immediately and then shows its OWN branded
+    splash for the whole protocol handshake. Announcing the accept as "connected"
+    therefore lifted the window's cover at the exact moment that splash appeared,
+    and the person saw it - the cover was correct, its trigger was not.
+
+    Measured against the container: the entire handshake is 45 bytes (greeting 12,
+    security types 2, result 4, ServerInit 27); the first framebuffer update is
+    49132. The threshold sits between them by two orders of magnitude.
+    """
     _no_ipc_tasks(monkeypatch)
     r = mgr.start("scope-a", "sess-1")
     ticket = r["streamPath"].split("/t/")[1].split("/")[0]
-    assert r["viewerConnected"] is False, "no viewer has attached yet"
+    assert r["viewerConnected"] is False
 
     mgr._test_emitted.clear()
     assert mgr.stream_connected(ticket) is True
+    assert mgr._test_emitted == [], (
+        "accepting the socket must announce nothing: the splash starts here"
+    )
+
+    # The handshake: real sizes, and none of them may flip it.
+    for n in (12, 2, 4, 27):
+        assert mgr.stream_bytes(ticket, n) is False, f"{n} bytes is handshake, not a picture"
+    assert mgr._test_emitted == []
+    assert mgr._payload("active")["viewerConnected"] is False
+
+    # The first framebuffer update does.
+    assert mgr.stream_bytes(ticket, 49132) is True
     assert [p["viewerConnected"] for p, _ in mgr._test_emitted] == [True], (
-        "the first attach must announce itself exactly once"
+        "the picture must announce itself exactly once"
     )
 
     mgr._test_emitted.clear()
-    assert mgr.stream_connected(ticket) is True     # a second viewer, same lease
-    assert mgr._test_emitted == [], "an extra viewer is not a state change"
+    assert mgr.stream_bytes(ticket, 49132) is True, "already up: the caller may stop reporting"
+    assert mgr._test_emitted == [], "a running stream is not a state change"
 
     mgr._test_emitted.clear()
-    mgr.stream_disconnected(ticket)                  # one of two leaves
-    assert mgr._test_emitted == [], "still one viewer attached, nothing changed"
-    mgr.stream_disconnected(ticket)                  # the last one leaves
+    assert mgr.stream_bytes("forged", 49132) is True, "a foreign ticket reports nothing"
+    assert mgr._test_emitted == []
+
+
+def test_a_viewer_leaving_makes_the_next_one_wait_for_its_own_picture(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    r = mgr.start("scope-a", "sess-1")
+    ticket = r["streamPath"].split("/t/")[1].split("/")[0]
+    mgr.stream_connected(ticket)
+    mgr.stream_bytes(ticket, 49132)
+    assert mgr._payload("active")["viewerConnected"] is True
+
+    mgr._test_emitted.clear()
+    mgr.stream_connected(ticket)                 # a second viewer joins
+    mgr.stream_disconnected(ticket)              # one of two leaves
+    assert mgr._payload("active")["viewerConnected"] is True, "someone is still watching"
+
+    mgr.stream_disconnected(ticket)              # the last one leaves
+    assert mgr._payload("active")["viewerConnected"] is False, (
+        "the next viewer draws its own picture and shows its own splash while doing so"
+    )
     assert [p["viewerConnected"] for p, _ in mgr._test_emitted] == [False]
+
+
+def test_disconnect_before_the_picture_announces_nothing(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    r = mgr.start("scope-a", "sess-1")
+    ticket = r["streamPath"].split("/t/")[1].split("/")[0]
+    mgr.stream_connected(ticket)
+    mgr.stream_bytes(ticket, 45)                 # handshake only
+    mgr._test_emitted.clear()
+    mgr.stream_disconnected(ticket)
+    assert [p["viewerConnected"] for p, _ in mgr._test_emitted] == [False], (
+        "leaving before the picture is still a state report, and it says: not up"
+    )
 def test_parking_empties_the_window_instead_of_replacing_it(monkeypatch):
     """The browser window is launched in app mode - no tab strip, no toolbar - and
     ONLY that first window is one. A tab created through CDP comes up as an ordinary

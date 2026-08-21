@@ -316,6 +316,10 @@ class InteractiveLease:
     started_at: float
     stream_connections: int = 0
     last_disconnect: float = 0.0
+    # Bytes received FROM the display server on this lease. An open socket is not a
+    # picture: the viewer opens its socket immediately and shows its own splash for
+    # the whole handshake that follows, so "connected" has to mean pixels, not TCP.
+    pixels_seen: int = 0
 
 
 class InteractiveBrowserManager:
@@ -326,6 +330,14 @@ class InteractiveBrowserManager:
     # generous: reading without touching anything is normal browsing, so
     # "activity" is an open stream connection, not input.
     GRACE_S = 120.0
+    # What separates the protocol handshake from the first real picture. Measured
+    # against this container: the ENTIRE handshake is 45 bytes (greeting 12,
+    # security types 2, result 4, ServerInit 27) and the first framebuffer update is
+    # 49132. 4 KB sits 91x above the one and 12x below the other, so it cannot be
+    # reached by handshake traffic and cannot be missed by a real frame. Counted
+    # cumulatively rather than per frame, so an update that arrives split into
+    # several smaller frames still counts.
+    PIXELS_THRESHOLD = 4096
     _LIVENESS_EVERY_TICKS = 3   # janitor ticks (5s each) between container probes
 
     def __init__(self) -> None:
@@ -594,13 +606,33 @@ class InteractiveBrowserManager:
             if lease is None or not secrets.compare_digest(lease.ticket, ticket or ""):
                 return False
             lease.stream_connections += 1
-            first = lease.stream_connections == 1
+        # Deliberately NO emit here. This is the socket opening, and the viewer's own
+        # splash covers the handshake that follows - announcing it as "connected"
+        # lifted our cover at the exact moment that splash appeared. stream_bytes()
+        # makes that call instead. This path stays what it always was: the auth gate
+        # and the single-viewer count.
+        return True
+
+    def stream_bytes(self, ticket: str, count: int) -> bool:
+        """Report bytes relayed from the display server. Returns True once the
+        picture is up, so the caller can stop reporting.
+
+        This - not the socket accept - is what the window's connecting cover waits
+        for. Emitting only on the crossing keeps it to one message per lease.
+        """
+        with self._lock:
+            lease = self._lease
+            if lease is None or not secrets.compare_digest(lease.ticket, ticket or ""):
+                return True    # no lease of ours: nothing to report, stop asking
+            if lease.pixels_seen >= self.PIXELS_THRESHOLD:
+                return True
+            lease.pixels_seen += max(0, count)
+            crossed = lease.pixels_seen >= self.PIXELS_THRESHOLD
+            if not crossed:
+                return False
             payload = self._payload("active", lease=lease)
             sid = lease.session_id
-        # The window covers the viewer's own loading screen until pixels are really
-        # flowing; this is the moment it may lift, and only the server can know it.
-        if first:
-            self._emit(payload, sid)
+        self._emit(payload, sid)
         return True
 
     def stream_disconnected(self, ticket: str) -> None:
@@ -612,6 +644,9 @@ class InteractiveBrowserManager:
             gone = lease.stream_connections == 0
             if gone:
                 lease.last_disconnect = time.time()
+                # The next viewer draws its own picture from scratch and shows its
+                # own splash while doing so, so it must wait for its own frames.
+                lease.pixels_seen = 0
             payload = self._payload("active", lease=lease)
             sid = lease.session_id
         if gone:
@@ -709,7 +744,7 @@ class InteractiveBrowserManager:
             # Is a viewer socket actually attached right now? The window shows its own
             # connecting state until this turns true, which keeps the stream viewer's
             # own branded loading screen out of sight without touching its files.
-            "viewerConnected": bool(active and lease.stream_connections > 0),
+            "viewerConnected": bool(active and lease.pixels_seen >= self.PIXELS_THRESHOLD),
         }
 
     def _emit(self, payload: dict, session_id: str) -> None:

@@ -182,10 +182,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   there rather than a rebuilt fraction of it. The page fills the window instead
   of sitting in black bars, and the sub-window with Task, Actions, History and
   Activity stays away while you are driving, returning when the agent takes
-  over. Several smaller repairs went with it: streams no longer die after
-  exactly 40 seconds of reading, scrolling no longer smears the page, and
-  closing and re-opening the browser no longer leaves a second browser UI
-  inside the window.
+  over. Opening it shows VAF's own quiet loading state until the picture is
+  really there, rather than the stream viewer's foreign splash. Several smaller
+  repairs went with it: streams no longer die after exactly 40 seconds of
+  reading, scrolling no longer smears the page, and closing and re-opening the
+  browser no longer leaves a second browser UI inside the window.
 - **The interactive browser window now actually shows the browser.** It fetched
   its viewer correctly and then stayed blank, because the server sends
   `X-Frame-Options: DENY` on every response and the window is a frame - so the

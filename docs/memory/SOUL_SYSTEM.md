@@ -54,7 +54,7 @@ Tone and style (e.g. concise, formal). Defined in the Soul markdown and applied 
 
 ### 3.4 Continuity
 
-The Soul can be updated over time (manually in Settings or by the agent suggesting edits). Stored in `soul.md`.
+The Soul can be updated over time (manually in Settings or by the agent suggesting edits). Stored in `soul.md`. The default Continuity text (wizard suggestions and the backend fallback soul) names the agent's REAL persistence lane explicitly: recall via the `memory_search` tool, persist via `memory_save`. It deliberately does not speak of "memory files" - there is no such file (see RAG Maintenance below), and a soul that points at files sends the agent looking for something that does not exist instead of calling its tools.
 
 ---
 

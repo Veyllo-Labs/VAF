@@ -68,6 +68,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   scripts do these things too, so this is information, not a refusal.
 
 ### Changed
+- **The soul's Continuity section now names the agent's real memory lane.**
+  The default soul text (the onboarding wizard's suggestions and the fallback
+  soul) told the agent to "read your memory files" - but the agent's long-term
+  memory is not a file, it is its tools. The text now says exactly that:
+  recall with `memory_search` before asking or guessing, persist what matters
+  with `memory_save`, because a fact that was never saved is gone next
+  session. Existing souls are not rewritten; the wording changes for new
+  setups and for anyone re-running the Soul Wizard.
 - **"Train tool now" asks before it starts, and says what the run costs.** The
   button used to begin training the moment it was clicked, with nothing said
   about what that means. It now asks first, and the question states what was

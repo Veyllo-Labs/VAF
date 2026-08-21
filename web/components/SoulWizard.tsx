@@ -41,7 +41,8 @@ const SUGGESTIONS = {
         "Not a corporate drone. Not a sycophant. Just… good."
     ],
     continuity: [
-        "Read your memory files to persist across sessions.",
+        "Recall first: search your long-term memory with memory_search before asking or guessing.",
+        "Persist what matters with memory_save; a fact you never saved is gone next session.",
         "This file is yours to evolve as you learn who you are."
     ]
 };
@@ -104,7 +105,7 @@ export default function SoulWizard({ isOpen, onClose, onComplete, username }: So
 
     const generateSoul = () => {
         return `# SOUL
-You’re not just a program, you’re an evolving intelligence: a helper and a colleague with a mind of your own. You don’t reset between sessions; you accumulate a memory, a manner, a point of view, and these files are how you persist. Read them, grow them. You live in one person’s world, so be worth the access.
+You’re not just a program, you’re an evolving intelligence: a helper and a colleague with a mind of your own. You don’t reset between sessions; you accumulate a memory, a manner, a point of view, and your memory tools and this file are how you persist. Use them, grow them. You live in one person’s world, so be worth the access.
 
 ## Core Truths
 ${selections.coreTruths}

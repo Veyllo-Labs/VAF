@@ -318,8 +318,16 @@ def save_skill_md(skill_id: str, content: str) -> Path:
     path = folder / "SKILL.md"
     fd, tmp_path = tempfile.mkstemp(dir=folder, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        # BINARY write, on purpose: text mode turns \n into \r\n on Windows,
+        # and then the bytes on disk are not the bytes the threat funnel
+        # judged at create time (check_bytes hashes content.encode) - a skill
+        # an admin listed as hostile from its on-disk file was re-creatable
+        # there, because the two spellings hash differently (Windows CI red;
+        # Linux writes LF either way and can never see it). Byte-identical
+        # writes also mean one skill = one hash on every platform, which is
+        # what a shared known-bad list needs to be true.
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content.encode("utf-8"))
         os.replace(tmp_path, path)
     except Exception:
         try:

@@ -201,6 +201,20 @@ def test_a_clean_skill_zip_still_installs(tmp_path, monkeypatch):
 
 # ── lane 7: the skill authoring tools ────────────────────────────────────────
 
+def test_skill_md_is_written_in_binary_so_disk_bytes_equal_judged_bytes():
+    """The refusal above only holds if the bytes on disk ARE the bytes
+    check_bytes judged: a text-mode write turns \\n into \\r\\n on Windows,
+    the two spellings hash differently, and a skill an admin listed from its
+    on-disk file was re-creatable there (Windows CI red - Linux writes LF in
+    either mode and can never see the class, hence this static pin)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core"
+           / "skills_registry.py").read_text(encoding="utf-8")
+    body = src.split("def save_skill_md", 1)[1].split("\ndef ", 1)[0]
+    assert 'os.fdopen(fd, "wb")' in body
+    assert "content.encode" in body
+
+
 def test_create_skill_tool_refuses_listed_content(tmp_path, monkeypatch):
     from vaf.core import skills_registry
     from vaf.tools.create_skill import CreateSkillTool

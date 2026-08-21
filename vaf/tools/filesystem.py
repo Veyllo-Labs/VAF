@@ -3,6 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import os
 import shutil
+import tempfile
 from vaf.tools.base import BaseTool
 from pathlib import Path
 from typing import List, Tuple
@@ -24,6 +25,18 @@ BLOCKED_DIRS = [
 
 # VAF program root - agent must NEVER access this (source code, config, secrets)
 _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# The system temp directory, in BOTH spellings. Every staging lane (the upload
+# funnel, the sidebar-document lane, the browser download sweep) writes its
+# bytes to temp before the jailed read - on Linux that is /tmp and was never
+# blocked, but macOS' tempfile answers with the SYMLINK spelling
+# /var/folders/... , which the absolute /var entry in BLOCKED_DIRS refused:
+# every clean upload came back "Access denied: /var", on macOS only (CI red the
+# local gates could not see). Temp is exempt from the blocked-dir screen;
+# everything else under /var stays blocked, and the VAF-root, VAF-data and
+# per-user jail checks apply to temp paths like to any other.
+_TEMP_ROOTS = tuple(dict.fromkeys(
+    p for p in (tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())) if p))
 
 # ── Per-user filesystem jail ─────────────────────────────────────────────────────────────────────
 # While a jailed tool run executes, is_safe_path additionally enforces that the tool can access only
@@ -422,8 +435,21 @@ def is_safe_path(path):
         # they are a whole path component.
         norm = abs_path.replace("\\", "/")
         components = norm.split("/")
+        # Inside the system temp dir the ABSOLUTE-root screens stand down -
+        # they are location screens, and temp IS the location every staging
+        # lane writes to (see _TEMP_ROOTS: macOS spells its temp dir
+        # /var/folders/..., inside the /var block). The NAME-based tokens
+        # (.env, .ssh, id_rsa, ...) keep applying everywhere including temp:
+        # they describe what the file IS, not where it lies, and the learn and
+        # viewer lanes pin exactly that.
+        in_temp = any(
+            norm == t or norm.startswith(t + "/")
+            for t in (r.replace("\\", "/").rstrip("/") for r in _TEMP_ROOTS) if t
+        )
         for blocked in BLOCKED_DIRS:
             if blocked.startswith("/"):
+                if in_temp:
+                    continue
                 if norm == blocked or norm.startswith(blocked + "/"):
                     return False, f"Access denied: {blocked}"
             elif blocked in components:

@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The shared browser forgets the previous user when it changes hands.** On
+  any change of user - an interactive session, an agent run, or an unknown
+  state after a server restart - the sandbox browser now scrubs cookies and
+  every site's stored data (localStorage, IndexedDB and friends) before the
+  next user touches it; previously only cookies were cleared, and the agent
+  lane inherited whatever the last user left behind. A non-persistent
+  `browser_agent` run now truly starts clean, as its description always
+  promised. `VAF_BROWSER_SCRUB=full` deepens the handover to a whole-profile
+  wipe (history, browser-saved passwords, autofill, downloads) with a short
+  browser relaunch.
 - **The sandbox browser blocks ads and malware domains.** uBlock Origin Lite
   (the official release build, version-pinned and checksum-verified at image
   build) now rides in the browser container and filters ads, trackers and

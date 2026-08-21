@@ -88,6 +88,20 @@ def test_ublock_origin_lite_pinned_in_image_and_installable_at_launch():
     assert "--disable-extensions" not in code
 
 
+def test_profile_scrub_marker_is_honoured_between_launches():
+    """The full handover scrub: VAF drops a marker and kills Chromium; the
+    supervisor's next launch must wipe the profile and the downloads BEFORE
+    starting Chromium - a container restart cannot do this (the container
+    filesystem survives restarts), so the wipe lives here or nowhere."""
+    src = _script()
+    assert ".scrub-profile" in src
+    assert "rm -rf /home/browser/.config/chromium /home/browser/Downloads" in src
+    # The wipe must run inside start_chromium (both the first launch and every
+    # supervisor relaunch pass through it), before Chromium comes up.
+    body = src.split("start_chromium() {", 1)[1].split("\n}", 1)[0]
+    assert ".scrub-profile" in body
+
+
 def test_dns_filtering_is_the_security_variant_never_the_family_one():
     """Deliberate: Cloudflare's 1.1.1.2/security lane blocks malware and phishing
     domains; the 1.1.1.3/family lane additionally censors adult content, which

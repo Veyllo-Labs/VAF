@@ -525,24 +525,28 @@ uses, so its isolation is a lease, not a partition:
 - **One lease at a time**, bound to the `user_scope_id` of the WebSocket CONNECTION
   (never the message). A different user asking while a lease stands gets `busy`,
   deliberately without learning whose lease it is; only an admin may evict.
-- **Cookie handover:** when the lease changes to a DIFFERENT scope, the container's
-  cookie jar is cleared (`Storage.clearCookies`) before the new scope's stored logins
-  are optionally loaded. Saved logins live in the same per-scope storage-state files as
+- **Handover scrub:** when the browser changes hands to a DIFFERENT scope - an
+  interactive lease, an agent run (`stop_for_agent_run` carries the run's scope), or an
+  unknown jar after a server restart - the shared state is scrubbed before the new
+  scope's stored logins are optionally loaded: cookies plus every site's stored state
+  (localStorage, IndexedDB, CacheStorage, service workers) in one CDP sweep. A
+  non-persistent agent run is scrubbed even for the same scope (its documented promise
+  is a clean start). `VAF_BROWSER_SCRUB=full` deepens the handover to a whole-profile
+  wipe (history, Chromium-saved passwords, autofill, bookmarks, downloads) via a short
+  Chromium relaunch. Saved logins live in the same per-scope storage-state files as
   the agent's persistent sessions, above.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
   lane is: the credential is in the request itself.
-- **Named residual:** everything else in the container's single Chromium profile is NOT
-  cleared on handover - the same shared-sandbox limitation the known-limitations table
-  records for the Docker sandbox. That is more than caches: localStorage, IndexedDB and
-  the HTTP cache, but also browsing HISTORY (chrome://history shows the previous
-  holder's pages), passwords saved via Chromium's own password manager (Login Data,
-  offered back to the next holder by autofill), autofill entries, bookmarks, and files
-  downloaded into the container. Cookies (the part that carries logins) are handled;
-  the rest is shared state between everyone who uses the one container, it survives
-  until the container is recreated, and multi-tenant deployments that need more should
-  run per-user browser containers.
+- **Named residual:** in the default `quick` mode the handover scrub does not reach the
+  profile FILES of the container's single Chromium: browsing HISTORY (chrome://history
+  shows the previous holder's pages), passwords saved via Chromium's own password
+  manager (Login Data, offered back to the next holder by autofill), autofill entries,
+  bookmarks, files downloaded into the container, and the HTTP disk cache. Those
+  survive until a `full`-mode handover wipes the profile or the container is recreated.
+  Multi-tenant deployments that need genuine partitions (and parallel use) should run
+  per-user browser containers.
 
 ## 6. Connection-Level Isolation
 

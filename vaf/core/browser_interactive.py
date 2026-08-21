@@ -94,15 +94,11 @@ def resolve_cdp_ws_url(base: str) -> str:
     ) from last_err
 
 
-def browser_storage_state_path(user_scope_id: Optional[str] = None,
-                               session_name: str = "default") -> str:
-    """Path of the per-scope persistent browser login store, creating its dir.
-
-    USER ISOLATION: the cookie/login store is keyed by user_scope_id so one
-    user's persistent browser logins are never shared with (or readable by)
-    another. Scope resolution: explicit arg, the child-process env, the local
-    admin scope (single-user/local mode), then "default".
-    """
+def resolve_browser_scope(user_scope_id: Optional[str] = None) -> str:
+    """The one answer to "whose browser use is this": explicit arg, the
+    child-process env, the local admin scope (single-user/local mode), then
+    "default". Storage paths and the shared-jar arbitration must resolve the
+    SAME way, or a run and its own login store disagree about the owner."""
     _scope = user_scope_id or os.environ.get("VAF_USER_SCOPE_ID")
     if not _scope:
         try:
@@ -110,7 +106,19 @@ def browser_storage_state_path(user_scope_id: Optional[str] = None,
             _scope = get_local_admin_scope_id()
         except Exception:
             _scope = "default"
-    scope_seg = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(_scope)) or "default"
+    return str(_scope)
+
+
+def browser_storage_state_path(user_scope_id: Optional[str] = None,
+                               session_name: str = "default") -> str:
+    """Path of the per-scope persistent browser login store, creating its dir.
+
+    USER ISOLATION: the cookie/login store is keyed by user_scope_id so one
+    user's persistent browser logins are never shared with (or readable by)
+    another. Scope resolution: resolve_browser_scope above.
+    """
+    _scope = resolve_browser_scope(user_scope_id)
+    scope_seg = "".join(c if c.isalnum() or c in "-_" else "_" for c in _scope) or "default"
     sessions_dir = os.path.join(os.path.expanduser("~"), ".vaf", "browser_sessions", scope_seg)
     os.makedirs(sessions_dir, exist_ok=True)
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_name) or "default"
@@ -227,6 +235,19 @@ def _cookie_op(cdp_base: str, op: str, cookies: Optional[List[dict]] = None):
             if op == "clear":
                 await asyncio.wait_for(client.send.Storage.clearCookies(params={}), 10)
                 return None
+            if op == "scrub":
+                # The quick handover scrub: cookies plus every site's stored
+                # state in one sweep. storageTypes "all" covers local_storage,
+                # indexeddb, cache_storage, service_workers and cookies; the
+                # wildcard origin is honoured by this Chromium (measured: a
+                # localStorage entry set on a real origin was gone after this
+                # call). The HTTP disk cache is NOT in "all" - that residue is
+                # the full scrub's job, and the docs name it.
+                await asyncio.wait_for(client.send.Storage.clearCookies(params={}), 10)
+                await asyncio.wait_for(
+                    client.send.Storage.clearDataForOrigin(
+                        params={"origin": "*", "storageTypes": "all"}), 15)
+                return None
             raise ValueError(f"unknown cookie op: {op}")
         finally:
             try:
@@ -300,6 +321,43 @@ def _export_storage_cookies(path: str, cookies: List[dict]) -> None:
         os.chmod(path, 0o600)
     except Exception:
         pass
+
+
+def scrub_mode() -> str:
+    """The handover scrub depth: "quick" (CDP sweep, default) or "full" (adds a
+    profile wipe with a Chromium relaunch). An env knob like its siblings
+    VAF_BROWSER_MAX_PARALLEL and VAF_BROWSER_CDP_URL; anything unrecognized
+    means quick, so a typo degrades to the safe-and-fast default."""
+    return "full" if os.environ.get("VAF_BROWSER_SCRUB", "").strip().lower() == "full" else "quick"
+
+
+def request_profile_wipe() -> None:
+    """Full-scrub half: wipe the container's Chromium profile between launches.
+
+    A `docker restart` does NOT do this - the container filesystem survives
+    restarts, so History, Login Data, autofill and downloads would all come
+    back. Instead the entrypoint's supervisor owns the wipe: this drops a
+    marker and kills Chromium, the supervisor relaunches it and start_chromium
+    deletes the profile and the downloads first when the marker is present.
+    The extension reinstalls itself into the fresh profile (external-
+    extensions provider, see the Dockerfile). Callers need no explicit wait:
+    every CDP consumer already polls through resolve_cdp_ws_url, which rides
+    out the relaunch. Same docker access and best-effort stance as the stop
+    watchdog's container restart in vaf/tools/browser_agent.py."""
+    try:
+        import subprocess
+        from vaf.core.service_stack import resolve_docker_exe
+        docker = resolve_docker_exe()
+        subprocess.run(
+            [docker, "exec", "-u", "root", "vaf-browser", "sh", "-c",
+             "touch /home/browser/.scrub-profile"
+             " && chown browser:browser /home/browser/.scrub-profile"
+             " && pkill chromium"],
+            timeout=20, capture_output=True,
+        )
+        append_domain_log("webui", "[browser_interactive] full scrub: profile wipe requested")
+    except Exception as e:
+        append_domain_log("webui", f"[browser_interactive] full scrub failed (quick scrub still ran): {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -407,13 +465,28 @@ class InteractiveBrowserManager:
             pass
         return False
 
-    def stop_for_agent_run(self) -> None:
-        """The agent is about to use the browser: evict any interactive lease.
+    def stop_for_agent_run(self, user_scope_id: Optional[str] = None,
+                           persistent: bool = False) -> None:
+        """The agent is about to use the browser: evict any interactive lease,
+        then hand the shared jar over to the run's own scope.
 
         Whoever held the lease is remembered: the agent may take the browser,
         but a window the person opened themselves gets it back when the run
         ends (agent_run_ended announces that as resumable) instead of being
-        closed over their head. No lease means nothing to give back."""
+        closed over their head. No lease means nothing to give back.
+
+        The JAR half exists because the agent lane shares the one cookie jar
+        with everyone (browser_use works in the default browser context,
+        browser-level Storage.setCookies - measured, no createBrowserContext
+        anywhere in it), so without a handover a run browses with whatever the
+        previous holder left behind. Ordering is load-bearing: the eviction
+        above EXPORTS the holder's cookies to their per-scope file before the
+        scrub wipes the jar. A non-persistent run is scrubbed even for the
+        same scope - "starts with a clean browser" is the tool's documented
+        promise. The handover runs in the web-server parent for both lanes
+        (this hook fires before the spawn branch); in a spawned child the jar
+        was already handed over, so the child skips it rather than scrubbing
+        a second time mid-start."""
         with self._lock:
             self._agent_active = True
             lease = self._lease
@@ -424,6 +497,25 @@ class InteractiveBrowserManager:
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
+            return
+        try:
+            scope = resolve_browser_scope(user_scope_id)
+            with self._lock:
+                jar_scope = self._last_cookie_scope
+            if jar_scope != scope:
+                if scrub_mode() == "full":
+                    request_profile_wipe()
+                _cookie_op(self.cdp_base(), "scrub")
+            elif not persistent:
+                # Same scope, but the run promised a clean start: quick scrub
+                # only - the person's own logins are already exported and come
+                # back on their next interactive lease or persistent run.
+                _cookie_op(self.cdp_base(), "scrub")
+            with self._lock:
+                self._last_cookie_scope = scope
+        except Exception as e:
+            append_domain_log("webui", f"[browser_interactive] agent jar handover failed: {e}")
 
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
@@ -519,12 +611,20 @@ class InteractiveBrowserManager:
         except Exception:
             return self._payload("error", reason="browser_unavailable")
 
-        # Cookie jar handover, before the person starts browsing.
+        # Jar handover, before the person starts browsing. A scope CHANGE gets
+        # the scrub, not just a cookie clear: the previous holder's
+        # localStorage/IndexedDB carry logins on token-based sites just as
+        # cookies do. None counts as a change - after a server restart the
+        # tracker is empty while the container may still hold anyone's state,
+        # and trusting that gap is how residue crosses users. Only the same
+        # scope refreshing keeps its state.
         try:
             with self._lock:
                 jar_scope = self._last_cookie_scope
-            if jar_scope is not None and jar_scope != user_scope_id:
-                _cookie_op(self.cdp_base(), "clear")
+            if jar_scope != user_scope_id:
+                if scrub_mode() == "full":
+                    request_profile_wipe()
+                _cookie_op(self.cdp_base(), "scrub")
             if save:
                 cookies = _load_storage_cookies(
                     browser_storage_state_path(user_scope_id, session_name))
@@ -901,10 +1001,13 @@ def get_interactive_manager() -> InteractiveBrowserManager:
         return _manager
 
 
-def stop_for_agent_run() -> None:
-    """Hook for BrowserAgentTool.run(): evict the interactive lease. Never raises."""
+def stop_for_agent_run(user_scope_id: Optional[str] = None,
+                       persistent: bool = False) -> None:
+    """Hook for BrowserAgentTool.run(): evict the interactive lease and hand
+    the shared jar to the run's scope. Never raises."""
     try:
-        get_interactive_manager().stop_for_agent_run()
+        get_interactive_manager().stop_for_agent_run(
+            user_scope_id=user_scope_id, persistent=persistent)
     except Exception:
         pass
 

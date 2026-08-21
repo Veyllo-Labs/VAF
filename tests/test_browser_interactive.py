@@ -22,6 +22,8 @@ def mgr(monkeypatch, tmp_path):
     """A fresh manager with every network seam stubbed and HOME sandboxed."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("VAF_USER_SCOPE_ID", raising=False)
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    monkeypatch.delenv("VAF_BROWSER_SCRUB", raising=False)
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub/devtools/browser/x")
     monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
     cookie_calls = []
@@ -178,13 +180,27 @@ def test_other_subagent_types_do_not_block(mgr, monkeypatch):
 
 # ── cookie jar handover and the login lane ────────────────────────────────
 
-def test_foreign_handover_clears_jar_before_loading(mgr, monkeypatch):
+def test_foreign_handover_scrubs_jar_before_loading(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     mgr.start("scope-a", "sess-1")
     mgr.stop("user", requester_scope="scope-a")
+    before = len(mgr._test_cookie_calls)
     mgr.start("scope-b", "sess-2")
-    ops = [op for op, _ in mgr._test_cookie_calls]
-    assert "clear" in ops, "a scope change must never inherit the previous user's cookies"
+    ops = [op for op, _ in mgr._test_cookie_calls[before:]]
+    # Scrub, not just a cookie clear: localStorage/IndexedDB carry logins on
+    # token-based sites exactly as cookies do.
+    assert "scrub" in ops, "a scope change must never inherit the previous user's state"
+
+
+def test_first_start_after_process_boot_scrubs_the_unknown_jar(mgr, monkeypatch):
+    """A fresh manager knows nothing about the jar while the container may
+    still hold anyone's state; trusting that gap is how residue crosses
+    users. The same scope refreshing afterwards keeps its state."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    assert [op for op, _ in mgr._test_cookie_calls].count("scrub") == 1
+    mgr.start("scope-a", "sess-1")
+    assert [op for op, _ in mgr._test_cookie_calls].count("scrub") == 1
 
 
 def test_save_exports_to_the_scope_file_on_stop(mgr, monkeypatch, tmp_path):
@@ -341,6 +357,66 @@ def test_no_lease_means_no_give_back(mgr, monkeypatch):
     mgr.stop_for_agent_run()
     mgr.agent_run_ended()
     assert not any(p.get("resumable") for p, _ in mgr._test_emitted)
+
+
+def test_agent_run_hands_the_jar_to_the_runs_scope(mgr, monkeypatch):
+    """The agent lane shares the one jar (browser_use works in the default
+    context, measured), so a run of a different scope must scrub the previous
+    holder's residue before it browses."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1", save=True)
+    before = len(mgr._test_cookie_calls)
+    mgr.stop_for_agent_run(user_scope_id="scope-b", persistent=True)
+    ops = [op for op, _ in mgr._test_cookie_calls[before:]]
+    # The evicted holder's cookies are EXPORTED before the scrub wipes them.
+    assert ops.index("get") < ops.index("scrub")
+    assert mgr._last_cookie_scope == "scope-b"
+    mgr.agent_run_ended()
+
+
+def test_non_persistent_run_starts_clean_even_for_the_same_scope(mgr, monkeypatch):
+    """"Starts with a clean browser" is the tool's documented promise; a
+    persistent run of the same scope keeps its own state instead."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop("user", requester_scope="scope-a")
+    before = len(mgr._test_cookie_calls)
+    mgr.stop_for_agent_run(user_scope_id="scope-a", persistent=False)
+    assert "scrub" in [op for op, _ in mgr._test_cookie_calls[before:]]
+    mgr.agent_run_ended()
+    before = len(mgr._test_cookie_calls)
+    mgr.stop_for_agent_run(user_scope_id="scope-a", persistent=True)
+    assert "scrub" not in [op for op, _ in mgr._test_cookie_calls[before:]]
+    mgr.agent_run_ended()
+
+
+def test_full_mode_wipes_the_profile_only_on_a_scope_change(mgr, monkeypatch):
+    """VAF_BROWSER_SCRUB=full adds the profile wipe (history, saved passwords,
+    downloads) on a change of hands; a same-scope clean start stays quick."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    wipes = []
+    monkeypatch.setattr(bi, "request_profile_wipe", lambda: wipes.append(1))
+    mgr.start("scope-a", "sess-1")
+    assert len(wipes) == 1                       # unknown jar counts as a change
+    mgr.stop("user", requester_scope="scope-a")
+    mgr.stop_for_agent_run(user_scope_id="scope-b", persistent=True)
+    assert len(wipes) == 2
+    mgr.agent_run_ended()
+    mgr.stop_for_agent_run(user_scope_id="scope-b", persistent=False)
+    assert len(wipes) == 2                       # same scope: quick scrub only
+    mgr.agent_run_ended()
+
+
+def test_spawned_child_skips_the_jar_handover(mgr, monkeypatch):
+    """The parent already handed the jar over before the spawn; a second scrub
+    in the child would wipe mid-start what the parent just prepared."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    before = len(mgr._test_cookie_calls)
+    mgr.stop_for_agent_run(user_scope_id="scope-b", persistent=False)
+    assert [op for op, _ in mgr._test_cookie_calls[before:]] == []
+    mgr.agent_run_ended()
 
 
 def test_fresh_lease_clears_a_pending_give_back(mgr, monkeypatch):

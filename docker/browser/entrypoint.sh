@@ -169,6 +169,20 @@ echo "UA: $USER_AGENT"
 # fingerprint surface (AudioContext rendering is computational and was never
 # muted), it only stops declaring "this browser wants no sound".
 start_chromium() {
+    # Full handover scrub: when VAF dropped the marker (a user-scope change
+    # with VAF_BROWSER_SCRUB=full), the whole profile is wiped BETWEEN Chromium
+    # launches - the only moment the files are not being rewritten. This is
+    # what a container restart cannot do (the container filesystem survives
+    # restarts), and it removes what the CDP scrub cannot reach: history,
+    # passwords saved in Chromium's own password manager, autofill, bookmarks
+    # and downloaded files. The content blocker comes back by itself: the
+    # external-extensions provider reinstalls it into the fresh profile.
+    if [ -f /home/browser/.scrub-profile ]; then
+        rm -rf /home/browser/.config/chromium /home/browser/Downloads
+        rm -f /home/browser/.scrub-profile
+        echo "Profile scrubbed for user handover"
+    fi
+
     # Never restore the previous session. The supervisor below kills Chromium with
     # SIGKILL, which marks the profile as crashed, and a crashed profile REOPENS the
     # windows it had - including any ordinary window that ever appeared, which then

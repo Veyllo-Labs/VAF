@@ -427,9 +427,13 @@ start and exported at lease end - to the SAME per-scope storage-state file the a
 persistent sessions use (`~/.vaf/browser_sessions/<scope>/default.json`, Playwright shape,
 cookies only), so a login performed by hand is a login the agent has on its next
 `persistent=true` run, and vice versa. The forget-everything mode exists only on the agent
-lane (`persistent=false` runs). On a lease handover to a DIFFERENT user scope the shared
-jar is cleared first; localStorage and the HTTP cache remain shared container state (the
-known shared-sandbox limitation, see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
+lane (`persistent=false` runs). On a handover to a DIFFERENT user scope the shared browser
+is SCRUBBED first - cookies plus every site's stored state (localStorage, IndexedDB,
+CacheStorage, service workers) in one CDP sweep, and the same rule fires when the jar
+owner is unknown (fresh server process). `VAF_BROWSER_SCRUB=full` deepens the handover to
+a whole-profile wipe (history, Chromium-saved passwords, autofill, downloads) with a short
+Chromium relaunch; the quick default leaves those plus the HTTP cache as the remaining
+shared state (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
 **The chat knows where you are.** While a chat's window drives the browser, that chat's
 messages travel WITH browser context: the current page URL and any selected text are
@@ -585,6 +589,27 @@ The practical limits are:
 
 ---
 
+### Handover scrub depth
+
+```bash
+# .env  (or system environment before starting VAF)
+VAF_BROWSER_SCRUB=quick   # default; "full" adds the profile wipe
+```
+
+What the shared browser forgets when it changes hands (a different user's interactive
+lease or agent run, or an unknown jar after a server restart):
+
+| Mode | Cleared on handover | Cost |
+|---|---|---|
+| `quick` (default) | Cookies, localStorage, IndexedDB, CacheStorage, service workers (one CDP sweep) | < 1 s |
+| `full` | Everything in `quick`, plus the whole Chromium profile: history, Chromium-saved passwords, autofill, bookmarks, downloads, HTTP cache | Chromium relaunch, ~3-5 s |
+
+`full` needs the same docker access the stop watchdog already uses (it drops a marker in
+the container and relaunches Chromium; the supervisor wipes the profile between
+launches). The content blocker reinstalls itself into the fresh profile automatically.
+A non-persistent `browser_agent` run always gets at least the quick scrub, even for the
+same user - a clean start is that lane's documented promise.
+
 ### Custom CDP port
 
 If port `9222` is already in use on your machine, override it in `.env` before starting Docker:
@@ -664,7 +689,10 @@ someone deliberately takes that on, this stays a local build.
 
 The container runs a **supervised** Chromium process **headed under a virtual X display (KasmVNC's Xkasmvnc)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
 
-**Default behaviour:** each task starts with a clean browser profile - no cookies, no login state.
+**Default behaviour:** each task starts with a clean browser - and that is enforced, not
+assumed: the shared jar is scrubbed at run start (always for a non-persistent run, and on
+any change of user scope for persistent ones), because browser_use drives the default
+browser context and would otherwise inherit whatever the previous user left behind.
 
 **Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/<scope>/{session}.json` (one subdirectory per user_scope_id) after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
 

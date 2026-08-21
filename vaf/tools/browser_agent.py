@@ -647,9 +647,14 @@ class BrowserAgentTool(BaseTool):
         # The agent's run always wins the shared browser: evict a person's
         # interactive lease BEFORE the spawn branch, so the eviction happens in
         # the web-server parent process for both lanes (in the spawned child
-        # the manager singleton is empty and this is a no-op). Never raises.
+        # the manager singleton is empty and this is a no-op). The hook also
+        # hands the shared cookie jar over to THIS run's scope (scrubbing a
+        # previous holder's residue; always scrubbing for a non-persistent run,
+        # which promises a clean start) - which is why it needs to know whose
+        # run this is and whether it is persistent. Never raises.
         from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
-        stop_for_agent_run()
+        stop_for_agent_run(user_scope_id=kwargs.get("user_scope_id"),
+                           persistent=bool(kwargs.get("persistent") or False))
 
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly

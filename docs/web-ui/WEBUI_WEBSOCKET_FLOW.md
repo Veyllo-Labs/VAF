@@ -247,7 +247,14 @@ Key rules:
   `superseded` by the same user's newer window, `agent_takeover`, `agent_done`,
   `viewer_gone` after the 120s grace, `browser_restarted`), `busy` (a different user
   holds the lease; deliberately without saying who), `agent_active`, or `error`
-  (`browser_unavailable`). Sent as a direct reply to the requesting connection AND
+  (`browser_unavailable`). An `agent_active` sent to the session that OWNS the run
+  carries a streamPath of its own: the run's watch-only live view (the URL carries
+  the viewer's `view_only` setting); to every other session the field stays empty -
+  the ticket is the capability. A `stopped`/`agent_done` carries `resumable: true`
+  when the run evicted that session's own interactive lease at its start; the
+  frontend then re-sends `browser_interactive_start` instead of letting the window
+  close, which is how a person's hand-opened browser survives an agent run that
+  only borrowed it. Sent as a direct reply to the requesting connection AND
   broadcast to the owning session; declared in `VAF_LIVE_VIEW_TYPES`
   (`vaf/core/progress.py`), so `tests/test_live_view_wire_types.py` pins the page.tsx
   handler and the emitter to it.

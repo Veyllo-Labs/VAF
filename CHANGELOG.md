@@ -12,6 +12,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Watching the agent browse now shows the real browser.** During a
+  `browser_agent` run started from a chat, the browser window streams the
+  sandbox Chromium itself - real tab strip, real omnibox, live - instead of a
+  rebuilt address bar over 1.5-second screenshots. The stream is watch-only
+  (the run must not be typed into) and is offered only to the chat that owns
+  the run; the task, action plan, history and activity panels stay below the
+  viewport. Where no live stream exists (workflow tile, spawned child runs)
+  the screenshot view remains.
+- **An agent run only borrows your browser.** If a `browser_agent` run takes
+  over while you are driving the sandbox browser, the window no longer closes
+  on you when the run ends: the server remembers whose interactive session was
+  evicted and hands the browser straight back, and the window returns to the
+  interactive mode by itself. A short handover veil plays in both directions -
+  you to agent, agent back to you - so the change of hands reads as one motion.
+  Runs that took a free browser close the window afterwards, as before.
+- **The browser window closes with an animation.** Closing used to snap the
+  window away while the panel beside it collapsed smoothly; the slide-out now
+  plays on close too, and the interactive stream is stopped only after it has
+  played.
 - **The agent knows it can take the browser over from you.** While you are
   driving the sandbox browser, your messages already carried the page, your
   selection and a screenshot along - but nothing said what the agent could do

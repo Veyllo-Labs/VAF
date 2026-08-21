@@ -259,7 +259,102 @@ def test_helpers_never_raise_without_a_manager(monkeypatch):
     monkeypatch.setattr(bi, "get_interactive_manager",
                         lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     bi.stop_for_agent_run()
+    bi.agent_stream_started("sess-1")
     bi.agent_run_ended()
+
+
+# ── the run's watch-only stream grant ─────────────────────────────────────
+
+def test_agent_watch_grant_lifecycle(mgr, monkeypatch):
+    """The grant's ticket validates for the duration of the run and dies with it."""
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    mgr.stop_for_agent_run()
+    mgr.agent_stream_started("sess-run")
+    payload, sid = mgr._test_emitted[-1]
+    assert sid == "sess-run"
+    assert payload["status"] == "agent_active"
+    assert "view_only=1" in payload["streamPath"]
+    ticket = payload["streamPath"].split("/t/")[1].split("/")[0]
+    assert mgr.validate_ticket(ticket) is not None
+    mgr.agent_run_ended()
+    assert mgr.validate_ticket(ticket) is None
+
+
+def test_watch_stream_goes_only_to_the_runs_session(mgr, monkeypatch):
+    """A start() during a run hands the stream to the run's own session and the
+    bare refusal to everyone else - the ticket is the capability."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.stop_for_agent_run()
+    mgr.agent_stream_started("sess-run")
+    own = mgr.start("scope-a", "sess-run")
+    assert own["status"] == "agent_active" and "view_only=1" in own["streamPath"]
+    other = mgr.start("scope-b", "sess-other")
+    assert other["status"] == "agent_active" and other["streamPath"] == ""
+    mgr.agent_run_ended()
+
+
+def test_watch_grant_viewer_connected_waits_for_pixels(mgr, monkeypatch):
+    """The connecting cover works for the watch grant exactly as for a lease."""
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    mgr.stop_for_agent_run()
+    mgr.agent_stream_started("sess-run")
+    assert mgr._test_emitted[-1][0]["viewerConnected"] is False
+    ticket = mgr._test_emitted[-1][0]["streamPath"].split("/t/")[1].split("/")[0]
+    assert mgr.stream_connected(ticket)
+    assert mgr.stream_bytes(ticket, 45) is False           # handshake-sized
+    assert mgr.stream_bytes(ticket, 49132) is True         # a real frame
+    payload, sid = mgr._test_emitted[-1]
+    assert sid == "sess-run" and payload["viewerConnected"] is True
+    mgr.agent_run_ended()
+
+
+def test_no_watch_grant_inside_a_spawned_child(mgr, monkeypatch):
+    """In the child the singleton is not the one the proxy validates against:
+    a grant made there would be a link to a 403, so the helper stands down."""
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    mgr.agent_stream_started("sess-run")
+    assert mgr._agent_stream is None and mgr._test_emitted == []
+
+
+# ── the give-back after an agent takeover ─────────────────────────────────
+
+def test_takeover_remembers_the_holder_and_run_end_says_resumable(mgr, monkeypatch):
+    """The run only borrows the browser: the evicted holder's session is told
+    resumable on run end, exactly once."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    mgr.agent_run_ended()
+    resumable = [(p, sid) for p, sid in mgr._test_emitted
+                 if p.get("reason") == "agent_done" and p.get("resumable")]
+    assert resumable == [({"status": "stopped", "reason": "agent_done",
+                           "saving": False, "streamPath": "", "resumable": True},
+                          "sess-1")]
+    # Consumed: a second run that evicted nobody offers nobody a give-back.
+    mgr.stop_for_agent_run()
+    mgr.agent_run_ended()
+    assert [1 for p, _ in mgr._test_emitted if p.get("resumable")] == [1]
+
+
+def test_no_lease_means_no_give_back(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    mgr.stop_for_agent_run()
+    mgr.agent_run_ended()
+    assert not any(p.get("resumable") for p, _ in mgr._test_emitted)
+
+
+def test_fresh_lease_clears_a_pending_give_back(mgr, monkeypatch):
+    """Spawn lane: the holder survives the marker return (notify=False), but a
+    lease the person starts by hand supersedes it - the browser has an owner
+    again, and the eventual run end must not re-offer it."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    mgr.agent_run_ended(notify=False)      # marker returned, child still starting
+    mgr.start("scope-a", "sess-1")         # person re-opens by hand mid-run
+    mgr.stop("user", requester_scope="scope-a")
+    mgr.agent_run_ended()
+    assert not any(p.get("resumable") for p, _ in mgr._test_emitted)
 
 
 def test_run_hook_evicts_lease_and_clears_flag_on_spawn(monkeypatch, tmp_path):

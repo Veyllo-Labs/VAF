@@ -716,6 +716,14 @@ class BrowserAgentTool(BaseTool):
             _session_id = get_current_session_id()
         except Exception:
             _session_id = None
+        # Grant the run's own chat window a watch-only live stream of this run
+        # (the window then shows the real streamed Chromium instead of the
+        # 1.5s screenshot view; the screenshots below keep streaming as the
+        # fallback and as vision input). In-process lane only - the helper
+        # itself stands down inside a spawned child, where the ticket would
+        # validate against the wrong process. Never raises.
+        from vaf.core.browser_interactive import agent_stream_started
+        agent_stream_started(_session_id)
         try:
             return _run_async_in_new_loop(
                 self._run_browser(

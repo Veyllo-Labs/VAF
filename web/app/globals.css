@@ -499,6 +499,17 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    up and vanishes reads as a splash of our own. The hint fades in only after the
    wait has become unusual. Pure CSS, so nothing has to run a timer. */
 @keyframes vafBrowserConnectHint { to { opacity: 1 } }
+/* The browser window's change-of-hands veil (person -> agent and back). Fades
+   in, holds long enough to be read, fades out - and while it is up it also
+   covers the stream iframe's ticket swap and reconnect, so the handover reads
+   as one deliberate motion instead of a flicker. Opacity only, per the repaint
+   rule above. */
+@keyframes vafBrowserHandover {
+  0% { opacity: 0 }
+  12% { opacity: 1 }
+  78% { opacity: 1 }
+  100% { opacity: 0 }
+}
 
 @keyframes skelPulse { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
 @keyframes loadCrawl {

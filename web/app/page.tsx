@@ -5441,6 +5441,22 @@ function VAFDashboardContent() {
                     if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     {
                         const st = String(data.status ?? '');
+                        // The run only BORROWED the browser: an agent_done that says
+                        // resumable means an interactive lease was evicted for this very
+                        // run, and the window it belonged to is this one. Hand the person
+                        // the browser back instead of letting the window close over them -
+                        // unless they closed it themselves in the meantime, which is the
+                        // one signal that outranks the give-back.
+                        if (st === 'stopped' && String(data.reason ?? '') === 'agent_done'
+                            && data.resumable
+                            && subAgentStateRef.current.isOpen
+                            && subAgentStateRef.current.agentKind === 'browser'
+                            && !subAgentUserClosedRef.current) {
+                            socket.send(JSON.stringify({
+                                type: 'browser_interactive_start',
+                                sessionId: data.sessionId || activeSessionId,
+                            }));
+                        }
                         let streamUrl = String(data.streamPath || '');
                         const resolvedBase = wsBaseResolvedRef.current;
                         if (streamUrl && resolvedBase) {
@@ -5471,9 +5487,15 @@ function VAFDashboardContent() {
                                     reason: String(data.reason ?? ''),
                                     viewerConnected: !!data.viewerConnected,
                                 }
-                                : (st === 'busy' || st === 'error')
-                                    ? { active: false, status: st, streamUrl: '', saving: false, reason: String(data.reason ?? ''), viewerConnected: false }
-                                    : null,
+                                // agent_active WITH a stream path is the run's watch-only
+                                // live view (view_only rides in the URL, granted only to
+                                // the run's own session); without one it stays the bare
+                                // refusal and clears like every other non-active status.
+                                : (st === 'agent_active' && streamUrl)
+                                    ? { active: false, status: st, streamUrl, saving: false, reason: String(data.reason ?? ''), viewerConnected: !!data.viewerConnected }
+                                    : (st === 'busy' || st === 'error')
+                                        ? { active: false, status: st, streamUrl: '', saving: false, reason: String(data.reason ?? ''), viewerConnected: false }
+                                        : null,
                         }));
                     }
                 }
@@ -7296,10 +7318,15 @@ function VAFDashboardContent() {
         }, 500);
     };
 
+    // A window whose interactive browser is live belongs to the person, not to the
+    // run that just ended: the browser agent's give-back re-enters the interactive
+    // mode moments after the run completes, and the auto-close below must neither
+    // fire before that round trip nor after it.
+    const interactiveDriving = !!subAgentState.interactive?.active;
     useEffect(() => {
         if (!subAgentState.isOpen) return;
         if (subAgentManualOpenRef.current) return;
-        if (!subAgentCanClose) {
+        if (!subAgentCanClose || interactiveDriving) {
             if (subAgentAutoCloseRef.current) {
                 clearTimeout(subAgentAutoCloseRef.current);
                 subAgentAutoCloseRef.current = null;
@@ -7322,7 +7349,7 @@ function VAFDashboardContent() {
                 subAgentAutoCloseRef.current = null;
             }
         };
-    }, [subAgentCanClose, subAgentState.isOpen]);
+    }, [subAgentCanClose, subAgentState.isOpen, interactiveDriving]);
 
     // Mobile: the right dock (sub-agent + document/code/browser viewers) is hidden <lg. A mini-bar opens it
     // as a full-screen sheet on demand; reset the sheet once every dock panel has closed, so the next one
@@ -7352,12 +7379,28 @@ function VAFDashboardContent() {
             sendBrowserInteractive({ type: 'browser_interactive_stop' });
         }
     }, [subAgentState.interactive, sendBrowserInteractive]);
+    // Closing plays the window's slide-out FIRST and stops the stream after it:
+    // cutting the lease first swaps the iframe for the empty view mid-animation.
+    // Re-opening inside that gap cancels the pending stop, or the fresh lease the
+    // person just asked for would be killed by the old window's timer.
+    const pendingBrowserStopRef = useRef<number | null>(null);
+    const closeBrowserWindowAnimated = () => {
+        closeSubAgentWindow(true);
+        if (pendingBrowserStopRef.current) window.clearTimeout(pendingBrowserStopRef.current);
+        pendingBrowserStopRef.current = window.setTimeout(() => {
+            pendingBrowserStopRef.current = null;
+            stopBrowserInteractiveIfAny();
+        }, 340);
+    };
     const toggleBrowserWindow = () => {
         if (browserWindowBusy) return;
         if (browserWindowOpen) {
-            stopBrowserInteractiveIfAny();
-            closeSubAgentWindow(true);
+            closeBrowserWindowAnimated();
             return;
+        }
+        if (pendingBrowserStopRef.current) {
+            window.clearTimeout(pendingBrowserStopRef.current);
+            pendingBrowserStopRef.current = null;
         }
         // The window picks its browser view off agentKind, so the button has to name the kind
         // it is opening. The last browser run's screenshot rides along on subAgentState and
@@ -9510,12 +9553,14 @@ function VAFDashboardContent() {
                                     isOpen={subAgentState.isOpen}
                                     mode="dock"
                                     onClose={() => {
-                                        // closeSubAgentWindow(true), not a bare isOpen=false: the
-                                        // manual close must set the user-closed flag, or the very
+                                        // closeSubAgentWindow(true) inside, not a bare isOpen=false:
+                                        // the manual close must set the user-closed flag, or the very
                                         // next streamed event reopens the window - measured live in
                                         // a room run, where events never pause long enough to close.
-                                        stopBrowserInteractiveIfAny();
-                                        closeSubAgentWindow(true);
+                                        // The animated variant also delays the interactive-stream
+                                        // stop (a no-op for every non-browser view) until the
+                                        // slide-out has played.
+                                        closeBrowserWindowAnimated();
                                     }}
                                     canClose={true}
                                     agentName={subAgentState.agentName}

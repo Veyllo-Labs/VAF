@@ -322,6 +322,25 @@ class InteractiveLease:
     pixels_seen: int = 0
 
 
+@dataclass
+class AgentStream:
+    """A WATCH-ONLY stream grant for the duration of one browser_agent run.
+
+    The agent view in the window shows the same streamed Chromium the person
+    would drive, instead of a rebuilt chrome bar over 1.5s screenshots - but
+    the person must not be able to type into a browser the agent is driving,
+    so the stream URL carries the viewer's view_only setting and the grant is
+    emitted only to the chat session that owns the run. The ticket dies with
+    the run. Screenshots keep streaming regardless: they are the fallback for
+    the lanes without a grant (workflow tile, spawned child)."""
+
+    session_id: str
+    ticket: str
+    started_at: float
+    stream_connections: int = 0
+    pixels_seen: int = 0
+
+
 class InteractiveBrowserManager:
     """Singleton arbiter for the interactive use of the shared browser."""
 
@@ -344,6 +363,14 @@ class InteractiveBrowserManager:
         self._lock = threading.RLock()
         self._lease: Optional[InteractiveLease] = None
         self._agent_active = False
+        self._agent_stream: Optional[AgentStream] = None
+        # The lease an agent takeover evicted: (user_scope_id, session_id).
+        # This is the fact "the person was driving BEFORE the agent took the
+        # browser", kept server-side so it survives a page reload during the
+        # run. agent_run_ended() turns it into a resumable=True stop event to
+        # that session, whose window then re-enters the interactive mode
+        # instead of closing; any freshly started lease clears it.
+        self._pre_agent_holder: Optional[tuple] = None
         self._last_session_id: str = ""
         # Whose cookies currently sit in the shared container jar. Survives the
         # lease so a scope handover can clear the jar even after a stop.
@@ -381,26 +408,70 @@ class InteractiveBrowserManager:
         return False
 
     def stop_for_agent_run(self) -> None:
-        """The agent is about to use the browser: evict any interactive lease."""
+        """The agent is about to use the browser: evict any interactive lease.
+
+        Whoever held the lease is remembered: the agent may take the browser,
+        but a window the person opened themselves gets it back when the run
+        ends (agent_run_ended announces that as resumable) instead of being
+        closed over their head. No lease means nothing to give back."""
         with self._lock:
             self._agent_active = True
+            lease = self._lease
+            self._pre_agent_holder = ((lease.user_scope_id, lease.session_id)
+                                      if lease else None)
         try:
             self.stop("agent_takeover", force=True)
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
 
+    def agent_stream_started(self, session_id: Optional[str]) -> None:
+        """Grant the run's own chat window a watch-only live stream of the run.
+
+        In-process lane only: in a spawned child this manager is not the one
+        the web server's proxy validates tickets against, so a grant made
+        there would be a link to a 403 - the child lane keeps the screenshot
+        view. Emitted only to the session that owns the run; the ticket IS the
+        capability, so nobody else may receive it."""
+        if not session_id:
+            return
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
+            return
+        with self._lock:
+            stream = AgentStream(session_id=str(session_id),
+                                 ticket=secrets.token_urlsafe(24),
+                                 started_at=time.time())
+            self._agent_stream = stream
+            payload = self._agent_payload(stream)
+        self._emit(payload, str(session_id))
+
     def agent_run_ended(self, notify: bool = True) -> None:
         with self._lock:
             self._agent_active = False
+            # The watch-only ticket dies with the run; a stream that outlives
+            # it would keep showing the browser to a window with no run behind.
+            self._agent_stream = None
             sid = self._last_session_id
+            holder = self._pre_agent_holder if notify else None
+            if notify:
+                self._pre_agent_holder = None
         # Tell the window that owned the interactive view the browser is free
-        # again; the frontend may offer a restart. Best-effort. notify=False is
-        # the spawn lane, where run() returns its marker while the child is
-        # only starting - announcing a free browser there would be a lie.
-        if notify and sid:
+        # again. When an interactive lease was evicted FOR this run, the stop
+        # event says resumable: the holder's window re-enters the interactive
+        # mode instead of closing - the run only borrowed the browser.
+        # Best-effort. notify=False is the spawn lane, where run() returns its
+        # marker while the child is only starting - announcing a free browser
+        # there would be a lie (the holder stays remembered for the run that
+        # does end with a notification).
+        if not notify:
+            return
+        if holder is not None:
             self._emit({"status": "stopped", "reason": "agent_done",
-                        "saving": False, "streamPath": ""}, sid)
+                        "saving": False, "streamPath": "", "resumable": True},
+                       holder[1])
+        elif sid:
+            self._emit({"status": "stopped", "reason": "agent_done",
+                        "saving": False, "streamPath": "", "resumable": False}, sid)
 
     # -- lease lifecycle ---------------------------------------------------
     def start(self, user_scope_id: str, session_id: str, *, save: bool = True,
@@ -418,6 +489,14 @@ class InteractiveBrowserManager:
         unless the caller is an admin, who may evict.
         """
         if self.is_agent_active():
+            # The run's own window may WATCH: hand it the view-only stream
+            # grant when one exists for exactly this session. Any other
+            # session gets the bare refusal - the ticket is the capability,
+            # and a foreign user must not see what someone's agent browses.
+            with self._lock:
+                stream = self._agent_stream
+                if stream is not None and stream.session_id == session_id:
+                    return self._agent_payload(stream)
             return self._payload("agent_active", reason="agent_run")
 
         with self._lock:
@@ -481,6 +560,9 @@ class InteractiveBrowserManager:
                 )
                 self._lease = lease
             self._last_session_id = session_id
+            # A fresh (or refreshed) lease supersedes any pending give-back
+            # from an earlier agent takeover: the browser has an owner again.
+            self._pre_agent_holder = None
             # A stream is being handed out, so a viewer is about to draw its picture
             # from scratch and will show its own splash while doing so. The count of
             # what the PREVIOUS viewer received says nothing about that, and leaving
@@ -601,19 +683,27 @@ class InteractiveBrowserManager:
             return None
 
     # -- stream proxy hooks ------------------------------------------------
-    def validate_ticket(self, ticket: str) -> Optional[InteractiveLease]:
+    def _match_ticket(self, ticket: str):
+        """The lease or agent stream this ticket belongs to. Caller holds the lock."""
+        lease = self._lease
+        if lease is not None and secrets.compare_digest(lease.ticket, ticket or ""):
+            return lease
+        stream = self._agent_stream
+        if stream is not None and secrets.compare_digest(stream.ticket, ticket or ""):
+            return stream
+        return None
+
+    def validate_ticket(self, ticket: str):
+        """The proxy's auth gate: a lease's ticket or a run's watch-only ticket."""
         with self._lock:
-            lease = self._lease
-            if lease is not None and secrets.compare_digest(lease.ticket, ticket or ""):
-                return lease
-            return None
+            return self._match_ticket(ticket)
 
     def stream_connected(self, ticket: str) -> bool:
         with self._lock:
-            lease = self._lease
-            if lease is None or not secrets.compare_digest(lease.ticket, ticket or ""):
+            grant = self._match_ticket(ticket)
+            if grant is None:
                 return False
-            lease.stream_connections += 1
+            grant.stream_connections += 1
         # Deliberately NO emit here. This is the socket opening, and the viewer's own
         # splash covers the handshake that follows - announcing it as "connected"
         # lifted our cover at the exact moment that splash appeared. stream_bytes()
@@ -626,37 +716,42 @@ class InteractiveBrowserManager:
         picture is up, so the caller can stop reporting.
 
         This - not the socket accept - is what the window's connecting cover waits
-        for. Emitting only on the crossing keeps it to one message per lease.
+        for. Emitting only on the crossing keeps it to one message per grant.
         """
         with self._lock:
-            lease = self._lease
-            if lease is None or not secrets.compare_digest(lease.ticket, ticket or ""):
-                return True    # no lease of ours: nothing to report, stop asking
-            if lease.pixels_seen >= self.PIXELS_THRESHOLD:
+            grant = self._match_ticket(ticket)
+            if grant is None:
+                return True    # no grant of ours: nothing to report, stop asking
+            if grant.pixels_seen >= self.PIXELS_THRESHOLD:
                 return True
-            lease.pixels_seen += max(0, count)
-            crossed = lease.pixels_seen >= self.PIXELS_THRESHOLD
+            grant.pixels_seen += max(0, count)
+            crossed = grant.pixels_seen >= self.PIXELS_THRESHOLD
             if not crossed:
                 return False
-            payload = self._payload("active", lease=lease)
-            sid = lease.session_id
+            payload = (self._payload("active", lease=grant)
+                       if isinstance(grant, InteractiveLease)
+                       else self._agent_payload(grant))
+            sid = grant.session_id
         self._emit(payload, sid)
         return True
 
     def stream_disconnected(self, ticket: str) -> None:
         with self._lock:
-            lease = self._lease
-            if lease is None or not secrets.compare_digest(lease.ticket, ticket or ""):
+            grant = self._match_ticket(ticket)
+            if grant is None:
                 return
-            lease.stream_connections = max(0, lease.stream_connections - 1)
-            gone = lease.stream_connections == 0
+            grant.stream_connections = max(0, grant.stream_connections - 1)
+            gone = grant.stream_connections == 0
             if gone:
-                lease.last_disconnect = time.time()
                 # The next viewer draws its own picture from scratch and shows its
                 # own splash while doing so, so it must wait for its own frames.
-                lease.pixels_seen = 0
-            payload = self._payload("active", lease=lease)
-            sid = lease.session_id
+                grant.pixels_seen = 0
+                if isinstance(grant, InteractiveLease):
+                    grant.last_disconnect = time.time()
+            payload = (self._payload("active", lease=grant)
+                       if isinstance(grant, InteractiveLease)
+                       else self._agent_payload(grant))
+            sid = grant.session_id
         if gone:
             self._emit(payload, sid)
 
@@ -713,37 +808,66 @@ class InteractiveBrowserManager:
                     self._ensure_janitor()
 
     # -- plumbing ----------------------------------------------------------
+    @staticmethod
+    def _stream_doc_path(ticket: str, *, view_only: bool = False) -> str:
+        """The viewer document URL for one ticket.
+
+        The ?path= is not decoration, it is the whole stream. The KasmVNC client
+        builds its socket URL from SETTINGS, not relative to its own directory:
+            ws://<host>:<port>/ + getSetting("path")   // default "websockify"
+        so without this it dials ws://<backend>/websockify, a route that does not
+        exist here, and the viewer never connects. The client reads settings from
+        the URL (hash first, then query), so handing it the ticketed path makes it
+        dial our proxy route instead. No leading slash: the client adds "/" itself.
+        host/port/encrypt stay default and therefore point at the iframe's own
+        origin, which IS the backend serving this route.
+
+        RELATIVE on purpose. The document is loaded same-origin by the window, so
+        it travels whichever front door the person is on (the dev server, or the
+        HTTPS proxy when LAN hosting is on) and no scheme has to be guessed here -
+        guessing it wrong is exactly how this lane produced an empty response: the
+        backend port speaks HTTPS while TLS is on, and a plain http:// iframe URL
+        got nothing back. The socket's host and port are appended by the frontend
+        from its own backend-socket helper, which is the app's single answer to
+        "where is the backend".
+        resize=remote: the server only ALLOWS resizing, the viewer has to ask
+        for it. Without this the display stays at its start geometry and the
+        window shows black bars above and below the page.
+        view_only=1 (the agent's watch grant): the viewer setting is read as a
+        truthy STRING, so it is either present ("1") or absent - never "0".
+        """
+        ws_path = f"api/browser-vnc/t/{ticket}/websockify"
+        doc = (f"/api/browser-vnc/t/{ticket}/index.html"
+               f"?path={ws_path}&resize=remote")
+        if view_only:
+            doc += "&view_only=1"
+        return doc
+
+    def _agent_payload(self, stream: Optional[AgentStream] = None) -> dict:
+        """The agent-run status for the run's own window: watchable, not drivable.
+
+        Same event shape as the lease payloads, same status name the start()
+        refusal always used ("agent_active") - the difference is that the run's
+        own session now gets a streamPath to watch the run through."""
+        if stream is None:
+            with self._lock:
+                stream = self._agent_stream
+        return {
+            "status": "agent_active",
+            "reason": "agent_run",
+            "saving": False,
+            "streamPath": (self._stream_doc_path(stream.ticket, view_only=True)
+                           if stream else ""),
+            "viewerConnected": bool(stream and stream.pixels_seen >= self.PIXELS_THRESHOLD),
+        }
+
     def _payload(self, status: str, *, reason: str = "",
                  lease: Optional[InteractiveLease] = None) -> dict:
         if lease is None:
             with self._lock:
                 lease = self._lease
         active = status == "active" and lease is not None
-        # The ?path= is not decoration, it is the whole stream. The KasmVNC client
-        # builds its socket URL from SETTINGS, not relative to its own directory:
-        #     ws://<host>:<port>/ + getSetting("path")   // default "websockify"
-        # so without this it dials ws://<backend>/websockify, a route that does not
-        # exist here, and the viewer never connects. The client reads settings from
-        # the URL (hash first, then query), so handing it the ticketed path makes it
-        # dial our proxy route instead. No leading slash: the client adds "/" itself.
-        # host/port/encrypt stay default and therefore point at the iframe's own
-        # origin, which IS the backend serving this route.
-        stream = ""
-        if active:
-            ws_path = f"api/browser-vnc/t/{lease.ticket}/websockify"
-            # RELATIVE on purpose. The document is loaded same-origin by the window, so
-            # it travels whichever front door the person is on (the dev server, or the
-            # HTTPS proxy when LAN hosting is on) and no scheme has to be guessed here -
-            # guessing it wrong is exactly how this lane produced an empty response: the
-            # backend port speaks HTTPS while TLS is on, and a plain http:// iframe URL
-            # got nothing back. The socket's host and port are appended by the frontend
-            # from its own backend-socket helper, which is the app's single answer to
-            # "where is the backend".
-            # resize=remote: the server only ALLOWS resizing, the viewer has to ask
-            # for it. Without this the display stays at its start geometry and the
-            # window shows black bars above and below the page.
-            stream = (f"/api/browser-vnc/t/{lease.ticket}/index.html"
-                      f"?path={ws_path}&resize=remote")
+        stream = self._stream_doc_path(lease.ticket) if active else ""
         return {
             "status": status,
             "reason": reason,
@@ -781,6 +905,15 @@ def stop_for_agent_run() -> None:
     """Hook for BrowserAgentTool.run(): evict the interactive lease. Never raises."""
     try:
         get_interactive_manager().stop_for_agent_run()
+    except Exception:
+        pass
+
+
+def agent_stream_started(session_id: Optional[str]) -> None:
+    """Hook for BrowserAgentTool.run()'s in-process lane: grant the run's own
+    window a watch-only live stream. Never raises."""
+    try:
+        get_interactive_manager().agent_stream_started(session_id)
     except Exception:
         pass
 

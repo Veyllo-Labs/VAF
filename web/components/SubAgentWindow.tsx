@@ -814,6 +814,68 @@ export default function SubAgentWindow({
         setViewerSaysState(null);
     }, [interactiveIsActive, interactiveStreamUrl]);
 
+    // The browser window is ONE browser with two modes: the person drives it
+    // (interactive lease) or the agent does (a run, watched through the same
+    // stream when a watch-only grant arrived, through screenshots otherwise).
+    // A change of hands is announced by a short full-viewport handover veil,
+    // which also happens to cover the iframe's ticket swap and reconnect.
+    const agentWatchStream = (!interactive?.active
+        && interactive?.status === 'agent_active'
+        && interactive.streamUrl) ? interactive : null;
+    const browserStreamMode: 'user' | 'agent' | 'none' =
+        interactive?.active ? 'user'
+            : (agentWatchStream || (browser && inferredPresence === 'online')) ? 'agent'
+                : 'none';
+    const lastRealBrowserModeRef = useRef<'user' | 'agent' | null>(null);
+    const [browserHandover, setBrowserHandover] = useState<'to-agent' | 'to-user' | null>(null);
+    useEffect(() => {
+        // 'none' is the gap BETWEEN the modes (takeover clears the lease before
+        // the run's data arrives), so the comparison runs against the last real
+        // mode, not the immediate predecessor - or every handover would read as
+        // "none -> agent" and never fire.
+        if (agentKind !== 'browser' || browserStreamMode === 'none') return;
+        const last = lastRealBrowserModeRef.current;
+        lastRealBrowserModeRef.current = browserStreamMode;
+        if (last !== null && last !== browserStreamMode) {
+            setBrowserHandover(browserStreamMode === 'agent' ? 'to-agent' : 'to-user');
+            const t = setTimeout(() => setBrowserHandover(null), 1100);
+            return () => clearTimeout(t);
+        }
+    }, [browserStreamMode, agentKind]);
+    const handoverOverlay = browserHandover ? (
+        <div
+            className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center"
+            style={{ animation: 'vafBrowserHandover 1.1s ease-in-out forwards' }}
+        >
+            <div className="absolute inset-0 bg-[#101319]/80" />
+            <div className="relative flex items-center gap-2.5 rounded-full border border-white/10 bg-[#1e2430] px-4 py-2 shadow-xl">
+                <span className={cn('h-2 w-2 rounded-full', browserHandover === 'to-agent' ? 'bg-sky-400' : 'bg-emerald-400')} />
+                <span className="text-[12px] font-medium text-gray-100">
+                    {browserHandover === 'to-agent' ? 'The agent takes over the browser' : 'The browser is yours again'}
+                </span>
+            </div>
+        </div>
+    ) : null;
+
+    // Closing must ANIMATE. Returning null the moment isOpen flips false kills
+    // the slide-out before its first frame - the window simply vanished while
+    // the (transparent) dock beside it collapsed. The hold flag is therefore
+    // ARMED WHILE OPEN and released one transition length after the close:
+    // arming it in response to the close would be too late, because effects run
+    // after the closed render has already committed the unmount - the DOM is
+    // torn down before any transition could start, and the remount that follows
+    // begins life in the exit classes with nothing to animate from (measured:
+    // no slide-out, ever). With the hold pre-armed, the first closed render
+    // keeps the SAME nodes and only swaps their classes, which is what a CSS
+    // transition needs. The perf guard below (no heavy hidden DOM) holds again
+    // once the hold drops.
+    const [exitHold, setExitHold] = useState(false);
+    useEffect(() => {
+        if (isOpen) { setExitHold(true); return; }
+        const t = setTimeout(() => setExitHold(false), 320);
+        return () => clearTimeout(t);
+    }, [isOpen]);
+
     const browserActionsRef = useRef<HTMLDivElement>(null);
     const browserActivityRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -849,7 +911,8 @@ export default function SubAgentWindow({
     // typewriter + ResizeObserver. The old `&& mode === 'overlay'` made this guard dead code: the only
     // caller uses mode="dock", so the heavy view was still built while invisible and then thrashed for
     // minutes when revealed (e.g. closing the editor after a research run re-mounts this view).
-    if (!isOpen) return null;
+    // exitHold keeps the DOM for one transition length after a close so the slide-out can play.
+    if (!isOpen && !exitHold) return null;
 
     if (mode === 'dock' && agentKind === 'document') {
         // ── Document view for the document agent: A4 paper growing section by
@@ -2166,6 +2229,7 @@ export default function SubAgentWindow({
                             <span className="ml-auto flex-none">{interactive.viewerConnected ? 'connected' : 'connecting'}</span>
                         </div>
                     </div>
+                    {handoverOverlay}
                 </div>
             );
         }
@@ -2202,7 +2266,43 @@ export default function SubAgentWindow({
                     </div>
 
                     <div className="flex min-h-0 flex-1 flex-col">
-                        {/* Browser: chrome + widescreen screenshot (letterboxed) */}
+                        {agentWatchStream ? (
+                            // The run's watch-only live stream: the SAME streamed Chromium
+                            // the person would drive - real tab strip, real omnibox - so
+                            // the agent view stops rebuilding a chrome bar over 1.5s
+                            // screenshots. pointer-events-none on top of the URL's
+                            // view_only: watching a run must never type into it. The
+                            // screenshot lane keeps running underneath and serves as the
+                            // cover image while the stream draws its first picture.
+                            <div className="relative min-h-0 flex-1 bg-[#1e2430]">
+                                <iframe
+                                    ref={streamIframeRef}
+                                    src={agentWatchStream.streamUrl}
+                                    title="Browser (agent live view)"
+                                    className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
+                                />
+                                {(viewerSaysState !== null
+                                    ? viewerSaysState !== 'connected'
+                                    : !agentWatchStream.viewerConnected) && (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-[#1e2430] p-3">
+                                        {browserFrame
+                                            ? <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
+                                            : (
+                                                <div
+                                                    className="flex flex-col items-center gap-3 opacity-0"
+                                                    style={{ animation: 'vafBrowserConnectHint .4s ease-out 3s forwards' }}
+                                                >
+                                                    <Loader2 size={20} className="animate-spin text-[#5c6675]" />
+                                                    <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                                </div>
+                                            )}
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                        // No watch grant (workflow tile lane, spawned child, or a window
+                        // with no run behind it): the rebuilt chrome bar over the
+                        // screenshot lane stays as the fallback view.
                         <div className="flex min-h-0 flex-1 flex-col bg-[#1e2430]">
                             <div className="flex h-10 flex-none items-center gap-2 border-b border-black/40 bg-[#2a313f] px-3">
                                 <div className="flex gap-0.5">
@@ -2236,6 +2336,7 @@ export default function SubAgentWindow({
                                         </div>}
                             </div>
                         </div>
+                        )}
 
                         {/* Bottom dock: Task · Actions · History · Activity */}
                         <div className="flex h-[266px] flex-none border-t border-gray-200 bg-white">
@@ -2293,6 +2394,7 @@ export default function SubAgentWindow({
                         <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">{b?.status === 'done' ? 'done' : 'running'}</div>
                     </div>
                 </div>
+                {handoverOverlay}
             </div>
         );
     }

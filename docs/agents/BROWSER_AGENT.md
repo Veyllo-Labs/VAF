@@ -306,26 +306,15 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 
 ## Live View in WebUI
 
-When `browser_agent` is running, the **SubAgent Window** in the WebUI opens automatically and shows a live browser view:
+When `browser_agent` is running, the **SubAgent Window** in the WebUI opens automatically and shows a live browser view: the streamed Chromium itself on top (the same KasmVNC stream the interactive lane uses, watch-only), and the run's dock below (task, action plan, visited URLs, activity).
 
-```
-┌─────────────────────────────────────┐
-│ Browser Agent  ● Running            │
-│─────────────────────────────────────│
-│ https://news.ycombinator.com  ● LIVE │
-│ ┌─────────────────────────────────┐ │
-│ │   [Live Screenshot ~1.5 fps]    │ │
-│ └─────────────────────────────────┘ │
-│─────────────────────────────────────│
-│ Console                             │
-│ [12:34:01] Start: browser_agent … │
-└─────────────────────────────────────┘
-```
+**The viewport is the real browser.** At run start the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`): the window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run.
 
-- **URL bar** - shows the current page URL, updated with every screenshot
+**Screenshots stay.** The ~1.5s JPEG screenshot loop keeps running regardless - it feeds vision, the workflow tile, and the fallback view for the lanes without a stream grant (a spawned child validates tickets against the wrong process, so the child lane deliberately makes no grant and keeps the rebuilt chrome bar over screenshots). While the stream draws its first picture, the latest screenshot doubles as the connecting cover.
+
 - **Live indicator** - red pulsing dot disappears when the task ends
-- **Frame rate** - ~1 frame per 1.5 seconds (JPEG quality 55, ~30–80 KB/frame)
-- **Console** - tool start/end events and log lines still shown below the viewport
+- **Dock** - task, actions, history and activity below the viewport
+- **Handover veil** - a change of hands (person to agent, agent back to person) plays a short full-viewport veil, which also covers the stream's ticket swap and reconnect
 
 The viewport is visible in both **dock mode** (right side panel) and **overlay mode** (full-screen modal, triggered by clicking the SubAgent bubble in the chat).
 
@@ -414,12 +403,21 @@ viewer disappears is released after a 120s grace period, and the browser is park
 one blank tab - the same idle rule the agent lane uses, for the same measured 1027%-CPU
 reason.
 
-**The agent always wins.** `BrowserAgentTool.run()` evicts any interactive lease at its
-very start (for both the in-process and the spawned-child lane, since the hook runs before
-the spawn branch), and an interactive start is refused with `agent_active` while a run is
-underway - the in-process flag covers the first, an IPC scan for a live `browser_agent`
-task covers the second. The window flips back to the agent view (task, actions, history,
-activity) the moment agent data streams, and becomes startable again when the run ends.
+**The agent always wins - but only borrows.** `BrowserAgentTool.run()` evicts any
+interactive lease at its very start (for both the in-process and the spawned-child lane,
+since the hook runs before the spawn branch), and an interactive start is refused with
+`agent_active` while a run is underway - the in-process flag covers the first, an IPC
+scan for a live `browser_agent` task covers the second. The refusal is not blind for the
+run's own session: it carries the run's watch-only stream, so opening the window during a
+run shows the live browser rather than nothing. The window flips to the agent view (live
+stream or screenshots, plus task, actions, history, activity) the moment agent data
+streams. The eviction is remembered server-side (`_pre_agent_holder`): when the run ends,
+the evicted holder's session receives the stop event with `resumable: true` and its
+window re-enters the interactive mode by itself, with a short handover veil in each
+direction - the agent must not close a browser window the person opened. A run that
+evicted nobody ends as before: the window auto-closes a few seconds after completion.
+The give-back is consumed on first use, and a lease the person starts by hand clears any
+pending one.
 
 **Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
 counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its
@@ -751,7 +749,7 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
 | **Single browser instance** | All tasks share one Chromium process. Concurrent requests are serialised by a queue (see [Concurrency](#concurrency--multi-user)). |
-| **Live view frame rate** | ~1 frame/1.5 s - sufficient for monitoring, not a real-time stream. |
+| **Live view frame rate** | Chat runs stream the browser live (KasmVNC, watch-only). The screenshot lanes (workflow tile, spawned child) stay at ~1 frame/1.5 s - sufficient for monitoring. |
 
 ---
 

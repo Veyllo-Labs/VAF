@@ -732,8 +732,11 @@ sidebar the same way.
 Interactive browser: `browser_interactive_state`
 (`{ sessionId, status: active|stopped|busy|agent_active|error, saving, reason, streamPath }`)
 carries the lease verdict and lifecycle (superseded by another window, agent takeover,
-viewer gone, browser container restarted). Sent as a direct reply to the requester AND
-broadcast to the owning session.
+viewer gone, browser container restarted). `agent_active` carries a watch-only
+streamPath for the run's own session; `agent_done` carries `resumable: true` to the
+session whose lease the run evicted, and that window re-enters the interactive mode
+instead of closing. Sent as a direct reply to the requester AND broadcast to the
+owning session.
 
 ```json
 {

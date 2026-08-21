@@ -177,6 +177,23 @@ Key rules:
 - `speaker_confirm_reply`: answer to a speaker-confirmation card. Payload: `{ confirmId, answer: "yes" | "no", name? }` (name only meaningful with `"no"`: stores a named third-party voice profile). The scope is taken from the CONNECTION identity, never from the client. Server responds with `speaker_confirm_result` (`ok`, `outcome`, `ack`, `confirmId`, optional `error`).
 - **Speech:** `process_audio` (`{ audio: base64, format?: "wav" }`; the frontend records via MediaRecorder, converts to 16 kHz mono WAV client-side and sets `format: "wav"`; if conversion fails it sends the raw WebM/OGG recording without a `format` field). The backend transcribes via the configured STT lane (cloud provider, Docker Whisper, or local faster-whisper). `speak` (`{ text }`) requests TTS synthesis; `stop_speech` (no payload) stops playback state.
 
+- **Interactive browser:** `browser_interactive_start` (`{ sessionId, session? }`)
+  asks for the interactive lease on the sandbox browser (ownership-gated like every
+  session command; identity from the CONNECTION; a repeat from the same window refreshes
+  the lease). Persistence is decided SERVER-side - interactive use is always the
+  persistent mode, and a client-sent save flag is deliberately not read.
+  `browser_interactive_stop`
+  (`{ sessionId }`) releases it. The pixel stream itself never rides this socket: the
+  reply's `streamPath` names a ticketed proxy path (`/api/browser-vnc/t/<ticket>/...`)
+  which the window's iframe loads SAME-ORIGIN (the ticket is the credential there:
+  auth-middleware-exempt path, validated per request against the lease, the room-seat
+  pattern). The frontend appends `host` and `port` for the stream socket from
+  `getWsBase`, because the dev server cannot proxy websockets; the LAN lane needs both a
+  `WebSocketRoute` and an `_WS_ALLOWED` entry in `vaf/network/https_proxy.py`, and that
+  relay carries binary frames. Both handlers run the manager's blocking work (container
+  probe, cookie transfer) in an executor. See
+  [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#interactive-browser-driving-the-sandbox-by-hand).
+
 - `open_room` (`{ room_id }`): asks for one agent room's transcript. A room is NOT a
   session and deliberately does not travel through `load_session`: `Session.save()`
   rewrites the whole message list, which with N writers is the lost update the room
@@ -223,6 +240,17 @@ Key rules:
   `room_transcript`, so the card redraws from the store rather than from the click.
 
 ### Server → Client
+
+- `browser_interactive_state` (`{ sessionId, status, saving, reason, streamPath }`):
+  the interactive-browser lease verdict and lifecycle. `status` is one of `active`
+  (streamPath set, the window's iframe loads it), `stopped` (with `reason`: `user`,
+  `superseded` by the same user's newer window, `agent_takeover`, `agent_done`,
+  `viewer_gone` after the 120s grace, `browser_restarted`), `busy` (a different user
+  holds the lease; deliberately without saying who), `agent_active`, or `error`
+  (`browser_unavailable`). Sent as a direct reply to the requesting connection AND
+  broadcast to the owning session; declared in `VAF_LIVE_VIEW_TYPES`
+  (`vaf/core/progress.py`), so `tests/test_live_view_wire_types.py` pins the page.tsx
+  handler and the emitter to it.
 
 - `room_transcript`: answers `open_room`. The frontend adopts it into the view ONLY
   when it answers the room click the person just made (a pending mark set at the

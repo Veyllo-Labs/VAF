@@ -55,6 +55,12 @@ BRANCHES_WITH_CLIENT_SESSION_ID = {
     # client path) and cancel verifies the task belongs to the caller's session
     # before touching the flag file - both behind _ws_session_owner_ok.
     "learn_document_start", "learn_document_cancel",
+    # The interactive browser lanes. The sessionId names the chat whose window
+    # shows the stream (status broadcasts are scoped to it); the browser LEASE
+    # itself is authorised against the connection's user scope inside the
+    # manager. Both branches still gate the sessionId with _ws_session_owner_ok
+    # so this file's invariant has no exceptions to reason about.
+    "browser_interactive_start", "browser_interactive_stop",
 }
 
 

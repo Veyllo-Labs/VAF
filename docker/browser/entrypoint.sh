@@ -1,9 +1,12 @@
 #!/bin/sh
 # VAF Browser Container Entrypoint
 #
-# Chromium runs HEADED under a virtual X display (Xvfb) instead of --headless=new:
+# Chromium runs HEADED under a virtual X display instead of --headless=new:
 # real headed Chrome leaks far fewer automation tells, so it is the stronger
-# anti-bot baseline.
+# anti-bot baseline. The display server is KasmVNC's Xkasmvnc: an X server like
+# Xvfb, plus a built-in WebSocket stream of the display (port 6901) so the same
+# Chromium is watchable and drivable from the VAF web UI. Chromium and its CDP
+# lane do not know the difference.
 #
 # Chrome 112+ binds the remote-debugging port to 127.0.0.1 only (security), so
 # Chromium listens on 127.0.0.1:9223 and socat exposes 0.0.0.0:9222 -> 9223
@@ -22,26 +25,63 @@ CHROMIUM=/usr/lib/chromium/chromium
 export DISPLAY=:99
 
 start_xvfb() {
-    # Remove a stale lock/socket left by a previous (crashed) Xvfb, otherwise Xvfb aborts with
+    # Remove a stale lock/socket left by a previous (crashed) X server, otherwise it aborts with
     # "Server is already active for display 99", the leftover socket makes the readiness check below
     # pass anyway, and Chromium then launches against a dead display ("Missing X server"). This bit us
     # on container restarts where /tmp survived.
     rm -f /tmp/.X99-lock 2>/dev/null || true
     rm -f /tmp/.X11-unix/X99 2>/dev/null || true
 
-    Xvfb :99 -screen 0 1920x1080x24 -ac -nolisten tcp >/tmp/xvfb.log 2>&1 &
+    # The three encoder settings are about ARTEFACTS, and each answers a different
+    # cause of them:
+    #   -CompareFB 1   compare the framebuffer pixel by pixel instead of trusting the
+    #                  damage the application reports (default: auto). Chromium's
+    #                  damage does not cover everything it actually repaints, and the
+    #                  parts it forgets stay on screen as stale rectangles.
+    #   -VideoTime/-VideoArea  push the automatic "video mode" out of reach. It would
+    #                  otherwise trigger on any scroll (>45% of the screen changing for
+    #                  5s), downscale the whole display and encode it lossily - which
+    #                  looks exactly like smeared text.
+    #   -DynamicQuality  raise the floor of dynamic JPEG scaling (default 7-8), so a
+    #                  busy moment cannot drop the page into blocky quality.
+    #
+    # Xkasmvnc IS the X server (Xvnc lineage), launched directly rather than via the
+    # kasmvncserver perl wrapper, which insists on interactive user setup. The flags
+    # mirror /etc/kasmvnc/kasmvnc.yaml on purpose: whichever of the two this build
+    # reads first, the answer is the same. Plain WS + no basic auth is the same
+    # threat model as the unauthenticated CDP port: both leave this container only
+    # through loopback-published ports, and user-facing auth lives in the VAF web
+    # server that proxies the stream.
+    Xkasmvnc :99 -geometry 1920x1080 -depth 24 \
+        -websocketPort 6901 -interface 0.0.0.0 \
+        -httpd /usr/share/kasmvnc/www \
+        -disableBasicAuth -SecurityTypes None \
+        -AlwaysShared -FrameRate 60 \
+        -CompareFB 1 \
+        -VideoTime 600 -VideoArea 100 \
+        -DynamicQualityMin 8 -DynamicQualityMax 9 \
+        -ac >/tmp/kasmvnc.log 2>&1 &
     XVFB_PID=$!
-    # Wait until the X server is genuinely up: the socket must exist AND the Xvfb process must still be
-    # alive (a stale socket alone is not enough; see above). Bail out loudly if Xvfb dies.
+    # Wait until the X server is genuinely up: the socket must exist AND the process must still be
+    # alive (a stale socket alone is not enough; see above). Bail out loudly if it dies.
     i=0
     while [ $i -lt 100 ]; do
         if ! kill -0 "$XVFB_PID" 2>/dev/null; then
-            echo "Xvfb failed to start:"; cat /tmp/xvfb.log 2>/dev/null; exit 1
+            echo "Xkasmvnc failed to start:"; cat /tmp/kasmvnc.log 2>/dev/null; exit 1
         fi
         [ -e /tmp/.X11-unix/X99 ] && break
         i=$((i + 1)); sleep 0.1
     done
-    echo "Xvfb ready on :99"
+    echo "Xkasmvnc ready on :99 (VNC web stream on :6901)"
+
+    # A window manager, for exactly one job: keep Chromium's window the size of the
+    # display. Without one, nothing manages the window - it keeps the geometry it was
+    # created with, and when the viewer resizes the display to match the panel it is
+    # shown in, the difference stays behind as a black band with no browser in it.
+    # matchbox is ~300 KB, fullscreens what it manages, and draws no decorations.
+    pkill -f matchbox-window-manager 2>/dev/null || true   # -f: the name is >15 chars, -x never matches it
+    matchbox-window-manager -use_titlebar no -use_cursor no >/tmp/wm.log 2>&1 &
+    WM_PID=$!
 }
 
 start_xvfb
@@ -80,9 +120,50 @@ echo "UA: $USER_AGENT"
 # --disable-search-engine-choice-screen suppresses the choice modal, and
 # --search-engine-choice-country=US pins a non-EEA country so that whole subsystem
 # is never entered. See Debian #1141618 / crbug.com/357068286.
+#
+# The browser keeps its OWN window: tab strip, toolbar, bookmarks, downloads. An
+# earlier version hid all of it (app mode) so the web UI could draw that chrome
+# itself, and it cost more than it bought - a middle-click into a new tab opened a
+# second, ordinary window inside the streamed one, and every browser feature that
+# lives in the toolbar was simply gone. --force-dark-mode dresses that UI to match
+# the app instead of replacing it; it themes the BROWSER, not page content, so sites
+# still render the way their authors meant.
+#
+# --test-type exists to suppress ONE thing: the yellow "You are using an unsupported
+# command-line flag: --no-sandbox" infobar. That bar is 56px of the display, measured,
+# and it was the band with no browser in it that survived every other fix. The flag
+# cannot simply be dropped: this container has no permission to create the namespaces
+# Chromium's sandbox needs (measured: "Failed to move to new namespace ... Operation
+# not permitted"), and the SUID helper is refused by modern Chromium as well, so the
+# choice is between the warning and a container capability that would weaken the
+# isolation this browser exists to provide. --test-type is not visible to pages:
+# navigator.webdriver stays false, verified in this container.
+#
+# NOT --kiosk. It hides the browser UI and ALSO disables the right-click context
+# menu - and that menu is a feature here, not decoration: it is where "save as",
+# "print" and VAF's own "send this to your agent" live.
+#
+# --disable-gpu-compositing + --disable-partial-raster are for the VNC stream, not
+# for rendering: with partial swaps the compositor repaints only what it believes
+# changed, the X damage it reports does not cover the rest, and the stream keeps
+# showing stale rectangles of an older frame. WebGL keeps working through
+# SwiftShader, so the fingerprint surface is unchanged.
 start_chromium() {
+    # Never restore the previous session. The supervisor below kills Chromium with
+    # SIGKILL, which marks the profile as crashed, and a crashed profile REOPENS the
+    # windows it had - including any ordinary window that ever appeared, which then
+    # shows a full browser UI inside the streamed window and never goes away again
+    # (measured after a container restart: two pages, the wrong one in front). Both
+    # halves are needed: the flag suppresses the restore bubble, the edit clears the
+    # crash mark that drives the restore itself.
+    PREFS=/home/browser/.config/chromium/Default/Preferences
+    [ -f "$PREFS" ] && sed -i 's/"exit_type":"[^"]*"/"exit_type":"Normal"/' "$PREFS" 2>/dev/null || true
+
     "$CHROMIUM" \
+        --disable-session-crashed-bubble \
+        --hide-crash-restore-bubble \
         --no-sandbox \
+        --test-type \
         --disable-dev-shm-usage \
         --remote-debugging-port=9223 \
         --disable-blink-features=AutomationControlled \
@@ -91,6 +172,7 @@ start_chromium() {
         --accept-lang=en-US,en \
         --window-position=0,0 \
         --window-size=1920,1080 \
+        --force-dark-mode \
         --disable-extensions \
         --disable-background-networking \
         --disable-default-apps \
@@ -106,8 +188,9 @@ start_chromium() {
         --use-gl=angle \
         --use-angle=swiftshader \
         --enable-unsafe-swiftshader \
-        $PROXY_ARGS \
-        about:blank &
+        --disable-gpu-compositing \
+        --disable-partial-raster \
+        $PROXY_ARGS &
     CHROMIUM_PID=$!
 }
 
@@ -128,7 +211,7 @@ wait_for_cdp() {
 # wait. This entrypoint is PID 1 now (socat is a child, not exec'd), so without a
 # trap SIGTERM would be ignored and every stop would hang for the full grace period.
 cleanup() {
-    kill "$SOCAT_PID" "$CHROMIUM_PID" "$XVFB_PID" 2>/dev/null || true
+    kill "$SOCAT_PID" "$CHROMIUM_PID" "$WM_PID" "$XVFB_PID" 2>/dev/null || true
     exit 0
 }
 trap cleanup TERM INT

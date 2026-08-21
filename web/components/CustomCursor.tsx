@@ -20,7 +20,7 @@
 import { useRef, useEffect, useCallback } from "react";
 import { useCursorStore } from "@/lib/cursorStore";
 
-type CursorState = "default" | "pointer" | "text";
+type CursorState = "default" | "pointer" | "text" | "resize";
 
 // ── READING ANIMATION CONSTANTS ──
 const LINE_DURATION  = 2.5;
@@ -304,6 +304,13 @@ export function CustomCursor() {
     } else if (state === "text") {
       mainInner.style.cssText  = "width:3px;height:24px;border-radius:0;background-color:white;box-shadow:1px 1px 0 #F5A623;transition:width .2s,height .2s,box-shadow .2s";
       trailInner.style.cssText = "width:3px;height:24px;border-radius:0;background-color:#F5A623;box-shadow:1px 1px 0 #F5A623;transition:width .3s,height .3s,background-color .3s,box-shadow .3s";
+    } else if (state === "resize") {
+      // Over a horizontal drag seam: the pair keeps its identity (white main,
+      // amber trail) but each dot becomes a left-right double arrow. One
+      // clip-path per div - no extra elements, nothing rasters per frame.
+      const arrow = "polygon(0% 50%, 30% 6%, 30% 34%, 70% 34%, 70% 6%, 100% 50%, 70% 94%, 70% 66%, 30% 66%, 30% 100%)";
+      mainInner.style.cssText  = `width:22px;height:12px;border-radius:0;background-color:white;clip-path:${arrow};transition:width .2s,height .2s`;
+      trailInner.style.cssText = `width:34px;height:18px;border-radius:0;background-color:#F5A623;clip-path:${arrow};transition:width .3s,height .3s,background-color .3s`;
     } else {
       mainInner.style.cssText  = "width:12px;height:12px;border-radius:50%;background-color:white;box-shadow:2px 2px 0 #F5A623;transition:width .2s,height .2s,box-shadow .2s";
       trailInner.style.cssText = "width:12px;height:12px;border-radius:50%;background-color:#F5A623;box-shadow:2px 2px 0 #F5A623;transition:width .3s,height .3s,background-color .3s,box-shadow .3s";
@@ -390,6 +397,15 @@ export function CustomCursor() {
       const isText = (t.tagName === "INPUT" && ["text","email","password","search","url","tel","number"].includes((t as HTMLInputElement).type))
                   || t.tagName === "TEXTAREA" || t.isContentEditable;
       if (isText) { cursorStateRef.current = "text"; applyCursorState("text"); return; }
+      const isResize = (() => {
+        let el: HTMLElement | null = t;
+        while (el && el !== document.body) {
+          if (el.classList.contains("cursor-ew-resize")) return true;
+          el = el.parentElement;
+        }
+        return false;
+      })();
+      if (isResize) { cursorStateRef.current = "resize"; applyCursorState("resize"); return; }
       const clickable = (() => {
         let el: HTMLElement | null = t;
         while (el && el !== document.body) {

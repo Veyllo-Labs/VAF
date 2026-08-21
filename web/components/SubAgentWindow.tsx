@@ -118,6 +118,9 @@ export type SubAgentWindowProps = {
     document?: DocumentViewState | null;  // enables the document view (document agent only)
     librarian?: LibrarianViewState | null;  // enables the read-only explorer view (librarian agent only)
     browser?: BrowserViewState | null;  // enables the live browser window (browser agent only)
+    // Interactive browser: active carries the KasmVNC stream URL for the iframe;
+    // an inactive object is a surfaced refusal (busy/error) for the empty state.
+    interactive?: { active: boolean; status: string; streamUrl: string; saving: boolean; reason: string; viewerConnected?: boolean } | null;
     // Kind known the moment the main agent CALLS the sub-agent (from the tool name) -> the matching custom
     // view renders IMMEDIATELY in a loading shell, instead of waiting for streamed data.
     agentKind?: 'coder' | 'research' | 'document' | 'librarian' | 'browser' | null;
@@ -184,7 +187,7 @@ function StartingBanner({ label }: { label: string }) {
     return (
         <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50/70 px-3 py-1.5 text-[11.5px] text-gray-500">
             <Loader2 size={12} className="animate-spin text-gray-400" />
-            <span>Starting {label} — waiting for the agent…</span>
+            <span>Starting {label} - waiting for the agent…</span>
         </div>
     );
 }
@@ -549,6 +552,7 @@ export default function SubAgentWindow({
     steps,
     browserFrame,
     browserUrl,
+    interactive = null,
     coder,
     research,
     document,
@@ -774,6 +778,9 @@ export default function SubAgentWindow({
     }, [librarian?.activity?.length, librarian?.entries?.length, librarian?.stage]);
 
     // Browser window: auto-scroll the action plan and the activity log to the newest entry
+    // Has this window ever had a live stream? Decides whether the connecting cover
+    // may still appear (see the interactive branch below).
+    const hasStreamedRef = useRef(false);
     const browserActionsRef = useRef<HTMLDivElement>(null);
     const browserActivityRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -795,7 +802,14 @@ export default function SubAgentWindow({
     const researchLoading = !research;
     const documentLoading = !document;
     const librarianLoading = !librarian;
-    const browserLoading = !browser && !browserFrame;
+    // Two different situations look identical from here, and until this window could be
+    // opened by hand only one of them existed: a run that is STARTING (the agent called
+    // browser_agent, its state is on its way) and a window a person opened themselves with
+    // no run behind it at all. Only the first may say "Starting"; the second has to say what
+    // is true, or the window announces an agent that was never called. presence is what
+    // separates them - the tool call sets it to 'online' before any browser data streams.
+    const browserEmpty = !browser && !browserFrame;
+    const browserStarting = browserEmpty && inferredPresence === 'online';
 
     // When the window is closed the outer dock panel is already w-0/opacity-0/invisible, so render
     // nothing rather than building the full (un-virtualized) research/document report DOM and arming its
@@ -2039,6 +2053,73 @@ export default function SubAgentWindow({
         const url = browserUrl || b?.url || '';
         const stepTxt = b && b.maxSteps ? `Step ${b.step}/${b.maxSteps}` : (b?.step ? `Step ${b.step}` : '');
         const shortUrl = (u: string) => (u || 'about:blank').replace(/^https?:\/\//, '');
+        // The person is driving: the KasmVNC iframe IS the browser - Chromium's own
+        // tabs, omnibox and navigation are inside the stream, so the rebuilt chrome
+        // bar, the bottom dock and the statusbar all stand down. Only the window
+        // header stays (identity, the save-logins toggle, close).
+        if (interactive?.active && interactive.streamUrl) {
+            // The streamed browser keeps its OWN chrome - tab strip, toolbar,
+            // bookmarks, downloads - themed dark to match. This window deliberately
+            // draws none of its own on top: two stacked toolbars was the first thing
+            // that looked wrong, and a rebuilt one could only ever offer a fraction
+            // of what the real one already does. What stays is the window frame: who
+            // is driving, and how to close it.
+            //
+            // The cover is for the FIRST connect only. It hides the stream viewer's
+            // branded splash while the socket comes up; once pixels have arrived, a
+            // later blip (a new tab, a reconnect) must not blank a page the person is
+            // reading - the viewer reconnects on its own and shows its own state.
+            if (interactive.viewerConnected) hasStreamedRef.current = true;
+            const showCover = !interactive.viewerConnected && !hasStreamedRef.current;
+            return (
+                <div
+                    className={cn(
+                        `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
+                        isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    )}
+                    aria-hidden={!isOpen}
+                >
+                    <div className="flex h-full w-full flex-col">
+                        <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                            <div className="flex min-w-0 items-center gap-3">
+                                <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-sky-600"><Globe size={14} /></div>
+                                <div className="min-w-0">
+                                    <div className="text-xs font-semibold text-gray-900">Browser</div>
+                                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                        <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500" />
+                                        <span className="truncate">Interactive browser - you are in control</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
+                        </div>
+
+                        <div className="relative min-h-0 w-full flex-1">
+                            {/* Clipboard permissions delegated so copy/paste between host and
+                                sandbox works where the browser allows it. */}
+                            <iframe
+                                src={interactive.streamUrl}
+                                title="Interactive browser"
+                                className="absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
+                                allow="clipboard-read; clipboard-write"
+                            />
+                            {showCover && (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e2430]">
+                                    <Loader2 size={20} className="animate-spin text-[#5c6675]" />
+                                    <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex h-6 flex-none items-center gap-3 border-t border-gray-200 bg-white px-3 text-[10px] text-gray-500">
+                            <span className="rounded bg-sky-600 px-1.5 py-0.5 text-[9px] font-bold text-white">VAF</span>
+                            <span className="truncate">Sandbox browser</span>
+                            <span className="ml-auto flex-none">{interactive.viewerConnected ? 'connected' : 'connecting'}</span>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
         return (
             <div
                 className={cn(
@@ -2048,7 +2129,7 @@ export default function SubAgentWindow({
                 aria-hidden={!isOpen}
             >
                 <div className="flex h-full w-full flex-col">
-                    {browserLoading && <StartingBanner label="Browser Agent" />}
+                    {browserStarting && <StartingBanner label="Browser Agent" />}
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
@@ -2090,7 +2171,20 @@ export default function SubAgentWindow({
                             <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
                                 {browserFrame
                                     ? <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
-                                    : <div className="flex items-center gap-2 text-[12px] text-[#9aa4b5]"><Loader2 size={14} className="animate-spin" /> Browser startet…</div>}
+                                    : browserStarting
+                                        ? <div className="flex items-center gap-2 text-[12px] text-[#9aa4b5]"><Loader2 size={14} className="animate-spin" /> Browser startet…</div>
+                                        : <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+                                            <Globe size={22} className="text-[#5c6675]" />
+                                            <span className="text-[12px] text-[#9aa4b5]">No browser session yet</span>
+                                            <span className="text-[11px] leading-relaxed text-[#6b7482]">This window fills itself when the agent uses browser_agent. Ask it to look something up in a real browser.</span>
+                                            {interactive && !interactive.active && (
+                                                <span className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                                                    {interactive.status === 'busy'
+                                                        ? 'Another user is driving the browser right now.'
+                                                        : 'The browser container is not reachable. Start the Docker stack and try again.'}
+                                                </span>
+                                            )}
+                                        </div>}
                             </div>
                         </div>
 

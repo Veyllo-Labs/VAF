@@ -234,7 +234,7 @@ services:
       dockerfile: Dockerfile
     container_name: vaf-browser
     restart: unless-stopped
-    # Headed Chromium under Xvfb needs more shared memory than headless to avoid
+    # Headed Chromium needs more shared memory than headless to avoid
     # renderer crashes on heavy pages.
     shm_size: "1gb"
     environment:
@@ -247,6 +247,10 @@ services:
       VAF_BROWSER_PROXY: "${VAF_BROWSER_PROXY:-}"
     ports:
       - "127.0.0.1:${BROWSER_CDP_PORT:-9222}:9222"
+      # KasmVNC stream of the browser display (interactive browser in the web
+      # UI). Loopback-only like the CDP port; user-facing auth happens in the
+      # VAF web server that proxies it.
+      - "127.0.0.1:${BROWSER_VNC_PORT:-6901}:6901"
     networks:
       - vaf-browser-network
     healthcheck:

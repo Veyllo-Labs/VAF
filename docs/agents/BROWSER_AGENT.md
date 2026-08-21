@@ -22,8 +22,11 @@ BrowserAgentTool          (vaf/tools/browser_agent.py)
     │           WebSocket → browser_frame_update → WebUI
     ▼
 vaf-browser               (Docker container)
-    └── Chromium (HEADED, under Xvfb) --remote-debugging-port=9223
-            └── socat 9222 → 9223   (CDP reachable via Docker port map)
+    └── Chromium (HEADED, under KasmVNC's X server) --remote-debugging-port=9223
+            ├── socat 9222 → 9223   (CDP reachable via Docker port map)
+            └── KasmVNC WebSocket stream of the display on 127.0.0.1:6901
+                (the interactive browser in the web UI; see
+                [Interactive browser](#interactive-browser-driving-the-sandbox-by-hand))
 ```
 
 **Chromium runs in a dedicated Docker container** (`vaf-browser`). VAF connects to it via the [Chrome DevTools Protocol (CDP)](https://chromedevtools.github.io/devtools-protocol/) over a local WebSocket. No browser is ever installed on the host machine.
@@ -326,6 +329,128 @@ When `browser_agent` is running, the **SubAgent Window** in the WebUI opens auto
 
 The viewport is visible in both **dock mode** (right side panel) and **overlay mode** (full-screen modal, triggered by clicking the SubAgent bubble in the chat).
 
+### Interactive browser: driving the sandbox by hand
+
+The globe button in the chat's top-right corner (aligned with the sidebar logo) opens the
+browser window and, when no agent run holds the browser, asks the server for the
+INTERACTIVE stream (`browser_interactive_start`). The window then shows the container's
+Chromium fullscreen through a KasmVNC WebSocket stream - Chromium's own tabs, omnibox and
+navigation, at up to 60 fps, with mouse and keyboard carried natively by the VNC protocol.
+Nothing about this starts `browser_agent`: it is the same shared browser, driven by a
+person instead of the model. Closing the window (or clicking the marked globe again) sends
+`browser_interactive_stop`.
+
+**The stream path.** The KasmVNC client is loaded from the container THROUGH the VAF web
+server (`/api/browser-vnc/t/<ticket>/...`), never directly: the container port
+(127.0.0.1:6901, loopback-only like CDP) is reachable for LAN users only via that proxy.
+The ticket in the path is the credential, validated against the current lease on every
+request; a stopped or superseded lease kills its ticket immediately. The two halves of
+the stream carry that ticket differently, and it is worth knowing which is which: ASSETS
+resolve relative to the client's own directory and take the ticket along by themselves,
+but the SOCKET url is built from the client's settings (`ws://<host>:<port>/` + the
+`path` setting, default `websockify`) and would otherwise dial a ticketless
+`/websockify` that does not exist on the VAF server. Those settings are overridable per
+URL (the client reads the hash first, then the query), so the stream URL carries
+`?path=api/browser-vnc/t/<ticket>/websockify` and the client dials the proxy route.
+`host` and `port` are appended by the frontend from the app's own backend-socket helper
+(the dev server cannot proxy websockets at all, so the socket needs an address of its
+own), while `encrypt` stays default: the client derives ws/wss from the page's protocol
+exactly as that helper does.
+
+**How the streamed browser is launched**, because four of these settings look cosmetic
+and are not:
+
+- **The browser keeps its OWN window** - tab strip, toolbar, bookmarks, downloads -
+  dressed dark with `--force-dark-mode` (which themes the BROWSER, not page content, so
+  sites still render as their authors meant). An earlier version hid all of it with app
+  mode so the web UI could draw that chrome itself; it cost more than it bought. A
+  middle-click into a new tab opened a second, ordinary window inside the streamed one,
+  and every browser feature living in the toolbar was simply gone. Not `--kiosk` either:
+  it hides the UI and also disables the right-click context menu, which is a feature
+  here rather than decoration.
+- **`--test-type`** suppresses exactly one thing: the "unsupported command-line flag:
+  --no-sandbox" infobar, which is 56px of the display. The flag cannot simply be
+  dropped - this container may not create the namespaces Chromium's sandbox needs
+  ("Failed to move to new namespace ... Operation not permitted"), and the SUID helper
+  is refused by current Chromium too, so the alternative would be granting the container
+  a capability that weakens the isolation this browser exists to provide. It is not
+  visible to pages: `navigator.webdriver` stays false.
+- **A window manager** (matchbox, ~300 KB) keeps the window at the size of the display,
+  which changes whenever a viewer asks for its own geometry.
+- **No session restore.** The supervisor kills Chromium with SIGKILL, which marks the
+  profile as crashed, and a crashed profile reopens the windows it had - including any
+  ordinary window that ever appeared, which then shows a full browser UI inside the
+  streamed window and never leaves. The flag suppresses the bubble; the `exit_type`
+  edit clears the mark that drives the restore.
+
+Idle parking follows from the same fact: it EMPTIES the window by navigating it to
+`about:blank` rather than creating a fresh tab and closing the rest, because a tab made
+through CDP is an ordinary window. The old version closed the app window along with the
+page (its `data:` URL is not `about:blank`), which is how re-opening the browser showed
+a browser inside the browser.
+
+**Three things this lane needs that are easy to miss**, each of which produced a window
+that loaded and then showed nothing:
+
+- **The viewer document is loaded by a RELATIVE url**, i.e. same-origin, so it rides
+  whichever front door the person is on. An absolute `http://<backend>` url is wrong the
+  moment LAN hosting with TLS is on, because the backend port is HTTPS-only then and a
+  plain HTTP request to it returns nothing at all.
+- **`X-Frame-Options` must be `SAMEORIGIN` for this path.** The server sets `DENY` on
+  every other response; under `DENY` the browser fetches the viewer (a clean 200 in the
+  access log) and then refuses to paint it in the window. The exemption is one prefix
+  wide (`/api/browser-vnc/`) and same-origin only, so no foreign page can embed it.
+- **The HTTPS proxy needs a `WebSocketRoute` for the stream path, not just an allowlist
+  entry.** The path starts with `/api`, so the proxy's catch-all API route looks like it
+  covers it; that route matches HTTP scopes only, and the upgrade comes back as HTTP 403
+  with the backend never reached. The relay also had to learn BINARY frames - it read
+  text only, which was invisible while the WebUI's JSON socket was its only client and
+  fatal for a VNC stream.
+
+**The lease.** One person drives at a time (`vaf/core/browser_interactive.py`): a second
+window of the same user takes over (the older one is told "superseded"), a different user
+gets "busy" without learning who holds the browser, and an admin may evict. A lease whose
+viewer disappears is released after a 120s grace period, and the browser is parked back to
+one blank tab - the same idle rule the agent lane uses, for the same measured 1027%-CPU
+reason.
+
+**The agent always wins.** `BrowserAgentTool.run()` evicts any interactive lease at its
+very start (for both the in-process and the spawned-child lane, since the hook runs before
+the spawn branch), and an interactive start is refused with `agent_active` while a run is
+underway - the in-process flag covers the first, an IPC scan for a live `browser_agent`
+task covers the second. The window flips back to the agent view (task, actions, history,
+activity) the moment agent data streams, and becomes startable again when the run ends.
+
+**Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
+counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its
+own: whether a login gets remembered is decided where the person expects that question, in
+the browser itself, which asks. The person's cookies are loaded into the browser at lease
+start and exported at lease end - to the SAME per-scope storage-state file the agent's
+persistent sessions use (`~/.vaf/browser_sessions/<scope>/default.json`, Playwright shape,
+cookies only), so a login performed by hand is a login the agent has on its next
+`persistent=true` run, and vice versa. The forget-everything mode exists only on the agent
+lane (`persistent=false` runs). On a lease handover to a DIFFERENT user scope the shared
+jar is cleared first; localStorage and the HTTP cache remain shared container state (the
+known shared-sandbox limitation, see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
+
+**The chat knows where you are.** While a chat's window drives the browser, that chat's
+messages travel WITH browser context: the current page URL and any selected text are
+injected into the turn (the code-viewer pattern - stored by `web_server.py` at send time,
+injected and cleared per turn by `headless_runner.py`), and a screenshot of the current
+view rides the existing attached-images lane, so it appears under the message like an
+upload and reaches the model as vision input. Captured server-side at send time via a
+short CDP snapshot (`snapshot_context` in `vaf/core/browser_interactive.py`), and only
+for the chat session that holds the lease - other sessions get nothing. A small "Browser"
+chip next to the workspace chip says the context is riding along.
+
+With no run behind it and no interactive stream, the window shows an honest empty state
+("No browser session yet") instead of a starting banner; `presence` separates a hand-opened
+window from a run whose data is on its way. While another sub-agent is actually RUNNING,
+the globe stands down and says so. The button reports "open", not "on top": every viewer
+and editor keeps its priority over the sub-agent window, and the button deliberately does
+not close them to get the slot - closing the document panel detaches the chat's documents
+on the server, which a browser click must never do.
+
 ### How frames reach the UI (subprocess bridge)
 
 The browser agent runs as its own **child process** (in workflows, and via `subagent run`). That
@@ -439,7 +564,7 @@ Make sure the CDP port is not exposed publicly - restrict access at the firewall
 
 VAF hardens the browser so a vanilla automated browser's obvious tells are removed. The robust, hard-to-bypass parts live in how Chromium is launched (`docker/browser/entrypoint.sh`), not in fragile JavaScript:
 
-- **Headed Chromium under Xvfb** - not `--headless`. The new headless mode still has subtle, detectable tells; a real headed browser does not.
+- **Headed Chromium under a virtual X display** (KasmVNC's Xkasmvnc) - not `--headless`. The new headless mode still has subtle, detectable tells; a real headed browser does not.
 - **`--disable-blink-features=AutomationControlled`** - `navigator.webdriver` is natively `false` (no detectable JS redefine).
 - **Version-matched User-Agent** - derived at startup from the actual Chromium version, with no "HeadlessChrome" marker; consistent with `navigator.platform = "Linux x86_64"`.
 - **HTTP/2 kept on**, realistic window size (1920×1080), `en-US` locale.
@@ -465,14 +590,25 @@ When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC
 ## Docker Container Details
 
 **Image:** built from `docker/browser/Dockerfile`  
-**Base:** `debian:bookworm-slim` + Chromium + Xvfb from Debian repos  
+**Base:** `debian:bookworm-slim` + Chromium from Debian repos + the KasmVNC server (version-pinned vendor .deb, checksum-verified; it is BOTH the X server the headed Chromium renders into and the WebSocket stream of that display)
+
+**Licence boundary (KasmVNC is GPL-2.0).** As things stand VAF distributes none of
+it: the Dockerfile fetches an unmodified, version-pinned vendor `.deb`, and the image
+is built on the user's own machine (`docker compose build`), where it runs as a
+separate process alongside the other Debian packages. That is aggregation, with no
+copyleft reach into VAF's own code, and it is why the client is never patched to hide
+its branding - the web UI covers it with its own loading state instead.
+**Publishing a PREBUILT `vaf-browser` image would change exactly that**: Veyllo would
+become the distributor of a GPL-2.0 binary and would owe, for the pinned release, the
+licence text and the complete corresponding source (or a written offer for it). Until
+someone deliberately takes that on, this stays a local build.  
 **Container name:** `vaf-browser`  
 **Internal port:** `9223` (CDP), exposed as `9222` via socat  
 **Memory limit:** 2 GB (`shm_size: 1gb`)  
 **User:** non-root (`browser:browser`)  
 **Health check:** `curl http://localhost:9222/json/version` every 10 seconds
 
-The container runs a **supervised** Chromium process **headed under a virtual X display (Xvfb)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
+The container runs a **supervised** Chromium process **headed under a virtual X display (KasmVNC's Xkasmvnc)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
 
 **Default behaviour:** each task starts with a clean browser profile - no cookies, no login state.
 
@@ -508,9 +644,9 @@ docker compose -f docker-compose.memory.yml restart vaf-browser
 
 ### Container is `(unhealthy)` / logs show `Missing X server or $DISPLAY`
 
-Chromium runs headed under Xvfb (display `:99`). If a previous run crashed without cleaning up, a stale `/tmp/.X99-lock` survives a restart and Xvfb aborts with `Server is already active for display 99`. The leftover socket then makes startup *look* ready while Chromium actually has no display (`Missing X server or $DISPLAY` → exit), so socat reports `Connection refused` on CDP and the healthcheck flips the container to `(unhealthy)`.
+Chromium runs headed under Xkasmvnc (display `:99`). If a previous run crashed without cleaning up, a stale `/tmp/.X99-lock` survives a restart and the X server aborts with `Server is already active for display 99`. The leftover socket then makes startup *look* ready while Chromium actually has no display (`Missing X server or $DISPLAY` → exit), so socat reports `Connection refused` on CDP and the healthcheck flips the container to `(unhealthy)`.
 
-The entrypoint (`docker/browser/entrypoint.sh`) removes the stale lock/socket on start and waits for Xvfb to be genuinely alive, so this self-heals on the next start. If you still hit it, recreate the container so it gets a clean `/tmp`:
+The entrypoint (`docker/browser/entrypoint.sh`) removes the stale lock/socket on start and waits for the X server to be genuinely alive, so this self-heals on the next start. If you still hit it, recreate the container so it gets a clean `/tmp`:
 
 ```bash
 docker compose -f docker-compose.memory.yml up -d --force-recreate vaf-browser
@@ -580,8 +716,8 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` - WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
 | [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) - standalone runs |
 | [web/components/BrowserLiveTile.tsx](../../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
-| [web/app/page.tsx](../../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
+| [web/app/page.tsx](../../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount, the chat's browser button (`toggleBrowserWindow`) |
 | [vaf/tools/_stealth_supplement.js](../../vaf/tools/_stealth_supplement.js) | Fingerprint supplement injected via CDP (WebGL renderer realism + canvas/audio noise) |
-| [docker/browser/Dockerfile](../../docker/browser/Dockerfile) | Browser container image definition (Chromium + Xvfb) |
-| [docker/browser/entrypoint.sh](../../docker/browser/entrypoint.sh) | Headed Chromium launch under Xvfb + anti-detection flags + optional proxy |
+| [docker/browser/Dockerfile](../../docker/browser/Dockerfile) | Browser container image definition (Chromium + KasmVNC) |
+| [docker/browser/entrypoint.sh](../../docker/browser/entrypoint.sh) | Xkasmvnc display + headed Chromium launch + anti-detection flags + optional proxy |
 | [docker-compose.memory.yml](../../docker-compose.memory.yml) | `vaf-browser` service definition (`VAF_BROWSER_PROXY` / `VAF_BROWSER_TZ` env) |

@@ -644,6 +644,13 @@ class BrowserAgentTool(BaseTool):
         if not task:
             return "Error: task parameter is required."
 
+        # The agent's run always wins the shared browser: evict a person's
+        # interactive lease BEFORE the spawn branch, so the eviction happens in
+        # the web-server parent process for both lanes (in the spawned child
+        # the manager singleton is empty and this is a no-op). Never raises.
+        from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
+        stop_for_agent_run()
+
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
         # instead of abandoning an un-killable in-process thread. The child sets
@@ -674,6 +681,11 @@ class BrowserAgentTool(BaseTool):
                     marker_note=f"Browser agent running as a child process. Task: {task[:80]}...",
                 )
                 if spawned:
+                    # Clear the in-process flag without the "browser free again"
+                    # notification: the run is only STARTING, and from here
+                    # is_agent_active() answers through the IPC scan of the
+                    # spawned task, which lives exactly as long as the child.
+                    agent_run_ended(notify=False)
                     return spawned.marker
                 # spawn failed (task already cancelled) -> fall through to in-process
             except Exception:
@@ -733,6 +745,7 @@ class BrowserAgentTool(BaseTool):
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
             _BROWSER_SEMAPHORE.release()
+            agent_run_ended()
 
     # ── Internal async implementation ─────────────────────────────────────────
 
@@ -794,24 +807,12 @@ class BrowserAgentTool(BaseTool):
         )
 
         # ── Persistent session: resolve cookie store path ─────────────────────
+        # Shared with the interactive browser lane (vaf/core/browser_interactive):
+        # one per-scope store, so a login saved by hand is a login this run has.
         session_file: Optional[str] = None
         if persistent:
-            # USER ISOLATION: key the cookie/login store by user_scope_id so one user's persistent
-            # browser logins are never shared with (or readable by) another. Resolve the scope from the
-            # explicit arg, the child-process env, or the local-admin scope (single-user/local mode).
-            _scope = user_scope_id or os.environ.get("VAF_USER_SCOPE_ID")
-            if not _scope:
-                try:
-                    from vaf.core.config import get_local_admin_scope_id
-                    _scope = get_local_admin_scope_id()
-                except Exception:
-                    _scope = "default"
-            scope_seg = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(_scope)) or "default"
-            sessions_dir = os.path.join(os.path.expanduser("~"), ".vaf", "browser_sessions", scope_seg)
-            os.makedirs(sessions_dir, exist_ok=True)
-            # Sanitise session name: only alphanumeric, dash, underscore
-            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in session)
-            session_file = os.path.join(sessions_dir, f"{safe_name}.json")
+            from vaf.core.browser_interactive import browser_storage_state_path
+            session_file = browser_storage_state_path(user_scope_id, session)
 
         session_kwargs: dict = {"cdp_url": cdp_url}
         if allowed_domains:
@@ -1006,46 +1007,11 @@ class BrowserAgentTool(BaseTool):
 
     @staticmethod
     def _park_browser_idle(cdp_base: str) -> None:
-        """Leave the shared browser on one blank tab when a run ends.
-
-        Closing the browser-use SESSION only drops our CDP connection; the
-        container's Chromium keeps every tab exactly as the run left it, and a
-        page that animates keeps rendering forever. Measured live: one visit to
-        an animated site left `vaf-browser` at 1027% CPU (ten cores) minutes
-        after the agent had finished and reported - the machine stayed loaded
-        with nobody watching. A parked browser costs about 5%.
-
-        HTTP CDP endpoints on purpose: they are the one interface that works
-        whether or not the run ended cleanly, and this must also be reachable
-        after a crashed or cancelled run. Best-effort throughout - a browser
-        that cannot be parked is not a reason to fail a finished task.
-        """
-        import json as _json
-        import urllib.request as _req
-
-        def _call(path: str, method: str = "GET") -> str:
-            r = _req.Request(cdp_base.rstrip("/") + path, method=method)
-            with _req.urlopen(r, timeout=5) as resp:
-                return resp.read().decode()
-
-        try:
-            # A blank tab FIRST: closing the last page can take the browser with
-            # it, and the next run must find something to attach to.
-            try:
-                _call("/json/new?about:blank", "PUT")
-            except Exception:
-                _call("/json/new?about:blank")
-            for target in _json.loads(_call("/json/list")):
-                if target.get("type") != "page":
-                    continue
-                if str(target.get("url", "")).startswith("about:blank"):
-                    continue
-                try:
-                    _call("/json/close/" + target["id"])
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        """Delegates to the shared implementation in vaf.core.browser_interactive
+        (the interactive lane parks the very same browser); see there for the
+        1027%-CPU incident this exists for."""
+        from vaf.core.browser_interactive import park_browser_idle
+        park_browser_idle(cdp_base)
 
     @staticmethod
     def _restart_browser_container() -> None:
@@ -1294,50 +1260,12 @@ class BrowserAgentTool(BaseTool):
 
     @staticmethod
     def _resolve_cdp_url(base: str) -> str:
-        """
-        Fetch /json/version and return the full webSocketDebuggerUrl.
-        Accepts both http:// and ws:// base URLs.
-
-        Polls with bounded backoff instead of a single probe: a connect that lands inside the
-        container's startup window (compose healthcheck start_period ~20s) or hits a still-booting /
-        just-restarted vaf-browser must not fail on the first try. Deadline is VAF_BROWSER_CDP_WAIT_S
-        (default 30s, > start_period + one healthcheck interval).
-        """
-        import urllib.request as _urlreq
-        import os as _os
-        import time as _time
-
-        http_base = base.replace("ws://", "http://").replace("wss://", "https://")
-        url = http_base.rstrip("/") + "/json/version"
-        try:
-            _deadline_s = float(_os.environ.get("VAF_BROWSER_CDP_WAIT_S", "30") or 30)
-        except Exception:
-            _deadline_s = 30.0
-        _deadline = _time.monotonic() + max(0.0, _deadline_s)
-        last_err = None
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                with _urlreq.urlopen(url, timeout=3) as resp:
-                    data = json.loads(resp.read())
-                ws_url = data["webSocketDebuggerUrl"]
-                # Ensure the hostname matches what the host can reach
-                # (Chromium may report its internal container hostname)
-                import re
-                ws_url = re.sub(r"ws://[^/]+", f"ws://{http_base.split('//')[1].split('/')[0]}", ws_url)
-                return ws_url
-            except Exception as e:
-                last_err = e
-                if _time.monotonic() >= _deadline:
-                    break
-                _time.sleep(min(1.5, max(0.5, 0.5 * attempt)))
-        raise RuntimeError(
-            f"Browser service not ready: Chrome DevTools at {http_base} did not respond within "
-            f"{int(_deadline_s)}s. Is `vaf-browser` running/healthy? "
-            f"Check: docker ps | grep vaf-browser ; docker logs vaf-browser\n"
-            f"Details: {last_err}"
-        ) from last_err
+        """Delegates to the shared implementation in vaf.core.browser_interactive
+        (bounded-backoff poll of /json/version; the interactive lane needs the
+        identical resolution). Kept as a staticmethod so call sites and tests
+        keep their name."""
+        from vaf.core.browser_interactive import resolve_cdp_ws_url
+        return resolve_cdp_ws_url(base)
 
     # ── Result extraction ─────────────────────────────────────────────────────
 

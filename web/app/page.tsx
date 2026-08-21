@@ -13,7 +13,7 @@ import {
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
     Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
-    Lock, Unlock,
+    Lock, Unlock, Globe,
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -2317,6 +2317,76 @@ function VAFDashboardContent() {
     }, [JSON.stringify(roomVotes)]);
     const voteDockOpen = voteDock.votes.length > 0;
     // How much room the conversation has to make, MEASURED rather than guessed.
+    // User-dragged width of the right dock panel, in px. null = the automatic
+    // width classes (72%/58%) stay in charge. Read from localStorage in an effect
+    // rather than the initializer so the first client render matches SSR markup.
+    // The value is consumed ONLY through a CSS variable inside an lg:-scoped class:
+    // the mobile sheet overrides width with max-lg:!w-full CLASSES, and classes
+    // never beat an inline width - scoping the variable to lg: sidesteps that
+    // entire fight (measured against the sheet override at the panel below).
+    const [dockWidthPx, setDockWidthPx] = useState<number | null>(null);
+    const [dockResizing, setDockResizing] = useState(false);
+    useEffect(() => {
+        try {
+            const v = localStorage.getItem('vaf_dock_width');
+            if (v) {
+                const n = parseInt(v, 10);
+                if (Number.isFinite(n) && n >= 400) setDockWidthPx(n);
+            }
+        } catch { /* storage unavailable: automatic widths remain */ }
+    }, []);
+    const DOCK_MIN_PX = 560;   // browser/coder views need room for their own chrome
+    const CHAT_MIN_PX = 480;   // composer + a readable message column
+    const clampDockWidth = (w: number) => {
+        // 64 sidebar rail + 5px row right-padding + the 5px divider
+        const max = Math.max(DOCK_MIN_PX, window.innerWidth - 64 - CHAT_MIN_PX - 10);
+        return Math.min(max, Math.max(DOCK_MIN_PX, Math.round(w)));
+    };
+    // Pointer capture instead of window listeners: once the dock hosts an iframe
+    // (interactive browser), a plain window pointermove dies the moment the cursor
+    // crosses into the iframe - capture keeps every event retargeted to the divider.
+    const onDockDividerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        setDockResizing(true);
+    };
+    const onDockDividerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (!dockResizing) return;
+        setDockWidthPx(clampDockWidth(window.innerWidth - 5 - e.clientX));
+    };
+    const onDockDividerUp = () => {
+        if (!dockResizing) return;
+        setDockResizing(false);
+        setDockWidthPx(prev => {
+            try {
+                if (prev != null) localStorage.setItem('vaf_dock_width', String(prev));
+            } catch { /* not persisted, still applied for this session */ }
+            return prev;
+        });
+    };
+    // Fallback drag lane on window level while resizing (the VoiceCallBar gate-slider
+    // pattern): pointer capture carries the drag on every platform we know, but a
+    // silently denied capture would leave a divider that presses and never moves -
+    // with these listeners the drag works even then, and while capture works the
+    // duplicate events set the same clamped value (idempotent).
+    useEffect(() => {
+        if (!dockResizing) return;
+        const move = (e: PointerEvent) => setDockWidthPx(clampDockWidth(window.innerWidth - 5 - e.clientX));
+        const up = () => onDockDividerUp();
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+        return () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', up);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dockResizing]);
+    const resetDockWidth = () => {
+        setDockWidthPx(null);
+        try { localStorage.removeItem('vaf_dock_width'); } catch { /* ignore */ }
+    };
     // Two docks of their own height (open votes, running work) plus a composer that
     // grows with what is typed cannot be answered by a padding constant: the first
     // version used one, and it was already wrong for two cards.
@@ -3061,6 +3131,17 @@ function VAFDashboardContent() {
             actions: Array<{ verb: string; text: string; status: string }>;
             history: string[];
         } | null;
+        // Interactive browser: the person drives the sandbox Chromium by hand.
+        // active=true carries the stream URL for the KasmVNC iframe; active=false
+        // is a surfaced refusal (busy/error) shown in the window's empty state.
+        interactive: {
+            active: boolean;
+            status: string;
+            streamUrl: string;
+            saving: boolean;
+            reason: string;
+            viewerConnected: boolean;
+        } | null;
     };
     const IDLE_SUB_AGENT_STATE: SubAgentViewState = useMemo(() => ({
         isOpen: false,
@@ -3082,6 +3163,7 @@ function VAFDashboardContent() {
         document: null,
         librarian: null,
         browser: null,
+        interactive: null,
     }), []);
     const [subAgentState, setSubAgentState] = useState<SubAgentViewState>(IDLE_SUB_AGENT_STATE);
     // The window's state is ONE object, so a chat switch must swap it like the
@@ -3945,6 +4027,9 @@ function VAFDashboardContent() {
     }, [currentSessionId]);
 
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
+    // '' = same-origin (a real proxy fronts us), otherwise ws(s)://host:port. Written
+    // where the chat socket resolves it; read by the interactive browser's stream URL.
+    const wsBaseResolvedRef = useRef<string>('');
     const [drawerOpen, setDrawerOpen] = useState(false);  // mobile sidebar drawer (max-md only; desktop keeps the hover-rail)
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -3971,6 +4056,13 @@ function VAFDashboardContent() {
                 }
             }
             if (cancelled) return;
+            // Remember what this resolved to. The interactive browser's stream needs the
+            // very same answer, and re-deriving it from getWsBase() is how it ended up
+            // dialling the TLS-only port: that helper is the FALLBACK below, while the
+            // real answer comes from /api/network/ws-config, which knows that the local
+            // desktop must use the plain internal channel (its self-signed cert is
+            // rejected by the desktop's web engine).
+            wsBaseResolvedRef.current = base;
             let wsUrl = (base ? base + '/ws' : '/ws');
             const token = localStorage.getItem('vaf_token');
             if (token) {
@@ -4167,6 +4259,7 @@ function VAFDashboardContent() {
                             // different kind) must never show the previous run's data through the new gate.
                             browserFrame: '',
                             browserUrl: '',
+                            interactive: null,
                             consoleLines: [],
                             coder: null,
                             research: null,
@@ -5328,6 +5421,61 @@ function VAFDashboardContent() {
                             history: Array.isArray(data.history) ? data.history : (prev.browser?.history ?? []),
                         },
                     }));
+                }
+                else if (data.type === 'browser_interactive_state') {
+                    // Interactive browser lease status. active carries the stream path the
+                    // iframe loads; busy/error are kept as a surfaced refusal; every other
+                    // status (stopped, agent takeover) clears the interactive view so the
+                    // ordinary agent/empty rendering takes the window back.
+                    //
+                    // The document URL stays RELATIVE, i.e. same-origin: it then rides the
+                    // front door this page is already on (dev server, or the HTTPS proxy
+                    // when LAN hosting is on) and no scheme has to be guessed. Guessing it
+                    // is what broke this lane once - the backend port speaks HTTPS while
+                    // TLS is on, and an http:// iframe URL got an empty response back.
+                    // Only the stream SOCKET needs an address of its own, because the dev
+                    // server cannot proxy websockets at all; getWsBase is the app's single
+                    // answer to "where is the backend socket", and the VNC client derives
+                    // ws/wss from this page's protocol exactly as getWsBase does, so host
+                    // and port are the only two things it has to be told.
+                    if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
+                    {
+                        const st = String(data.status ?? '');
+                        let streamUrl = String(data.streamPath || '');
+                        const resolvedBase = wsBaseResolvedRef.current;
+                        if (streamUrl && resolvedBase) {
+                            // Not same-origin: the viewer has to be told where the socket
+                            // lives, because the front door serving this page cannot proxy
+                            // websockets. Empty base means a real proxy IS in front, and
+                            // then the viewer's own defaults (this page's host, port and
+                            // protocol) are already right.
+                            try {
+                                const u = new URL(resolvedBase);
+                                streamUrl += `&host=${encodeURIComponent(window.location.hostname)}`
+                                          + `&port=${encodeURIComponent(u.port)}`;
+                                // Only ever SET when secure: the viewer reads this as a
+                                // truthy string, so "encrypt=0" would read as TRUE. Absent
+                                // means "derive from this page's protocol", which is right
+                                // for the plain case.
+                                if (u.protocol === 'wss:') streamUrl += '&encrypt=1';
+                            } catch { /* leave it relative; the viewer's defaults apply */ }
+                        }
+                        setSubAgentState(prev => ({
+                            ...prev,
+                            interactive: st === 'active'
+                                ? {
+                                    active: true,
+                                    status: st,
+                                    streamUrl,
+                                    saving: !!data.saving,
+                                    reason: String(data.reason ?? ''),
+                                    viewerConnected: !!data.viewerConnected,
+                                }
+                                : (st === 'busy' || st === 'error')
+                                    ? { active: false, status: st, streamUrl: '', saving: false, reason: String(data.reason ?? ''), viewerConnected: false }
+                                    : null,
+                        }));
+                    }
                 }
                 else if (data.type === 'artifact_update') {
                     if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
@@ -7180,6 +7328,48 @@ function VAFDashboardContent() {
     // as a full-screen sheet on demand; reset the sheet once every dock panel has closed, so the next one
     // doesn't auto-reopen full-screen.
     const anyDockPanelOpen = subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen || imageViewerState.isOpen;
+
+    // What the browser button reports and what it toggles. Deliberately "the browser window
+    // is open" and NOT "the browser window is visible": the dock has one slot and gives every
+    // viewer/editor priority over the sub-agent window, which then waits underneath - the way
+    // every other opener in this dock already behaves. Putting the viewers away instead would
+    // be worse than a covered window: handleDocumentViewerClose detaches the chat's documents
+    // on the server, and asking for a browser must never do that.
+    const browserWindowOpen = subAgentState.isOpen && subAgentState.agentKind === 'browser';
+    // A sub-agent that is actually RUNNING owns this window, and the button stands down for
+    // the duration. Taking the slot would hide live work behind a browser view with no way
+    // back inside the same run: agentKind has exactly two writers, the tool START and this
+    // button, and no streamed state event restores it - so a hijacked coder would stay
+    // hidden until the agent called the next sub-agent tool.
+    const browserWindowBusy = isSubAgentRunning && subAgentState.agentKind !== 'browser';
+    const sendBrowserInteractive = useCallback((msg: Record<string, unknown>) => {
+        if (ws?.readyState === WebSocket.OPEN && currentSessionId) {
+            ws.send(JSON.stringify({ ...msg, sessionId: currentSessionId }));
+        }
+    }, [ws, currentSessionId]);
+    const stopBrowserInteractiveIfAny = useCallback(() => {
+        if (subAgentState.interactive?.active) {
+            sendBrowserInteractive({ type: 'browser_interactive_stop' });
+        }
+    }, [subAgentState.interactive, sendBrowserInteractive]);
+    const toggleBrowserWindow = () => {
+        if (browserWindowBusy) return;
+        if (browserWindowOpen) {
+            stopBrowserInteractiveIfAny();
+            closeSubAgentWindow(true);
+            return;
+        }
+        // The window picks its browser view off agentKind, so the button has to name the kind
+        // it is opening. The last browser run's screenshot rides along on subAgentState and
+        // reappears with the window; with no run behind it the window asks the server for the
+        // INTERACTIVE stream - the reply decides whether the person gets to drive (active),
+        // sees a refusal (busy/error), or an agent run keeps the window (agent_active).
+        setSubAgentState(prev => ({ ...prev, agentKind: 'browser' }));
+        openSubAgentWindow(true);
+        // No save flag: interactive use is always the persistent mode, decided
+        // server-side; whether a login gets remembered is the browser's own ask.
+        sendBrowserInteractive({ type: 'browser_interactive_start' });
+    };
     useEffect(() => {
         if (!anyDockPanelOpen && subAgentSheetOpen) setSubAgentSheetOpen(false);
     }, [anyDockPanelOpen, subAgentSheetOpen]);
@@ -7622,13 +7812,46 @@ function VAFDashboardContent() {
                     </div>
                 </aside>
 
-                <div
-                    className={cn(
-                        "flex-1 flex overflow-hidden pr-4 transition-all duration-300 ease-out",
-                        (subAgentState.isOpen || codeViewerState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen) ? "gap-4" : "gap-0"
-                    )}
-                >
+                {/* No row gap any more: with a panel open, the 5px divider between the
+                    columns IS the whole spacing (a gap-4 on both sides of it added 37px
+                    of dead air between chat and window - measured on screen). */}
+                <div className="flex-1 flex overflow-hidden pr-[5px] transition-all duration-300 ease-out">
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
+                        {/* Browser entry point, in the chat column's top-right corner. It hangs off
+                            THIS column, not the window, so it travels inward when the right dock
+                            opens; the message area is centred and never reaches this corner, so
+                            nothing is covered. It is not positioned by a top offset but given the
+                            sidebar header's own h-16 band and centred inside it: the aside and this
+                            column are siblings of one flex row and start at the same y, so the same
+                            band puts this icon on the exact optical line as the logo, and a later
+                            change to the header height moves both together. The colours are one
+                            pair, not two: the folding palette maps gray-400 to a quiet mid tone on
+                            both themes, and gray-700 folds DARKER on light while it folds LIGHTER
+                            on dark - which is exactly the hover direction wanted on each theme.
+                            Hidden below md: the small layout has its own top bar and the message
+                            column runs edge to edge there, so this corner is not free. */}
+                        <button
+                            type="button"
+                            onClick={toggleBrowserWindow}
+                            disabled={browserWindowBusy}
+                            aria-pressed={browserWindowOpen}
+                            aria-label={tMain('browserWindowAria')}
+                            title={browserWindowBusy
+                                ? tMain('browserWindowBusy')
+                                : browserWindowOpen ? tMain('closeBrowserWindow') : tMain('openBrowserWindow')}
+                            className={cn(
+                                "absolute top-0 right-[19px] z-20 max-md:hidden h-16 flex items-center transition-[color,transform] duration-150",
+                                // Open wears the hover state permanently, so the active mark speaks the
+                                // same language the hover already taught: one step brighter and larger.
+                                browserWindowBusy
+                                    ? "text-gray-300 cursor-default"
+                                    : browserWindowOpen
+                                        ? "text-gray-900 scale-110"
+                                        : "text-gray-400 hover:text-gray-700 hover:scale-110"
+                            )}
+                        >
+                            <Globe size={20} />
+                        </button>
                         {/* ── Prompt Navigator (right rail, DeepSeek-style) ── */}
                         {(() => {
                             const userPrompts = messages.filter(m => m.role === 'user' && String(m.content ?? '').trim());
@@ -8760,12 +8983,33 @@ function VAFDashboardContent() {
                                         too when it is still empty (vaf/core/session.py SessionManager.delete). */}
                                     {workspaceInfo?.path && (
                                         <span
-                                            className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 leading-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all select-none"
+                                            className={cn(
+                                                "inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 leading-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all select-none",
+                                                // mr-auto belongs on the LAST chip of the left group, not simply
+                                                // on this one: the row is justify-end, so the auto margin is
+                                                // what splits "left group" from the right-aligned rest. With the
+                                                // browser chip present it carries it instead, or this chip would
+                                                // push the browser chip over to the token gauge.
+                                                !subAgentState.interactive?.active && "mr-auto"
+                                            )}
                                             title={workspaceInfo.path}
                                             onClick={() => { setWorkspaceNavHist([]); setIsWorkspaceModalOpen(true); refreshWorkspace(); }}
                                         >
                                             <Folder size={10} className="shrink-0" />
                                             <span className="max-w-[160px] truncate">{workspaceInfo.name}</span>
+                                        </span>
+                                    )}
+                                    {/* Interactive-browser chip: says the next message travels WITH browser
+                                        context (current page, selection, screenshot). Right of the workspace
+                                        folder, which keeps the leftmost slot. Not clickable - it is a status,
+                                        and the window it describes is already open beside the chat. */}
+                                    {subAgentState.interactive?.active && (
+                                        <span
+                                            className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-sky-600 opacity-90 px-2 py-0.5 rounded border border-sky-200 bg-sky-50/60 leading-none select-none"
+                                            title={tMain('browserContextChipTitle')}
+                                        >
+                                            <Globe size={10} className="shrink-0" />
+                                            <span>Browser</span>
                                         </span>
                                     )}
                                     {(ragResults?.sources?.length > 0 || crossChatHints.length > 0) && (
@@ -9115,22 +9359,57 @@ function VAFDashboardContent() {
                             <span className="text-[11px] font-semibold shrink-0 px-2 py-0.5 rounded-full bg-white/15">Open</span>
                         </button>
                     )}
+                    {/* Drag handle between chat and the dock panel. A sibling of both inside
+                        the same flex row, so dragging simply reassigns width between the
+                        panel (fixed width) and the chat column (flex-1). Deliberately
+                        INVISIBLE: the seam between the two columns is the whole handle (the
+                        cursor announces it), a painted grip would only add furniture. The
+                        5px layout width is also the entire chat-to-window spacing; the
+                        invisible child widens the grab area over both neighbours without
+                        costing a pixel of layout. Double-click gives the automatic widths
+                        back. Desktop only - below lg the dock is a full-screen sheet and
+                        there is nothing to share space with. */}
+                    {anyDockPanelOpen && (
+                        <div
+                            role="separator"
+                            aria-orientation="vertical"
+                            title={tMain('dockResizeHint')}
+                            className="hidden lg:block relative z-30 w-[5px] shrink-0 cursor-ew-resize select-none touch-none"
+                            onPointerDown={onDockDividerDown}
+                            onPointerMove={onDockDividerMove}
+                            onPointerUp={onDockDividerUp}
+                            onPointerCancel={onDockDividerUp}
+                            onDoubleClick={resetDockWidth}
+                        >
+                            {/* z-30 on the parent is what makes the RIGHT half of this overhang
+                                real: the panel is a later sibling and would otherwise win
+                                hit-testing over it (measured: only the chat-side half worked). */}
+                            <div className="absolute inset-y-0 -left-2 -right-2 cursor-ew-resize" />
+                        </div>
+                    )}
                     {/* Right Panel: CodeViewer, DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
                     {showSubAgentPanel && (
                         <div
+                            style={dockWidthPx != null ? { ['--vaf-dock-w' as string]: `${dockWidthPx}px` } : undefined}
                             className={cn(
-                                "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
+                                "hidden lg:flex h-full items-stretch overflow-hidden",
+                                // The width transition must not chase the pointer during a drag.
+                                dockResizing ? "transition-none" : "transition-all duration-300 ease-out",
                                 (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen || imageViewerState.isOpen)
                                     // Wide window ONLY while the SubAgentWindow itself renders a
                                     // custom view (coder/research data or a browser frame). The
                                     // viewers/editors take render priority over the SubAgentWindow,
                                     // so when one of them is open (e.g. the Document Editor after a
                                     // research run) the panel must drop back to the classic width.
-                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame || subAgentState.browser)
-                                        && !documentEditorState.isOpen && !documentViewerState.isOpen
-                                        && !codeViewerState.isOpen && !htmlViewerState.isOpen && !imageViewerState.isOpen
-                                        ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
-                                        : "w-[58%] min-w-[704px] max-w-[1000px] opacity-100")
+                                    ? (dockWidthPx != null
+                                        // User-chosen width: clamped in JS, so the CSS min/max
+                                        // clamps stand down (they would fight the drag).
+                                        ? "lg:!w-[var(--vaf-dock-w)] min-w-0 max-w-none opacity-100"
+                                        : ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame || subAgentState.browser)
+                                            && !documentEditorState.isOpen && !documentViewerState.isOpen
+                                            && !codeViewerState.isOpen && !htmlViewerState.isOpen && !imageViewerState.isOpen
+                                            ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
+                                            : "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"))
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none",
                                 stopHovered && isSubAgentRunning
                                     ? "outline outline-2 outline-red-400/60 shadow-[0_0_16px_6px_rgba(239,68,68,0.12)]"
@@ -9235,6 +9514,7 @@ function VAFDashboardContent() {
                                         // manual close must set the user-closed flag, or the very
                                         // next streamed event reopens the window - measured live in
                                         // a room run, where events never pause long enough to close.
+                                        stopBrowserInteractiveIfAny();
                                         closeSubAgentWindow(true);
                                     }}
                                     canClose={true}
@@ -9252,6 +9532,7 @@ function VAFDashboardContent() {
                                     steps={subAgentState.steps}
                                     browserFrame={subAgentState.browserFrame}
                                     browserUrl={subAgentState.browserUrl}
+                                    interactive={subAgentState.interactive}
                                     coder={subAgentState.coder}
                                     research={subAgentState.research}
                                     document={subAgentState.document}

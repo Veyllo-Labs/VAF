@@ -1648,6 +1648,40 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # Interactive browser: while this chat's window drives the sandbox
+                    # browser, web_server stored the page the user is on (URL + selected
+                    # text) at send time; a screenshot travelled separately through the
+                    # attached-images lane. Injected into THIS turn only and cleared, the
+                    # code-viewer lifecycle.
+                    try:
+                        session_for_bc = session_mgr.load(task.session_id)
+                        bc = (getattr(session_for_bc, "runtime_state", None) or {}).get("browser_context") or {}
+                        bc_url = (bc.get("url") or "").strip()
+                        if bc_url:
+                            bc_sel = (bc.get("selection") or "").strip()
+                            bc_block = (
+                                "--- USER IS IN THE INTERACTIVE BROWSER ---\n"
+                                f"They are currently on this page: {bc_url}\n"
+                                + (f"Text they have selected on the page:\n\"{bc_sel}\"\n" if bc_sel else "")
+                                + "A screenshot of their current view is attached to this message as an image.\n"
+                                # State of the world plus what can be DONE with it. Without the
+                                # second half the model was told where the person is and drew no
+                                # conclusion from it - measured live: asked to open a page and
+                                # wait, it neither knew the person was in the browser nor that it
+                                # could take that same browser over.
+                                + "To act in this browser yourself - open a page, click, wait, read "
+                                  "something back - call the browser_agent tool. It drives THIS "
+                                  "browser: it takes over from the user for the length of the run "
+                                  "and hands control back when it finishes, and it sees whatever "
+                                  "the user is logged into.\n"
+                                + "---\n\n"
+                            )
+                            effective_input = bc_block + effective_input
+                            session_for_bc.runtime_state.pop("browser_context", None)
+                            session_mgr.save(session_for_bc, sync_state=False)
+                    except Exception:
+                        pass
+
                     # Image viewer: while the Image Viewer is open, inject the open image's vision
                     # description into THIS turn only (so the agent can reason about the image the user
                     # is looking at). Stored in runtime_state by web_server.py and cleared here after use

@@ -92,6 +92,7 @@ def _tray_startup_log(msg: str, error: str = ""):
 
 import atexit
 import time
+from datetime import datetime, timezone
 import threading
 import signal
 import platform
@@ -1117,8 +1118,45 @@ def quit_app(icon=None, item=None):
     # Docker stop is slow (10-20s) — run it in the background so it does not
     # block the rest of the cleanup sequence.  The 25s force_exit gives it
     # enough headroom to finish before we call os._exit(0).
+    #
+    # REFEREE against the restart race: a person stopping and quickly
+    # restarting VAF races this background stop against the NEW instance's
+    # startup - the new instance brings the stack up, then this thread from
+    # the dying process pulls every container down again, and the user finds
+    # the whole stack "mysteriously" dead minutes later (measured live three
+    # times in one evening, startup_trace: stack up 06:00:57, stopped
+    # 06:06:54 by the old instance, never restarted). The container's own
+    # StartedAt is the referee: (re)started AFTER this shutdown began means a
+    # new instance owns the stack now, and this stop stands down.
+    _shutdown_began_utc = datetime.now(timezone.utc)
+
+    def _stack_restarted_since_shutdown() -> bool:
+        try:
+            from vaf.core.service_stack import resolve_docker_exe
+            r = subprocess.run(
+                [resolve_docker_exe(), "inspect", "vaf-memory-db",
+                 "--format", "{{.State.StartedAt}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            raw = (r.stdout or "").strip()
+            if r.returncode != 0 or not raw:
+                return False
+            # RFC3339Nano ("2026-08-21T04:12:58.81979334Z"): trim to
+            # microseconds for fromisoformat.
+            iso = raw.rstrip("Z")
+            if "." in iso:
+                head, frac = iso.split(".", 1)
+                iso = f"{head}.{frac[:6]}"
+            started = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
+            return started > _shutdown_began_utc
+        except Exception:
+            return False
+
     def _stop_docker():
         try:
+            if _stack_restarted_since_shutdown():
+                print("Docker stack stop skipped: a new VAF instance restarted the stack")
+                return
             stop_memory_stack()
         except Exception as e:
             print(f"Error stopping memory stack: {e}")

@@ -1,0 +1,34 @@
+# VAF browser container KasmVNC configuration.
+#
+# Installed as /etc/kasmvnc/kasmvnc.yaml, overriding the shipped defaults in
+# /usr/share/kasmvnc/kasmvnc_defaults.yaml where they conflict with this
+# container's design:
+#   - require_ssl false: the stream leaves the container as plain WebSocket on a
+#     loopback-only published port and is re-encrypted (or not) by the VAF web
+#     server that proxies it, exactly like the CDP port on 9222. A self-signed
+#     in-container cert would add a browser warning, not security.
+#   - resolution 1920x1080 is the STARTING geometry, and allow_resize is on: the
+#     viewer asks the display to match the window it is shown in, so the page
+#     fills the panel instead of sitting in black bars, and the pixels stay crisp
+#     because nothing is scaled. The agent lane is unaffected - it captures
+#     whatever the viewport is via CDP and never assumed a fixed size.
+#   - idle_timeout never: the VAF side owns the lifecycle (lease janitor with
+#     its own idle policy); a second, hidden timeout in here would make stream
+#     drops unexplainable.
+# The entrypoint passes the same choices as Xkasmvnc command-line flags, so the
+# behaviour does not depend on which of the two mechanisms this KasmVNC build
+# reads first.
+desktop:
+  resolution:
+    width: 1920
+    height: 1080
+  allow_resize: true
+  pixel_depth: 24
+network:
+  protocol: http
+  interface: 0.0.0.0
+  websocket_port: 6901
+  ssl:
+    require_ssl: false
+user_session:
+  idle_timeout: never

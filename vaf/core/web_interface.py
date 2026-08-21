@@ -481,6 +481,12 @@ class WebInterfaceManager:
         itself stays on the separate browser_frame_update stream."""
         self.emit_agent_state("browser_state", state, session_id=session_id)
 
+    def emit_browser_interactive_state(self, state: dict, session_id: str = None):
+        """Emit the interactive browser lease status (active/stopped/busy/agent_active,
+        saving flag, stream path) for the hand-driven browser window. The pixel stream
+        itself never passes through here - KasmVNC carries it on its own socket."""
+        self.emit_agent_state("browser_interactive_state", state, session_id=session_id)
+
     def emit_learn_state(self, state: dict, session_id: str = None):
         """Emit the batched document-learn progress (docName, batch, batchesTotal,
         phase) for the learning banner. Frame keys are ints and plain strings ONLY -

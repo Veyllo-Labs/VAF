@@ -163,9 +163,17 @@ def test_a_finished_run_parks_the_browser_on_a_blank_tab(monkeypatch):
     Closing the browser-use session only drops OUR connection; the container's
     Chromium keeps every tab as the run left it. Measured live: one visit to an
     animated page left vaf-browser at 1027% CPU - ten cores - minutes after the
-    agent had finished and reported. The blank tab is opened BEFORE the busy
-    ones are closed, because closing the last page can take the browser down
-    and the next run needs something to attach to.
+    agent had finished and reported.
+
+    THE MECHANISM CHANGED, THE INVARIANTS DID NOT. Parking used to open a fresh
+    blank tab and then close every busy page. It cannot any more: the streamed
+    browser window is launched in app mode (no tab strip, no toolbar) and only
+    that first window is one - a tab created through CDP comes up as an ordinary
+    browser window with all its chrome. The old order therefore closed the app
+    window along with the busy pages and left the ordinary one behind, which
+    showed a whole browser UI inside the streamed window. The surviving page is
+    EMPTIED by navigating it instead. What this pins is what it always meant to:
+    no page is left rendering, and the browser is never left with zero pages.
     """
     calls = []
 
@@ -180,21 +188,26 @@ def test_a_finished_run_parks_the_browser_on_a_blank_tab(monkeypatch):
     def _fake_urlopen(request, timeout=None):
         calls.append((request.get_method(), request.full_url))
         if request.full_url.endswith("/json/list"):
-            return _Resp('[{"type": "page", "id": "t1", "url": "https://busy.example/anim"},'
-                         ' {"type": "page", "id": "t2", "url": "about:blank"}]')
+            return _Resp('[{"type": "page", "id": "t1", "url": "https://busy.example/anim",'
+                         '  "webSocketDebuggerUrl": "ws://stub/t1"},'
+                         ' {"type": "page", "id": "t2", "url": "about:blank",'
+                         '  "webSocketDebuggerUrl": "ws://stub/t2"}]')
         return _Resp("{}")
 
+    emptied = []
+    import vaf.core.browser_interactive as _bi
+    monkeypatch.setattr(_bi, "_navigate_blank", lambda ws: emptied.append(ws))
     monkeypatch.setattr(_req, "urlopen", _fake_urlopen)
     BrowserAgentTool._park_browser_idle("http://localhost:9222")
 
     urls = [u for _, u in calls]
-    assert any("/json/new?about:blank" in u for u in urls), "no blank tab was opened"
-    assert any(u.endswith("/json/close/t1") for u in urls), "the busy page stayed open"
-    assert not any(u.endswith("/json/close/t2") for u in urls), (
-        "the blank tab was closed too - the browser can go down with its last page")
-    assert urls.index([u for u in urls if "/json/new" in u][0]) < \
-        urls.index([u for u in urls if "/json/close/t1" in u][0]), (
-        "the blank tab must exist BEFORE the busy one is closed")
+    closed = [u.rsplit("/", 1)[-1] for u in urls if "/json/close/" in u]
+    assert closed == ["t2"], f"exactly the extra page must be closed, closed={closed}"
+    assert not any("/json/new" in u for u in urls), (
+        "parking must not create a tab: a CDP-made tab is an ordinary browser window, "
+        "and creating one is what used to cost the app window")
+    assert emptied == ["ws://stub/t1"], (
+        f"the surviving page must be emptied by navigating, emptied={emptied}")
 
 
 def test_the_run_parks_the_browser_when_it_ends():

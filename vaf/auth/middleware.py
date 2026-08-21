@@ -58,6 +58,12 @@ AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     # gate - they authenticate every request themselves against the room's own
     # seat record (web_server._a2a_workspace_for_seat) and refuse without one.
     "/api/a2a/rooms/",
+    # The interactive-browser stream lane. The KasmVNC client is loaded in a
+    # cross-origin iframe, so the SameSite JWT cookie cannot ride along on its
+    # asset and socket requests - instead the lease TICKET in the path is the
+    # credential, validated on every request against the current lease
+    # (vaf/core/browser_interactive.py). No ticket, no bytes.
+    "/api/browser-vnc/t/",
 )
 
 

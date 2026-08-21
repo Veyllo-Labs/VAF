@@ -968,10 +968,23 @@ from starlette.responses import Response as _Resp
 
 class _SecurityHeadersMiddleware(_BaseHM):
     """Add security headers to all responses."""
+
+    # The one lane that is MEANT to be framed, and only by us. The interactive
+    # browser's viewer is a page served by this server and displayed inside the
+    # web UI's own browser window; a blanket DENY makes the browser fetch it
+    # (200 in the access log) and then refuse to paint it, which reads as a
+    # window that loads and dies. SAMEORIGIN rather than dropping the header:
+    # the viewer travels the same front door as the UI framing it, so an
+    # embedder on any other origin is still refused. Everything else keeps DENY.
+    _FRAMEABLE_PREFIX = "/api/browser-vnc/"
+
     async def dispatch(self, request: _Req, call_next):
         response: _Resp = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        _path = request.url.path or ""
+        response.headers["X-Frame-Options"] = (
+            "SAMEORIGIN" if _path.startswith(self._FRAMEABLE_PREFIX) else "DENY"
+        )
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -1985,6 +1998,135 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
     except Exception as e:
         append_domain_log("webui", f"[ERROR] broadcast failed in /api/subagent/stream: {e}")
     return {"status": "ok"}
+
+
+# ── interactive browser stream (KasmVNC proxy) ──────────────────────────────
+#
+# The browser window's interactive mode loads the KasmVNC client from the
+# vaf-browser container THROUGH these two routes, never directly: the container
+# port is loopback-only, and a LAN user reaches it exclusively here. The lease
+# TICKET in the path is the credential (auth-middleware-exempt, the room-seat
+# pattern): the KasmVNC client builds every asset and websocket URL relative to
+# its own directory, so the ticket rides along on all of them by construction.
+# Validated per request against the CURRENT lease - a superseded or stopped
+# lease invalidates its ticket immediately.
+
+@app.get("/api/browser-vnc/t/{ticket}/{path:path}")
+async def browser_vnc_asset(ticket: str, path: str):
+    """Static KasmVNC client files, fetched from the container and passed on."""
+    from fastapi.responses import JSONResponse, Response
+    from vaf.core.browser_interactive import get_interactive_manager
+    mgr = get_interactive_manager()
+    if mgr.validate_ticket(ticket) is None:
+        return JSONResponse(status_code=403, content={"detail": "Invalid or expired stream ticket"})
+    if ".." in path:
+        return JSONResponse(status_code=400, content={"detail": "Invalid path"})
+    import httpx
+    url = mgr.vnc_base().rstrip("/") + "/" + (path or "index.html")
+    try:
+        # follow_redirects: only content-type and cache-control are passed on below,
+        # so a 3xx would reach the browser WITHOUT its Location header - a redirect
+        # to nowhere, which presents as an empty response. Resolving it here keeps
+        # the answer a real body.
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            upstream = await client.get(url)
+    except Exception as e:
+        append_domain_log("webui", f"[browser-vnc] asset fetch failed: {e}")
+        return JSONResponse(status_code=502, content={"detail": "Browser stream backend unreachable"})
+    headers = {}
+    for h in ("content-type", "cache-control"):
+        if h in upstream.headers:
+            headers[h] = upstream.headers[h]
+    return Response(content=upstream.content, status_code=upstream.status_code, headers=headers)
+
+
+@app.websocket("/api/browser-vnc/t/{ticket}/websockify")
+async def browser_vnc_stream(websocket: WebSocket, ticket: str):
+    """Byte pipe between the viewer and the container's KasmVNC socket.
+
+    Every open pipe counts as viewer presence for the lease janitor; the last
+    disconnect starts the grace timer that eventually releases the lease.
+    """
+    from vaf.core.browser_interactive import get_interactive_manager
+    mgr = get_interactive_manager()
+    if mgr.validate_ticket(ticket) is None:
+        # Accept-then-close: a close before accept surfaces as a handshake
+        # error in the browser console instead of a readable code.
+        await websocket.accept()
+        await websocket.close(code=4403)
+        return
+
+    # Mirror the client's offered subprotocol (the KasmVNC client offers
+    # "binary"); inventing or dropping it makes some browsers abort the socket.
+    offered = websocket.scope.get("subprotocols") or []
+    chosen = offered[0] if offered else None
+
+    from websockets.asyncio.client import connect as _ws_connect
+    target = (mgr.vnc_base().rstrip("/")
+              .replace("http://", "ws://").replace("https://", "wss://") + "/websockify")
+    counted = False
+    try:
+        # KasmVNC refuses a handshake without an Origin header ("missing
+        # Sec-WebSocket-Origin", measured against 1.5.0); browsers always send
+        # one, a server-side client must say so explicitly.
+        # ping_interval=None: the client library pings every 20s and closes after a
+        # 20s pong timeout, and the VNC server does not answer protocol pings - so
+        # every stream died after EXACTLY 40 seconds of the person reading a page
+        # (measured against the container log: connect 07:14:12, "Clean
+        # disconnection" 07:14:52). The VNC protocol has its own liveness, and the
+        # lease janitor already notices a dead container, so nothing is lost by
+        # switching this off.
+        async with _ws_connect(target, subprotocols=[chosen] if chosen else None,
+                               origin=mgr.vnc_base(), max_size=None,
+                               ping_interval=None) as upstream:
+            await websocket.accept(subprotocol=chosen)
+            if not mgr.stream_connected(ticket):
+                await websocket.close(code=4403)
+                return
+            counted = True
+
+            async def _to_upstream():
+                while True:
+                    msg = await websocket.receive()
+                    if msg.get("type") == "websocket.disconnect":
+                        return
+                    if msg.get("bytes") is not None:
+                        await upstream.send(msg["bytes"])
+                    elif msg.get("text") is not None:
+                        await upstream.send(msg["text"])
+
+            async def _to_client():
+                async for frame in upstream:
+                    if isinstance(frame, (bytes, bytearray)):
+                        await websocket.send_bytes(bytes(frame))
+                    else:
+                        await websocket.send_text(frame)
+
+            tasks = [asyncio.create_task(_to_upstream()), asyncio.create_task(_to_client())]
+            try:
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for t in pending:
+                    t.cancel()
+                for t in done:
+                    # Surface a pump crash (not a normal disconnect) in the log.
+                    exc = t.exception()
+                    if exc is not None and not isinstance(exc, (WebSocketDisconnect,)):
+                        append_domain_log("webui", f"[browser-vnc] stream pump ended: {exc}")
+            finally:
+                for t in tasks:
+                    t.cancel()
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        append_domain_log("webui", f"[browser-vnc] stream proxy failed: {e}")
+    finally:
+        if counted:
+            mgr.stream_disconnected(ticket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
 
 @app.get("/api/tools/{name}/source")
 async def get_tool_source(name: str):
@@ -5276,6 +5418,47 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
+                        # Interactive browser context: while THIS chat's window drives the
+                        # sandbox browser, the current page rides along with the message -
+                        # URL + selected text into runtime_state (the code-viewer pattern,
+                        # injected per turn by headless_runner and cleared there), and a
+                        # screenshot through the EXISTING attached-images lane, so it shows
+                        # under the user's message like any upload and reaches the model as
+                        # vision input. Captured server-side at send time: fresher than
+                        # anything the client could claim, and nothing to trust.
+                        try:
+                            from vaf.core.browser_interactive import get_interactive_manager as _get_bi
+                            _bi = _get_bi()
+                            if _bi.interactive_session_id() == str(session_id):
+                                _snap = await asyncio.get_running_loop().run_in_executor(
+                                    None, lambda: _bi.snapshot_context(str(session_id)))
+                                if _snap and _snap.get("url"):
+                                    try:
+                                        loaded = session_mgr.load(session_id)
+                                    except FileNotFoundError:
+                                        loaded = Session(id=session_id, name=f"Session {session_id}", runtime_state={})
+                                    if not getattr(loaded, "runtime_state", None):
+                                        loaded.runtime_state = {}
+                                    loaded.runtime_state["browser_context"] = {
+                                        "url": _snap["url"], "selection": _snap.get("selection", "")}
+                                    session_mgr.save(loaded, sync_state=False)
+                                    if _snap.get("screenshot_b64"):
+                                        attached_images.append({
+                                            "data": _snap["screenshot_b64"],
+                                            "mime_type": "image/jpeg",
+                                            "name": "browser-view.jpg",
+                                        })
+                            else:
+                                try:
+                                    loaded = session_mgr.load(session_id)
+                                    if getattr(loaded, "runtime_state", None) and "browser_context" in loaded.runtime_state:
+                                        del loaded.runtime_state["browser_context"]
+                                        session_mgr.save(loaded, sync_state=False)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
                         # Image viewer context: while the Image Viewer is open, the frontend sends the
                         # open image's vision description each turn. Store it in runtime_state so
                         # headless_runner injects it per-turn (kept in context only while the viewer is
@@ -8178,6 +8361,78 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "type": "generation_stopped",
                             "sessionId": session_id,
                             "subagentsKept": subagents_kept,
+                        })
+
+                elif type == "browser_interactive_start":
+                    # A person asks to drive the sandbox browser by hand. Identity
+                    # comes from the CONNECTION, never the message; ownership of the
+                    # chat session whose window will show the stream is the same gate
+                    # every session command passes.
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if not session_id:
+                        continue
+                    _ok_bi, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                    if not _ok_bi:
+                        log("API", f"Access denied: browser_interactive_start {session_id} not owned by caller")
+                        continue
+                    _bi_scope = manager.get_connection_user(websocket)
+                    _bi_role = manager.get_connection_user_role(websocket)
+                    try:
+                        from vaf.core.config import is_admin_identity as _is_admin
+                        _bi_admin = _is_admin(_bi_role, _bi_scope)
+                    except Exception:
+                        _bi_admin = False
+                    from vaf.core.browser_interactive import get_interactive_manager
+                    _bi_mgr = get_interactive_manager()
+                    # start() blocks (container probe + cookie handover): executor, so
+                    # a slow browser start cannot starve every other websocket.
+                    _bi_result = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: _bi_mgr.start(
+                            _bi_scope or "", str(session_id),
+                            # Always the persistent mode: the person's browser asks about
+                            # saving logins itself; a client-sent flag would be a second
+                            # switch for the same question and is deliberately not read.
+                            save=True,
+                            session_name=str(cmd.get("session") or "default").strip() or "default",
+                            is_admin=_bi_admin,
+                        ),
+                    )
+                    # Direct reply on top of the manager's broadcast: the opener needs
+                    # the verdict even when it is a refusal that no session-scoped
+                    # broadcast would reach (busy for a foreign user's lease).
+                    await websocket.send_json({
+                        "type": "browser_interactive_state",
+                        "sessionId": session_id,
+                        **_bi_result,
+                    })
+
+                elif type == "browser_interactive_stop":
+                    # The ACTION is authorised inside stop() against the lease scope; the
+                    # sessionId only addresses the direct reply. Gated anyway: a branch
+                    # reading a client sessionId without _ws_session_owner_ok passed the
+                    # ownership guard only through a string match in a comment far below,
+                    # and an invariant held by accident is not held.
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if session_id:
+                        _ok_bi, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                        if not _ok_bi:
+                            log("API", f"Access denied: browser_interactive_stop {session_id} not owned by caller")
+                            continue
+                    _bi_scope = manager.get_connection_user(websocket)
+                    from vaf.core.browser_interactive import get_interactive_manager
+                    _bi_mgr = get_interactive_manager()
+                    # Owner check happens inside stop() against the lease scope; the
+                    # cookie export in there blocks, so executor again.
+                    _bi_result = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: _bi_mgr.stop("user", requester_scope=_bi_scope or ""),
+                    )
+                    if session_id:
+                        await websocket.send_json({
+                            "type": "browser_interactive_state",
+                            "sessionId": session_id,
+                            **_bi_result,
                         })
 
             except json.JSONDecodeError:

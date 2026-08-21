@@ -206,7 +206,14 @@ def _get_cookie_header(scope: dict) -> str | None:
 # nobody would ever make that decision on purpose. The room id shape is the store's own
 # (_SAFE_COMPONENT in vaf/core/a2a/store.py), so a path that would be refused as a
 # directory name never reaches the backend either.
-_WS_ALLOWED = re.compile(r"^/ws$|^/ws/a2a/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_WS_ALLOWED = re.compile(
+    r"^/ws$"
+    r"|^/ws/a2a/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    # The interactive browser's VNC stream. The ticket is the credential and is
+    # checked against the live lease by the backend route, so the shape is all this
+    # pattern has to pin: token_urlsafe output, nothing that could walk a path.
+    r"|^/api/browser-vnc/t/[A-Za-z0-9_-]{16,64}/websockify$"
+)
 
 
 async def _forward_websocket(websocket: WebSocket) -> None:
@@ -224,8 +231,14 @@ async def _forward_websocket(websocket: WebSocket) -> None:
         # socket that opens and then closes for no stated reason.
         await websocket.close(code=4004)
         return
-    await websocket.accept()
-    backend_uri = "ws://127.0.0.1:8005" + path
+    # Mirror the client's offered subprotocol. The VNC client offers "binary" and
+    # checks what came back; accepting without one leaves it holding a socket it
+    # will not speak on.
+    _offered = websocket.scope.get("subprotocols") or []
+    await websocket.accept(subprotocol=_offered[0] if _offered else None)
+    # Derived from BACKEND_ORIGIN, not a second hardcoded 8005: the HTTP half already
+    # reads that constant, and two literals for one backend is one of them going stale.
+    backend_uri = BACKEND_ORIGIN.replace("http://", "ws://").replace("https://", "wss://") + path
     if websocket.url.query:
         backend_uri += "?" + websocket.url.query
     extra_headers = []
@@ -245,7 +258,14 @@ async def _forward_websocket(websocket: WebSocket) -> None:
         # (WS_MAX_SIZE_BYTES - the tray passes it explicitly; for a long time it did
         # NOT, so this comment claimed a bound that was uvicorn's 16 MB default),
         # so disable the intermediate limit here.
-        async with websockets.connect(backend_uri, additional_headers=extra_headers or None, max_size=None) as backend_ws:
+        _sub = [_offered[0]] if _offered else None
+        # ping_interval=None for the same reason the stream lane needs it: the client
+        # library's 20s ping plus 20s pong timeout closes any relayed socket whose far
+        # end does not answer protocol pings after exactly 40 seconds of quiet. The
+        # WebUI's own socket answers, a relayed VNC stream does not.
+        async with websockets.connect(backend_uri, additional_headers=extra_headers or None,
+                                      subprotocols=_sub, max_size=None,
+                                      ping_interval=None) as backend_ws:
             async def from_backend():
                 try:
                     async for msg in backend_ws:
@@ -256,10 +276,20 @@ async def _forward_websocket(websocket: WebSocket) -> None:
                 except Exception:
                     pass
             async def from_client():
+                # receive(), not receive_text(): this relay used to be text-only, which
+                # was invisible while the only client was the WebUI's JSON socket and
+                # fatal for the first BINARY one (the interactive browser's VNC stream
+                # is binary end to end - receive_text() raises on the first frame and
+                # this half of the relay dies without a word).
                 try:
                     while True:
-                        data = await websocket.receive_text()
-                        await backend_ws.send(data)
+                        message = await websocket.receive()
+                        if message.get("type") == "websocket.disconnect":
+                            return
+                        if message.get("bytes") is not None:
+                            await backend_ws.send(message["bytes"])
+                        elif message.get("text") is not None:
+                            await backend_ws.send(message["text"])
                 except Exception:
                     pass
             await asyncio.gather(from_backend(), from_client())
@@ -326,6 +356,12 @@ def create_proxy_app() -> Starlette:
         # perfectly on the desktop, which is handed ws://127.0.0.1:8005 directly and
         # never passes through here.
         WebSocketRoute("/ws/a2a/{room_id}", endpoint=_ws_handler),
+        # The interactive browser's VNC stream. Same reason as the line above, and the
+        # trap is sharper here: the path starts with /api, so the catch-all API Route
+        # below LOOKS like it covers it - it does not, because that Route matches HTTP
+        # scopes only, and the upgrade came back as HTTP 403 (measured) with the backend
+        # route never reached. _WS_ALLOWED is the second gate; this is the first.
+        WebSocketRoute("/api/browser-vnc/t/{ticket}/websockify", endpoint=_ws_handler),
         Route("/api", endpoint=_api_route, methods=_API_METHODS),
         Route("/api/{rest:path}", endpoint=_api_route, methods=_API_METHODS),
         Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),

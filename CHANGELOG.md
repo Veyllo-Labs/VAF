@@ -12,6 +12,49 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The agent knows it can take the browser over from you.** While you are
+  driving the sandbox browser, your messages already carried the page, your
+  selection and a screenshot along - but nothing said what the agent could do
+  about it, so asking it to open a page and wait got you an answer instead of
+  an action. That turn now also says that `browser_agent` drives the very same
+  browser: it takes over for the length of the run, hands control back when it
+  finishes, and sees whatever you are logged into.
+- **The sandbox browser is now yours to drive.** Opening the browser window
+  (the globe in the chat's top-right corner) with no agent run underway shows
+  the sandbox Chromium fullscreen and USABLE: click, type, scroll, use
+  Chromium's own tabs and omnibox, streamed at up to 60 fps over a KasmVNC
+  lane instead of the agent view's 1.5-second screenshots. Logins persist the
+  way they do in any browser - the browser itself asks whether to remember
+  them, no extra switch in our chrome - and they land in your personal browser
+  store, the same one the agent's persistent sessions read, so a login you
+  performed by hand is a login the agent has on its next run. One person
+  drives at a time;
+  another user asking sees "busy" without learning who. While you drive, your
+  chat knows it: a small "Browser" chip appears beside the workspace chip, and
+  every message you send carries the page you are on, any selected text, and a
+  screenshot of your current view - as a normal image attachment the agent can
+  see. The agent always wins:
+  when a `browser_agent` run starts it takes the browser back and the window
+  returns to the familiar task/actions/history view, and when the run ends the
+  interactive browser is one click away again. The stream reaches the page
+  only through the VAF server with a per-session ticket; the container port
+  stays loopback-only.
+- **The chat and the side panel share the space you give them.** The border
+  between the chat and the right panel carries a drag handle: pull it to
+  resize both, with sensible minimum widths on each side, double-click to go
+  back to the automatic layout. The chosen width survives reloads.
+- **A browser button in the chat, so the browser window is no longer only
+  reachable while an agent happens to be using it.** A globe in the chat's
+  top-right corner, on the same line as the sidebar logo, opens and closes the
+  Browser Agent window; while the window is open the button stays marked. It
+  opens a window rather than starting anything: `browser_agent` is a tool the
+  agent calls, so what the button shows is what actually exists - the last
+  browser run's screenshot, visited URLs and action plan after a run, and an
+  empty browser saying "No browser session yet" when there was none. That
+  empty state replaces a "Starting Browser Agent" banner which, in a window
+  opened by hand, announced an agent nobody had called. While another
+  sub-agent is actually running, the button stands down and says so, so a
+  click can never hide live work behind a browser view.
 - **The agent can now update a memory instead of saving it twice.** A new
   `memory_update` tool rewrites an existing long-term memory in place - the
   same operation the Memory page has always offered, now available to the
@@ -133,6 +176,35 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   handed over as a follow-up document with a filename caption, on Telegram,
   WhatsApp and Discord alike. Workflow runs whose send step already attached
   the document stay at one copy - the second send is recognized and skipped.
+- **The interactive browser looks and behaves like a browser now.** The window
+  is a real browser, with its own tab strip, address bar, bookmarks and
+  downloads, themed dark to match the app - so everything a browser can do is
+  there rather than a rebuilt fraction of it. The page fills the window instead
+  of sitting in black bars, and the sub-window with Task, Actions, History and
+  Activity stays away while you are driving, returning when the agent takes
+  over. Several smaller repairs went with it: streams no longer die after
+  exactly 40 seconds of reading, scrolling no longer smears the page, and
+  closing and re-opening the browser no longer leaves a second browser UI
+  inside the window.
+- **The interactive browser window now actually shows the browser.** It fetched
+  its viewer correctly and then stayed blank, because the server sends
+  `X-Frame-Options: DENY` on every response and the window is a frame - so the
+  browser downloaded the page and refused to paint it. That header is now
+  `SAMEORIGIN` for the stream path only, which is the one page meant to be
+  framed, and only by VAF's own UI. Two more defects on the same lane went with
+  it: the viewer's address is no longer built with a guessed `http://`, which
+  was wrong whenever LAN hosting with TLS is on (the backend port speaks HTTPS
+  then and answered nothing), and the stream reaches LAN users at all now - the
+  HTTPS proxy had no websocket route for it and its relay could only carry text
+  frames, while a browser stream is binary from the first byte.
+- **Quickly restarting VAF no longer leaves the Docker services dead.** Quitting
+  VAF stops the Docker stack in a background thread with up to 25 seconds of
+  headroom; stopping and restarting VAF inside that window raced the old
+  instance's stop against the new instance's startup, and the stop won - the
+  new VAF ran with every container down (memory search empty, browser gone)
+  until someone noticed. The stop now checks the containers' own start time
+  first: restarted after the shutdown began means a new instance owns the
+  stack, and the old stop stands down.
 - **The tool self-learning loop no longer goes quiet for the tools you use
   most.** Three repairs in the Whare Wananga lane. A tool whose definition
   changed (marked stale) was excluded from the proactive pitfall injection AND

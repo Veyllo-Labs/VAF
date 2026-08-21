@@ -295,6 +295,38 @@ many frames have not been read.
 - **Auto-Open**: The panel opens when a sub-agent starts (via tool events/logs).
 - **Tool Card Toggle**: Clicking a sub-agent tool card expands details and opens the panel; collapsing the card closes the panel.
 - **Auto-Close Guard**: The panel does not auto-close while any sub-agent step is still running.
+- **Browser button**: A globe in the chat area's top-right corner opens and closes the
+  browser window directly, and carries the open state as its own mark (one step brighter
+  and larger, the same language its hover uses). It is placed in the chat column rather
+  than the window, so it travels inward with the column when the dock opens, and it is
+  given the sidebar header's `h-16` band so it sits on the logo's optical line. Opening
+  also asks the server for the INTERACTIVE stream (`browser_interactive_start`): with no
+  agent run holding the browser, the window shows the sandbox Chromium fullscreen through
+  a KasmVNC stream and the person drives it by hand - Chromium's own tabs and omnibox,
+  native mouse/keyboard. Always the persistent mode: logins survive without a switch of
+  our own (the browser itself asks about remembering them). When the agent's own
+  `browser_agent` run holds the browser, the window keeps today's agent view instead; the
+  agent always wins the shared browser and evicts an interactive session at run start.
+  Details and the lease/ticket model:
+  [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#interactive-browser-driving-the-sandbox-by-hand).
+  The mark means open, not on top - the dock's single slot gives every viewer priority
+  over the sub-agent window, and the button deliberately does not close them to take the
+  slot, since closing the document panel detaches the chat's documents. While another
+  sub-agent is actually running, the button stands down and says so. Hidden below `md`:
+  the small layout has its own top bar and the message column runs edge to edge there.
+- **Browser context chip**: While the interactive browser is active, a small "Browser"
+  chip appears next to the workspace chip above the composer. It announces that the next
+  message carries browser context: current page URL and selected text (injected per turn,
+  the code-viewer lifecycle) plus a screenshot through the attached-images lane. The
+  capture happens server-side at send time and only for the chat session holding the
+  browser lease.
+- **Resizable dock**: The border between the chat column and the dock panel carries a
+  drag handle (desktop only). Dragging reassigns width between the panel and the chat
+  column, clamped to a 560px panel minimum and a 480px chat minimum; the chosen width is
+  kept in `localStorage` (`vaf_dock_width`) and survives reloads. Double-click resets to
+  the automatic widths. The width is applied through a CSS variable consumed only by an
+  `lg:`-scoped class, deliberately not an inline style: the mobile full-screen sheet
+  overrides width with `max-lg:` classes, and an inline style would silently beat them.
 - **Per-chat isolation**: The window's state is snapshotted and swapped per session on a
   chat switch, exactly like the message list - chat A's running coder view (and the stop
   button its "running" state arms) never shows over chat B. A snapshot is restored with
@@ -639,6 +671,13 @@ The local LLM runs as a single HTTP backend on `127.0.0.1:8080`. When a prompt a
 
 ### Client → Server Messages
 
+Interactive browser: `browser_interactive_start` (`{ sessionId, save, session }`) asks for
+the interactive stream lease (ownership-gated like every session command; a repeat from
+the same window updates the save toggle in place), `browser_interactive_stop`
+(`{ sessionId }`) releases it. The stream itself does NOT ride this socket: the reply's
+`streamPath` names a ticketed proxy path (`/api/browser-vnc/t/<ticket>/...`) the window's
+iframe loads directly from the backend origin.
+
 ```json
 {
   "type": "chat",
@@ -689,6 +728,12 @@ sidebar the same way.
 ```
 
 ### Server → Client Messages
+
+Interactive browser: `browser_interactive_state`
+(`{ sessionId, status: active|stopped|busy|agent_active|error, saving, reason, streamPath }`)
+carries the lease verdict and lifecycle (superseded by another window, agent takeover,
+viewer gone, browser container restarted). Sent as a direct reply to the requester AND
+broadcast to the owning session.
 
 ```json
 {

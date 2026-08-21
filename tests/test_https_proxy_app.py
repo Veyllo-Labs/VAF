@@ -10,6 +10,7 @@ never bound the LAN port and remote devices got connection-refused. These tests 
 that the shared httpx clients are still closed on shutdown.
 """
 import asyncio
+from pathlib import Path
 
 import vaf.network.https_proxy as proxy
 
@@ -103,8 +104,12 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
         scope = {"headers": []}
         client = type("C", (), {"host": "192.168.1.50"})()
 
-        async def accept(self):
-            pass
+        accepted_subprotocol = "unset"
+
+        async def accept(self, subprotocol=None):
+            # The relay mirrors the client's offered subprotocol; a VNC client
+            # that offered one and got nothing back refuses to speak.
+            type(self).accepted_subprotocol = subprotocol
 
         async def send_text(self, _):
             pass
@@ -112,7 +117,10 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
         async def send_bytes(self, _):
             pass
 
-        async def receive_text(self):
+        async def receive(self):
+            # receive(), not receive_text(): the relay carries BINARY frames too
+            # (the interactive browser's VNC stream is binary end to end), and a
+            # text-only read raises on the first frame and kills the relay half.
             raise RuntimeError("client gone")  # ends the from_client relay loop
 
         async def close(self):
@@ -127,3 +135,11 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
 
     assert "max_size" in captured and captured["max_size"] is None
     assert str(captured.get("uri", "")).startswith("ws://127.0.0.1:8005/ws")
+    # The relay must read frames in a way that survives binary payloads. Pinned on
+    # the source because the fake above can only prove it is not receive_text().
+    _relay_src = Path(proxy.__file__).read_text(encoding="utf-8")
+    assert "await websocket.receive()" in _relay_src, (
+        "the client->backend relay must use receive(); receive_text() raises on the "
+        "first binary frame and that half of the relay dies silently"
+    )
+    assert 'message.get("bytes")' in _relay_src, "binary frames must be forwarded as bytes"

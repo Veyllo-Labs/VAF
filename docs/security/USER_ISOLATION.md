@@ -517,6 +517,29 @@ This prevents users from reading each other's temporary files within the shared 
 
 The persistent cookie/login store for the browser agent is keyed by user scope at `~/.vaf/browser_sessions/<scope_seg>/<session>.json` (not the old flat shared path), so one user's saved logins are never readable by another even on the same OS account. The agent injects the caller's `user_scope_id` for `browser_agent` calls and propagates it to the killable child process via the `VAF_USER_SCOPE_ID` environment variable, so the child writes and reads under the correct per-user store. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
 
+### Interactive browser (`vaf/core/browser_interactive.py`)
+
+The web UI's interactive browser drives the SAME shared Chromium container the agent
+uses, so its isolation is a lease, not a partition:
+
+- **One lease at a time**, bound to the `user_scope_id` of the WebSocket CONNECTION
+  (never the message). A different user asking while a lease stands gets `busy`,
+  deliberately without learning whose lease it is; only an admin may evict.
+- **Cookie handover:** when the lease changes to a DIFFERENT scope, the container's
+  cookie jar is cleared (`Storage.clearCookies`) before the new scope's stored logins
+  are optionally loaded. Saved logins live in the same per-scope storage-state files as
+  the agent's persistent sessions, above.
+- **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
+  validated on every asset request and on the stream websocket, and dead the moment the
+  lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
+  lane is: the credential is in the request itself.
+- **Named residual:** localStorage, IndexedDB and the HTTP cache live in the container's
+  single profile and are NOT cleared on handover - the same shared-sandbox limitation the
+  known-limitations table records for the Docker sandbox. Cookies (the part that carries
+  logins) are handled; the rest is shared state between everyone who uses the one
+  container, and multi-tenant deployments that need more should run per-user browser
+  containers.
+
 ## 6. Connection-Level Isolation
 
 ### WhatsApp

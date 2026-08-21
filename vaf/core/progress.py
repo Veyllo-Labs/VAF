@@ -123,6 +123,7 @@ VAF_LIVE_VIEW_TYPES = frozenset({
     "subagent_update",        # the coder's live editor feed; NOT derivable from any name
     "browser_frame_update",
     "browser_step_update",
+    "browser_interactive_state",   # interactive browser lease status (active/stopped/busy)
 })
 
 

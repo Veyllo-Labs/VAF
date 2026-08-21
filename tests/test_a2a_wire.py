@@ -257,10 +257,21 @@ def test_the_proxy_carries_the_path_to_the_backend():
     With a hardcoded /ws the new route relays every room to the WebUI handler: the
     socket opens, frames flow, the wrong handler answers. Everything looks healthy,
     which is what makes it the worst shape of all.
+
+    Pinned as the INVARIANT rather than as one literal line: the backend ORIGIN
+    later became a single constant shared with the HTTP half (it used to be a
+    second hardcoded copy), and a guard that matched the old literal would have
+    failed on that improvement while a re-hardcoded PATH - the thing that
+    actually breaks rooms - slipped through unnoticed.
     """
+    import re as _re
     source = (ROOT / "vaf" / "network" / "https_proxy.py").read_text(encoding="utf-8")
-    assert 'backend_uri = "ws://127.0.0.1:8005" + path' in source
+    assert _re.search(r"backend_uri\s*=\s*BACKEND_ORIGIN[^\n]*\+\s*path", source), (
+        "the backend websocket URI must be built from BACKEND_ORIGIN with the CLIENT's "
+        "path appended; a literal path here relays every socket to the WebUI handler"
+    )
     assert 'backend_uri = "ws://127.0.0.1:8005/ws"' not in source
+    assert '+ "/ws"' not in source
 
 
 @pytest.mark.parametrize("path,allowed", [

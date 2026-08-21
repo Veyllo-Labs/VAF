@@ -450,12 +450,45 @@ boundary above intact. The trigger is the subtlety: an open socket is NOT a pict
 viewer opens its websocket immediately and then shows that splash for the whole protocol
 handshake, so lifting the cover on the accept revealed the splash instead of hiding it.
 The server therefore counts bytes relayed from the display server and reports the
-crossing once (`stream_bytes` in `vaf/core/browser_interactive.py`). The threshold is
+crossing once (`stream_bytes` in `vaf/core/browser_interactive.py`). The count is reset
+whenever a stream is HANDED OUT, not only when the last viewer disconnects: a lease can
+survive a close (same person, same chat, so `start` reuses it) and came back carrying
+the previous viewer's count, which reported "picture is up" before a pixel had arrived
+and left the foreign splash visible on every open after the first. The threshold is
 measured, not guessed: the entire RFB handshake is 45 bytes (greeting 12, security types
 2, result 4, ServerInit 27) and the first framebuffer update is 49132, so 4 KB cannot be
-reached by handshake traffic and cannot be missed by a real frame. The window keeps its
-own rule on top - the cover is for the FIRST picture only, so a later reconnect never
-blanks a page somebody is reading.
+reached by handshake traffic and cannot be missed by a real frame. **Who decides that the picture is there.** The viewer itself, when it has ever spoken:
+it calls `parent.postMessage({action:"connection_state", value})` on every visual state
+change, with `connected` at the moment it takes its own splash down, and the window
+listens for that (same-origin frame, and only messages from ITS iframe are accepted).
+The server's byte count is the FALLBACK, for the case where that message never arrives,
+because their postMessage contract is not ours to rely on. The reason the viewer has the
+last word: the server sees the picture arrive on the wire before the viewer has decoded
+and drawn it, so a cover lifted on the server's signal alone shows the splash for the
+length of that gap - a brief flash that survived every earlier fix. Whatever the last
+viewer said is forgotten when a stream starts or ends, because closing and re-opening
+can hand back the same ticket, and a stale `connected` would suppress the cover for
+exactly the moment the splash is on screen.
+
+The window's own rule is
+deliberately blunt: the cover is up whenever there is no picture, not only for the first
+one. An earlier version covered the first picture per stream, to avoid blanking a page
+somebody was reading - but there is nothing to blank, because when the stream is down
+the viewer has already replaced the page with its own white splash. Every reconnect is
+one of those moments, and that is why the splash kept flashing briefly. The cover is
+also SILENT: a plain dark surface, with its spinner and wording fading in only after
+three seconds (pure CSS, no timer), because a label that appears for a second and
+vanishes is just a splash of our own - which is exactly what it was mistaken for.
+
+The stream viewer's splash cannot be switched off from the outside, and that was checked
+rather than assumed: its 44 URL settings (`initSetting` in the client bundle) contain
+nothing for it, `Xkasmvnc` has no such option and the server's YAML no such key. It is
+two things in its stylesheet - `#noVNC_transition` with a hard `background: #fff` plus an
+embedded logo, and a `body` background of `#fff url(./splash-*.jpg)` - and neither its
+script nor its stylesheet mentions `prefers-color-scheme`, so it is always white. A
+configurable "Splash Background" exists only in the commercial Kasm Workspaces product,
+not in this server. Covering it is therefore the only route that does not patch the
+vendor client, which the licence boundary above rules out.
 
 With no run behind it and no interactive stream, the window shows an honest empty state
 ("No browser session yet") instead of a starting banner; `presence` separates a hand-opened

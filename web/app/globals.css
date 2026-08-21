@@ -493,6 +493,13 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    The crawl is deliberately dishonest about its pace: fast to two thirds, then
    a creep it never finishes, because finishing is the content's job - the bar
    vanishes with the skeleton the moment real messages arrive. */
+/* The interactive browser's connecting hint. The cover itself is there from the
+   first frame - it is what hides the stream viewer's own white splash - but it
+   stays SILENT: a normal connect takes about a second, and a label that flashes
+   up and vanishes reads as a splash of our own. The hint fades in only after the
+   wait has become unusual. Pure CSS, so nothing has to run a timer. */
+@keyframes vafBrowserConnectHint { to { opacity: 1 } }
+
 @keyframes skelPulse { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
 @keyframes loadCrawl {
   0% { transform: scaleX(0) }

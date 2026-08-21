@@ -778,9 +778,42 @@ export default function SubAgentWindow({
     }, [librarian?.activity?.length, librarian?.entries?.length, librarian?.stage]);
 
     // Browser window: auto-scroll the action plan and the activity log to the newest entry
-    // Has this window ever had a live stream? Decides whether the connecting cover
-    // may still appear (see the interactive branch below).
-    const hasStreamedRef = useRef(false);
+    // The stream viewer reports its own visual state to us: it calls
+    // parent.postMessage({action:"connection_state", value}) on every change, with
+    // "connected" at the moment it takes its splash down. That is the signal the
+    // cover wants. The server's byte count cannot be it - the server sees the
+    // picture arrive on the wire BEFORE the viewer has decoded and drawn it, so a
+    // cover lifted on that shows the splash for the last few frames of the gap,
+    // which is exactly the brief flash that survived every earlier fix.
+    // The server's signal stays as the fallback: if this message never arrives
+    // (their contract is not ours to rely on), behaviour is what it was before.
+    const streamIframeRef = useRef<HTMLIFrameElement | null>(null);
+    const [viewerSaysState, setViewerSaysState] = useState<string | null>(null);
+    useEffect(() => {
+        const onMessage = (e: MessageEvent) => {
+            // Same-origin frame, but the window hears every frame on the page, so
+            // only OUR iframe may speak here.
+            if (!streamIframeRef.current || e.source !== streamIframeRef.current.contentWindow) return;
+            const d = e.data as { action?: string; value?: unknown } | null;
+            if (!d || d.action !== 'connection_state') return;
+            setViewerSaysState(typeof d.value === 'string' ? d.value : null);
+        };
+        window.addEventListener('message', onMessage);
+        return () => window.removeEventListener('message', onMessage);
+    }, []);
+
+    // Forget what the LAST viewer said whenever a stream starts or ends. Keyed on
+    // "is it active" as well as on the url, because closing and re-opening can hand
+    // back the very same ticket: the url would not change, the iframe would still
+    // remount and load from scratch, and a stale "connected" would suppress the
+    // cover for exactly the moment the splash is on screen. The server-side count
+    // had this same shape of bug, one layer down.
+    const interactiveIsActive = !!interactive?.active;
+    const interactiveStreamUrl = interactive?.streamUrl ?? '';
+    useEffect(() => {
+        setViewerSaysState(null);
+    }, [interactiveIsActive, interactiveStreamUrl]);
+
     const browserActionsRef = useRef<HTMLDivElement>(null);
     const browserActivityRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -2065,12 +2098,17 @@ export default function SubAgentWindow({
             // of what the real one already does. What stays is the window frame: who
             // is driving, and how to close it.
             //
-            // The cover is for the FIRST connect only. It hides the stream viewer's
-            // branded splash while the socket comes up; once pixels have arrived, a
-            // later blip (a new tab, a reconnect) must not blank a page the person is
-            // reading - the viewer reconnects on its own and shows its own state.
-            if (interactive.viewerConnected) hasStreamedRef.current = true;
-            const showCover = !interactive.viewerConnected && !hasStreamedRef.current;
+            // Up whenever there is no picture, full stop - covering only the first one
+            // left the splash on show from the second open onwards, and there is
+            // nothing to protect anyway: when the stream is down the viewer has
+            // already replaced the page with its own splash.
+            //
+            // WHO decides "no picture": the viewer itself if it has ever spoken to us,
+            // because only it knows when it has finished drawing. The server's byte
+            // count is the fallback for the case where it never does.
+            const showCover = viewerSaysState !== null
+                ? viewerSaysState !== 'connected'
+                : !interactive.viewerConnected;
             return (
                 <div
                     className={cn(
@@ -2098,6 +2136,7 @@ export default function SubAgentWindow({
                             {/* Clipboard permissions delegated so copy/paste between host and
                                 sandbox works where the browser allows it. */}
                             <iframe
+                                ref={streamIframeRef}
                                 src={interactive.streamUrl}
                                 title="Interactive browser"
                                 className="absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
@@ -2105,8 +2144,18 @@ export default function SubAgentWindow({
                             />
                             {showCover && (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e2430]">
-                                    <Loader2 size={20} className="animate-spin text-[#5c6675]" />
-                                    <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                    {/* Silent by default: the cover's whole job is to hide the
+                                        stream viewer's white splash, and a label that appears
+                                        for a second and vanishes is just a splash of our own.
+                                        After three seconds the wait is no longer normal and
+                                        saying so beats an empty dark window. */}
+                                    <div
+                                        className="flex flex-col items-center gap-3 opacity-0"
+                                        style={{ animation: 'vafBrowserConnectHint .4s ease-out 3s forwards' }}
+                                    >
+                                        <Loader2 size={20} className="animate-spin text-[#5c6675]" />
+                                        <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                    </div>
                                 </div>
                             )}
                         </div>

@@ -569,3 +569,41 @@ def test_the_browser_context_block_says_what_can_be_done_with_it():
         "the hand-over must be stated: the model has to know the user loses and regains "
         "control, or it cannot judge whether acting is appropriate"
     )
+
+
+def test_reopening_waits_for_its_own_picture(mgr, monkeypatch):
+    """Every handout starts the wait again, however the window was closed.
+
+    The count was only reset when the LAST viewer disconnected. A lease that
+    survived the close - same person, same chat, so start() reuses it - came
+    back carrying the previous viewer's count, so the very first payload said
+    "picture is up" before a pixel had arrived and the cover never went up. The
+    foreign splash was then visible on every open after the first, which is
+    exactly what the live test showed.
+    """
+    _no_ipc_tasks(monkeypatch)
+    r = mgr.start("scope-a", "sess-1")
+    ticket = r["streamPath"].split("/t/")[1].split("/")[0]
+    mgr.stream_connected(ticket)
+    mgr.stream_bytes(ticket, 49132)
+    assert mgr._payload("active")["viewerConnected"] is True
+
+    # The window is closed in a way that leaves the lease standing (no stop, no
+    # disconnect - a chat switch, a dropped socket, a race on the way out).
+    again = mgr.start("scope-a", "sess-1")
+    assert again["status"] == "active"
+    assert again["viewerConnected"] is False, (
+        "a handed-out stream has shown nothing yet, whatever the last one managed"
+    )
+    assert mgr._payload("active")["viewerConnected"] is False
+
+
+def test_a_new_window_of_the_same_person_also_waits(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    r = mgr.start("scope-a", "sess-1")
+    ticket = r["streamPath"].split("/t/")[1].split("/")[0]
+    mgr.stream_connected(ticket)
+    mgr.stream_bytes(ticket, 49132)
+    assert mgr._payload("active")["viewerConnected"] is True
+    r2 = mgr.start("scope-a", "sess-2")          # same person, different chat
+    assert r2["viewerConnected"] is False

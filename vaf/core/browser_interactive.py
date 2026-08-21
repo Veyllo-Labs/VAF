@@ -481,6 +481,14 @@ class InteractiveBrowserManager:
                 )
                 self._lease = lease
             self._last_session_id = session_id
+            # A stream is being handed out, so a viewer is about to draw its picture
+            # from scratch and will show its own splash while doing so. The count of
+            # what the PREVIOUS viewer received says nothing about that, and leaving
+            # it standing reported "picture is up" before a single pixel had arrived -
+            # which is how the foreign splash came back on every open after the first.
+            # Resetting here rather than only on the last disconnect makes it hold no
+            # matter how the window was closed.
+            lease.pixels_seen = 0
             self._ensure_janitor()
             payload = self._payload("active", lease=lease)
         self._emit(payload, session_id)

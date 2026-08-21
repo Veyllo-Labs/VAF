@@ -1320,8 +1320,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     // Material 3 motion: what enters is decelerated, what leaves is
     // accelerated, and leaving is the shorter of the two.
+    // Shelf and content are ONE motion: same start, same duration, same curve.
+    // A stagger on the contents reads as two phases, the box first and the
+    // cards after it, which is the opposite of what an expanding surface
+    // should look like.
     const EASE_EMPHASIZED: [number, number, number, number] = [0.2, 0, 0, 1];
-    const EASE_DECELERATE: [number, number, number, number] = [0.05, 0.7, 0.1, 1];
     const EASE_ACCELERATE: [number, number, number, number] = [0.3, 0, 0.8, 0.15];
 
     // The shelf grows with its content, so a fixed duration would make a shelf
@@ -5715,14 +5718,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     {bundle.tools.map((tool, idx) => (
                                                                         <motion.div
                                                                             key={tool.name}
-                                                                            initial={{ opacity: 0, y: 10, scale: 0.985 }}
-                                                                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                                                                            exit={{ opacity: 0, y: -6, scale: 0.99 }}
-                                                                            transition={{
-                                                                                duration: 0.26,
-                                                                                delay: 0.09 + Math.min(idx, 12) * 0.026,
-                                                                                ease: EASE_DECELERATE,
-                                                                            }}
+                                                                            initial={{ opacity: 0 }}
+                                                                            animate={{ opacity: 1 }}
+                                                                            exit={{ opacity: 0, transition: { duration: closeMs(rows) / 1000, ease: EASE_ACCELERATE } }}
+                                                                            transition={{ duration: openMs(rows) / 1000, ease: EASE_EMPHASIZED }}
                                                                         >
                                                                             {renderToolCard(tool, idx)}
                                                                         </motion.div>

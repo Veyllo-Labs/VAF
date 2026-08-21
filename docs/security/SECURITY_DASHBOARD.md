@@ -152,7 +152,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 | `skill_scan_alert` | Periodic re-scan found a worsened risk level (below high) | `vaf/skills/rescan.py` |
 | `skill_quarantined` | Skill quarantined (auto on worsened-to-high, or manual isolate) | `vaf/skills/rescan.py`, `security_routes.py` isolate |
 | `skill_removed` | Quarantined skill deleted from the dashboard | `security_routes.py` delete |
-| `upload_blocked` | Arriving content matched the known-bad hash list and was refused; `channel` carries the lane (`web_chat`, `workspace_upload`, `a2a_room`, `telegram`, `discord`, `whatsapp`, `mail`, `cloud_sync`, `skill_import`), `path` the sha256 prefix | `vaf/core/threat_db.py` (`inspect_upload`, `emit_threat_block`), called from every ingress lane |
+| `upload_blocked` | Arriving content matched the known-bad hash list and was refused; `channel` carries the lane (`web_chat`, `workspace_upload`, `a2a_room`, `telegram`, `discord`, `whatsapp`, `mail`, `cloud_sync`, `skill_import`, `browser_download`), `path` the sha256 prefix | `vaf/core/threat_db.py` (`inspect_upload`, `emit_threat_block`), called from every ingress lane |
 | `upload_flagged` | Arriving content tripped the static scanner. ADVISORY: it was delivered, not refused | `vaf/core/threat_db.py` (`inspect_upload`) |
 | `threat_listed` | A digest was added to the known-bad list | `vaf/core/threat_db.py` (`record_threat`) |
 | `threat_delisted` | A digest was removed from the known-bad list | `vaf/core/threat_db.py` (`remove_threat`) |

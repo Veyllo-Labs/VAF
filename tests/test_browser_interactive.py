@@ -27,6 +27,16 @@ def mgr(monkeypatch, tmp_path):
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub/devtools/browser/x")
     monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
     monkeypatch.setattr(bi, "_current_page", lambda base: None)
+    monkeypatch.delenv("VAF_BROWSER_DOWNLOADS", raising=False)
+    dl_policy = []
+    monkeypatch.setattr(bi, "_set_download_behavior",
+                        lambda base, allow: dl_policy.append(allow))
+    dl_purges = []
+    monkeypatch.setattr(bi, "_purge_container_downloads",
+                        lambda name: dl_purges.append(name))
+    dl_sweeps = []
+    monkeypatch.setattr(bi, "_sweep_container_downloads",
+                        lambda name, scope: (dl_sweeps.append((name, scope)) or []))
     cookie_calls = []
 
     def fake_cookie_op(base, op, cookies=None):
@@ -43,6 +53,9 @@ def mgr(monkeypatch, tmp_path):
     # No janitor thread in unit tests: its 5s cadence would outlive the test.
     m._ensure_janitor = lambda: None
     m._test_cookie_calls = cookie_calls
+    m._test_dl_policy = dl_policy
+    m._test_dl_purges = dl_purges
+    m._test_dl_sweeps = dl_sweeps
     m._test_emitted = emitted
     return m
 
@@ -504,6 +517,101 @@ def test_give_back_keeps_the_browser_unparked_until_claimed(mgr, monkeypatch):
     mgr.start("scope-a", "sess-1")
     assert mgr._park_if_unclaimed() is False and len(parked) == 1
     mgr.stop("user", requester_scope="scope-a")
+
+
+# ── downloads: the container is a hand-off point, not storage ─────────────
+
+def test_downloads_flow_to_the_holder_and_die_on_a_scope_change(mgr, monkeypatch):
+    """The person's finished downloads leave with THEM (janitor tick, lease
+    end, takeover), and a scope change purges the folder instead of delivering
+    a previous holder's files into the next person's workspace."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    assert mgr._test_dl_policy[-1] is True          # downloads allowed by default
+    mgr.stop("user", requester_scope="scope-a")
+    assert ("vaf-browser", "scope-a") in mgr._test_dl_sweeps
+    before = len(mgr._test_dl_purges)
+    mgr.start("scope-b", "sess-2")                  # different scope takes over
+    assert len(mgr._test_dl_purges) == before + 1
+    mgr.stop("user", requester_scope="scope-b")
+    # Same-scope refresh purges nothing - their own files are on their way.
+    before = len(mgr._test_dl_purges)
+    mgr.start("scope-b", "sess-2")
+    assert len(mgr._test_dl_purges) == before
+    mgr.stop("user", requester_scope="scope-b")
+
+
+def test_a_runs_downloads_reach_the_runs_own_scope(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
+    assert mgr._test_dl_policy[-1] is True
+    mgr.agent_run_ended()
+    assert ("vaf-browser", "scope-b") in mgr._test_dl_sweeps
+
+
+def test_downloads_off_denies_in_the_browser_and_never_sweeps(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setenv("VAF_BROWSER_DOWNLOADS", "off")
+    mgr.start("scope-a", "sess-1")
+    assert mgr._test_dl_policy[-1] is False         # deny, enforced browser-side
+    mgr.stop("user", requester_scope="scope-a")
+    assert mgr._test_dl_sweeps == []
+
+
+def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
+    """The module half, with the docker seam faked: a finished file is copied
+    out, asked past inspect_upload_file, and lands sanitized in the owner's
+    VAF_Projects Downloads; a blocked file goes nowhere - and in BOTH cases
+    the container copy is deleted. Deliberately WITHOUT the mgr fixture: it
+    stubs this very function for the manager-level tests."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import types as _types
+    import vaf.core.browser_pool as bp
+    import vaf.core.session as session_mod
+    import vaf.core.threat_db as threat_mod
+
+    calls = []
+    payload = b"%PDF-1.4 test"
+
+    def fake_docker(args, timeout=60):
+        calls.append(list(args))
+        if args[0] == "exec" and "find" in args[-1]:
+            return _types.SimpleNamespace(returncode=0, stdout=(
+                f"{len(payload)}\t/home/browser/Downloads/böse datei?.pdf\n"
+                "999\t/home/browser/Downloads/loading.crdownload-not-really\n"), stderr="")
+        if args[0] == "cp":
+            with open(args[-1], "wb") as f:
+                f.write(payload)
+            return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(bp, "_docker", fake_docker)
+    monkeypatch.setattr(session_mod, "get_user_projects_root",
+                        lambda scope: tmp_path / "VAF_Projects" / "ab12cd34")
+    blocked = {"value": False}
+    monkeypatch.setattr(threat_mod, "inspect_upload_file",
+                        lambda p, **kw: _types.SimpleNamespace(blocked=blocked["value"]))
+
+    delivered = bi._sweep_container_downloads("vaf-browser", "scope-a")
+    target = tmp_path / "VAF_Projects" / "ab12cd34" / "Downloads"
+    assert delivered and (target / delivered[0]).exists()
+    assert "?" not in delivered[0]                  # sanitized name
+    find_arg = next(c[-1] for c in calls if c[0] == "exec" and "find" in c[-1])
+    assert "*.crdownload" in find_arg               # in-progress files excluded
+    assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
+
+    # Second file of the same name gets a collision suffix, not an overwrite.
+    delivered2 = bi._sweep_container_downloads("vaf-browser", "scope-a")
+    assert delivered2 and delivered2[0] != delivered[0]
+
+    # Blocked verdict: nothing lands, the container copy still dies.
+    calls.clear()
+    blocked["value"] = True
+    existing = sorted(target.iterdir())
+    assert bi._sweep_container_downloads("vaf-browser", "scope-a") == []
+    assert sorted(target.iterdir()) == existing
+    assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
 
 
 def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():

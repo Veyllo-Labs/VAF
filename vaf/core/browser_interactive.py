@@ -352,6 +352,172 @@ def _current_page(cdp_base: str) -> Optional[dict]:
         return None
 
 
+def downloads_mode() -> str:
+    """What happens to files downloaded inside the sandbox browser.
+
+    "workspace" (default): they are swept out of the container, pass the same
+    threat funnel every other ingress lane asks (vaf/core/threat_db.py), and
+    land in the owner's own file area (VAF_Projects/<uid8>/Downloads) - the
+    container is a sandbox, not a place a person can reach into.
+    "off": downloading is denied outright at the browser level.
+    An env knob like its siblings; anything unrecognized means workspace."""
+    return "off" if os.environ.get("VAF_BROWSER_DOWNLOADS", "").strip().lower() == "off" else "workspace"
+
+
+def _set_download_behavior(cdp_base: str, allow: bool) -> None:
+    """Tell the browser whether downloads may happen at all.
+
+    Browser-level CDP, one short-lived client (the _cookie_op pattern), and
+    the setting OUTLIVES the connection - which is the point: set once at
+    every handover, it holds for the person's whole session or the agent's
+    whole run. 'allow' pins the container path the sweep drains; 'deny' is
+    the off switch, enforced in the browser rather than in our chrome.
+    BLOCKING: call from a worker thread. Best-effort."""
+    import asyncio
+
+    ws_url = resolve_cdp_ws_url(cdp_base)
+
+    async def _main():
+        from cdp_use.client import CDPClient
+        client = CDPClient(ws_url)
+        await client.start()
+        try:
+            params = ({"behavior": "allow", "downloadPath": "/home/browser/Downloads"}
+                      if allow else {"behavior": "deny"})
+            await asyncio.wait_for(
+                client.send.Browser.setDownloadBehavior(params=params), 10)
+        finally:
+            try:
+                await asyncio.wait_for(client.stop(), 5)
+            except Exception:
+                pass
+
+    try:
+        asyncio.run(_main())
+    except Exception as e:
+        append_domain_log("webui", f"[browser_interactive] download policy not applied: {e}")
+
+
+def _purge_container_downloads(container_name: str) -> None:
+    """Delete whatever sits in the container's download folder, unread.
+
+    Called on a scope CHANGE: residue a previous (or unknown) holder left
+    behind must never be delivered into the NEXT person's workspace, and
+    leaving it standing would do exactly that on the first sweep. Best-effort;
+    the full profile scrub wipes the same folder as part of its job."""
+    try:
+        from vaf.core.browser_pool import _docker
+        _docker(["exec", container_name, "sh", "-c",
+                 "rm -rf /home/browser/Downloads/* 2>/dev/null || true"], timeout=20)
+    except Exception:
+        pass
+
+
+_DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024
+_DOWNLOAD_NAME_OK = re.compile(r"[^A-Za-z0-9._ ()\[\]-]")
+
+
+def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[str]:
+    """Move finished downloads out of the container into their owner's files.
+
+    The sandbox browser downloads into its own container filesystem, where no
+    person can reach ("it downloaded, but where?" - measured live with a PDF
+    that existed only inside the container). This drains that folder: every
+    completed file (Chromium keeps in-progress ones as *.crdownload) is copied
+    out, asked past the SAME threat funnel every ingress lane asks
+    (inspect_upload_file, origin browser_download - a downloaded file is
+    foreign bytes like any upload), and placed under the owner's
+    VAF_Projects/<uid8>/Downloads with a sanitized, collision-suffixed name.
+    Delivered or blocked, the container copy is deleted - the folder is a
+    hand-off point, not storage. Returns the delivered filenames. BLOCKING
+    (docker + hashing): call off the event loop. Never raises."""
+    delivered: List[str] = []
+    try:
+        from vaf.core.browser_pool import _docker
+        from vaf.core.session import get_user_projects_root
+
+        root = get_user_projects_root(user_scope_id)
+        if root is None:
+            return delivered
+        r = _docker(["exec", container_name, "sh", "-c",
+                     "find /home/browser/Downloads -maxdepth 1 -type f "
+                     "! -name '*.crdownload' -printf '%s\\t%p\\n' 2>/dev/null || true"],
+                    timeout=30)
+        if r.returncode != 0:
+            return delivered
+        entries = []
+        for line in (r.stdout or "").splitlines():
+            if "\t" not in line:
+                continue
+            size_s, path = line.split("\t", 1)
+            try:
+                entries.append((int(size_s), path.strip()))
+            except ValueError:
+                continue
+        if not entries:
+            return delivered
+
+        import shutil
+        import tempfile
+        from vaf.core.config import resolve_caller_username
+        from vaf.core.threat_db import inspect_upload_file
+
+        target_dir = root / "Downloads"
+        for size, cpath in entries:
+            raw_name = os.path.basename(cpath)
+            if size > _DOWNLOAD_MAX_BYTES:
+                append_domain_log("webui",
+                                  f"[browser_interactive] download skipped (over size cap): "
+                                  f"{raw_name} ({size} bytes)")
+                _docker(["exec", container_name, "rm", "-f", cpath], timeout=20)
+                continue
+            staged = None
+            try:
+                fd, staged = tempfile.mkstemp(prefix="vaf-browser-dl-")
+                os.close(fd)
+                c = _docker(["cp", f"{container_name}:{cpath}", staged], timeout=120)
+                if c.returncode != 0:
+                    continue
+                name = _DOWNLOAD_NAME_OK.sub("_", raw_name).strip("._ ") or "download"
+                name = name[:180]
+                verdict = inspect_upload_file(
+                    staged, filename=name, origin="browser_download",
+                    username=resolve_caller_username(None, user_scope_id))
+                if verdict.blocked:
+                    # The funnel has logged and surfaced it; the bytes go nowhere.
+                    append_domain_log("webui",
+                                      f"[browser_interactive] download blocked by threat "
+                                      f"funnel: {name}")
+                else:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    dest = target_dir / name
+                    stem, dot, ext = name.rpartition(".")
+                    n = 1
+                    while dest.exists():
+                        dest = target_dir / (f"{stem}-{n}.{ext}" if dot else f"{name}-{n}")
+                        n += 1
+                    shutil.move(staged, dest)
+                    staged = None
+                    try:
+                        os.chmod(dest, 0o600)
+                    except Exception:
+                        pass
+                    delivered.append(dest.name)
+                    append_domain_log("webui",
+                                      f"[browser_interactive] download delivered to "
+                                      f"workspace: {dest.name}")
+                _docker(["exec", container_name, "rm", "-f", cpath], timeout=20)
+            finally:
+                if staged:
+                    try:
+                        os.unlink(staged)
+                    except Exception:
+                        pass
+    except Exception as e:
+        append_domain_log("webui", f"[browser_interactive] download sweep failed: {e}")
+    return delivered
+
+
 def scrub_mode() -> str:
     """The handover scrub depth: "quick" (CDP sweep, default) or "full" (adds a
     profile wipe with a Chromium relaunch). An env knob like its siblings
@@ -664,6 +830,9 @@ class InteractiveBrowserManager:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
+                # Same rule as the interactive handover: a previous holder's
+                # undelivered downloads never ride into another scope's sweep.
+                _purge_container_downloads(self._container_name)
             elif not persistent and not continuing:
                 # Same scope, but the run promised a clean start: quick scrub
                 # only - the person's own logins are already exported and come
@@ -672,10 +841,18 @@ class InteractiveBrowserManager:
                 # person's LIVE session exists to carry it on, and scrubbing
                 # would log out the very session it was handed.
                 _cookie_op(self.cdp_base(), "scrub")
+            _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
             with self._lock:
                 self._last_cookie_scope = scope
         except Exception as e:
             append_domain_log("webui", f"[browser_interactive] agent jar handover failed: {e}")
+
+    def sweep_downloads(self, user_scope_id: Optional[str]) -> List[str]:
+        """Drain finished downloads to their owner's workspace. Mode-gated,
+        BLOCKING (docker + hashing), never raises - see the module helper."""
+        if downloads_mode() == "off" or not user_scope_id:
+            return []
+        return _sweep_container_downloads(self._container_name, str(user_scope_id))
 
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
@@ -707,6 +884,10 @@ class InteractiveBrowserManager:
             holder = self._pre_agent_holder if notify else None
             if notify:
                 self._pre_agent_holder = None
+            run_scope = self._last_cookie_scope
+        # A run downloads too (the agent saves a PDF for the person): drain to
+        # the run's OWN scope - the jar owner at this moment is that run's.
+        self.sweep_downloads(run_scope)
         # Tell the window that owned the interactive view the browser is free
         # again. When an interactive lease was evicted FOR this run, the stop
         # event says resumable: the holder's window re-enters the interactive
@@ -790,6 +971,11 @@ class InteractiveBrowserManager:
                 if scrub_mode() == "full":
                     request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
+                # Residue in the download folder belongs to the PREVIOUS
+                # holder; delivering it to the next person's workspace on the
+                # first sweep would be a cross-user hand-off. It dies here.
+                _purge_container_downloads(self._container_name)
+            _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
             if save:
                 cookies = _load_storage_cookies(
                     browser_storage_state_path(user_scope_id, session_name))
@@ -872,6 +1058,10 @@ class InteractiveBrowserManager:
         # agent is about to drive the very tabs parking would close.
         if reason != "agent_takeover":
             park_browser_idle(self.cdp_base())
+        # Whatever the person downloaded and the janitor has not drained yet
+        # leaves WITH them - on takeover too, so the run that follows never
+        # finds another scope's files in the hand-off folder.
+        self.sweep_downloads(lease.user_scope_id)
 
         payload = {"status": "stopped", "reason": reason,
                    "saving": lease.save_enabled, "streamPath": ""}
@@ -1054,6 +1244,11 @@ class InteractiveBrowserManager:
                 if idle_gone:
                     self.stop("viewer_gone", force=True)
                     return
+                # Deliver finished downloads promptly (one janitor tick, ~5s,
+                # after the browser completes them), not only at session end:
+                # "it downloaded, but where?" is answered by the file simply
+                # appearing in the person's own Downloads folder.
+                self.sweep_downloads(lease.user_scope_id)
                 if tick % self._LIVENESS_EVERY_TICKS == 0:
                     try:
                         import urllib.request as _req

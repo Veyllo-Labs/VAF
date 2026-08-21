@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Browser downloads land in your files, not in the sandbox.** A file
+  downloaded in the sandbox browser - by you or by the agent - used to exist
+  only inside the browser container, where nobody could reach it. Finished
+  downloads now appear in your own file area (`Downloads` folder) within
+  seconds, after passing the same threat scan every other arriving file gets;
+  blocked files are refused and show up in the security dashboard. Downloads
+  belong to whoever holds the browser, a change of user purges leftovers
+  unread, and `VAF_BROWSER_DOWNLOADS=off` disables downloading entirely,
+  enforced in the browser itself.
 - **The browser agent can see now - and it browses smarter.** With a
   vision-capable model, browser runs take screenshots on demand and stop
   scrolling blind: scroll and layout decisions finally have eyes. Without

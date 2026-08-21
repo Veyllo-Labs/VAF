@@ -656,6 +656,31 @@ IPC-based "agent run underway" scan cannot attribute a spawned run to one instan
 that scan keeps guarding whichever manager it runs on, which can refuse an
 interactive start conservatively during workflow browser runs.
 
+### Downloads
+
+```bash
+# .env  (or system environment before starting VAF)
+VAF_BROWSER_DOWNLOADS=workspace   # default; "off" denies downloading outright
+```
+
+Files downloaded inside the sandbox browser - by the person or by an agent run - never
+stay in the container (a folder nobody can reach; "it downloaded, but where?" was a live
+question). In `workspace` mode a sweep drains every FINISHED download (Chromium keeps
+in-progress files as `*.crdownload`): while a person is driving, the lease janitor
+delivers within a few seconds; a lease end, a takeover and an agent run's end drain the
+rest. Each file passes the same threat funnel every ingress lane asks
+(`inspect_upload_file`, origin `browser_download` - a download is foreign bytes like any
+upload; a blocked file is deleted and surfaces in the security dashboard) and lands
+under the owner's own file area, `VAF_Projects/<uid8>/Downloads/`, with a sanitized,
+collision-suffixed name and a 512 MB size cap. Delivered or blocked, the container copy
+is deleted - the folder is a hand-off point, not storage.
+
+Ownership follows the jar: downloads go to whoever holds (or last held) the browser,
+and a scope CHANGE purges the folder unread - a previous holder's undelivered files
+must never ride into the next person's workspace. `off` is enforced in the browser
+itself (`Browser.setDownloadBehavior deny` at every handover), not in our chrome.
+Pinned by `tests/test_browser_interactive.py`.
+
 ### Handover scrub depth
 
 ```bash

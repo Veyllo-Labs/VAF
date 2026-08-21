@@ -9495,8 +9495,18 @@ function VAFDashboardContent() {
                                     // research run) the panel must drop back to the classic width.
                                     ? (dockWidthPx != null
                                         // User-chosen width: clamped in JS, so the CSS min/max
-                                        // clamps stand down (they would fight the drag).
-                                        ? "lg:!w-[var(--vaf-dock-w)] min-w-0 max-w-none opacity-100"
+                                        // clamps stand down (they would fight the drag). The huge
+                                        // max-w is NOT max-w-none, deliberately: `max-width: none`
+                                        // cannot interpolate to the closed state's max-w-0, so the
+                                        // used width snapped to zero at the start of every close
+                                        // and the collapse played invisibly - one dock drag ever
+                                        // (persisted in localStorage) killed the close animation
+                                        // forever. A finite cap that never binds keeps the drag
+                                        // free AND the transition real (measured in the sandbox
+                                        // browser, 600px panel, 300ms ease-out: none was at 0px by
+                                        // t=60ms; the finite cap eased 396/265/155/45px at
+                                        // t=60/100/150/220ms).
+                                        ? "lg:!w-[var(--vaf-dock-w)] min-w-0 max-w-[9999px] opacity-100"
                                         : ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame || subAgentState.browser)
                                             && !documentEditorState.isOpen && !documentViewerState.isOpen
                                             && !codeViewerState.isOpen && !htmlViewerState.isOpen && !imageViewerState.isOpen

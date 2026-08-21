@@ -949,7 +949,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -1157,7 +1157,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -1382,7 +1382,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -1550,7 +1550,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -1739,7 +1739,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -2172,7 +2172,7 @@ export default function SubAgentWindow({
                 <div
                     className={cn(
                         `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                        isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                        isOpen ? "" : "pointer-events-none"
                     )}
                     aria-hidden={!isOpen}
                 >
@@ -2245,7 +2245,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >
@@ -2386,7 +2386,7 @@ export default function SubAgentWindow({
             <div
                 className={cn(
                     `relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 ${WIN_SHELL} transition-all duration-300 ease-out`,
-                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                    isOpen ? "" : "pointer-events-none"
                 )}
                 aria-hidden={!isOpen}
             >

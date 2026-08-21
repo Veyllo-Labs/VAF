@@ -224,6 +224,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **Closing the side panel finally plays its animation.** If the panel's
+  width had ever been adjusted by dragging its edge (the choice is
+  remembered), every close snapped shut instantly instead of sliding: the
+  dragged state carried an unbounded CSS max-width, and `none` cannot animate
+  to the closed state's zero, so the browser clamped the width to nothing on
+  the spot (measured: closed at 60ms of a 300ms transition). The cap is now a
+  finite value that never binds, and the window keeps its content painted
+  while the panel closes over it - the close is the open, played backwards.
 - **A browser window you opened yourself never closes itself again.** Opening
   the browser by hand now marks the window as yours until you close it: an
   agent run may still borrow the browser, but afterwards - whether the run

@@ -221,6 +221,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **A browser window you opened yourself never closes itself again.** Opening
+  the browser by hand now marks the window as yours until you close it: an
+  agent run may still borrow the browser, but afterwards - whether the run
+  succeeded, failed with a browser error, or was stopped - the window returns
+  to your interactive session instead of auto-closing. Previously the mark was
+  shared with every worker view and got reset the moment agent data streamed,
+  so a failed takeover could close the browser over the error it caused.
+- **The agent's browser view is the same window you drive.** One browser, two
+  modes: in agent mode the window keeps the exact frame of the interactive
+  browser (header, viewport, status bar) and adds the Task, Activity and
+  History panels beneath the viewport. The rebuilt tab strip and address bar
+  are gone - the live stream shows Chromium's real UI, and where only
+  screenshots exist (workflow runs) they appear on the same surface.
 - **An automation's saved file now follows its message to the messenger.** A
   prompt-based automation that sends its summary itself in-run (say, a morning
   weather text via Telegram) produces its output file only after the run, so

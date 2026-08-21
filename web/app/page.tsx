@@ -3691,6 +3691,16 @@ function VAFDashboardContent() {
     const subAgentAutoCloseRef = useRef<NodeJS.Timeout | null>(null);
     const subAgentManualOpenRef = useRef(false);
     const subAgentUserClosedRef = useRef(false);  // User explicitly closed panel - don't auto-reopen
+    // THE PERSON OPENED THE BROWSER WINDOW, and only the person may make it go
+    // away. Distinct from subAgentManualOpenRef on purpose: that flag is shared
+    // with every worker view and is RESET by each auto-open when agent data
+    // streams - which is precisely how a browser the person opened by hand got
+    // auto-closed after an agent run (and, on a failed run, closed over an
+    // error). This one is set by the globe, cleared only by the person's own
+    // close or a session switch, and while it stands the browser window never
+    // closes itself: after an agent run - successful, failed or stopped - the
+    // window returns to the interactive mode instead.
+    const browserManualOpenRef = useRef(false);
     // Current task has a custom view (coder/research/browser): keep the window
     // closed until the first custom data arrives — never flash the generic window.
     const subAgentCustomViewRef = useRef(false);
@@ -3903,6 +3913,7 @@ function VAFDashboardContent() {
         // Leaving only isOpen:false here is how session A's "running" coder kept
         // the stop button and the delegate avatar alive in session B.
         subAgentUserClosedRef.current = false;  // Reset for new session
+        browserManualOpenRef.current = false;   // the hand-opened browser belongs to the previous chat
         const restoredSubAgent = sessionSubAgentStates.current[id] ?? IDLE_SUB_AGENT_STATE;
         // Restored with presence DEMOTED: while this chat was closed, its worker's
         // terminal event went to nobody, so the snapshot may claim "running" about
@@ -5446,9 +5457,14 @@ function VAFDashboardContent() {
                         // run, and the window it belonged to is this one. Hand the person
                         // the browser back instead of letting the window close over them -
                         // unless they closed it themselves in the meantime, which is the
-                        // one signal that outranks the give-back.
+                        // one signal that outranks the give-back. browserManualOpenRef is
+                        // the second, client-side trigger: the server's resumable only
+                        // exists when the run EVICTED a live lease, but a hand-opened
+                        // window whose lease had already ended (or whose run died in an
+                        // error before any takeover) deserves its browser back just the
+                        // same - the person's click is the fact, not the server's memory.
                         if (st === 'stopped' && String(data.reason ?? '') === 'agent_done'
-                            && data.resumable
+                            && (data.resumable || browserManualOpenRef.current)
                             && subAgentStateRef.current.isOpen
                             && subAgentStateRef.current.agentKind === 'browser'
                             && !subAgentUserClosedRef.current) {
@@ -7326,6 +7342,13 @@ function VAFDashboardContent() {
     useEffect(() => {
         if (!subAgentState.isOpen) return;
         if (subAgentManualOpenRef.current) return;
+        // A browser window the person opened by hand NEVER closes itself - not
+        // after a successful agent run, not after a failed one. The agent only
+        // borrowed it; the give-back handler returns it to the interactive
+        // mode, and if that fails the window stays open showing why. Checked
+        // here and not via subAgentManualOpenRef, because every streamed agent
+        // event resets that shared flag on its auto-open.
+        if (subAgentState.agentKind === 'browser' && browserManualOpenRef.current) return;
         if (!subAgentCanClose || interactiveDriving) {
             if (subAgentAutoCloseRef.current) {
                 clearTimeout(subAgentAutoCloseRef.current);
@@ -7349,7 +7372,7 @@ function VAFDashboardContent() {
                 subAgentAutoCloseRef.current = null;
             }
         };
-    }, [subAgentCanClose, subAgentState.isOpen, interactiveDriving]);
+    }, [subAgentCanClose, subAgentState.isOpen, subAgentState.agentKind, interactiveDriving]);
 
     // Mobile: the right dock (sub-agent + document/code/browser viewers) is hidden <lg. A mini-bar opens it
     // as a full-screen sheet on demand; reset the sheet once every dock panel has closed, so the next one
@@ -7385,6 +7408,7 @@ function VAFDashboardContent() {
     // person just asked for would be killed by the old window's timer.
     const pendingBrowserStopRef = useRef<number | null>(null);
     const closeBrowserWindowAnimated = () => {
+        browserManualOpenRef.current = false;   // the person closed it: their hold is released
         closeSubAgentWindow(true);
         if (pendingBrowserStopRef.current) window.clearTimeout(pendingBrowserStopRef.current);
         pendingBrowserStopRef.current = window.setTimeout(() => {
@@ -7402,6 +7426,7 @@ function VAFDashboardContent() {
             window.clearTimeout(pendingBrowserStopRef.current);
             pendingBrowserStopRef.current = null;
         }
+        browserManualOpenRef.current = true;    // this window is the person's until THEY close it
         // The window picks its browser view off agentKind, so the button has to name the kind
         // it is opening. The last browser run's screenshot rides along on subAgentState and
         // reappears with the window; with no run behind it the window asks the server for the

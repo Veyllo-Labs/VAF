@@ -4,7 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -877,13 +877,9 @@ export default function SubAgentWindow({
     }, [isOpen]);
 
     const browserActionsRef = useRef<HTMLDivElement>(null);
-    const browserActivityRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (browserActionsRef.current) browserActionsRef.current.scrollTop = browserActionsRef.current.scrollHeight;
     }, [browser?.actions?.length, browser?.step]);
-    useEffect(() => {
-        if (browserActivityRef.current) browserActivityRef.current.scrollTop = browserActivityRef.current.scrollHeight;
-    }, [consoleLines.length]);
 
     // Custom views render IMMEDIATELY once the kind is known (from the tool CALL), in a loading shell, then
     // fill as <x>_state streams. <x>V = a guaranteed-valid object for the (large) view bodies; <x>Loading =
@@ -2233,6 +2229,18 @@ export default function SubAgentWindow({
                 </div>
             );
         }
+        // AGENT MODE. The same window the person drives - one browser, two modes:
+        // identical frame (header, viewport, statusbar), and only two things
+        // differ. The header and statusbar name the agent as the driver, with its
+        // live step - the marking that says what the agent is doing stays. And a
+        // dock with Task | Activity | History sits between viewport and statusbar.
+        // The viewport itself shows the watch-only live stream when the run
+        // granted one, the screenshot lane otherwise - NEVER a rebuilt chrome bar:
+        // the real Chromium UI lives inside the stream, and a fake tab strip next
+        // to the real one was exactly what looked wrong.
+        const agentShowCover = agentWatchStream
+            ? (viewerSaysState !== null ? viewerSaysState !== 'connected' : !agentWatchStream.viewerConnected)
+            : false;
         return (
             <div
                 className={cn(
@@ -2243,47 +2251,43 @@ export default function SubAgentWindow({
             >
                 <div className="flex h-full w-full flex-col">
                     {browserStarting && <StartingBanner label="Browser Agent" />}
-                    {/* Header */}
+                    {/* Header - the interactive window's header, naming the agent as driver */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
                             <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-sky-600"><Globe size={14} /></div>
                             <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Browser Agent'}</div>
+                                <div className="text-xs font-semibold text-gray-900">Browser</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", isLive ? "animate-pulse bg-sky-500" : presenceTone)} />
                                     <span className="truncate">{b?.task ? `Browsing autonomously: ${b.task}` : (displayStatus || 'Browser')}</span>
                                 </div>
                             </div>
                         </div>
                         <div className="flex flex-none items-center gap-2">
                             {isLive && <span className="flex items-center gap-1.5 rounded-md bg-red-50 px-2 py-1 text-[9px] font-extrabold uppercase tracking-wider text-red-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> LIVE</span>}
-                            <span className="flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-sky-700">
-                                {isLive && b?.status !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {stepTxt || 'Browser'}{activeAction ? ` · ${verbLabel[activeAction.verb] ?? activeAction.verb}` : ''}
-                            </span>
+                            {(stepTxt || activeAction) && (
+                                <span className="flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-sky-700">
+                                    {isLive && b?.status !== 'done' && <Loader2 size={9} className="animate-spin" />}
+                                    {stepTxt || 'Browser'}{activeAction ? ` · ${verbLabel[activeAction.verb] ?? activeAction.verb}` : ''}
+                                </span>
+                            )}
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col">
+                    {/* Viewport - the same surface the interactive mode streams into */}
+                    <div className="relative min-h-0 w-full flex-1 bg-[#1e2430]">
                         {agentWatchStream ? (
-                            // The run's watch-only live stream: the SAME streamed Chromium
-                            // the person would drive - real tab strip, real omnibox - so
-                            // the agent view stops rebuilding a chrome bar over 1.5s
-                            // screenshots. pointer-events-none on top of the URL's
-                            // view_only: watching a run must never type into it. The
-                            // screenshot lane keeps running underneath and serves as the
-                            // cover image while the stream draws its first picture.
-                            <div className="relative min-h-0 flex-1 bg-[#1e2430]">
+                            <>
+                                {/* Watch-only: view_only rides in the URL, pointer events are
+                                    off on top, and the relay drops client input server-side. */}
                                 <iframe
                                     ref={streamIframeRef}
                                     src={agentWatchStream.streamUrl}
                                     title="Browser (agent live view)"
                                     className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
                                 />
-                                {(viewerSaysState !== null
-                                    ? viewerSaysState !== 'connected'
-                                    : !agentWatchStream.viewerConnected) && (
+                                {agentShowCover && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-[#1e2430] p-3">
                                         {browserFrame
                                             ? <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
@@ -2298,100 +2302,78 @@ export default function SubAgentWindow({
                                             )}
                                     </div>
                                 )}
+                            </>
+                        ) : browserFrame ? (
+                            // No stream grant (workflow tile lane, spawned child): the
+                            // screenshot lane, letterboxed on the same surface.
+                            <div className="absolute inset-0 flex items-center justify-center overflow-hidden p-3">
+                                <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
                             </div>
                         ) : (
-                        // No watch grant (workflow tile lane, spawned child, or a window
-                        // with no run behind it): the rebuilt chrome bar over the
-                        // screenshot lane stays as the fallback view.
-                        <div className="flex min-h-0 flex-1 flex-col bg-[#1e2430]">
-                            <div className="flex h-10 flex-none items-center gap-2 border-b border-black/40 bg-[#2a313f] px-3">
-                                <div className="flex gap-0.5">
-                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] hover:bg-[#384151]"><ChevronLeft size={14} /></span>
-                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] opacity-40"><ChevronRight size={14} /></span>
-                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] hover:bg-[#384151]"><RotateCw size={12} /></span>
-                                </div>
-                                <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg border border-black/40 bg-[#1b202b] px-3">
-                                    <Lock size={10} className="flex-none text-emerald-400" />
-                                    <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-[#c7cedb]">{url || 'about:blank'}</span>
-                                    {isLive && b?.status !== 'done' && <Loader2 size={11} className="flex-none animate-spin text-sky-400" />}
-                                </div>
-                                <span className="flex-none rounded bg-[#384151] px-2 py-1 text-[9px] text-[#9aa4b5]">1 Tab</span>
+                            <div className="absolute inset-0 flex items-center justify-center p-3">
+                                {browserStarting
+                                    ? <div className="flex items-center gap-2 text-[12px] text-[#9aa4b5]"><Loader2 size={14} className="animate-spin" /> Browser is starting…</div>
+                                    : <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+                                        <Globe size={22} className="text-[#5c6675]" />
+                                        <span className="text-[12px] text-[#9aa4b5]">No browser session yet</span>
+                                        <span className="text-[11px] leading-relaxed text-[#6b7482]">This window fills itself when the agent uses browser_agent. Ask it to look something up in a real browser.</span>
+                                        {interactive && !interactive.active && (interactive.status === 'busy' || interactive.status === 'error') && (
+                                            <span className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                                                {interactive.status === 'busy'
+                                                    ? 'Another user is driving the browser right now.'
+                                                    : 'The browser container is not reachable. Start the Docker stack and try again.'}
+                                            </span>
+                                        )}
+                                    </div>}
                             </div>
-                            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
-                                {browserFrame
-                                    ? <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
-                                    : browserStarting
-                                        ? <div className="flex items-center gap-2 text-[12px] text-[#9aa4b5]"><Loader2 size={14} className="animate-spin" /> Browser startet…</div>
-                                        : <div className="flex max-w-sm flex-col items-center gap-2 text-center">
-                                            <Globe size={22} className="text-[#5c6675]" />
-                                            <span className="text-[12px] text-[#9aa4b5]">No browser session yet</span>
-                                            <span className="text-[11px] leading-relaxed text-[#6b7482]">This window fills itself when the agent uses browser_agent. Ask it to look something up in a real browser.</span>
-                                            {interactive && !interactive.active && (
-                                                <span className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
-                                                    {interactive.status === 'busy'
-                                                        ? 'Another user is driving the browser right now.'
-                                                        : 'The browser container is not reachable. Start the Docker stack and try again.'}
-                                                </span>
-                                            )}
-                                        </div>}
+                        )}
+                    </div>
+
+                    {/* Dock: Task | Activity | History */}
+                    <div className="flex h-[266px] flex-none border-t border-gray-200 bg-white">
+                        <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.15 }}>
+                            <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Task</div>
+                            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+                                <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-sky-900"><span className="mb-1 block text-[8.5px] font-extrabold uppercase tracking-wider text-sky-600">Goal</span>{b?.task || '—'}</div>
                             </div>
                         </div>
-                        )}
-
-                        {/* Bottom dock: Task · Actions · History · Activity */}
-                        <div className="flex h-[266px] flex-none border-t border-gray-200 bg-white">
-                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.15 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Task</div>
-                                <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-                                    <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-sky-900"><span className="mb-1 block text-[8.5px] font-extrabold uppercase tracking-wider text-sky-600">Goal</span>{b?.task || '—'}</div>
-                                </div>
-                            </div>
-                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.75 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Actions<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.maxSteps ? `${b.step}/${b.maxSteps}` : (b?.actions?.length ?? 0)}</span></div>
-                                <div ref={browserActionsRef} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2.5 pb-3">
-                                    {(b?.actions ?? []).length === 0
-                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">Waiting for the first step…</div>
-                                        : b!.actions.map((a, i) => (
-                                            <div key={i} className={cn("flex items-start gap-2 rounded-lg border px-2 py-1.5", a.status === 'active' ? "border-sky-200 bg-sky-50/60" : "border-gray-100")}>
-                                                <span className={cn("mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full", a.status === 'active' ? "bg-sky-100 text-sky-700" : "bg-emerald-50 text-emerald-600")}>{a.status === 'active' ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle2 size={10} />}</span>
-                                                <div className="min-w-0 flex-1">
-                                                    <span className={cn("mr-1.5 rounded px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide", verbStyle[a.verb] ?? 'bg-gray-100 text-gray-500')}>{verbLabel[a.verb] ?? a.verb}</span>
-                                                    <span className="text-[11px] text-gray-700">{a.text}</span>
-                                                </div>
+                        <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.75 }}>
+                            <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.maxSteps ? `${b.step}/${b.maxSteps}` : (b?.actions?.length ?? 0)}</span></div>
+                            <div ref={browserActionsRef} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2.5 pb-3">
+                                {(b?.actions ?? []).length === 0
+                                    ? <div className="px-1 py-1 text-[9.5px] text-gray-400">Waiting for the first step…</div>
+                                    : b!.actions.map((a, i) => (
+                                        <div key={i} className={cn("flex items-start gap-2 rounded-lg border px-2 py-1.5", a.status === 'active' ? "border-sky-200 bg-sky-50/60" : "border-gray-100")}>
+                                            <span className={cn("mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full", a.status === 'active' ? "bg-sky-100 text-sky-700" : "bg-emerald-50 text-emerald-600")}>{a.status === 'active' ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle2 size={10} />}</span>
+                                            <div className="min-w-0 flex-1">
+                                                <span className={cn("mr-1.5 rounded px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide", verbStyle[a.verb] ?? 'bg-gray-100 text-gray-500')}>{verbLabel[a.verb] ?? a.verb}</span>
+                                                <span className="text-[11px] text-gray-700">{a.text}</span>
                                             </div>
-                                        ))}
-                                </div>
+                                        </div>
+                                    ))}
                             </div>
-                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.1 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">History<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.history?.length ?? 0}</span></div>
-                                <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
-                                    {(b?.history ?? []).length === 0
-                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">—</div>
-                                        : b!.history.map((h, i) => (
-                                            <div key={i} className={cn("flex items-center gap-2 rounded px-2 py-1 text-[11px]", i === b!.history.length - 1 && "bg-sky-50")}>
-                                                <Globe size={11} className="flex-none text-gray-400" />
-                                                <span className={cn("min-w-0 flex-1 truncate font-mono", i === b!.history.length - 1 ? "text-sky-700" : "text-gray-500")}>{shortUrl(h)}</span>
-                                            </div>
-                                        ))}
-                                </div>
-                            </div>
-                            <div className="flex min-w-0 flex-col" style={{ flex: 1.15 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
-                                <div ref={browserActivityRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 font-mono text-[10px] leading-relaxed text-gray-500">
-                                    {consoleLines.slice(-40).map((line, i) => <div key={i} className="whitespace-pre-wrap break-words">{line}</div>)}
-                                </div>
+                        </div>
+                        <div className="flex min-w-0 flex-col" style={{ flex: 1.1 }}>
+                            <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">History<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.history?.length ?? 0}</span></div>
+                            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
+                                {(b?.history ?? []).length === 0
+                                    ? <div className="px-1 py-1 text-[9.5px] text-gray-400">—</div>
+                                    : b!.history.map((h, i) => (
+                                        <div key={i} className={cn("flex items-center gap-2 rounded px-2 py-1 text-[11px]", i === b!.history.length - 1 && "bg-sky-50")}>
+                                            <Globe size={11} className="flex-none text-gray-400" />
+                                            <span className={cn("min-w-0 flex-1 truncate font-mono", i === b!.history.length - 1 ? "text-sky-700" : "text-gray-500")}>{shortUrl(h)}</span>
+                                        </div>
+                                    ))}
                             </div>
                         </div>
                     </div>
 
-                    {/* Statusbar */}
-                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
-                        <div className="flex h-full items-center gap-1.5 bg-sky-600 px-2.5 font-bold text-white">VAF</div>
-                        <div className="flex h-full items-center gap-1.5 px-2.5 font-mono">{shortUrl(url).slice(0, 48)}</div>
-                        {stepTxt && <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{stepTxt}</div>}
-                        {activeAction && <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {verbLabel[activeAction.verb] ?? activeAction.verb}</div>}
-                        <div className="hidden h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 text-[#bfe3ff] md:flex">Vision: {b?.vision ?? 'auto'}</div>
-                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">{b?.status === 'done' ? 'done' : 'running'}</div>
+                    {/* Statusbar - the interactive window's statusbar, carrying the run state */}
+                    <div className="flex h-6 flex-none items-center gap-3 border-t border-gray-200 bg-white px-3 text-[10px] text-gray-500">
+                        <span className="rounded bg-sky-600 px-1.5 py-0.5 text-[9px] font-bold text-white">VAF</span>
+                        <span className="flex-none">Sandbox browser</span>
+                        {url && <span className="hidden min-w-0 truncate font-mono text-gray-400 sm:block">{shortUrl(url).slice(0, 60)}</span>}
+                        <span className="ml-auto flex-none">{b?.status === 'done' ? 'done' : (isLive ? 'agent running' : 'idle')}</span>
                     </div>
                 </div>
                 {handoverOverlay}

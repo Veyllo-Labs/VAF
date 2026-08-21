@@ -328,6 +328,13 @@ natural re-generation retries informed. Once per tool per turn (to avoid an inje
 loop), hard fail-safe. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
+The matcher strips VAF's OWN dispatcher wrapping first (the `invalid arguments for '<tool>'`
+prefix and the `Retry the SAME call` repair hint) - measured live, that boilerplate held eleven
+of a real error's sixteen tokens and pushed a squarely-known pitfall under the 0.6 overlap bar -
+and it carries an argument-contract branch: an error that quotes an argument name together with
+required/missing matches a pitfall naming that argument as required, because the two wordings of
+that trap share almost no tokens ("missing required field: 'path'" vs "path is a required
+property").
 
 The reactive lane covers BOTH failure paths: synchronous tool errors (above) and **asynchronous
 sub-agent failures**, which never produce an error-shaped tool result (the tool returned only the
@@ -361,9 +368,22 @@ Implementation: `vaf/whare_wananga/retrain.py`.
 like DNS/timeout/5xx are filtered out) is turned into a new learned pitfall from the real
 observation (the call args + the error) via a single background LLM distil -- no tool re-execution
 (`vaf/whare_wananga/runtime.py`, `maybe_relearn`). It only ever *appends* a deduped, capped pitfall
-to a `confirmed` record, is rate-limited per tool and serialized, and is fire-and-forget (never
-blocks the turn). The new pitfall then flows back into proactive (A) and reactive (B) delivery on
-the next turn, closing the learn-from-use loop.
+to a `confirmed` **or `stale`** record, is rate-limited per tool and serialized, and is
+fire-and-forget (never blocks the turn). Stale is included deliberately: a tool whose schema
+changed is where the agent trips most, its stale record is already excluded from proactive
+injection, and a confirmed-only gate then refused it the lesson too - so the same error repeated
+until a retrain nobody had triggered (measured live: the retrain queue sat undrained for 41 days
+while stale `read_file` relearned nothing from a fresh surprise). A pitfall distilled from a
+CURRENT observation is valid for the current tool by construction; the record stays `stale` and
+retraining is still owed. The new pitfall then flows back into proactive (A, once re-trained) and
+reactive (B, immediately as UNVERIFIED) delivery, closing the learn-from-use loop.
+
+**Visibility.** The learning events are logged twice: the debug markers (`[WW-INJECT]`,
+`[WW-SURPRISE]`, `[WW-REACTIVE]`, `[WW-RELEARN]`, `[WW-STALE]`) go to `backend.log`, and the
+OWNER-relevant ones - a reactive re-feed, a runtime re-learn, and know-how going stale (with the
+drain hint) - additionally appear in the UI log timeline as source `Whare Wananga`. The per-turn
+`[WW-INJECT]` stays file-only on purpose: it fires for every scoped tool on every turn and would
+drown the timeline.
 
 The **Action tag** is NOT the injection trigger; its role stays transparency / verify
 (declared-vs-actual) / learn-signal (see [ACTION_TAG.md](../agents/ACTION_TAG.md)). Independently of any path,

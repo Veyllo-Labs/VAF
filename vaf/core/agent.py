@@ -10797,6 +10797,22 @@ class Agent:
                                     append_domain_log("backend", f"[WW-REACTIVE] {function_name}: re-fed know-how (known={_known})")
                                 except Exception:
                                     pass
+                                try:
+                                    # Visible half of the learning loop: these events
+                                    # lived only in the debug file, so the owner could
+                                    # not tell whether the system worked at all.
+                                    from vaf.core.web_interface import get_web_interface
+                                    _ww_msg = (
+                                        f"{function_name} failed on a KNOWN pitfall - re-fed the learned procedure."
+                                        if _known else
+                                        f"{function_name} failed with a novel error - re-fed know-how and queued a background re-learn."
+                                    )
+                                    get_web_interface().log(
+                                        _ww_msg, level="info", source="Whare Wananga",
+                                        session_id=getattr(self, "_session_id", None),
+                                    )
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
 
@@ -13017,6 +13033,21 @@ class Agent:
                 _stale = _ww_store.invalidate_stale(self.tools)
                 if _stale:
                     append_domain_log("backend", f"[WW-STALE] tool definition changed -> marked stale: {_stale}")
+                    try:
+                        # Visible half: a stale record silently leaves the proactive
+                        # injection, and the retrain queue drains only when somebody
+                        # triggers it - an owner who never sees this event cannot know
+                        # their most-used tools stopped being covered (measured live:
+                        # the queue sat undrained for 41 days).
+                        from vaf.core.web_interface import get_web_interface
+                        get_web_interface().log(
+                            f"Tool definition changed for {', '.join(sorted(_stale))} - learned know-how "
+                            "marked stale and queued for retraining (train from the Tools window, "
+                            "'vaf ww retrain --pending', or enable eager training).",
+                            level="warning", source="Whare Wananga",
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 pass
         n_ctx = self.config.get("n_ctx", 8192)

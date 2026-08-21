@@ -202,7 +202,27 @@ def known_pitfall_hit(name: str, error_text: str, *, allow_unverified: bool = Fa
         stripped = _norm(re.sub(r"(?:[A-Za-z]:)?[/\\][^\s'\"]+", " ", err))
         if stripped:
             err = stripped
+        # Strip VAF's OWN dispatcher wrapping before matching: the prefix names
+        # the tool and the repair hint tells the model to retry - neither can
+        # appear in a stored pitfall, and together they drown the signal.
+        # Measured live: read_file's "missing required field: 'path'" scored
+        # 0.31 against a pitfall stating exactly that trap, because eleven of
+        # sixteen tokens were wrapper - and the hit was logged as novel.
+        wrapper_stripped = _norm(re.sub(
+            r"^tool error: invalid arguments for '[^']+':\s*", "", err))
+        wrapper_stripped = _norm(re.sub(
+            r"\bretry the same call and include (?:it|them)\.?\s*$", "", wrapper_stripped))
+        if wrapper_stripped:
+            err = wrapper_stripped
         etoks = set(re.findall(r"[a-z0-9']{3,}", err))
+        # An argument-contract error and its pitfall often share almost no
+        # wording ("missing required field: 'path'" vs "path is a required
+        # property"), so token overlap alone cannot see they describe the same
+        # trap. The quoted argument name plus the required/missing signal is
+        # what identifies the class.
+        quoted_args = set(re.findall(r"'([a-z0-9_]{2,})'", err))
+        arg_contract_error = bool(quoted_args) and bool(
+            {"required", "missing"} & etoks)
         for p in (rec.get("tuatea") or {}).get("pitfalls") or []:
             pt = _norm(p.get("text") if isinstance(p, dict) else p).lower()
             if not pt:
@@ -213,6 +233,8 @@ def known_pitfall_hit(name: str, error_text: str, *, allow_unverified: bool = Fa
                 hit = sum(1 for t in etoks if t in pt)
                 if hit / len(etoks) >= 0.6:     # most of the error's content words are in the pitfall
                     return True
+            if arg_contract_error and "required" in pt and any(q in pt for q in quoted_args):
+                return True
         return False
     except Exception:
         return False

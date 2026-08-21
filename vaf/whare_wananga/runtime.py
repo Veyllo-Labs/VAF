@@ -136,7 +136,16 @@ def maybe_relearn(agent, tool: str, args: Any, error: str) -> None:
         if not _is_learnable_error(error):
             return
         rec = store.load(tool)
-        if not rec or rec.get("status") != "confirmed":           # only refine reliable knowledge
+        # confirmed AND stale learn from a surprise. Stale is exactly where the
+        # loop used to break: a tool whose schema changed is where the agent is
+        # MOST likely to trip, its stale record is excluded from proactive
+        # injection, and this gate then refused it the lesson too - so the same
+        # error repeated until a retrain nobody had triggered (measured live:
+        # the retrain queue sat undrained for 41 days while read_file, stale,
+        # relearned nothing from a fresh runtime surprise). A pitfall distilled
+        # from a CURRENT observation is valid for the CURRENT tool by
+        # construction; the record stays stale, retraining is still owed.
+        if not rec or rec.get("status") not in ("confirmed", "stale"):
             return
         if time.time() - float(rec.get("runtime_refreshed_at") or 0) < _COOLDOWN:
             return
@@ -158,7 +167,9 @@ def _relearn(agent, tool: str, args: Any, error: str) -> None:
     try:
         with _lock:                                # at most one background distil at a time
             rec = store.load(tool)
-            if not rec or rec.get("status") != "confirmed":
+            # Same set as maybe_relearn's gate: a stale record keeps learning
+            # from live surprises while its retraining is still owed.
+            if not rec or rec.get("status") not in ("confirmed", "stale"):
                 return
             existing = [e for e in (
                 _norm(p.get("text") if isinstance(p, dict) else p)
@@ -201,6 +212,18 @@ def _relearn(agent, tool: str, args: Any, error: str) -> None:
             try:
                 from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"[WW-RELEARN] {tool}: +{len(added)} pitfall(s) from runtime surprise")
+            except Exception:
+                pass
+            try:
+                # Visible half: learning events used to live only in the debug
+                # file, so the owner could not tell whether this system did
+                # anything at all. No session id on purpose - tool knowledge is
+                # global by design (the store is), and this thread has no turn.
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().log(
+                    f"Learned from a runtime error: {tool} gained {len(added)} new pitfall(s).",
+                    level="info", source="Whare Wananga",
+                )
             except Exception:
                 pass
     except Exception:

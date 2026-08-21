@@ -98,6 +98,56 @@ def test_known_pitfall_hit_relaxed():
     assert delivery.known_pitfall_hit("t_match", err, allow_unverified=True) is True
 
 
+# ── The live miss: dispatcher wrapper + argument-contract wording ────────────
+
+def test_known_pitfall_hit_sees_through_the_dispatcher_wrapper():
+    """The live pair (2026-08-21): read_file failed and the stored pitfall
+    stated exactly that trap in other words - but eleven of the error's sixteen
+    tokens were VAF's OWN dispatcher wrapping (the invalid-arguments prefix and
+    the retry hint), so token overlap scored 0.31 and the hit was logged as a
+    novel surprise while the record's first pitfall described it."""
+    _save("t_wrap", pitfalls=(
+        "Using 'file_path' as the argument name instead of 'path' causes a "
+        "validation error: 'path is a required property'",
+    ))
+    err = ("Tool Error: invalid arguments for 't_wrap': missing required field: "
+           "'path'. Retry the SAME call and include it.")
+    assert delivery.known_pitfall_hit("t_wrap", err) is True
+
+
+def test_arg_contract_branch_needs_the_required_signal():
+    """The new branch must not turn every quoted token into a match: an error
+    naming an argument WITHOUT the required/missing signal stays with the
+    overlap rule (here: too little overlap, no match)."""
+    _save("t_quoted", pitfalls=(
+        "The 'path' argument is required and must name an existing file.",))
+    err = "Tool Error: something entirely else broke around 'path' handling today"
+    assert delivery.known_pitfall_hit("t_quoted", err) is False
+
+
+def test_relearn_gate_accepts_stale(monkeypatch):
+    """A stale record keeps learning from live surprises. The loop used to
+    refuse it: a stale tool is already excluded from proactive injection, and
+    this gate then refused it the lesson too - so the same error repeated until
+    a retrain nobody had triggered (measured live: the retrain queue sat
+    undrained for 41 days while stale read_file relearned nothing)."""
+    from types import SimpleNamespace
+
+    from vaf.whare_wananga import runtime as ww_runtime
+
+    spawned = []
+    monkeypatch.setattr(ww_runtime, "threading", SimpleNamespace(
+        Thread=lambda *a, **k: SimpleNamespace(start=lambda: spawned.append(k.get("name")))))
+    monkeypatch.setattr(ww_runtime, "_is_learnable_error", lambda e: True)
+    for status, expect in (("stale", True), ("confirmed", True), ("draft", False)):
+        spawned.clear()
+        rec = store.new_record(f"t_rl_{status}", tool_schema_hash="h1")
+        rec["status"] = status
+        store.save(rec)
+        ww_runtime.maybe_relearn(None, f"t_rl_{status}", {}, "boom")
+        assert bool(spawned) is expect, f"status={status}"
+
+
 # ── Gate rejects feed the re-training queue ──────────────────────────────────
 
 def test_gate_reject_enqueues_for_retraining():

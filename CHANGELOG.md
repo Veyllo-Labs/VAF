@@ -110,6 +110,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   during training at all.
 
 ### Fixed
+- **The tool self-learning loop no longer goes quiet for the tools you use
+  most.** Three repairs in the Whare Wananga lane. A tool whose definition
+  changed (marked stale) was excluded from the proactive pitfall injection AND
+  refused new lessons from live errors, so the agent repeated mistakes the
+  system had already seen - stale records now keep learning from runtime
+  surprises while their retraining is still owed. The known-pitfall matcher
+  saw a real failure as novel although the record's first pitfall described
+  exactly that trap, because most of the error's words were VAF's own error
+  wrapping - the matcher now strips that wrapping and recognizes
+  argument-contract errors by the argument they name. And the learning events
+  are finally visible: a re-fed know-how, a newly learned pitfall, and
+  know-how going stale (with how to retrain) now appear in the log timeline
+  instead of only in a debug file nobody reads.
 - **A thinking turn with a text-recovered tool call no longer dies with a
   Veyllo 400.** Some models occasionally write a tool call as text instead of
   a structured call; VAF recovers those and, for Veyllo, replays them as plain

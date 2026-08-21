@@ -1169,7 +1169,7 @@ function RoomVoteDock({ votes, onVote, leaving, widthClass }: {
     }, [votes, activeId]);
     if (!active) return null;
     return (
-        <div className={cn(widthClass, "mx-auto mb-2",
+        <div className={cn(widthClass, "mr-auto mb-2",
             leaving ? "vote-dock-leave" : "vote-dock-enter")}>
             <div className="rounded-2xl border border-gray-200 dark:border-[#2f2f2f] bg-white/95 dark:bg-[#1f1f1f]/95 backdrop-blur-sm shadow-sm overflow-hidden">
                 {votes.length > 1 && (
@@ -1268,7 +1268,7 @@ function RoomWorkDock({ tasks, widthClass, onOpen }: {
     if (!active.length) return null;
     const shown = active.slice(0, 3);
     return (
-        <div className={cn(widthClass, "mx-auto mb-2 vote-dock-enter")}>
+        <div className={cn(widthClass, "mr-auto mb-2 vote-dock-enter")}>
             {/* The whole strip is the button. Anything in it that a reader wants more
                 of - the rest of the list, who else is on something, what a step was
                 about - lives one click away in the room's own panel, and hunting for
@@ -7423,8 +7423,16 @@ function VAFDashboardContent() {
         }
     }, [subAgentState.isOpen, showSubAgentPanel]);
 
+    // The chat column runs from the sidebar's edge, not from the middle of what is
+    // left over. Everything here (messages, composer, banners, room docks) is
+    // LEFT-aligned - the call sites pass mr-auto, and the message rows use
+    // justify-start rather than a second centring pass on top of this one. Two
+    // stacked centrings plus a 15% row inset used to leave a wide empty gutter on
+    // the left while the right edge sat against the dock; with the right dock open
+    // that gutter was most of the space the text could have used. The widths below
+    // are therefore reading-length CAPS, not a layout device.
     const chatWidthClass = subAgentState.isOpen ? 'max-w-3xl' : 'max-w-4xl';
-    const messagesAreaWidthClass = subAgentState.isOpen ? 'max-w-5xl' : 'max-w-6xl';
+    const messagesAreaWidthClass = subAgentState.isOpen ? 'max-w-[1140px]' : 'max-w-[1320px]';
 
     if (authChecking) {
         return (
@@ -7587,6 +7595,16 @@ function VAFDashboardContent() {
                 <div className="md:hidden fixed inset-0 z-[45] bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
+                {/* The sidebar's LANE. It is 64px wide and never changes, so the chat
+                    column beside it keeps one width: the aside itself is absolute
+                    within this lane and its hover expansion floats OVER the chat
+                    instead of pushing it. As a flex item it grew from 64 to 288px on
+                    every hover, and the whole conversation slid 224px sideways with
+                    it. The lane also keeps the right dock's percentage widths honest -
+                    they resolve against the row that starts after this element, and
+                    that row must not change width when a pointer crosses the sidebar.
+                    Zero-width below md, where the aside is a fixed drawer instead. */}
+                <div className="relative shrink-0 md:w-16 max-md:w-0">
                 <aside
                     data-editing={editingId ? 'true' : undefined}
                     className={cn(
@@ -7594,7 +7612,10 @@ function VAFDashboardContent() {
                     // While renaming a chat, pin the sidebar open (it only expands on hover otherwise)
                     // so the rename input never collapses out from under the user. The data-editing
                     // attribute reveals the labels via group-data-[editing=true]:opacity-100.
-                    editingId ? "md:w-72 md:z-20" : "md:w-16 md:hover:w-72 md:z-20",
+                    // z-50 on desktop, because the expanded panel now overlays the chat
+                    // column and has to clear the composer's own gradient bar (z-40).
+                    "md:absolute md:inset-y-0 md:left-0",
+                    editingId ? "md:w-72 md:z-50" : "md:w-16 md:hover:w-72 md:z-50",
                     "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:z-50 max-md:shadow-2xl",
                     drawerOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
                 )}>
@@ -7854,6 +7875,7 @@ function VAFDashboardContent() {
                         </div>
                     </div>
                 </aside>
+                </div>
 
                 {/* No row gap any more: with a panel open, the 5px divider between the
                     columns IS the whole spacing (a gap-4 on both sides of it added 37px
@@ -7964,7 +7986,7 @@ function VAFDashboardContent() {
                                 Padding and not height: this column is what scrolls, and its
                                 bottom is the only thing the docked composer overlaps. */}
                             <div className={cn(messagesAreaWidthClass,
-                                "mx-auto space-y-2 transition-[padding] duration-300 ease-out")}
+                                "mr-auto space-y-2 transition-[padding] duration-300 ease-out")}
                                 style={{ paddingBottom: `${128 + dockHeight}px` }}>
                                 {/* An agent room, rendered INSIDE the ordinary chat area. The chat's own
                                     frame stays exactly as it is - sidebar, header, composer - and only
@@ -8112,7 +8134,7 @@ function VAFDashboardContent() {
                                                         const _wakeDone = _afterWake.some(m => m.role === 'user')
                                                             || (_afterWake.some(m => m.role === 'assistant' && String(m.content ?? '').trim().length > 0) && !isGenerating);
                                                         return (
-                                                            <div className="flex gap-4 pt-4 justify-center">
+                                                            <div className="flex gap-4 pt-4 justify-start">
                                                                 <div className="w-full max-w-[85%] flex gap-4 items-start">
                                                                     {/* Avatar: the real agent avatar. ACTIVE → dark + amber clock badge; DONE → dim + no badge. */}
                                                                     <div className="relative shrink-0">
@@ -8173,7 +8195,7 @@ function VAFDashboardContent() {
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolLower);
                                                         const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
-                                                            <div className={cn("flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                            <div className={cn("flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
@@ -8206,7 +8228,7 @@ function VAFDashboardContent() {
                                                     // Render Workflow Messages
                                                     if (msg.role === 'workflow') {
                                                         return (
-                                                            <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
+                                                            <div key={`workflow-${trueIndex}`} className="flex justify-start gap-4 pt-4">
                                                                 <div className={cn(
                                                                     "flex gap-4 max-w-[85%] w-full items-start rounded-xl transition-all duration-300",
                                                                     stopHovered && isWorkflowRunning && trueIndex === messages.length - 1
@@ -8609,7 +8631,7 @@ function VAFDashboardContent() {
                                                     );
 
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "justify-start" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 hasTimeline ? (
                                                                     <div className={cn(
@@ -8663,7 +8685,7 @@ function VAFDashboardContent() {
                                     phase (loops continuously, only the text updates; system rows are suppressed
                                     above). Shown while the latest message is a system step during an active turn. */}
                                 {!historyLoading && (loading || isGenerating) && visibleMessages[visibleMessages.length - 1]?.role === 'system' && (
-                                    <div className="flex gap-4 justify-center pt-4">
+                                    <div className="flex gap-4 justify-start pt-4">
                                         <div className="w-full max-w-[85%]">
                                             <SetupLine message={String(visibleMessages[visibleMessages.length - 1].content ?? '')} />
                                         </div>
@@ -8677,7 +8699,7 @@ function VAFDashboardContent() {
                                     // Or when last message is a system step (RAG, Router, Final tools, etc.) – no redundant avatar + dots row
                                     messages[messages.length - 1].role === 'system'
                                 ) && (
-                                    <div className="flex gap-4 justify-center pt-4">
+                                    <div className="flex gap-4 justify-start pt-4">
                                         <div className="w-full max-w-[85%] flex gap-4">
                                             <AgentAvatar mode="plan" />
                                             <div className="flex flex-col gap-1">
@@ -8727,7 +8749,7 @@ function VAFDashboardContent() {
                         >
                             <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))] max-md:[&>*]:pointer-events-auto">
                                 {messages.length === 0 && !roomView && !historyLoading && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-4 text-center")}>
                                         <div className="flex justify-center mb-8 max-md:mb-4 origin-center scale-[1.8] max-md:scale-[1.35]">
                                             <AgentAvatar mode="idle" />
                                         </div>
@@ -8775,7 +8797,7 @@ function VAFDashboardContent() {
 
                                 {/* Memory Learning Banner */}
                                 {memoryLearning && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-2 flex items-center gap-2")}>
                                         {/* Spacer mirroring the input's w-9 stop-button slot, so the banner is
                                             centered on the message box rather than flush-left under the row. */}
                                         <div className="w-9 shrink-0" aria-hidden="true" />
@@ -8802,7 +8824,7 @@ function VAFDashboardContent() {
                                 {/* Document Learning Banner — batch N of M with a determinate bar
                                     (model_download markup) + Cancel; driven by learn_state frames. */}
                                 {learnState && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-2 flex items-center gap-2")}>
                                         <div className="w-9 shrink-0" aria-hidden="true" />
                                         <div className="flex-1 min-w-0 flex justify-center">
                                             <div className={cn(
@@ -8872,7 +8894,7 @@ function VAFDashboardContent() {
                                 {/* Attachment Indexing Banner — same UI as the Memory Learning banner,
                                     shown while the LLM indexes attached documents for retrieval. */}
                                 {activeAttachmentIndexStatus && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-2 flex items-center gap-2")}>
                                         <div className="w-9 shrink-0" aria-hidden="true" />
                                         <div className="flex-1 min-w-0 flex justify-center">
                                             <div className={cn(
@@ -8910,7 +8932,7 @@ function VAFDashboardContent() {
 
                                 {/* Model download progress (visible when downloading, e.g. after closing Settings) */}
                                 {downloadModelStatus?.status === 'downloading' && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-2 flex items-center gap-2")}>
                                         {/* spacer mirroring the input's w-9 stop-button slot, so the banner lines up with the message box */}
                                         <div className="w-9 shrink-0" aria-hidden="true" />
                                         <div className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -8941,7 +8963,7 @@ function VAFDashboardContent() {
                                     migration). Same markup family as the model download banner; no
                                     cancel: the job is resumable and finishing it is the safe state. */}
                                 {maintenanceStatus && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                    <div className={cn(chatWidthClass, "mr-auto mb-2 flex items-center gap-2")}>
                                         <div className="w-9 shrink-0" aria-hidden="true" />
                                         <div className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
                                             <div className="flex-1 min-w-0">
@@ -8982,7 +9004,7 @@ function VAFDashboardContent() {
                                 )}
 
                                 {/* Token Stats (Clickable) + RAG Badge */}
-                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex items-center gap-2 min-h-[16px]")}>
+                                <div className={cn(chatWidthClass, "mr-auto mb-1 flex items-center gap-2 min-h-[16px]")}>
                                     {/* Mirror the input row geometry: the stop-button column (w-9) only exists
                                         while generating, so add the matching spacer ONLY then — otherwise the
                                         indicators sit flush-left, aligned with the (slot-less) input field. */}
@@ -9147,7 +9169,7 @@ function VAFDashboardContent() {
                                     call bar (its own mute/hangup controls), so reserving a 44px stop slot
                                     would make it narrower than the standard input with an empty gap on the
                                     left; hanging up ends everything, so no separate stop is needed here. */}
-                                <div className={cn(chatWidthClass, "mx-auto flex items-center relative")}>
+                                <div className={cn(chatWidthClass, "mr-auto flex items-center relative")}>
                                     {/* Suggestions popup, anchored to the input it completes. bottom-full
                                         grows it UPWARD from just above the box, so it sits where the '@'
                                         or '/' is being typed instead of floating mid-screen. */}

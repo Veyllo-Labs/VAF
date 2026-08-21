@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The conversation starts at the left edge, not in the middle.** The chat
+  column was centred twice over - once as a block and once per message row -
+  which left a wide empty margin on the left while the text ran right up
+  against the right-hand panel; with the browser window open that margin was
+  most of the room the text had. Messages, composer and banners now line up on
+  the left, and the sidebar's hover expansion floats over the conversation
+  instead of pushing it sideways.
 - **Every user can get a browser of their own, in parallel.** Setting
   `VAF_BROWSER_POOL_MAX` above zero gives each user their own browser
   container with its own persistent profile and its own container network:

@@ -589,6 +589,39 @@ The practical limits are:
 
 ---
 
+### Per-user browser pool (parallel use)
+
+```bash
+# .env  (or system environment before starting VAF)
+VAF_BROWSER_POOL_MAX=2            # default 0 = pool off, everyone shares one browser
+VAF_BROWSER_POOL_MIN_FREE_MB=2500 # refuse NEW instances below this free-memory floor
+VAF_BROWSER_POOL_IDLE_S=900       # stop an unused instance after this long (data kept)
+```
+
+With the pool on, each user scope gets a browser CONTAINER of their own
+(`vaf/core/browser_pool.py`): their own profile volume - history, browser-saved
+passwords and downloads become legitimately per-user instead of state the handover
+scrub has to wipe - their own CDP and stream endpoints, and therefore PARALLEL use:
+two users browse (or run `browser_agent`) at the same time in two different browsers,
+and "busy" between users disappears. Instances are cloned from the shared container's
+image and network, published loopback-only on ephemeral ports, and named by a scope
+hash so a container listing never says who uses the machine. The stream ticket names
+the instance: the VNC proxy routes each window to the browser that issued its ticket.
+
+The pool only ever ADDS isolation: whenever it cannot serve - disabled (the default),
+at capacity, free memory below the floor, docker unreachable - the caller falls back
+to the shared container and its handover scrub. An idle instance is stopped (never
+removed: the container and its profile volume stay) and wakes on the next use; a
+stopped instance keeps its port mapping, so endpoints stay stable. Budget roughly
+1-2 GB RAM per concurrently active user. Needs the same docker CLI access the stop
+watchdog already uses.
+
+Named boundary: a spawned `browser_agent` child resolves the caller's instance
+itself (the parent created it before the spawn), but the interactive lane's
+IPC-based "agent run underway" scan cannot attribute a spawned run to one instance;
+that scan keeps guarding whichever manager it runs on, which can refuse an
+interactive start conservatively during workflow browser runs.
+
 ### Handover scrub depth
 
 ```bash
@@ -785,7 +818,7 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
-| **Single browser instance** | All tasks share one Chromium process. Concurrent requests are serialised by a queue (see [Concurrency](#concurrency--multi-user)). |
+| **Single browser instance** | By default all tasks share one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). `VAF_BROWSER_POOL_MAX` lifts this: each user gets their own browser container and runs in parallel (see [Per-user browser pool](#per-user-browser-pool-parallel-use)). |
 | **Live view frame rate** | Chat runs stream the browser live (KasmVNC, watch-only). The screenshot lanes (workflow tile, spawned child) stay at ~1 frame/1.5 s - sufficient for monitoring. |
 
 ---

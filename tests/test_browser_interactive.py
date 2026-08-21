@@ -396,7 +396,7 @@ def test_full_mode_wipes_the_profile_only_on_a_scope_change(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
     wipes = []
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda: wipes.append(1))
+    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: wipes.append(a))
     mgr.start("scope-a", "sess-1")
     assert len(wipes) == 1                       # unknown jar counts as a change
     mgr.stop("user", requester_scope="scope-a")

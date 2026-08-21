@@ -545,8 +545,12 @@ uses, so its isolation is a lease, not a partition:
   manager (Login Data, offered back to the next holder by autofill), autofill entries,
   bookmarks, files downloaded into the container, and the HTTP disk cache. Those
   survive until a `full`-mode handover wipes the profile or the container is recreated.
-  Multi-tenant deployments that need genuine partitions (and parallel use) should run
-  per-user browser containers.
+- **The genuine partition is the per-user pool** (`VAF_BROWSER_POOL_MAX`, see the pool
+  section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
+  browser container with its own profile volume, so nothing is shared with anyone and
+  users browse in PARALLEL; hand-over scrubbing then only guards the shared fallback
+  container the pool degrades to at capacity. Container and volume names carry a scope
+  hash, never the scope.
 
 ## 6. Connection-Level Isolation
 

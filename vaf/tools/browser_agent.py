@@ -247,6 +247,21 @@ import os as _os
 _BROWSER_MAX_PARALLEL = max(1, int(_os.environ.get("VAF_BROWSER_MAX_PARALLEL", "1")))
 _BROWSER_SEMAPHORE = threading.Semaphore(_BROWSER_MAX_PARALLEL)
 _BROWSER_QUEUE_TIMEOUT = 120  # seconds a caller will wait before giving up
+# One gate PER BROWSER: with the per-user pool on, runs against different
+# instances must not queue behind each other - the whole point of the pool is
+# parallel use. The shared container keeps the original semaphore object (some
+# tests pin it); pooled instances get their own with the same limit.
+_BROWSER_SEMAPHORES: dict = {"vaf-browser": _BROWSER_SEMAPHORE}
+_BROWSER_SEM_LOCK = threading.Lock()
+
+
+def _browser_semaphore(container_name: str) -> threading.Semaphore:
+    with _BROWSER_SEM_LOCK:
+        sem = _BROWSER_SEMAPHORES.get(container_name)
+        if sem is None:
+            sem = threading.Semaphore(_BROWSER_MAX_PARALLEL)
+            _BROWSER_SEMAPHORES[container_name] = sem
+        return sem
 
 # ── 3. Browser-use step log capture ──────────────────────────────────────────
 
@@ -644,7 +659,23 @@ class BrowserAgentTool(BaseTool):
         if not task:
             return "Error: task parameter is required."
 
-        # The agent's run always wins the shared browser: evict a person's
+        # Which browser this run drives: the caller's own pooled instance when
+        # the per-user pool is enabled, the shared container otherwise.
+        # Resolved BEFORE the eviction hook and before the spawn branch: the
+        # parent creates or wakes the instance the child then adopts through
+        # its own resolve, and the hooks below route to the resolved browser's
+        # manager (they peek the pool's cache, which this call fills). The
+        # pool never raises - every failure answers None, the shared browser.
+        import os as _os
+        from vaf.core.browser_pool import get_browser_pool
+        from vaf.core.browser_interactive import resolve_browser_scope
+        _endpoint = get_browser_pool().resolve(
+            resolve_browser_scope(kwargs.get("user_scope_id")))
+        _cdp_base = (_endpoint.cdp_base if _endpoint
+                     else _os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222"))
+        _container = _endpoint.container_name if _endpoint else "vaf-browser"
+
+        # The agent's run always wins its browser: evict a person's
         # interactive lease BEFORE the spawn branch, so the eviction happens in
         # the web-server parent process for both lanes (in the spawned child
         # the manager singleton is empty and this is a no-op). The hook also
@@ -690,7 +721,7 @@ class BrowserAgentTool(BaseTool):
                     # notification: the run is only STARTING, and from here
                     # is_agent_active() answers through the IPC scan of the
                     # spawned task, which lives exactly as long as the child.
-                    agent_run_ended(notify=False)
+                    agent_run_ended(notify=False, user_scope_id=kwargs.get("user_scope_id"))
                     return spawned.marker
                 # spawn failed (task already cancelled) -> fall through to in-process
             except Exception:
@@ -702,10 +733,11 @@ class BrowserAgentTool(BaseTool):
         session: str = str(kwargs.get("session") or "default").strip() or "default"
 
         # ── Concurrency gate ──────────────────────────────────────────────────
-        # Serialises access to the shared Chromium container.
-        # Multiple users (different sessions) each get their own slot; excess
-        # callers wait up to _BROWSER_QUEUE_TIMEOUT seconds before giving up.
-        acquired = _BROWSER_SEMAPHORE.acquire(timeout=_BROWSER_QUEUE_TIMEOUT)
+        # Serialises access to ONE Chromium container - the gate is per
+        # browser, so runs on different pooled instances proceed in parallel.
+        # Excess callers on the same browser wait up to _BROWSER_QUEUE_TIMEOUT
+        # seconds before giving up.
+        acquired = _browser_semaphore(_container).acquire(timeout=_BROWSER_QUEUE_TIMEOUT)
         if not acquired:
             return (
                 f"Browser agent is busy — all {_BROWSER_MAX_PARALLEL} slot(s) are in use. "
@@ -728,7 +760,7 @@ class BrowserAgentTool(BaseTool):
         # itself stands down inside a spawned child, where the ticket would
         # validate against the wrong process. Never raises.
         from vaf.core.browser_interactive import agent_stream_started
-        agent_stream_started(_session_id)
+        agent_stream_started(_session_id, user_scope_id=kwargs.get("user_scope_id"))
         try:
             return _run_async_in_new_loop(
                 self._run_browser(
@@ -739,6 +771,8 @@ class BrowserAgentTool(BaseTool):
                     session=session,
                     user_scope_id=kwargs.get("user_scope_id"),
                     session_id=_session_id,
+                    cdp_base=_cdp_base,
+                    container_name=_container,
                 )
             )
         except ImportError as e:
@@ -757,8 +791,8 @@ class BrowserAgentTool(BaseTool):
         except Exception as e:
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
-            _BROWSER_SEMAPHORE.release()
-            agent_run_ended()
+            _browser_semaphore(_container).release()
+            agent_run_ended(user_scope_id=kwargs.get("user_scope_id"))
 
     # ── Internal async implementation ─────────────────────────────────────────
 
@@ -771,6 +805,8 @@ class BrowserAgentTool(BaseTool):
         session: str = "default",
         user_scope_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        cdp_base: Optional[str] = None,
+        container_name: str = "vaf-browser",
     ) -> str:
         import os
         from browser_use import Agent
@@ -801,7 +837,11 @@ class BrowserAgentTool(BaseTool):
         threading.Thread(
             target=self._stop_watchdog,
             args=(_session_id, asyncio.get_running_loop(), _outer_task,
-                  _run_ended, self._restart_browser_container),
+                  _run_ended,
+                  # Bound to THIS run's container: with the pool on, the
+                  # escalation must sever the run's own instance, not the
+                  # shared browser someone else may be driving.
+                  lambda: self._restart_browser_container(container_name)),
             daemon=True,
             name="browser-stop-watchdog",
         ).start()
@@ -815,7 +855,7 @@ class BrowserAgentTool(BaseTool):
         cdp_url = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: self._resolve_cdp_url(
-                os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
+                cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
             ),
         )
 
@@ -945,7 +985,7 @@ class BrowserAgentTool(BaseTool):
                 await asyncio.wait_for(
                     asyncio.get_running_loop().run_in_executor(
                         None, self._park_browser_idle,
-                        os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")),
+                        cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")),
                     timeout=10.0,
                 )
             except Exception:
@@ -1027,8 +1067,9 @@ class BrowserAgentTool(BaseTool):
         park_browser_idle(cdp_base)
 
     @staticmethod
-    def _restart_browser_container() -> None:
-        """Sever every CDP connection by restarting the vaf-browser container.
+    def _restart_browser_container(container_name: str = "vaf-browser") -> None:
+        """Sever every CDP connection by restarting the run's browser container
+        (the shared one, or the run's own pooled instance).
 
         Restart rather than stop: the next browser run needs the container up
         again, and either way the point is that the blocked socket dies NOW.
@@ -1041,10 +1082,10 @@ class BrowserAgentTool(BaseTool):
             docker = resolve_docker_exe()
             append_domain_log(
                 "webui",
-                "[browser_agent] stop escalation: restarting vaf-browser to sever a blocked CDP connection",
+                f"[browser_agent] stop escalation: restarting {container_name} to sever a blocked CDP connection",
             )
             subprocess.run(
-                [docker, "restart", "-t", "2", "vaf-browser"],
+                [docker, "restart", "-t", "2", container_name],
                 timeout=30, capture_output=True,
             )
         except Exception:

@@ -7,9 +7,12 @@ The vaf-browser container's KasmVNC streams the display and carries mouse and
 keyboard natively, so nothing in here relays frames or input. This module owns
 the two things the stream cannot decide for itself:
 
-- the LEASE: one person drives the shared Chromium at a time, an agent run
-  always wins over a person, and a foreign user scope is refused rather than
-  silently joined to someone else's cookie jar;
+- the LEASE: one person drives one Chromium at a time, an agent run always
+  wins over a person, and a foreign user scope is refused rather than
+  silently joined to someone else's cookie jar. There is one manager PER
+  BROWSER: the shared container's (the default and fallback), plus one for
+  each per-user instance the pool hands out (vaf/core/browser_pool.py) - the
+  registry at the bottom routes by scope, by stream ticket and by session;
 - the LOGINS: cookies are loaded and exported per user scope through the same
   storage-state files the browser agent's persistent sessions use, so a login
   performed by hand is a login the agent has on its next run, and vice versa.
@@ -40,7 +43,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from vaf.core.log_helper import append_domain_log
 
@@ -331,7 +334,7 @@ def scrub_mode() -> str:
     return "full" if os.environ.get("VAF_BROWSER_SCRUB", "").strip().lower() == "full" else "quick"
 
 
-def request_profile_wipe() -> None:
+def request_profile_wipe(container_name: str = "vaf-browser") -> None:
     """Full-scrub half: wipe the container's Chromium profile between launches.
 
     A `docker restart` does NOT do this - the container filesystem survives
@@ -349,7 +352,7 @@ def request_profile_wipe() -> None:
         from vaf.core.service_stack import resolve_docker_exe
         docker = resolve_docker_exe()
         subprocess.run(
-            [docker, "exec", "-u", "root", "vaf-browser", "sh", "-c",
+            [docker, "exec", "-u", "root", container_name, "sh", "-c",
              "touch /home/browser/.scrub-profile"
              " && chown browser:browser /home/browser/.scrub-profile"
              " && pkill chromium"],
@@ -417,7 +420,19 @@ class InteractiveBrowserManager:
     PIXELS_THRESHOLD = 4096
     _LIVENESS_EVERY_TICKS = 3   # janitor ticks (5s each) between container probes
 
-    def __init__(self) -> None:
+    def __init__(self, cdp_base_url: Optional[str] = None,
+                 vnc_base_url: Optional[str] = None,
+                 container_name: str = "vaf-browser") -> None:
+        # Which browser this manager arbitrates. The default (None, None,
+        # "vaf-browser") is the SHARED container with its env-overridable
+        # endpoints - the only browser that exists unless the pool is on.
+        # Pool-created managers get their instance's endpoints instead; the
+        # whole lease/scrub/grant machinery below is per-browser by
+        # construction, so the pool multiplies managers rather than teaching
+        # this class about instances.
+        self._cdp_base_url = cdp_base_url
+        self._vnc_base_url = vnc_base_url
+        self._container_name = container_name
         self._lock = threading.RLock()
         self._lease: Optional[InteractiveLease] = None
         self._agent_active = False
@@ -436,13 +451,23 @@ class InteractiveBrowserManager:
         self._janitor_alive = False
 
     # -- environment -------------------------------------------------------
-    @staticmethod
-    def cdp_base() -> str:
-        return os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
+    def cdp_base(self) -> str:
+        # Env fallback evaluated at CALL time on purpose: tests and deployments
+        # repoint the shared browser mid-process via these variables.
+        return self._cdp_base_url or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
 
-    @staticmethod
-    def vnc_base() -> str:
-        return os.environ.get("VAF_BROWSER_VNC_URL", "http://127.0.0.1:6901")
+    def vnc_base(self) -> str:
+        return self._vnc_base_url or os.environ.get("VAF_BROWSER_VNC_URL", "http://127.0.0.1:6901")
+
+    def container_name(self) -> str:
+        return self._container_name
+
+    def has_activity(self) -> bool:
+        """Anything alive on this browser: a lease, a run, or a watch grant.
+        The pool's reaper asks this before stopping an idle instance."""
+        with self._lock:
+            return (self._lease is not None or self._agent_active
+                    or self._agent_stream is not None)
 
     # -- agent coordination ------------------------------------------------
     def is_agent_active(self) -> bool:
@@ -505,7 +530,7 @@ class InteractiveBrowserManager:
                 jar_scope = self._last_cookie_scope
             if jar_scope != scope:
                 if scrub_mode() == "full":
-                    request_profile_wipe()
+                    request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
             elif not persistent:
                 # Same scope, but the run promised a clean start: quick scrub
@@ -623,7 +648,7 @@ class InteractiveBrowserManager:
                 jar_scope = self._last_cookie_scope
             if jar_scope != user_scope_id:
                 if scrub_mode() == "full":
-                    request_profile_wipe()
+                    request_profile_wipe(self._container_name)
                 _cookie_op(self.cdp_base(), "scrub")
             if save:
                 cookies = _load_storage_cookies(
@@ -991,9 +1016,14 @@ class InteractiveBrowserManager:
 
 _manager: Optional[InteractiveBrowserManager] = None
 _manager_lock = threading.Lock()
+# Managers for the pool's per-user instances, keyed by container name. The
+# shared manager stays its own global (tests pin and monkeypatch it), the
+# registry only ever grows pool entries; scans walk both.
+_pool_managers: Dict[str, InteractiveBrowserManager] = {}
 
 
 def get_interactive_manager() -> InteractiveBrowserManager:
+    """The SHARED browser's manager - the fallback every lane can rely on."""
     global _manager
     with _manager_lock:
         if _manager is None:
@@ -1001,29 +1031,125 @@ def get_interactive_manager() -> InteractiveBrowserManager:
         return _manager
 
 
+def _manager_for_instance(inst) -> InteractiveBrowserManager:
+    with _manager_lock:
+        mgr = _pool_managers.get(inst.container_name)
+        if mgr is None:
+            mgr = InteractiveBrowserManager(
+                cdp_base_url=inst.cdp_base,
+                vnc_base_url=inst.vnc_base,
+                container_name=inst.container_name,
+            )
+            _pool_managers[inst.container_name] = mgr
+        return mgr
+
+
+def _all_managers() -> List[InteractiveBrowserManager]:
+    with _manager_lock:
+        managers = list(_pool_managers.values())
+    managers.append(get_interactive_manager())
+    return managers
+
+
+def peek_manager_for_container(container_name: str) -> Optional[InteractiveBrowserManager]:
+    """Registry lookup without side effects - the pool's reaper asks here."""
+    if container_name == "vaf-browser":
+        return get_interactive_manager()
+    with _manager_lock:
+        return _pool_managers.get(container_name)
+
+
+def get_manager_for_scope(user_scope_id: Optional[str]) -> InteractiveBrowserManager:
+    """The manager of the browser THIS scope should use.
+
+    Resolves through the pool, which may START the scope's own instance -
+    BLOCKING, run in an executor. Every pool failure answers with the shared
+    manager, so the browser degrades to time-sharing instead of vanishing."""
+    try:
+        from vaf.core.browser_pool import get_browser_pool
+        inst = get_browser_pool().resolve(resolve_browser_scope(user_scope_id))
+        if inst is not None:
+            return _manager_for_instance(inst)
+    except Exception:
+        pass
+    return get_interactive_manager()
+
+
+def _manager_for_run(user_scope_id: Optional[str]) -> InteractiveBrowserManager:
+    """Peek-only variant for the run hooks: the run resolved its instance at
+    its very start, so the cached answer is authoritative - and a docker
+    hiccup in a finally block must never route a run-ended signal to the
+    WRONG manager, which would leave the real one's agent flag stuck."""
+    try:
+        from vaf.core.browser_pool import get_browser_pool
+        inst = get_browser_pool().peek(resolve_browser_scope(user_scope_id))
+        if inst is not None:
+            return _manager_for_instance(inst)
+    except Exception:
+        pass
+    return get_interactive_manager()
+
+
+def get_manager_by_ticket(ticket: str) -> Optional[InteractiveBrowserManager]:
+    """The manager whose lease or watch grant owns this stream ticket. The VNC
+    proxy routes resolve the instance THROUGH the ticket, nothing else."""
+    for mgr in _all_managers():
+        if mgr.validate_ticket(ticket) is not None:
+            return mgr
+    return None
+
+
+def manager_for_session(session_id: str) -> Optional[InteractiveBrowserManager]:
+    """The manager whose interactive lease this chat session holds, if any."""
+    for mgr in _all_managers():
+        if mgr.interactive_session_id() == session_id:
+            return mgr
+    return None
+
+
+def get_manager_for_stop(user_scope_id: Optional[str],
+                         session_id: Optional[str] = None) -> InteractiveBrowserManager:
+    """The manager a stop request should land on: the one actually holding a
+    lease for this session or scope. Deliberately no pool RESOLVE here - a
+    stop must never start a container to have something to stop."""
+    if session_id:
+        mgr = manager_for_session(str(session_id))
+        if mgr is not None:
+            return mgr
+    scope = resolve_browser_scope(user_scope_id) if user_scope_id else None
+    if scope:
+        for mgr in _all_managers():
+            with mgr._lock:
+                if mgr._lease is not None and mgr._lease.user_scope_id == scope:
+                    return mgr
+    return get_interactive_manager()
+
+
 def stop_for_agent_run(user_scope_id: Optional[str] = None,
                        persistent: bool = False) -> None:
     """Hook for BrowserAgentTool.run(): evict the interactive lease and hand
-    the shared jar to the run's scope. Never raises."""
+    the jar to the run's scope, on the run's own browser. Never raises."""
     try:
-        get_interactive_manager().stop_for_agent_run(
+        _manager_for_run(user_scope_id).stop_for_agent_run(
             user_scope_id=user_scope_id, persistent=persistent)
     except Exception:
         pass
 
 
-def agent_stream_started(session_id: Optional[str]) -> None:
+def agent_stream_started(session_id: Optional[str],
+                         user_scope_id: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run()'s in-process lane: grant the run's own
-    window a watch-only live stream. Never raises."""
+    window a watch-only live stream of the run's own browser. Never raises."""
     try:
-        get_interactive_manager().agent_stream_started(session_id)
+        _manager_for_run(user_scope_id).agent_stream_started(session_id)
     except Exception:
         pass
 
 
-def agent_run_ended(notify: bool = True) -> None:
+def agent_run_ended(notify: bool = True,
+                    user_scope_id: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run()'s finally. Never raises."""
     try:
-        get_interactive_manager().agent_run_ended(notify=notify)
+        _manager_for_run(user_scope_id).agent_run_ended(notify=notify)
     except Exception:
         pass

@@ -2015,9 +2015,12 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
 async def browser_vnc_asset(ticket: str, path: str):
     """Static KasmVNC client files, fetched from the container and passed on."""
     from fastapi.responses import JSONResponse, Response
-    from vaf.core.browser_interactive import get_interactive_manager
-    mgr = get_interactive_manager()
-    if mgr.validate_ticket(ticket) is None:
+    # The ticket names the browser: with the per-user pool on there is more
+    # than one instance, and the manager that issued the ticket knows which
+    # vnc endpoint its stream lives on.
+    from vaf.core.browser_interactive import get_manager_by_ticket
+    mgr = get_manager_by_ticket(ticket)
+    if mgr is None:
         return JSONResponse(status_code=403, content={"detail": "Invalid or expired stream ticket"})
     if ".." in path:
         return JSONResponse(status_code=400, content={"detail": "Invalid path"})
@@ -2047,9 +2050,9 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
     Every open pipe counts as viewer presence for the lease janitor; the last
     disconnect starts the grace timer that eventually releases the lease.
     """
-    from vaf.core.browser_interactive import get_interactive_manager
-    mgr = get_interactive_manager()
-    if mgr.validate_ticket(ticket) is None:
+    from vaf.core.browser_interactive import get_manager_by_ticket
+    mgr = get_manager_by_ticket(ticket)
+    if mgr is None:
         # Accept-then-close: a close before accept surfaces as a handshake
         # error in the browser console instead of a readable code.
         await websocket.accept()
@@ -5437,9 +5440,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # vision input. Captured server-side at send time: fresher than
                         # anything the client could claim, and nothing to trust.
                         try:
-                            from vaf.core.browser_interactive import get_interactive_manager as _get_bi
-                            _bi = _get_bi()
-                            if _bi.interactive_session_id() == str(session_id):
+                            # Whichever browser (shared or pooled) this chat's
+                            # lease lives on answers; no lease, no context.
+                            from vaf.core.browser_interactive import manager_for_session as _bi_for
+                            _bi = _bi_for(str(session_id))
+                            if _bi is not None:
                                 _snap = await asyncio.get_running_loop().run_in_executor(
                                     None, lambda: _bi.snapshot_context(str(session_id)))
                                 if _snap and _snap.get("url"):
@@ -8392,13 +8397,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _bi_admin = _is_admin(_bi_role, _bi_scope)
                     except Exception:
                         _bi_admin = False
-                    from vaf.core.browser_interactive import get_interactive_manager
-                    _bi_mgr = get_interactive_manager()
-                    # start() blocks (container probe + cookie handover): executor, so
-                    # a slow browser start cannot starve every other websocket.
+                    from vaf.core.browser_interactive import get_manager_for_scope
+                    # Scope-resolved: with the per-user pool on this may START
+                    # the caller's own browser instance, which is exactly why
+                    # the whole call sits in the executor below.
+                    # start() blocks (pool resolve + container probe + cookie
+                    # handover): executor, so a slow browser start cannot
+                    # starve every other websocket.
                     _bi_result = await asyncio.get_running_loop().run_in_executor(
                         None,
-                        lambda: _bi_mgr.start(
+                        lambda: get_manager_for_scope(_bi_scope).start(
                             _bi_scope or "", str(session_id),
                             # Always the persistent mode: the person's browser asks about
                             # saving logins itself; a client-sent flag would be a second
@@ -8430,8 +8438,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log("API", f"Access denied: browser_interactive_stop {session_id} not owned by caller")
                             continue
                     _bi_scope = manager.get_connection_user(websocket)
-                    from vaf.core.browser_interactive import get_interactive_manager
-                    _bi_mgr = get_interactive_manager()
+                    from vaf.core.browser_interactive import get_manager_for_stop
+                    # The stop lands on whichever browser actually holds this
+                    # session's (or scope's) lease - and deliberately never
+                    # starts a container to have something to stop.
+                    _bi_mgr = get_manager_for_stop(_bi_scope or "", str(session_id) if session_id else None)
                     # Owner check happens inside stop() against the lease scope; the
                     # cookie export in there blocks, so executor again.
                     _bi_result = await asyncio.get_running_loop().run_in_executor(

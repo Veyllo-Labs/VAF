@@ -3073,6 +3073,10 @@ function VAFDashboardContent() {
             projectPath: string;
             diffs?: Record<string, string>;
             activity?: string;
+            /** Deterministic-intervention feed (gates blocking, stuck/reset loops, notes) for the Guards tab. */
+            guards?: Array<{ kind: string; label: string; detail?: string; loop?: number }>;
+            /** Run lifecycle (plan/build/document/commit) for the stepper above the Tasks section. */
+            phases?: Array<{ name: string; status: string }>;
         } | null;
         // Research view: streamed by the research agent as `research_state`
         research: {
@@ -5288,6 +5292,10 @@ function VAFDashboardContent() {
                             // liveness signal in file-less phases (docs/verify). Forward it too, else
                             // the field-by-field rebuild drops it (same trap as diffs above).
                             activity: typeof data.activity === 'string' ? data.activity : (prev.coder?.activity ?? ''),
+                            // Gate/loop feed for the Guards tab - same field-by-field trap.
+                            guards: Array.isArray(data.guards) ? data.guards : (prev.coder?.guards ?? []),
+                            // Lifecycle stepper - same trap again.
+                            phases: Array.isArray(data.phases) ? data.phases : (prev.coder?.phases ?? []),
                         },
                     }));
                 }

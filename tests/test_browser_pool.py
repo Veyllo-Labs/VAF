@@ -105,6 +105,8 @@ def test_instance_is_created_with_hashed_name_and_loopback_ports(pool, monkeypat
     assert any(a.startswith("vaf-browser-profile-") and ":/home/browser" in a for a in run_call)
     # the filtering resolvers compose gives the shared container are passed here too
     assert "1.1.1.2" in run_call and "1.0.0.2" in run_call
+    # and the host-gateway name render_check aims localhost targets at
+    assert "host.docker.internal:host-gateway" in run_call
 
 
 def test_each_instance_gets_a_network_of_its_own(pool, monkeypatch):

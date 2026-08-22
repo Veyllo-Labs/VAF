@@ -22,6 +22,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `webfetch` | read | Fetch a URL and convert it to readable Markdown. |
 | `research_agent` | read | Deep multi-section research sub-agent (10+ sources). |
 | `browser_agent` | write | Drive a real Chromium browser for multi-step web tasks. |
+| `render_check` | write | Open a URL or workspace HTML file in the sandbox browser once and report page errors, console output, failed requests, rendered text and a screenshot. |
 | `repair_report` | read | Regenerate empty/too-short sections of an HTML report. |
 
 ## Files & filesystem

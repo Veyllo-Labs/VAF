@@ -172,6 +172,7 @@ KWARGS_BASELINE = {
     "read_skill":                ("chat", ["user_scope_id", "username"]),
     "read_telegram_chat":        ("chat", ["user_scope_id", "username"]),
     "read_whatsapp_chat":        ("chat", ["user_scope_id", "username"]),
+    "render_check":              ("chat", ["user_scope_id"]),
     "repair_report":             ("chat", []),
     "replace_editor_selection":  ("chat", ["user_scope_id"]),
     "replace_editor_text":       ("chat", []),

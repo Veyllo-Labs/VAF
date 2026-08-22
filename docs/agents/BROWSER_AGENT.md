@@ -903,6 +903,45 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 
 ---
 
+## render_check: the single-look probe
+
+`render_check` is the browser container's second face: not an agent, a probe.
+One navigation, no clicking, and a developer's report back - final URL and
+title, page errors (uncaught exceptions), console output, failed network
+requests (HTTP 400+), the rendered text, and a screenshot saved into the chat
+workspace (inspect it with `analyze_image` when layout matters). It exists for
+the build-run-inspect-fix loop: write a page, render it, read what actually
+happened, fix, render again.
+
+Two callers, one implementation (`vaf/core/browser_render.py`):
+
+- The **main agent** has `render_check` as a registry tool.
+- The **coder** registers it as an inner tool bound to the project directory,
+  next to `run_tests`: `run_tests` proves the logic, `render_check` proves the
+  page. Relative targets like `index.html` resolve against the project.
+
+Targets:
+
+- **Workspace files** ride the existing workspace mirror: the project folder
+  is synced into the container and the file opens as
+  `file:///home/browser/Workspace/<path>`. Only files inside the caller's own
+  project root are renderable (same jail as every file tool).
+- **`localhost` URLs** are rewritten to `host.docker.internal`, which both the
+  compose browser and pooled instances map to the host (`host-gateway`). The
+  hard limit, stated in the tool description because no rewrite can remove it:
+  the dev server must listen on `0.0.0.0` (`next dev -H 0.0.0.0`,
+  `python -m http.server --bind 0.0.0.0`); a server bound to `127.0.0.1` is
+  invisible to any container. The mapping adds a NAME, not reachability - the
+  host's docker bridge address was always routable from the container.
+- **Public URLs** pass through unchanged.
+
+The probe never evicts anyone: while an interactive session or an agent run
+holds the browser, it answers busy instead of hijacking the visible tab. After
+rendering it parks the page on `about:blank` (an animating page with nobody
+watching burns CPU permanently). Everything runs through the same per-user
+resolution as the rest of the browser stack, so a pooled user probes their own
+instance.
+
 ## Known Limitations (v1)
 
 | Limitation | Notes |
@@ -921,6 +960,8 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | File | Purpose |
 |---|---|
 | [vaf/tools/browser_agent.py](../../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
+| [vaf/core/browser_render.py](../../vaf/core/browser_render.py) | `render_page()` - the single-look probe behind `render_check` (navigate, observe, screenshot, park) |
+| [vaf/tools/render_check.py](../../vaf/tools/render_check.py) | `render_check` tool face for the main agent and the coder (see [render_check](#render_check-the-single-look-probe)) |
 | [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` - WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
 | [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) - standalone runs |
 | [web/components/BrowserLiveTile.tsx](../../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |

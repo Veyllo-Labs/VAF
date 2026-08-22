@@ -2304,6 +2304,212 @@ def _verify_task_goal(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Deterministic gates (verify-before-done, read-before-edit, sibling-file note)
+#
+# The prompt already states these rules ("run_tests must be green before
+# task_done", "read before you edit") and the measured reality is that models
+# ignore stated rules under pressure - the linter gate exists as code for
+# exactly that reason. Pure module-level functions, like _verify_task_goal and
+# _meta_file_block_reason, so each gate is unit- and mutation-testable without
+# constructing a coder.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_WEB_FILE_SUFFIXES = (".html", ".htm")
+
+
+def _project_has_test_infra(base_dir: str) -> bool:
+    """Whether run_tests can meaningfully turn green here: a test tree or a
+    declared test runner. A project without either would be gated on a lane
+    that can never pass (pytest exits 5 on 'no tests collected')."""
+    try:
+        for name in ("tests", "test"):
+            if os.path.isdir(os.path.join(base_dir, name)):
+                return True
+        for name in ("pytest.ini", "setup.cfg", "tox.ini", "conftest.py"):
+            if os.path.isfile(os.path.join(base_dir, name)):
+                return True
+        for entry in os.listdir(base_dir):
+            if entry.startswith(("test_", "tests_")) and entry.endswith(".py"):
+                return True
+        pkg = os.path.join(base_dir, "package.json")
+        if os.path.isfile(pkg):
+            import json as _json
+            with open(pkg, "rb") as f:
+                scripts = (_json.loads(f.read().decode("utf-8", "replace")) or {}).get("scripts", {})
+            if isinstance(scripts, dict) and scripts.get("test"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _unverified_done_reason(
+    last_write_seq: int,
+    last_green_verify_seq: int,
+    web_written: bool,
+    has_test_infra: bool,
+    prior_blocks: int,
+) -> "Optional[str]":
+    """Verify-before-done: the block reason, or None to let task_done pass.
+
+    Blocks only when BOTH hold: something was written after the last green
+    verify, AND a verify lane actually exists for it (render_check for written
+    web pages, run_tests where the project has test infrastructure). After two
+    blocks it stands down - a gate the environment cannot satisfy (sandbox
+    down, browser busy) must degrade to a warning, never to a dead loop; the
+    caller appends that warning.
+    """
+    if last_write_seq == 0 or last_write_seq <= last_green_verify_seq:
+        return None
+    lanes = []
+    if web_written:
+        lanes.append("render_check the page you changed (e.g. render_check(target='index.html'))")
+    if has_test_infra:
+        lanes.append("run_tests and get 'TESTS PASSED'")
+    if not lanes:
+        return None
+    if prior_blocks >= 2:
+        return None
+    return (
+        "TASK_DONE BLOCKED - UNVERIFIED CHANGES.\n\n"
+        "You changed files after the last green verification. Claiming a task is "
+        "done without measuring it is how broken deliverables ship.\n\n"
+        "Do ONE of these, then call task_done again:\n"
+        + "\n".join(f"- {lane}" for lane in lanes)
+    )
+
+
+def _unread_edit_reason(path: str, known_files: "set") -> "Optional[str]":
+    """Read-before-edit: refuse editing an existing file this run has never
+    read (or written). Editing blind is the measured doom-loop opener on
+    existing repos: the search text does not match, the model retries with
+    guesses. A file this run created or already read is fair game."""
+    try:
+        real = os.path.realpath(path)
+        if not os.path.isfile(real):
+            return None  # let edit_file produce its own missing-file error
+        if real in known_files:
+            return None
+        return (
+            f"EDIT BLOCKED - you have not read this file in this run: {os.path.basename(path)}\n"
+            "Call read_file on it first, then edit_file with search text copied "
+            "from the REAL content. Editing from memory produces search strings "
+            "that do not match."
+        )
+    except Exception:
+        return None
+
+
+def _sibling_file_note(path: str, base_dir: str, max_entries: int = 4000) -> "Optional[str]":
+    """Search-before-build, as a note: the file being created has a
+    same-stemmed sibling in the project. Never blocks - test_utils.py next to
+    utils.py is legitimate - it makes the existing file visible at the moment
+    a duplicate is most likely to be born."""
+    try:
+        stem = os.path.splitext(os.path.basename(path))[0].lower().replace("-", "").replace("_", "")
+        if not stem:
+            return None
+        target_real = os.path.realpath(path)
+        matches = []
+        seen = 0
+        for root, dirs, files in os.walk(base_dir):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__")]
+            depth = os.path.relpath(root, base_dir).count(os.sep)
+            if depth >= 3:
+                dirs[:] = []
+            for f in files:
+                seen += 1
+                if seen > max_entries:
+                    return None  # huge tree: better silent than slow or partial
+                fs = os.path.splitext(f)[0].lower().replace("-", "").replace("_", "")
+                if fs == stem and os.path.realpath(os.path.join(root, f)) != target_real:
+                    matches.append(os.path.relpath(os.path.join(root, f), base_dir))
+        if not matches:
+            return None
+        listed = ", ".join(sorted(matches)[:5])
+        return (
+            f"NOTE: similarly named file(s) already exist: {listed}. "
+            "If one of them already serves this purpose, EXTEND it instead of "
+            "creating a sibling - two files doing one job is how projects rot."
+        )
+    except Exception:
+        return None
+
+
+def _active_lint_failure_files(history: "List[Dict]", window: int = 30) -> "List[str]":
+    """Files whose LATEST lint verdict in the recent history is FAILED.
+
+    The task_done linter gate used to block on ANY '❌ LINTER CHECK FAILED'
+    in the last messages - so a fixed file (FAILED followed by PASSED for the
+    same file) still blocked until the old message scrolled out of the
+    window. Per-write linting made that a routine sequence rather than a
+    corner case. Newest verdict per file wins; parsed from the 'File: <name>'
+    line both verdict messages carry."""
+    latest: dict = {}
+    try:
+        for msg in reversed(history[-window:]):
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content", "") or ""
+            failed = "❌ LINTER CHECK FAILED" in content
+            passed = "✅ LINTER CHECK PASSED" in content
+            if not (failed or passed):
+                continue
+            m = re.search(r"^File: (.+)$", content, re.M)
+            fname = (m.group(1).strip() if m else "?")
+            if fname not in latest:  # reversed scan: first hit IS the latest
+                latest[fname] = failed
+    except Exception:
+        return []
+    return sorted(f for f, is_failed in latest.items() if is_failed)
+
+
+def _lint_feedback_message(path: str, local_tools: "Dict[str, Any]") -> "tuple[Optional[Dict], bool]":
+    """(post-tool verdict message, has_errors) for one just-written file.
+
+    The immediate-feedback half of the loop-escape for small models: a hidden
+    syntax error surfaces ONE reply after the write, not a whole task later.
+    Shared by the write_file handler and the edit_file lane so both produce
+    the same verdict markers the task_done gate greps. (None, False) when no
+    linter is registered or the type has no linter."""
+    try:
+        linter_tool = (local_tools or {}).get("linter")
+        if not linter_tool:
+            return None, False
+        lint_result = linter_tool.run(path=path)
+        if lint_result and lint_result.startswith("[INFO]"):
+            return None, False  # unsupported type: no verdict, no noise
+        has_errors = bool(lint_result) and not lint_result.startswith("✓")
+        if has_errors:
+            return {
+                "role": "system",
+                "content": (
+                    f"╔═══════════════════════════════════════════════════════╗\n"
+                    f"║  ❌ LINTER CHECK FAILED                                ║\n"
+                    f"╚═══════════════════════════════════════════════════════╝\n\n"
+                    f"File: {os.path.basename(path)}\n"
+                    f"Status: FAIL - Code has linter errors\n\n"
+                    f"**Errors found:**\n{lint_result}\n\n"
+                    f"**ACTION REQUIRED:**\n"
+                    f"1. Fix the linter errors listed above\n"
+                    f"2. Write the file again with corrected code\n"
+                    f"3. Do NOT call task_done until linter passes\n\n"
+                    f"🚨 Files with linter errors will cause issues!"
+                ),
+            }, True
+        return {
+            "role": "system",
+            "content": (
+                f"✅ LINTER CHECK PASSED\n"
+                f"File: {os.path.basename(path)}\n"
+                f"Status: PASS - No linter errors\n"
+            ),
+        }, False
+    except Exception:
+        return None, False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Context State Management - Robust context switching with rollback
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2329,6 +2535,16 @@ class ContextState:
     files_created: List[str] = field(default_factory=list)
     tools_used: List[str] = field(default_factory=list)
     last_tool_call: Optional[str] = None
+
+    # Verify-before-done gate (per task context, so a retry starts clean):
+    # monotonic positions of the last file write and the last GREEN verify
+    # (run_tests "TESTS PASSED" / render_check with no page errors), whether a
+    # web page was written since the last green verify, and how often the gate
+    # has blocked this task (>= 2 stands down to a warning).
+    last_write_seq: int = 0
+    last_green_verify_seq: int = 0
+    web_written: bool = False
+    verify_gate_blocks: int = 0
 
     def is_main(self) -> bool:
         """Check if this is the main context (planning phase)."""
@@ -2356,7 +2572,11 @@ class ContextState:
             task_idx=self.task_idx,
             files_created=self.files_created.copy(),
             tools_used=self.tools_used.copy(),
-            last_tool_call=self.last_tool_call
+            last_tool_call=self.last_tool_call,
+            last_write_seq=self.last_write_seq,
+            last_green_verify_seq=self.last_green_verify_seq,
+            web_written=self.web_written,
+            verify_gate_blocks=self.verify_gate_blocks,
         )
 
     def record_file_created(self, filepath: str):
@@ -3591,6 +3811,14 @@ Thumbs.db
         from vaf.tools.sandbox_test_runner import RunTestsTool
         self.local_tools["run_tests"] = RunTestsTool(base_dir)
 
+        # Render a page in the sandbox browser and report errors/console/text -
+        # the visual half of the verify loop (run_tests proves logic, render_check
+        # proves the page). base_dir-bound so `index.html` means the file this
+        # run just wrote. Registered unconditionally for the same reason as
+        # run_tests: the schema is advertised in every mode.
+        from vaf.tools.render_check import RenderCheckTool
+        self.local_tools["render_check"] = RenderCheckTool(base_dir)
+
         # Re-bind codesearch to the project workspace: search DEFAULTS TO and is JAILED WITHIN
         # base_dir, never the backend process cwd (= VAF's own repo). base_dir is only defined
         # above, so the early registration is a placeholder rebound here.
@@ -3970,6 +4198,7 @@ Complete this task: "{task}"
 - `read_file(path)`: Read existing files.
 - `codesearch(query, search_type?)`: Locate code fast — definitions/usages/patterns (search_type: text|regex|symbol). On an existing/large project, FIND where things are with this, then read the whole file, instead of reading many files blindly.
 - `run_tests(command?)`: Run the project's tests in the sandbox and get the REAL result. After writing tests, CALL THIS to verify - never claim tests pass without running them.
+- `render_check(target)`: Open an HTML file or URL in the sandbox browser and get page errors, console output and the rendered text. After writing a web page, CALL THIS to verify it renders - never claim a page works without looking at it.
 - `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files (and run_tests is green if you wrote tests).
 </tools>
 
@@ -4396,6 +4625,7 @@ Task {task_idx + 1}: {current_task}
 - Focus ONLY on the current task — write ONLY the file(s) named in it, nothing else
 - Do NOT rewrite files from previous tasks (they are already done)
 - Use `write_file` to actually create/modify files (do not just describe code)
+- Work in small verified increments: write a working core first, read the linter/test feedback, then extend - never produce one giant blind shot and hope
 - **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
 - If you discover a reusable pattern, use `update_codex` to save it.
@@ -4679,6 +4909,37 @@ Task {task_idx + 1}: {current_task}
                                     }
                                 },
                                 "required": []
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "render_check",
+                            "description": (
+                                "Open an HTML file you wrote (or a URL) in the sandbox browser and get a "
+                                "developer's report: page errors, console output, failed requests, and the "
+                                "rendered text. USE THIS after writing/changing a web page to verify it "
+                                "actually renders - a page can be syntactically fine and still blank. "
+                                "Pass a project-relative path like 'index.html'. For a dev server use "
+                                "http://localhost:<port>/ - it is reachable only if the server listens on "
+                                "0.0.0.0 (start it that way, e.g. `python3 -m http.server --bind 0.0.0.0`). "
+                                "Single look, no clicking; fix with edit_file, then render_check again."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "target": {
+                                        "type": "string",
+                                        "description": "Project-relative or absolute path to an HTML file, or an http(s) URL.",
+                                    },
+                                    "wait_ms": {
+                                        "type": "integer",
+                                        "description": "Extra settle time after load for client-side rendering (default 1500, max 10000).",
+                                        "default": 1500,
+                                    }
+                                },
+                                "required": ["target"]
                             }
                         }
                     },
@@ -5053,6 +5314,48 @@ Task {task_idx + 1}: {current_task}
         # run's first frame, and that frame is the one that opens the window.
         _coder_pub = StatePublisher("coder_state", dedupe=True)
 
+        # Deterministic-intervention feed for the window's Guards tab: every time
+        # a gate blocks, a loop guard fires or a context resets, one row lands
+        # here. The run's self-corrections were previously visible only in the
+        # terminal stream; this makes them a first-class UI signal.
+        _guard_events: list = []
+
+        def _guard_event(kind: str, label: str, detail: str = ""):
+            """kind: 'gate' (blocked an action) | 'loop' (stuck/reset machinery)
+            | 'note' (non-blocking hint). Emits a fresh state frame so the row
+            appears immediately, not on the next file change."""
+            try:
+                _guard_events.append({
+                    "kind": kind, "label": str(label)[:80],
+                    "detail": str(detail)[:200], "loop": int(loop.loop_count),
+                })
+                del _guard_events[:-30]
+                _emit_coder_state()
+            except Exception:
+                pass
+
+        # Run lifecycle for the window's phase stepper: the Tasks section shows
+        # WHAT is being built, this shows WHERE the run is - previously the
+        # documentation pass and the final commit were invisible as steps.
+        # ORIENT is part of "plan" (its scan feeds the planner's prompt).
+        _PHASE_ORDER = ("plan", "build", "document", "commit")
+        _phases = {"plan": "running", "build": "pending",
+                   "document": "pending", "commit": "pending"}
+
+        def _set_phase(name: str):
+            """Mark `name` running and everything before it done. Idempotent."""
+            try:
+                if _phases.get(name) == "running":
+                    return
+                for p in _PHASE_ORDER:
+                    if p == name:
+                        _phases[p] = "running"
+                        break
+                    _phases[p] = "done"
+                _emit_coder_state()
+            except Exception:
+                pass
+
         def _emit_coder_state(current_file: str = ""):
             try:
                 _sid = resolve_ui_session_id()
@@ -5090,6 +5393,11 @@ Task {task_idx + 1}: {current_task}
                     # activity signal even in phases with no file/diff change (docs,
                     # verify) -- otherwise the frozen editor reads as "stuck".
                     "activity": (getattr(tui, "current_action", "") or "")[:80],
+                    # Deterministic-intervention feed (gates/loops/notes) for the
+                    # Guards tab; newest last, capped at 30 by _guard_event.
+                    "guards": list(_guard_events),
+                    # Run lifecycle (plan/build/document/commit) for the stepper.
+                    "phases": [{"name": p, "status": _phases[p]} for p in _PHASE_ORDER],
                 }
                 if _coder_pub.publish(payload, session_id=_sid) and lg:
                     lg.event(
@@ -5160,6 +5468,11 @@ Task {task_idx + 1}: {current_task}
         while True:
             loop.increment_loop()
             tui.increment_loop()
+            # Phase stepper: the first loop that runs inside a task context is
+            # the build phase - one anchor covers every path into it (model
+            # plan, auto plan, retry with fresh context).
+            if current_state.is_task() and _phases.get("build") == "pending":
+                _set_phase("build")
             _trace(f"--- LOOP {loop.loop_count} START ---")
             try:
                 if lg:
@@ -6692,6 +7005,8 @@ Task {task_idx + 1}: {current_task}
                                      })
 
                          # Reset history with preserved context
+                         _guard_event("loop", "context reset: empty loop",
+                                      "history rebuilt with preserved status")
                          current_state.history = critical_msgs + [
                              {
                                  "role": "system",
@@ -7130,6 +7445,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # If we hit 8 idle loops, force context compression with task reminder
                 if idle_loop_count >= 8:
                     _trace("Idle limit critical (8). Compressing context with task reminder.")
+                    _guard_event("loop", "context reset: thinking loop",
+                                 "compressed to system + task reminder + last 3 messages")
                     # Keep system prompt + task reminder + last 3 messages
                     system_msgs = [m for m in history if m.get("role") == "system"]
                     recent_msgs = history[-3:] if len(history) > 3 else []
@@ -7367,6 +7684,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
                     if verified:
                         tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck for {loops_on_task} loops - goal verified, completing.")
+                        _guard_event("loop", "stuck: goal verified, auto-completed", f"task {current_task_idx+1} after {loops_on_task} loops")
                         task_mgr.complete_current_task(
                             f"Auto-completed after stuck detection - goal verified: {evidence}"
                         )
@@ -7380,6 +7698,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         loop.task_start_loop[current_task_idx] = loop.loop_count
                         context_states.pop(f"task_{current_task_idx}", None)
                         tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck, goal not verified - retrying with fresh context.")
+                        _guard_event("loop", "stuck: retry with fresh context", f"task {current_task_idx+1}, goal not verified")
                         if switch_to_task_context(current_task_idx, current_title):
                             history.append({
                                 "role": "system",
@@ -7659,6 +7978,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     )
                     if not _ac_verified:
                         tui.append_stream(f"[AUTO] Inactivity auto-complete blocked - {_ac_evidence[:80]}")
+                        _guard_event("gate", "inactivity auto-complete blocked", _ac_evidence[:120])
                         history.append({
                             "role": "system",
                             "content": (
@@ -7673,6 +7993,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     task_mgr.complete_current_task(summary)
                     next_task = task_mgr.get_current_task()
                     tui.append_stream(f"✅ Auto-completed: {current[:60] if current else 'task'}")
+                    _guard_event("loop", "inactivity: goal verified, auto-completed", (current or "task")[:80])
                     tui.set_action(f"📋 {task_mgr.get_progress()}")
                     loop.no_action_since = 0
 
@@ -8309,6 +8630,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     f"**Remember your main goal:** {task}"
                                 )
                                 tui.append_stream(f"❌ task_done BLOCKED - Template Mode requires write_file per task!")
+                                _guard_event("gate", "task_done blocked: no files for task", "template mode requires write_file per task")
                             else:
                                 result = (
                                     f"[bold yellow]WARNING: NO FILES FOR THIS TASK![/]\n\n"
@@ -8321,6 +8643,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     f"**Remember your main goal:** {task}"
                                 )
                                 tui.append_stream(f"⚠️ task_done WARNING - No files for current task!")
+                                _guard_event("note", "task_done warning: no files for this task", "")
                         else:
                             # Files were created in this context - allow task_done
                             # Continue with normal task_done logic below
@@ -8350,6 +8673,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     f"Work on the remaining tasks now!"
                                 )
                                 tui.append_stream(f"Blocked premature completion - {len(remaining)} tasks remaining!")
+                                _guard_event("gate", "task_done blocked: tasks remaining", f"{len(remaining)} tasks still pending")
                                 tui.set_action(f"{task_mgr.get_progress()} - Complete remaining tasks!")
                                 # Reset counter to prevent infinite loop
                                 loop.consecutive_task_done = 0
@@ -8360,12 +8684,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         # ═══════════════════════════════════════════════════════
                         # LINTER CHECK - Prevent task_done with linter errors
                         # ═══════════════════════════════════════════════════════
-                        # Check recent history for linter errors
-                        has_recent_linter_errors = False
-                        for msg in current_state.history[-10:]:  # Check last 10 messages
-                            if msg.get("role") == "system" and "❌ LINTER CHECK FAILED" in msg.get("content", ""):
-                                has_recent_linter_errors = True
-                                break
+                        # Latest verdict PER FILE decides (see _active_lint_failure_files):
+                        # a fixed file (FAILED, then PASSED) must not keep blocking just
+                        # because the old FAILED message is still inside the scan window.
+                        _lint_failed_files = _active_lint_failure_files(current_state.history)
+                        has_recent_linter_errors = bool(_lint_failed_files)
 
                         if has_recent_linter_errors:
                             # Block task_done if there are recent linter errors
@@ -8383,7 +8706,42 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 f"✅ You must see 'LINTER CHECK PASSED' before calling task_done!"
                             )
                             tui.append_stream(f"❌ task_done BLOCKED - Fix linter errors first!")
+                            _guard_event("gate", "task_done blocked: linter errors",
+                                         "fix the reported errors, wait for LINTER CHECK PASSED")
                         elif 'result' not in locals() or result is None:
+                            # VERIFY-BEFORE-DONE GATE: the linter proves syntax, this
+                            # proves behaviour - something was written after the last
+                            # green run_tests/render_check, and a verify lane exists
+                            # for it. Pure decision in _unverified_done_reason.
+                            _ugr = _unverified_done_reason(
+                                current_state.last_write_seq,
+                                current_state.last_green_verify_seq,
+                                current_state.web_written,
+                                _project_has_test_infra(base_dir),
+                                current_state.verify_gate_blocks,
+                            )
+                            if _ugr:
+                                current_state.verify_gate_blocks += 1
+                                result = _ugr
+                                tui.append_stream("❌ task_done BLOCKED - verify your changes first (run_tests / render_check)!")
+                                _guard_event("gate", "task_done blocked: unverified changes",
+                                             "files changed after the last green run_tests/render_check")
+                            elif (current_state.last_write_seq > current_state.last_green_verify_seq
+                                  and current_state.verify_gate_blocks >= 2):
+                                # Gate stood down after two blocks (verify lane unusable:
+                                # sandbox down, browser busy). Say so instead of silently
+                                # passing an unverified task.
+                                _post_tool_messages.append({
+                                    "role": "system",
+                                    "content": ("NOTE: this task completed WITHOUT a green "
+                                                "verification run; the verify gate stood down "
+                                                "after repeated blocks. Treat the result as untested."),
+                                })
+                                tui.append_stream("⚠️ task_done passed unverified (verify gate stood down)")
+                                _guard_event("loop", "verify gate stood down",
+                                             "2 blocks without a usable verify lane; task passes as UNTESTED")
+
+                        if 'result' not in locals() or result is None:
                             # Normal task_done processing
                             # CONTENT_ONLY mode: Return actual file content
                             if skip_template and files_created:
@@ -8968,6 +9326,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         if not task_mgr.todos:
                             _emsg = "ERROR: call set_todos FIRST, then edit files."
                             tui.append_stream("edit_file rejected - call set_todos FIRST!")
+                            _guard_event("gate", "edit blocked: no plan yet", "set_todos required first")
                             history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _emsg})
                             continue
                         _epath = fn_args.get("path", "")
@@ -8977,6 +9336,20 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             continue
                         if _epath and not os.path.isabs(_epath):
                             fn_args["path"] = os.path.join(base_dir, _epath)
+                        # READ-BEFORE-EDIT GATE: editing a file this run has never
+                        # read (or written) produces search strings from memory that
+                        # do not match - the measured doom-loop opener on existing
+                        # repos. Same answer-then-continue shape as the guards above.
+                        _rbr = _unread_edit_reason(
+                            fn_args.get("path", ""),
+                            getattr(loop, 'files_known', set()) or set(),
+                        )
+                        if _rbr:
+                            tui.append_stream("edit_file rejected - read the file first!")
+                            _guard_event("gate", "edit blocked: file not read",
+                                         os.path.basename(fn_args.get("path", ""))[:60])
+                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _rbr})
+                            continue
 
                     if fn_name == "write_file":
                         is_template_file = False  # Initialize to prevent UnboundLocalError
@@ -9014,8 +9387,31 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             if _block_reason:
                                 _bn = os.path.basename(fn_args.get("path", "")).lower()
                                 tui.append_stream(f"[GUARD] write_file blocked: {_bn} is a meta file")
+                                _guard_event("gate", "write blocked: meta file", _bn[:60])
                                 history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _block_reason})
                                 continue
+
+                            # SEARCH-BEFORE-BUILD NOTE (never blocks): a brand-new file
+                            # with a same-stemmed sibling gets the sibling named, once
+                            # per basename, AFTER the tool result (adjacency-safe lane).
+                            # Computed pre-execution - afterwards the file exists and
+                            # "new" is no longer decidable.
+                            try:
+                                _wf_abs = path if os.path.isabs(path) else os.path.join(base_dir, path)
+                                if not os.path.exists(_wf_abs):
+                                    if not hasattr(loop, 'sibling_noted'):
+                                        loop.sibling_noted = set()
+                                    _wf_base = os.path.basename(path).lower()
+                                    if _wf_base not in loop.sibling_noted:
+                                        _sib = _sibling_file_note(_wf_abs, base_dir)
+                                        if _sib:
+                                            loop.sibling_noted.add(_wf_base)
+                                            _post_tool_messages.append({"role": "system", "content": _sib})
+                                            tui.append_stream(f"[GUARD] similar file exists for {_wf_base}")
+                                            _guard_event("note", "similar file exists",
+                                                         _sib.split("NOTE: ", 1)[-1][:180])
+                            except Exception:
+                                pass
 
                             # CRITICAL: Must set TODOs before writing files!
                             if not task_mgr.todos:
@@ -9028,6 +9424,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     "Call `set_todos` NOW with your task list."
                                 )
                                 tui.append_stream("write_file rejected - call set_todos FIRST!")
+                                _guard_event("gate", "write blocked: no plan yet", "set_todos required first")
                                 history.append({
                                     "role": "tool",
                                     "tool_call_id": tc['id'],
@@ -9162,6 +9559,12 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         live.update(tui.render())
                     elif fn_name == "bash":
                         tui.set_action(f"⚡ {fn_args.get('command', '')[:25]}")
+                        live.update(tui.render())
+                    elif fn_name == "run_tests":
+                        tui.set_action("🧪 Running tests...")
+                        live.update(tui.render())
+                    elif fn_name == "render_check":
+                        tui.set_action("🖥️ Render check...")
                         live.update(tui.render())
                     elif fn_name.startswith("git_"):
                         # Git tools
@@ -9512,46 +9915,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 # AUTOMATIC LINTER CHECK - Prevent zombie task_done
                                 # ═══════════════════════════════════════════════════════
                                 try:
-                                    linter_tool = self.local_tools.get("linter")
-                                    if linter_tool:
+                                    if self.local_tools.get("linter"):
                                         tui.set_action("🔍 Linting...")
                                         live.update(tui.render())
-                                        lint_result = linter_tool.run(path=path)
-
-                                        # Clear PASS/FAIL classification
-                                        has_errors = lint_result and not lint_result.startswith("✓") and not lint_result.startswith("[INFO]")
-
-                                        if has_errors:
-                                            # ❌ FAIL: Linter found issues
-                                            lint_msg = (
-                                                f"╔═══════════════════════════════════════════════════════╗\n"
-                                                f"║  ❌ LINTER CHECK FAILED                                ║\n"
-                                                f"╚═══════════════════════════════════════════════════════╝\n\n"
-                                                f"File: {os.path.basename(path)}\n"
-                                                f"Status: FAIL - Code has linter errors\n\n"
-                                                f"**Errors found:**\n{lint_result}\n\n"
-                                                f"**ACTION REQUIRED:**\n"
-                                                f"1. Fix the linter errors listed above\n"
-                                                f"2. Call write_file again with corrected code\n"
-                                                f"3. Do NOT call task_done until linter passes\n\n"
-                                                f"🚨 Files with linter errors will cause issues!"
-                                            )
-                                            _post_tool_messages.append({
-                                                "role": "system",
-                                                "content": lint_msg
-                                            })
+                                    _lmsg, _lfail = _lint_feedback_message(path, self.local_tools)
+                                    if _lmsg is not None:
+                                        _post_tool_messages.append(_lmsg)
+                                        if _lfail:
                                             tui.append_stream(f"❌ LINTER FAIL: {os.path.basename(path)} has errors!")
+                                            _guard_event("note", "lint failed after write",
+                                                         os.path.basename(path)[:60])
                                         else:
-                                            # ✅ PASS: No linter errors
-                                            lint_msg = (
-                                                f"✅ LINTER CHECK PASSED\n"
-                                                f"File: {os.path.basename(path)}\n"
-                                                f"Status: PASS - No linter errors\n"
-                                            )
-                                            _post_tool_messages.append({
-                                                "role": "system",
-                                                "content": lint_msg
-                                            })
                                             tui.append_stream(f"✅ LINTER PASS: {os.path.basename(path)}")
                                 except Exception as lint_error:
                                     # Don't fail the write_file if linter fails
@@ -9642,11 +10016,62 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # execution (e.g. set_todos triggers switch_to_task_context which
                 # reassigns the `history` variable via sync_legacy_vars).
                 _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
+                # Gate bookkeeping (verify-before-done, read-before-edit): the ORDER of
+                # writes vs. green verifies per task context, and the set of files this
+                # run has actually seen. Fed from the one place every tool result passes.
+                # Blocked calls never reach here (their handlers answer + continue), so
+                # a refused write does not count as a write.
+                try:
+                    if not hasattr(loop, 'guard_seq'):
+                        loop.guard_seq = 0
+                        loop.files_known = set()
+                    loop.guard_seq += 1
+                    _gpath = fn_args.get("path", "") if isinstance(fn_args, dict) else ""
+                    if fn_name in ("write_file", "edit_file"):
+                        if not result_str.lstrip().lower().startswith("error"):
+                            current_state.last_write_seq = loop.guard_seq
+                            if _gpath:
+                                loop.files_known.add(os.path.realpath(
+                                    _gpath if os.path.isabs(_gpath) else os.path.join(base_dir, _gpath)))
+                                if _gpath.lower().endswith(_WEB_FILE_SUFFIXES):
+                                    current_state.web_written = True
+                            # Immediate lint feedback for edit_file too: the write_file
+                            # handler lints inline, but an EDIT used to stay unlinted
+                            # until task_done - and edits on existing repos are exactly
+                            # where small models loop on a hidden syntax slip.
+                            if fn_name == "edit_file" and _gpath:
+                                _lmsg, _lfail = _lint_feedback_message(
+                                    _gpath if os.path.isabs(_gpath) else os.path.join(base_dir, _gpath),
+                                    self.local_tools)
+                                if _lmsg is not None:
+                                    _post_tool_messages.append(_lmsg)
+                                    if _lfail:
+                                        tui.append_stream(f"❌ LINTER FAIL: {os.path.basename(_gpath)} has errors!")
+                                        _guard_event("note", "lint failed after write",
+                                                     os.path.basename(_gpath)[:60])
+                                    else:
+                                        tui.append_stream(f"✅ LINTER PASS: {os.path.basename(_gpath)}")
+                    elif fn_name == "read_file":
+                        if _gpath and not result_str.lstrip().startswith("Error"):
+                            loop.files_known.add(os.path.realpath(
+                                _gpath if os.path.isabs(_gpath) else os.path.join(base_dir, _gpath)))
+                    elif fn_name == "run_tests":
+                        if result_str.lstrip().startswith("TESTS PASSED"):
+                            current_state.last_green_verify_seq = loop.guard_seq
+                    elif fn_name == "render_check":
+                        if result_str.startswith("Rendered:") and "Page errors: none" in result_str:
+                            current_state.last_green_verify_seq = loop.guard_seq
+                except Exception:
+                    pass
+
                 # read_file can return large files; give it more room so the agent
                 # can verify file contents without hitting the truncation limit.
                 # run_tests gets the larger limit too: its result is already tail-bounded
                 # (~4 KB) and HEAD-truncating it here would drop the pytest pass/fail summary.
-                _result_char_limit = 8000 if fn_name in ("read_file", "run_tests") else 3000
+                # render_check likewise: errors and console lead the report, but the
+                # rendered TEXT (the proof the page shows what it should) comes last
+                # and is exactly what a 3000-char head cut would drop.
+                _result_char_limit = 8000 if fn_name in ("read_file", "run_tests", "render_check") else 3000
                 _history_at_dispatch.append({
                     "role": "tool",
                     "tool_call_id": tc['id'],
@@ -9692,6 +10117,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         # skip the final commit below. Gated to real projects (not CONTENT_ONLY).
         # ═══════════════════════════════════════════════════════════════
         if not skip_template:
+            _set_phase("document")
             try:
                 _doc_note = self._run_document_phase(base_dir, _run_start_sha, tui)
                 if _doc_note and lg:
@@ -9708,6 +10134,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         # ═══════════════════════════════════════════════════════════════
         final_commit_note = ""
         if not skip_template:
+            _set_phase("commit")
             try:
                 _total_tasks = len(task_mgr.todos) if task_mgr and task_mgr.todos else 0
                 _completed_tasks = (
@@ -9727,6 +10154,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 except Exception:
                     pass
                 # WebUI: show the final commit in the source-control section
+                # (with the stepper fully done - this is the terminal frame).
+                _phases["commit"] = "done"
                 _emit_coder_state()
             except Exception:
                 final_commit_note = ""

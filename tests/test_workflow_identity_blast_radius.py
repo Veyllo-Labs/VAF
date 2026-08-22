@@ -95,6 +95,10 @@ NEWLY_IDENTIFIED = {
     # tool used to resolve its caller from an env var nobody sets, so every lane
     # concluded it was the owner and used the owner's stored OAuth credentials.
     "cloud_storage": ('user_role', 'user_scope_id', 'username'),
+    # Added 2026-08-22 with the tool itself. In the workflow lane a step renders
+    # into the WORKFLOW OWNER's browser (pool instance, projects-root jail,
+    # workspace mirror) instead of resolving to the machine owner via env.
+    "render_check": ('user_scope_id',),
     # Both added 2026-07-31 with their file_access declaration. In the workflow lane a
     # step now searches / lints inside the workflow owner's tree instead of wherever
     # the path pointed - codesearch previously returned file CONTENT from any absolute

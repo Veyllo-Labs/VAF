@@ -334,7 +334,7 @@ def test_coder_only_names_match_what_the_coder_actually_builds():
 
     shared_with_main = {
         "write_file", "edit_file", "read_file", "list_files",
-        "python_sandbox", "linter", "codesearch",
+        "python_sandbox", "linter", "codesearch", "render_check",
     }
     tree = ast.parse(open(mod.__file__, "rb").read())
     assigned_keys = {

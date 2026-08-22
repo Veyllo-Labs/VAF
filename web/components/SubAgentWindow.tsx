@@ -74,6 +74,12 @@ export type CoderViewState = {
     /** Human-readable current action ("Loop 26", "Checking quality...") for the
      *  header's live activity signal in file-less phases (docs/verify). */
     activity?: string;
+    /** Deterministic-intervention feed: gates that blocked an action ('gate'),
+     *  stuck/reset machinery that fired ('loop'), non-blocking hints ('note').
+     *  Newest last; rendered in the bottom panel's Guards tab. */
+    guards?: Array<{ kind: string; label: string; detail?: string; loop?: number }>;
+    /** Run lifecycle (plan/build/document/commit) for the stepper above Tasks. */
+    phases?: Array<{ name: string; status: string }>;
 };
 
 /** Live state streamed by the browser agent (`browser_state` event) for the browser
@@ -635,8 +641,8 @@ export default function SubAgentWindow({
     // ── VS-Code view (coding agent only) ──────────────────────────────────
     const [editorDark, setEditorDark] = useState(false);
 
-    // Bottom panel tabs (Console / Linter / Telemetry)
-    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry'>('console');
+    // Bottom panel tabs (Console / Linter / Guards / Telemetry)
+    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'guards' | 'telemetry'>('console');
 
     // Multi-tab editor: a persistent LIVE tab (always shows what the agent is
     // doing and keeps updating in the background) plus one read-only tab per file
@@ -1911,19 +1917,25 @@ export default function SubAgentWindow({
                             {/* Bottom panel: Console / Linter / Telemetry */}
                             <div className="flex h-[150px] flex-none flex-col border-t border-gray-200 bg-white">
                                 <div className="flex h-7 flex-none items-center gap-4 border-b border-gray-100 px-4">
-                                    {(['console', 'linter', 'telemetry'] as const).map(tab => {
+                                    {(['console', 'linter', 'guards', 'telemetry'] as const).map(tab => {
+                                        const guardCount = tab === 'guards' ? (coder.guards?.length ?? 0) : 0;
                                         return (
                                         <button
                                             key={tab}
                                             onClick={() => setActiveConsoleTab(tab)}
                                             className={cn(
-                                                'py-1 text-[9px] font-bold uppercase tracking-widest',
+                                                'flex items-center gap-1 py-1 text-[9px] font-bold uppercase tracking-widest',
                                                 activeConsoleTab === tab
                                                     ? 'border-b-2 border-blue-500 text-gray-600'
                                                     : 'text-gray-300 hover:text-gray-500'
                                             )}
                                         >
                                             {tab}
+                                            {guardCount > 0 && (
+                                                <span className="rounded-full bg-amber-100 px-1 text-[8px] font-bold text-amber-700">
+                                                    {guardCount}
+                                                </span>
+                                            )}
                                         </button>
                                         );
                                     })}
@@ -1964,6 +1976,37 @@ export default function SubAgentWindow({
                                         ))}
                                         {consoleLines.filter(l => /lint/i.test(l)).length === 0 && (
                                             <div className="text-gray-300">No linter output yet.</div>
+                                        )}
+                                    </div>
+                                )}
+                                {activeConsoleTab === 'guards' && (
+                                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2 font-mono text-[11px]">
+                                        {(coder.guards?.length ?? 0) > 0 ? (
+                                            <div className="space-y-1">
+                                                {coder.guards!.map((g, i) => (
+                                                    <div key={i} className="flex items-start gap-2 leading-5">
+                                                        <span
+                                                            className={cn(
+                                                                'mt-1.5 h-1.5 w-1.5 flex-none rounded-full',
+                                                                g.kind === 'gate' ? 'bg-red-500'
+                                                                    : g.kind === 'loop' ? 'bg-blue-500'
+                                                                        : 'bg-gray-400'
+                                                            )}
+                                                        />
+                                                        <span className="w-14 flex-none text-gray-400">
+                                                            {typeof g.loop === 'number' ? `Loop ${g.loop}` : ''}
+                                                        </span>
+                                                        <span className="min-w-0 flex-1 break-words text-gray-700">
+                                                            <span className="font-semibold text-gray-900">{g.label}</span>
+                                                            {g.detail ? <span className="text-gray-500"> - {g.detail}</span> : null}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="text-gray-300">
+                                                No guard interventions yet - gates and loop protections report here when they fire.
+                                            </div>
                                         )}
                                     </div>
                                 )}
@@ -2029,6 +2072,36 @@ export default function SubAgentWindow({
                                         </span>
                                     )}
                                 </div>
+                                {/* Run lifecycle stepper: the tasks below are WHAT is being
+                                    built, this line is WHERE the run is - previously the
+                                    documentation pass and the final commit were invisible. */}
+                                {(coder.phases?.length ?? 0) > 0 && (
+                                    <div className="flex flex-none items-center gap-1 px-3.5 pb-1.5">
+                                        {coder.phases!.map((p, i) => (
+                                            <div key={p.name} className="flex min-w-0 items-center gap-1">
+                                                {i > 0 && <span className="h-px w-2 flex-none bg-gray-200" />}
+                                                <span
+                                                    className={cn(
+                                                        'h-1.5 w-1.5 flex-none rounded-full',
+                                                        p.status === 'done' ? 'bg-emerald-500'
+                                                            : p.status === 'running' ? 'animate-pulse bg-blue-500'
+                                                                : 'bg-gray-200'
+                                                    )}
+                                                />
+                                                <span
+                                                    className={cn(
+                                                        'truncate text-[8px] font-semibold uppercase tracking-wider',
+                                                        p.status === 'done' ? 'text-emerald-600'
+                                                            : p.status === 'running' ? 'text-blue-600'
+                                                                : 'text-gray-300'
+                                                    )}
+                                                >
+                                                    {p.name}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-2">
                                     {/* Real task plan streamed by the coder (coder_state.tasks);
                                         the generic heartbeat steps are only the fallback. */}

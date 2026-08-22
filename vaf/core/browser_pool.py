@@ -240,6 +240,11 @@ class BrowserPool:
             # created by us, so the filtering resolvers have to be passed here or
             # the DNS half of the browser hardening silently stops applying.
             "--dns", "1.1.1.2", "--dns", "1.0.0.2",
+            # Same host name the compose browser gets: render_check rewrites
+            # localhost targets to host.docker.internal, and a pooled browser
+            # must resolve it too or the dev-server loop works for the shared
+            # browser only.
+            "--add-host", "host.docker.internal:host-gateway",
             "-p", "127.0.0.1::9222", "-p", "127.0.0.1::6901",
             "-e", f"TZ={os.environ.get('VAF_BROWSER_TZ', 'Europe/Berlin')}",
             "-v", f"{volume}:/home/browser",

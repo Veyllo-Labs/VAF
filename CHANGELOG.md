@@ -12,6 +12,36 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The coder now proves its work before claiming it, and you can watch the
+  guardrails fire.** Three deterministic gates joined the coder's loop:
+  finishing a task is blocked while changes have not been verified (a green
+  `run_tests`, or a clean `render_check` for web pages - only where such a
+  lane exists, and degrading to an explicit "untested" note instead of
+  looping when the environment cannot verify); editing a file the run has
+  never read is refused ("read it first" - editing from memory is where
+  doom loops start); and creating a file whose name matches an existing one
+  points out the sibling instead of letting a duplicate be born. Every gate
+  block, stuck-detection firing and context reset now also reports into a
+  new Guards tab in the coder window's bottom panel, so the run's
+  self-corrections are visible instead of terminal-only. Lint feedback is
+  immediate on BOTH write lanes now - an edited file used to stay unlinted
+  until the task ended - and a fixed file stops blocking completion the
+  moment its latest lint passes. A lifecycle stepper above the task list
+  shows where the run is (plan, build, document, commit) - the
+  documentation pass and the final commit used to happen invisibly - and
+  test runs and render checks now announce themselves in the live action
+  line instead of looking like a frozen editor.
+- **The coder can now look at the page it just built.** A new `render_check`
+  tool opens an HTML file from the project (or a URL) in the sandbox browser
+  and reports what a developer checks first: page errors, console output,
+  failed requests, the rendered text, and a screenshot. The coder gets it as
+  an inner tool next to `run_tests` - write the page, render it, read what
+  actually happened, fix, render again - and the chat agent gets it as
+  `render_check` (the screenshot lands in the chat workspace for
+  `analyze_image`). Dev servers on the host are reachable via rewritten
+  `localhost` URLs when they listen on `0.0.0.0`. While you or an agent run
+  are using the browser, the probe answers busy instead of taking over your
+  tab.
 - **Uploading in the browser starts from your own files.** The sandbox
   browser's file picker used to open into an empty container home - your
   files simply did not exist in there. Your file area is now mirrored into

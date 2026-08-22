@@ -246,6 +246,12 @@ services:
     dns:
       - 1.1.1.2
       - 1.0.0.2
+    # Name for the host, so render_check can open dev servers running on it
+    # (localhost targets are rewritten to this name). Adds a NAME, not reach:
+    # the host was already routable via the docker bridge address; servers
+    # must listen on 0.0.0.0 to be visible either way.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Timezone the browser reports (keep it consistent with the locale; the
       # browser_agent overrides this per-session via CDP when a proxy is used).

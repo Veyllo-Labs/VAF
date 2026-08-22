@@ -54,6 +54,7 @@ class UserIdentityUpdate(BaseModel):
     quiet_hours_start: Optional[str] = None  # "HH:MM" (24h), evaluated in the user's timezone
     quiet_hours_end: Optional[str] = None  # "HH:MM" (24h)
     last_seen_announcement_version: Optional[str] = None  # full version the user last acknowledged (announcement modal); legacy builds stored major.minor
+    hotbar_agents: Optional[List[str]] = None  # sub-agent kinds pinned to this user's rail; per USER, never per browser
 
 class UserIdentityEntryUpdate(BaseModel):
     """Update or delete a specific entry in a list field."""
@@ -167,10 +168,17 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
     # bookkeeping, not a user-facing profile edit, so it must never land in change_log.
     if "last_seen_announcement_version" in full_dict and full_dict["last_seen_announcement_version"] is not None:
         current["last_seen_announcement_version"] = str(full_dict["last_seen_announcement_version"]).strip() or None
+    # Same kind of field: which sub-agents this person pinned to their rail. Bookkeeping,
+    # so it persists silently too. Read from update_dict (exclude_none) rather than
+    # full_dict, because an EMPTY list has to round-trip - "I removed them all" is a
+    # setting, and treating it as "nothing sent" would resurrect the old picks.
+    if isinstance(update_dict.get("hotbar_agents"), list):
+        current["hotbar_agents"] = [str(k).strip() for k in update_dict["hotbar_agents"]
+                                    if str(k).strip()][:12]
     for key, value in update_dict.items():
         if key in ("main_messenger", "city", "country", "timezone", "date_format", "time_format",
                    "quiet_hours_enabled", "quiet_hours_start", "quiet_hours_end",
-                   "last_seen_announcement_version"):
+                   "last_seen_announcement_version", "hotbar_agents"):
             continue
         if current.get(key) != value:
             changes.append(key)

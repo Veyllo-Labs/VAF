@@ -125,8 +125,10 @@ This is the contract. Treat it as a stable API.
   `Agent` and `CoreAgent` - running and vetoing a tool call. Their documented
   arguments are in [EMBEDDING.md](EMBEDDING.md); `ToolCaller`'s remaining
   constructor parameters are not part of the promise.
-- `vaf.set_account_allowlist_resolver` - the per-account tool allowlist hook
-  (contract in [EMBEDDING.md](EMBEDDING.md))
+- `vaf.set_account_allowlist_resolver` - the per-account tool allowlist hook,
+  and `vaf.account_allows_tool` - its read side, for a surface that LISTS tools
+  and must not offer what the account cannot run (contract in
+  [EMBEDDING.md](EMBEDDING.md))
 - the `vaf.tools` entry-point group
 - documented config keys
 
@@ -138,7 +140,8 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   `_clean_reasoning`, context/compaction internals, sub-agent IPC, web server).
   The names above that live in `vaf.core` but are re-exported on the façade
   (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
-  `extract_pdf_markdown`, `set_account_allowlist_resolver`) are the deliberate
+  `extract_pdf_markdown`, `set_account_allowlist_resolver`,
+  `account_allows_tool`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

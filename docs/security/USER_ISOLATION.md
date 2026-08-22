@@ -405,6 +405,8 @@ as backstop for hallucinated names. Coder-internal tools (`bash`, the git tools)
 offered to the picker via `GET /api/users/tool-universe`, sourced from the coder
 module's own declaration so the picker cannot drift from what the child runs.
 
+**And what the USER is offered, not just what the agent may call.** Enforcing at dispatch alone still let a restricted account SEE the tool: the `tools_list` the web server pushes fed the `/` suggestions and the sub-agent hotbar, and it carried the whole registry. The read side of the same answer is `account_allows_tool(name, scope, role)` (facade primitive, `vaf/core/tool_dispatch.py`); all three `tools_list` producers in `vaf/core/web_server.py` filter through it and fail CLOSED per entry, so a resolver that crashed drops an entry rather than widening the menu. The exemptions (scopeless caller, admin) live inside that primitive precisely so a listing surface cannot rebuild them wrongly and strip an admin's own tools. Guard: `tests/test_tool_list_respects_account.py`.
+
 The same record can carry `permissions["confirmation_bypass"]` (default absent =
 off): the admin-granted hands-off switch that lets the agent run
 confirmation-gated tools for THIS user without asking. It is resolved through the

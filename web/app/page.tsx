@@ -13,8 +13,9 @@ import {
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
     Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
-    Lock, Unlock, Globe,
+    Lock, Unlock, Globe, Code2, MousePointer2, Microscope, PenLine, BookOpen,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
@@ -536,6 +537,37 @@ function subAgentKindFromName(toolName: string): SubAgentKind | null {
     for (const [re, kind] of SUBAGENT_KIND_BY_TOOL) if (re.test(n)) return kind;
     return null;
 }
+
+// The hotbar's catalogue. The KINDS are not listed a second time here - they are
+// taken from SUBAGENT_KIND_BY_TOOL above, so a sub-agent can never exist for the
+// window and be missing from the hotbar (or the other way round). What this adds
+// is the two things the registry has no opinion on: which tool call the pick
+// stands for, and the trade symbol its avatar wears.
+const SUBAGENT_TOOL_BY_KIND: Record<SubAgentKind, string> = {
+    coder: 'coding_agent',
+    research: 'research_agent',
+    document: 'document_agent',
+    librarian: 'librarian_agent',
+    browser: 'browser_agent',
+};
+const SUBAGENT_TRADE_ICON: Record<SubAgentKind, LucideIcon> = {
+    coder: Code2,          // </>
+    research: Microscope,
+    document: PenLine,
+    librarian: BookOpen,
+    browser: Globe,
+};
+const SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map(([, kind]) => kind);
+// The browser is NOT offered here: it already has a permanent seat in the rail
+// (the globe), so listing it would let someone "add" a thing that is never
+// absent and then wonder why removing it changes nothing.
+const HOTBAR_KINDS: SubAgentKind[] = SUBAGENT_KINDS.filter(k => k !== 'browser');
+// The rail's rhythm, in one place: the explainer drawing spaces its icons at
+// 1.67x the globe's width, which is 33px for the real 20px globe. RAIL_STEP_TOP
+// is where the first icon below the globe sits (its centre at 65; the globe's is
+// at 32, being top-0 in an h-16 box, and these buttons are h-7).
+const RAIL_STEP = 33;
+const RAIL_STEP_TOP = 51;
 
 // Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
 // Hard cap on the in-memory `messages` array. During Live-Mode the agent streams
@@ -2187,6 +2219,13 @@ function VAFDashboardContent() {
                 setUserName(name || null);
                 if (syncAnnouncement) {
                     setLastSeenVersion(data?.user_identity?.last_seen_announcement_version ?? null);
+                }
+                // The hotbar picks ride along in the same per-user blob - no extra
+                // round trip, and no flash of someone else's rail.
+                const picks = data?.user_identity?.hotbar_agents;
+                if (Array.isArray(picks)) {
+                    setHotbarPicks(picks.filter((k: unknown): k is SubAgentKind =>
+                        SUBAGENT_KINDS.includes(k as SubAgentKind)));
                 }
                 setPersonaLoaded(true);
             })
@@ -7400,6 +7439,49 @@ function VAFDashboardContent() {
     // button, and no streamed state event restores it - so a hijacked coder would stay
     // hidden until the agent called the next sub-agent tool.
     const browserWindowBusy = isSubAgentRunning && subAgentState.agentKind !== 'browser';
+    // Sub-agent palette: the specialists the agent can hand work to, one plus
+    // below the globe. Deliberately a full overlay rather than a dropdown - the
+    // tiles carry an avatar and an explanation, and the same size as the memory
+    // graph modal keeps the app's two "browse everything" surfaces consistent.
+    const [subAgentPaletteOpen, setSubAgentPaletteOpen] = useState(false);
+    const [subAgentQuery, setSubAgentQuery] = useState('');
+    // What the user put in the hotbar. Stored PER USER in user_identity.json (the
+    // same blob the boot fetch already loads), not in browser storage: the rail is
+    // one person's arrangement, and a second person signing in on the same machine
+    // must not inherit it. Hydrated in fetchUserTimeFormat above.
+    const [hotbarPicks, setHotbarPicks] = useState<SubAgentKind[]>([]);
+    // What the rail actually shows: the picks MINUS anything this account may no
+    // longer run. An admin can revoke a sub-agent after it was pinned, and a stored
+    // pick must not outlive the permission - the stored list stays untouched, so the
+    // icon returns by itself if the admin gives it back.
+    const visibleHotbarPicks = useMemo(() => {
+        const runnable = new Set(tools.map(t => t.name));
+        return tools.length
+            ? hotbarPicks.filter(k => runnable.has(SUBAGENT_TOOL_BY_KIND[k]))
+            : hotbarPicks;   // list not loaded yet: show the rail rather than blink
+    }, [hotbarPicks, tools]);
+    const toggleHotbarPick = useCallback((kind: SubAgentKind) => {
+        setHotbarPicks(prev => {
+            const next = prev.includes(kind) ? prev.filter(k => k !== kind) : [...prev, kind];
+            // Optimistic: the rail answers the click at once and the write follows.
+            // An empty list is a real value ("I removed them all"), so it is sent as
+            // [] rather than omitted - the route reads it from the exclude_none dict
+            // for exactly that reason.
+            fetch(getApiBase() + '/api/user/user-identity', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ hotbar_agents: next }),
+            }).catch(() => { /* offline: the rail still works this session */ });
+            return next;
+        });
+    }, []);
+    useEffect(() => {
+        if (!subAgentPaletteOpen) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSubAgentPaletteOpen(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [subAgentPaletteOpen]);
     const sendBrowserInteractive = useCallback((msg: Record<string, unknown>) => {
         if (ws?.readyState === WebSocket.OPEN && currentSessionId) {
             ws.send(JSON.stringify({ ...msg, sessionId: currentSessionId }));
@@ -7951,6 +8033,67 @@ function VAFDashboardContent() {
                             )}
                         >
                             <Globe size={20} />
+                        </button>
+                        {/* Sub-agent palette opener: directly below the globe, deliberately
+                            one step quieter than it (smaller glyph, paler resting tone) so the
+                            rail keeps ONE primary mark. Same hover vocabulary as every other
+                            rail button - one shade brighter and slightly larger - and the same
+                            max-md:hidden, because the small layout has no free corner here. */}
+                        {/* The hotbar itself: the picked specialists, between the globe and
+                            the plus, in the rhythm the explainer drawing sets. Clicking one
+                            writes its tool mention into the message box and puts the cursor
+                            behind it - the same '/' mention the suggestion list already
+                            produces, so this is a shortcut to an existing lane and not a
+                            second way to start an agent. */}
+                        {visibleHotbarPicks.map((kind, i) => {
+                            const Icon = SUBAGENT_TRADE_ICON[kind];
+                            const cap = kind.charAt(0).toUpperCase() + kind.slice(1);
+                            const label = tMain(`subAgent${cap}Name` as never) as string;
+                            return (
+                                <button
+                                    key={kind}
+                                    type="button"
+                                    onClick={() => {
+                                        const mention = `/${SUBAGENT_TOOL_BY_KIND[kind]} `;
+                                        setInput(prev => (prev.trim() ? `${prev.replace(/\s*$/, '')} ${mention}` : mention));
+                                        inputRef.current?.focus();
+                                    }}
+                                    aria-label={label}
+                                    title={label}
+                                    style={{ top: RAIL_STEP_TOP + i * RAIL_STEP }}
+                                    className={cn(
+                                        "absolute right-[19px] z-20 max-md:hidden h-7 flex items-center",
+                                        "transition-[color,transform] duration-150",
+                                        "text-gray-400 hover:text-gray-700 hover:scale-110"
+                                    )}
+                                >
+                                    <Icon size={20} strokeWidth={2} />
+                                </button>
+                            );
+                        })}
+                        <button
+                            type="button"
+                            onClick={() => setSubAgentPaletteOpen(true)}
+                            aria-haspopup="dialog"
+                            aria-expanded={subAgentPaletteOpen}
+                            aria-label={tMain('subAgentPaletteAria')}
+                            title={tMain('openSubAgentPalette')}
+                            style={{ top: RAIL_STEP_TOP + visibleHotbarPicks.length * RAIL_STEP }}
+                            className={cn(
+                                // The step comes from the explainer drawing, which is the same rail: there
+                                // the centre-to-centre step is 1.67x the globe's own width. Applied to the
+                                // real 20px globe that is 33px, so the plus centre sits at 65 (the globe's
+                                // is at 32, being top-0 in an h-16 box). Measured, not guessed - and the
+                                // picked agents inherit the same step, pushing the plus down as they
+                                // arrive, exactly as the drawing shows.
+                                "absolute right-[21px] z-20 max-md:hidden h-7 flex items-center",
+                                "transition-[color,transform,top] duration-150",
+                                subAgentPaletteOpen
+                                    ? "text-gray-900 scale-110"
+                                    : "text-gray-400 opacity-60 hover:text-gray-700 hover:opacity-100 hover:scale-110"
+                            )}
+                        >
+                            <Plus size={16} strokeWidth={2.25} />
                         </button>
                         {/* ── Prompt Navigator (right rail, DeepSeek-style) ── */}
                         {(() => {
@@ -10431,6 +10574,212 @@ function VAFDashboardContent() {
                         downloadToast.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"
                     )}>
                         {downloadToast.message}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Sub-agent palette ──────────────────────────────────────────
+                The specialists the agent can hand work to, opened by the plus
+                below the globe. Sized like the memory graph modal on purpose:
+                the app's two "browse everything" surfaces should feel like one
+                surface. The strip under the header explains what picking one
+                does, as a sequence rather than a sentence - three stages light
+                up in turn (opacity only, so it costs no repaint work). */}
+            {subAgentPaletteOpen && (
+                <div
+                    className="fixed inset-0 z-[85] flex items-center justify-center p-4 max-md:p-0"
+                    onClick={() => setSubAgentPaletteOpen(false)}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={tMain('subAgentPaletteAria')}
+                >
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header (DESIGN: modal header, gray palette) */}
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0 bg-gray-50 z-10 max-md:p-4 max-md:gap-2">
+                            <div className="flex items-center gap-3 min-w-0">
+                                {/* dark:bg override like the memory modal's badge: gray-900 is a
+                                    deliberate dark-in-light surface, so on the dark theme it would
+                                    sit dark-on-dark and read as an empty square. */}
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center shrink-0 max-md:w-9 max-md:h-9">
+                                    <Bot size={20} className="text-white" />
+                                </div>
+                                <div className="min-w-0">
+                                    <h2 className="text-xl font-bold text-gray-900 max-md:text-base truncate">{tMain('subAgentPaletteTitle')}</h2>
+                                    <p className="text-sm text-gray-500 truncate">{tMain('subAgentPaletteSubtitle')}</p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setSubAgentPaletteOpen(false)}
+                                className="p-2 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors shrink-0"
+                                aria-label={tMain('subAgentPaletteClose')}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex min-h-0 flex-1">
+                            {/* Left: search, then the specialists as tiles */}
+                            <div className="flex min-h-0 flex-1 flex-col p-6 max-md:p-4">
+                                {/* Small screens lose the drawing (it needs its own width, and
+                                    the rail it explains is hidden there), so the sentence has
+                                    to carry the explanation alone. */}
+                                <p className="hidden max-md:block mb-3 text-xs leading-relaxed text-gray-500">
+                                    {tMain('subAgentPaletteExplain')}
+                                </p>
+                                <div className="relative flex-none">
+                                    <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <input
+                                        type="text"
+                                        value={subAgentQuery}
+                                        onChange={(e) => setSubAgentQuery(e.target.value)}
+                                        placeholder={tMain('subAgentPaletteSearch')}
+                                        aria-label={tMain('subAgentPaletteSearch')}
+                                        className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-9 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition-colors focus:border-gray-400"
+                                    />
+                                    {subAgentQuery && (
+                                        <button
+                                            onClick={() => setSubAgentQuery('')}
+                                            aria-label={tMain('subAgentPaletteSearch')}
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    )}
+                                </div>
+
+                                {(() => {
+                                    const q = subAgentQuery.trim().toLowerCase();
+                                    // Only what this account may actually run. `tools` is the
+                                    // per-user list the server now filters by the account
+                                    // allowlist, so a sub-agent the admin took away never
+                                    // reaches this panel - offering it and refusing the click
+                                    // afterwards would be worse than not offering it.
+                                    const runnable = new Set(tools.map(t => t.name));
+                                    const entries = HOTBAR_KINDS
+                                        .filter(kind => runnable.has(SUBAGENT_TOOL_BY_KIND[kind]))
+                                        .map(kind => {
+                                        const cap = kind.charAt(0).toUpperCase() + kind.slice(1);
+                                        return {
+                                            kind,
+                                            name: tMain(`subAgent${cap}Name` as never) as string,
+                                            desc: tMain(`subAgent${cap}Desc` as never) as string,
+                                            Icon: SUBAGENT_TRADE_ICON[kind],
+                                        };
+                                    });
+                                    // Matching on the tool name too: someone who knows the agent
+                                    // as "coding_agent" from the logs should find it by that.
+                                    const shown = q
+                                        ? entries.filter(e =>
+                                            e.name.toLowerCase().includes(q) ||
+                                            e.desc.toLowerCase().includes(q) ||
+                                            SUBAGENT_TOOL_BY_KIND[e.kind].includes(q))
+                                        : entries;
+                                    if (!shown.length) {
+                                        return (
+                                            <p className="mt-6 text-center text-sm text-gray-400">
+                                                {tMain('subAgentPaletteEmpty')}
+                                            </p>
+                                        );
+                                    }
+                                    return (
+                                        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+                                            <div className="grid grid-cols-4 gap-3 max-[1500px]:grid-cols-3 max-[1200px]:grid-cols-2 max-[1050px]:grid-cols-1">
+                                                {shown.map(({ kind, name, desc, Icon }) => {
+                                                    const picked = hotbarPicks.includes(kind);
+                                                    return (
+                                                        <button
+                                                            key={kind}
+                                                            type="button"
+                                                            onClick={() => toggleHotbarPick(kind)}
+                                                            aria-pressed={picked}
+                                                            className={cn(
+                                                                'relative flex items-start gap-3 overflow-hidden rounded-2xl border px-4 py-[18px] text-left transition-colors',
+                                                                picked
+                                                                    ? 'border-gray-400 bg-gray-50'
+                                                                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                                                            )}
+                                                        >
+                                                            {picked && (
+                                                                <Check size={15} strokeWidth={2.5}
+                                                                    className="absolute right-3 top-3 z-10 text-gray-900" />
+                                                            )}
+                                                            <Icon
+                                                                size={92}
+                                                                strokeWidth={1.6}
+                                                                aria-hidden="true"
+                                                                style={{ color: 'rgb(var(--sfc-gray-200))' }}
+                                                                className="pointer-events-none absolute -bottom-[18px] -right-[14px]"
+                                                            />
+                                                            {/* The agent itself - no frame around it, the way it
+                                                                appears everywhere else - wearing the tool of this
+                                                                trade. `lite` drops the heavier idle animation:
+                                                                several of these are on screen at once. */}
+                                                            <span className="relative z-10 flex-none h-[56px] w-[56px]">
+                                                                <span className="block origin-top-left scale-[1.556]">
+                                                                    <AgentAvatar mode="idle" lite noScene />
+                                                                </span>
+                                                                <span className={cn(
+                                                                    'absolute -bottom-1.5 -right-1.5 flex h-[27px] w-[27px] items-center justify-center rounded-full border-[1.5px] border-gray-300 bg-white text-gray-900'
+                                                                )}>
+                                                                    <Icon size={15} strokeWidth={2.4} />
+                                                                </span>
+                                                            </span>
+
+                                                            <span className="relative z-10 min-w-0 flex-1">
+                                                                <span className="block text-base font-bold leading-tight text-gray-900">{name}</span>
+                                                                <span className="mt-1.5 block text-xs leading-relaxed text-gray-500">{desc}</span>
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+
+                            {/* Right: a recessed panel - one step darker than the surface it
+                                sits in, on both themes (gray-50 folds BELOW white in dark),
+                                with an inner shadow so it reads as depth rather than as a
+                                second surface. What picking one does, drawn rather than
+                                listed: the pointer opens the hotbar, picks a tile, and the
+                                pick ends up in the rail below the globe - then the same in
+                                reverse. Styles and the shared 12s timeline: globals.css. */}
+                            <div className="w-[36%] min-w-[420px] max-w-[620px] flex-none border-l border-gray-200 bg-gray-50 shadow-inner flex flex-col gap-5 px-6 pt-6 pb-8 max-md:hidden">
+                                {/* Order matters: the window and its rail icons first, the
+                                    panel last, so the panel that opens sits OVER the icons
+                                    the way the real one does. */}
+                                {/* flex-1: the drawing takes the room that is there rather
+                                    than a fixed box - no dead space below it, and no need
+                                    to widen the column at the content side's expense. */}
+                                <div className="vaf-hb-demo flex-1" aria-hidden="true">
+                                    <div className="vaf-hb-window-blur" />
+                                    <div className="vaf-hb-window" />
+                                    <div className="vaf-hb-dot vaf-hb-globe"><Globe size={24} strokeWidth={2.2} /></div>
+                                    <div className="vaf-hb-dot vaf-hb-slot"><Code2 size={24} strokeWidth={2.4} /></div>
+                                    <div className="vaf-hb-dot vaf-hb-plus"><Plus size={20} strokeWidth={2.4} /></div>
+                                    <div className="vaf-hb-popup">
+                                        <div className="vaf-hb-tile"><span className="vaf-hb-pick" /></div>
+                                        <div className="vaf-hb-tile" />
+                                        <div className="vaf-hb-tile" />
+                                        <div className="vaf-hb-tile" />
+                                        <div className="vaf-hb-tile" />
+                                        <div className="vaf-hb-tile" />
+                                    </div>
+                                    <div className="vaf-hb-cursor">
+                                        <span className="vaf-hb-ring" />
+                                        <MousePointer2 size={22} className="fill-current" />
+                                    </div>
+                                </div>
+                                <p className="mx-auto max-w-[380px] flex-none text-center text-xs leading-relaxed text-gray-500">
+                                    {tMain('subAgentPaletteExplain')}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

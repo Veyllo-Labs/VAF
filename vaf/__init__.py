@@ -23,7 +23,7 @@ __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "RemoteRoom", "Room", "RoomError",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
-           "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
+           "account_allows_tool", "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
            "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "joined_rooms", "markers",
            "participant_key", "record_threat", "room_invitation",
@@ -86,6 +86,15 @@ def __getattr__(name):
         # unaffected. See docs/EMBEDDING.md.
         from .core.tool_dispatch import ToolCaller, ToolRequest
         return ToolCaller
+    if name == "account_allows_tool":
+        # The allowlist resolver's read side: would this account be allowed to run
+        # this tool? The funnel asks it before every call; a UI that LISTS tools asks
+        # it to hide what the account may not run, instead of offering it and letting
+        # the refusal arrive after the click. Carries the exemptions with it (no scope
+        # and admins are unrestricted), which is why listing surfaces must not rebuild
+        # the check from the resolver alone. Stdlib-only underneath. See docs/EMBEDDING.md.
+        from .core.tool_dispatch import account_allows_tool
+        return account_allows_tool
     if name == "set_account_allowlist_resolver":
         # Which tools each ACCOUNT may use, answered by YOUR backend. One resolver per
         # process, consulted in the funnel after the hard policy block and BEFORE the

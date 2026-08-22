@@ -11,7 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **You are no longer offered tools your account cannot use.** The per-user tool
+  permission was enforced only when a tool was actually called, so a tool an
+  administrator had disabled still appeared in the `/` suggestions - and the
+  refusal arrived after you picked it. Every tool list the app sends now carries
+  only what that account may run, and it errs on the side of hiding an entry if
+  the permission lookup fails.
+
 ### Added
+- **A hotbar for the sub-agents.** A plus below the globe opens a panel with the
+  specialists the agent can hand work to - each with its own trade symbol - and
+  the ones you pick sit in the rail from then on, one click from any chat. The
+  choice belongs to your account, not to the browser, so a second person signing
+  in on the same machine gets their own rail; and a specialist an administrator
+  has not granted you never appears in the panel at all.
 - **The coder now proves its work before claiming it, and you can watch the
   guardrails fire.** Three deterministic gates joined the coder's loop:
   finishing a task is blocked while changes have not been verified (a green

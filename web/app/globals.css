@@ -1165,3 +1165,169 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .dark .react-flow__panel {
   color: #b0b0b0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sub-agent hotbar: the gesture, drawn.
+
+   A pictogram of the whole interaction on a loop - the pointer opens the
+   hotbar from the plus at the window's edge, picks a tile, the panel closes
+   and the pick now sits in the rail below the globe (the plus moves down to
+   make room); then the same in reverse, and the rail is bare again.
+
+   The frame is the point: the globe and the plus belong to the EDGE OF THE
+   CHAT WINDOW, so the drawing shows that window rather than a bare line -
+   the line read as a divider running through the plus. The panel that opens
+   is deliberately less detailed than the real one and small enough to sit
+   over the icons: it is a gesture, not a screenshot.
+
+   Only transform and opacity are animated (a colour or size animation here
+   would repaint on every frame, forever, in an always-mounted panel). The
+   picked state is a second element fading in over the plain tile for exactly
+   that reason. Timings are one 12s timeline shared by every element, so the
+   stages cannot drift apart; the percentages are noted in the keyframes.
+   ═══════════════════════════════════════════════════════════════════════ */
+.vaf-hb-demo { position: relative; width: 100%; min-height: 380px; }
+
+/* The chat window the rail belongs to. It does not END at the bottom of the
+   drawing - it runs out of frame and loses focus on the way, because the real
+   window does not end there either; the pictogram is a detail of it, not a
+   miniature of the whole app. Two layers do that: the sharp one is masked
+   away downwards, the blurred one is masked IN, so the transition is a real
+   defocus rather than a fade to nothing. Both are static (the blur is
+   rasterised once), so the loop above them still animates only transform and
+   opacity. */
+.vaf-hb-window,
+.vaf-hb-window-blur {
+  position: absolute; left: 0; top: 16px; right: 16px; bottom: 0;
+  border: 1px solid rgb(var(--lin-gray-300)); border-radius: 0 12px 0 0;
+  background: rgb(var(--sfc-white));
+}
+/* Two masks, intersected: out of view downwards AND to the left. Only the
+   right edge is a real edge here - that is the one the rail lives on. */
+.vaf-hb-window {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 72%),
+                      linear-gradient(to right, transparent 0%, #000 22%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 72%),
+              linear-gradient(to right, transparent 0%, #000 22%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+.vaf-hb-window-blur {
+  filter: blur(3px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 34%, #000 62%, transparent 100%),
+                      linear-gradient(to right, transparent 0%, #000 22%);
+  mask-image: linear-gradient(to bottom, transparent 34%, #000 62%, transparent 100%),
+              linear-gradient(to right, transparent 0%, #000 22%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+.vaf-hb-dot {
+  position: absolute; right: 30px; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  color: rgb(var(--txt-gray-400));
+}
+.vaf-hb-globe { top: 44px; }
+.vaf-hb-slot {
+  top: 84px; opacity: 0;
+  animation: vafHbSlot 12s linear infinite;
+}
+.vaf-hb-plus {
+  /* NOT txt-gray-300: the text ramp only folds 400..900, so that variable does
+     not exist at all - the colour silently fell back to the inherited one.
+     One step quieter than the rail's tone is opacity, never a lighter ink. */
+  top: 84px; opacity: .62;
+  animation: vafHbPlus 12s linear infinite;
+}
+
+/* the panel the plus opens: over the window, over the icons, and simplified */
+.vaf-hb-popup {
+  position: absolute; right: 40px; top: 62px; width: 310px; height: 130px;
+  border: 1px solid rgb(var(--lin-gray-300)); border-radius: 10px;
+  background: rgb(var(--sfc-white));
+  box-shadow: 0 8px 20px -6px rgb(0 0 0 / .25);
+  transform-origin: 92% 22%; opacity: 0;
+  animation: vafHbPopup 12s linear infinite;
+  padding: 12px; display: grid; gap: 10px;
+  grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr);
+}
+.vaf-hb-tile {
+  position: relative; border-radius: 7px;
+  background: rgb(var(--sfc-gray-100));
+}
+.vaf-hb-pick {
+  position: absolute; inset: -1.5px; border-radius: 8px;
+  border: 1.5px solid rgb(var(--txt-gray-900));
+  background: rgb(var(--sfc-gray-200));
+  opacity: 0; animation: vafHbPick 12s linear infinite;
+}
+.vaf-hb-cursor {
+  position: absolute; left: 100%; top: 0; width: 22px; height: 22px;
+  color: rgb(var(--txt-gray-700));
+  animation: vafHbCursor 12s ease-in-out infinite;
+}
+.vaf-hb-ring {
+  position: absolute; left: -10px; top: -10px; width: 34px; height: 34px;
+  border-radius: 50%; border: 1.5px solid rgb(var(--txt-gray-900));
+  opacity: 0; animation: vafHbClick 12s linear infinite;
+}
+
+/*  1.0s reaches the plus 8.33% | 1.2s click 10% | 1.7s open 14.17%
+    2.7s at a tile 22.5% | 2.9s picked 24.17% | 3.4s closed 28.33%
+    3.9s in the rail 32.5% | 6.5s back at the plus 54.17% | 7.2s open 60%
+    8.4s dropped 70% | 8.9s closed 74.17% | 9.4s bare 78.33% | loop 12s */
+@keyframes vafHbCursor {
+  0%,     3%      { transform: translate(-290px, 250px); }
+  8.33%,  14.17%  { transform: translate(-48px, 94px); }
+  22.5%,  28.33%  { transform: translate(-298px, 94px); }
+  32.5%,  47%     { transform: translate(-290px, 250px); }
+  54.17%, 60%     { transform: translate(-48px, 134px); }
+  68.33%, 74.17%  { transform: translate(-298px, 94px); }
+  78.33%, 100%    { transform: translate(-290px, 250px); }
+}
+@keyframes vafHbClick {
+  0%, 9.4%  { opacity: 0; transform: scale(.4); }
+  10%       { opacity: .9; transform: scale(.5); }
+  11.6%     { opacity: 0; transform: scale(1); }
+  23.5%     { opacity: 0; transform: scale(.4); }
+  24.17%    { opacity: .9; transform: scale(.5); }
+  25.8%     { opacity: 0; transform: scale(1); }
+  55.2%     { opacity: 0; transform: scale(.4); }
+  55.83%    { opacity: .9; transform: scale(.5); }
+  57.4%     { opacity: 0; transform: scale(1); }
+  69.3%     { opacity: 0; transform: scale(.4); }
+  70%       { opacity: .9; transform: scale(.5); }
+  71.6%     { opacity: 0; transform: scale(1); }
+  72%, 100% { opacity: 0; transform: scale(1); }
+}
+@keyframes vafHbPopup {
+  0%,     10%     { opacity: 0; transform: scale(.9); }
+  14.17%, 24.17%  { opacity: 1; transform: scale(1); }
+  28.33%, 55.83%  { opacity: 0; transform: scale(.9); }
+  60%,    70%     { opacity: 1; transform: scale(1); }
+  74.17%, 100%    { opacity: 0; transform: scale(.9); }
+}
+@keyframes vafHbPick {
+  0%,     24%    { opacity: 0; }
+  24.17%, 69.9%  { opacity: 1; }
+  70%,    100%   { opacity: 0; }
+}
+@keyframes vafHbSlot {
+  0%,     28.33%  { opacity: 0; transform: scale(.4); }
+  32.5%,  74.17%  { opacity: 1; transform: scale(1); }
+  78.33%, 100%    { opacity: 0; transform: scale(.4); }
+}
+@keyframes vafHbPlus {
+  0%,     28.33%  { transform: translateY(0); }
+  32.5%,  74.17%  { transform: translateY(40px); }
+  78.33%, 100%    { transform: translateY(0); }
+}
+
+/* Anyone who asked their system not to animate gets the end state, still. */
+@media (prefers-reduced-motion: reduce) {
+  .vaf-hb-cursor, .vaf-hb-ring, .vaf-hb-popup,
+  .vaf-hb-pick, .vaf-hb-slot, .vaf-hb-plus { animation: none; }
+  .vaf-hb-popup { opacity: 1; transform: scale(1); }
+  .vaf-hb-pick { opacity: 1; }
+  .vaf-hb-slot { opacity: 1; transform: scale(1); }
+  .vaf-hb-cursor { transform: translate(-298px, 94px); }
+}

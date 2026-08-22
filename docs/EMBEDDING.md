@@ -1142,6 +1142,25 @@ The contract, each choice against its failure mode:
 - **Consulted per call, not cached.** Revocation latency is your resolver's own
   business - cache inside it if lookups are expensive.
 
+**Asking the same question without making a call: `account_allows_tool`.** A
+surface that LISTS tools - a command palette, a picker, a row of shortcuts -
+has to know the answer before the user clicks, or it offers a tool the account
+cannot run and the refusal arrives too late to mean anything:
+
+```python
+from vaf import account_allows_tool
+
+visible = [name for name in registry
+           if account_allows_tool(name, user_scope_id, user_role)]
+```
+
+Use it instead of consulting your own resolver directly: the exemptions are
+part of the answer. A lister that reproduced the lookup but forgot that a
+scopeless caller and an admin are unrestricted would quietly strip an admin's
+own tools. It raises whatever your resolver raises, so the caller decides what
+its fail-closed looks like - the funnel refuses the call, a lister can drop the
+entry.
+
 Its sibling, `set_confirmation_bypass_resolver`, answers the opposite kind of
 question: does this account hold the admin-granted hands-off switch that skips
 the tool-confirmation DIALOG? `resolver(user_scope_id) -> bool`; unregistered

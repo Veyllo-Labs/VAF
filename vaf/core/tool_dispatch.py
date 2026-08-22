@@ -680,6 +680,33 @@ def resolve_account_allowlist(user_scope_id: str):
     return frozenset(str(t) for t in answer if str(t).strip())
 
 
+def account_allows_tool(tool_name: str, user_scope_id: str | None,
+                        user_role: str | None = None) -> bool:
+    """Would the account allowlist let this caller run this tool?
+
+    The same question the dispatcher asks before every call, asked WITHOUT making
+    a call - so a surface that LISTS tools can hide what the account may not run,
+    instead of offering it and letting the refusal arrive after the click.
+
+    It exists because the answer is not just the resolver: the exemptions are part
+    of it. A caller with no scope is the machine owner or an in-process lane, and
+    an admin is never restricted; a lister that reproduced the resolver but forgot
+    those two would quietly strip an admin's tools. That is a security decision, so
+    it gets one home rather than a copy per surface - ``_account_allowlist_blocks``
+    below is now a caller of this, not a second implementation.
+
+    Raises whatever the registered resolver raises: a guard that crashed must not
+    silently become no guard, and each caller decides what its own fail-closed
+    looks like (the dispatcher refuses the call; a lister may drop the entry).
+    """
+    if not user_scope_id:
+        return True
+    if policy_admin_flag(user_role, user_scope_id):
+        return True
+    allowed = resolve_account_allowlist(user_scope_id)
+    return allowed is None or tool_name in allowed
+
+
 # The WORKFLOW twin of the tool allowlist: which saved workflow TEMPLATES may this
 # account start. Same registration shape, same contract, separate slot - a workflow id
 # is not a tool name, and mixing the two answer spaces in one resolver would make every
@@ -965,17 +992,12 @@ class ToolCaller:
         quietly become no guard - the fail-open trade for an unreachable backend belongs
         INSIDE the resolver that knows its backend, and VAF's own resolver makes it there.
         """
-        if not self.user_scope_id:
-            return ""
-        if policy_admin_flag(self.user_role, self.user_scope_id):
-            return ""
         try:
-            allowed = resolve_account_allowlist(self.user_scope_id)
+            if account_allows_tool(name, self.user_scope_id, self.user_role):
+                return ""
         except Exception:
             return (f"The account allowlist resolver failed, so '{name}' is refused. "
                     f"A broken guard must not quietly become no guard.")
-        if allowed is None or name in allowed:
-            return ""
         return (f"The tool '{name}' is not enabled for your account. "
                 f"An administrator can enable it in user management.")
 

@@ -150,11 +150,15 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
             "quiet_hours_start": None,
             "quiet_hours_end": None,
             "last_seen_announcement_version": None,
+            # Sub-agent kinds this person pinned to their rail (the hotbar). Per USER,
+            # which is the whole point: it used to live in browser storage, so a second
+            # person signing in on the same machine inherited the first one's rail.
+            "hotbar_agents": [],
             "change_log": [],
         }
         try:
             data = json.loads(self.user_identity_file.read_text(encoding="utf-8"))
-            for key in ("preferences", "dos", "donts"):
+            for key in ("preferences", "dos", "donts", "hotbar_agents"):
                 if key not in data or not isinstance(data[key], list):
                     data[key] = defaults[key]
                 else:

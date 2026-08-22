@@ -16,7 +16,9 @@ set_account_allowlist_resolver(None) itself first: an in-repo full-suite run
 may have the product's real resolver registered process-wide. The autouse
 conftest fixture restores whatever was registered before each test.
 """
-from vaf import ToolCaller, set_account_allowlist_resolver
+import pytest
+
+from vaf import ToolCaller, account_allows_tool, set_account_allowlist_resolver
 
 # Synthetic tenant scope (never a real UUID): a scoped, non-admin caller is
 # the only identity the allowlist constrains.
@@ -191,3 +193,57 @@ def test_a_generator_answer_is_accepted():
     set_account_allowlist_resolver(lambda scope: (n for n in ("read_note",)))
 
     assert _tenant().execute("read_note", {}) == "NOTE: ok"
+
+
+
+# ── the read side: asking without calling ────────────────────────────────────
+#
+# A surface that LISTS tools has to know the answer before the user clicks. The
+# promise is that it gets the SAME answer the funnel uses, exemptions and all -
+# an embedder that rebuilt the check from its own resolver would strip an
+# admin's own tools, and that mistake stays invisible until an admin complains.
+
+def test_the_read_side_answers_for_a_restricted_account():
+    set_account_allowlist_resolver(lambda scope: {"read_note"})
+
+    assert account_allows_tool("read_note", SCOPE, "user") is True
+    assert account_allows_tool("write_note", SCOPE, "user") is False
+
+
+def test_the_read_side_is_unrestricted_without_a_resolver():
+    set_account_allowlist_resolver(None)
+
+    assert account_allows_tool("write_note", SCOPE, "user") is True
+
+
+def test_the_read_side_carries_the_exemptions():
+    """The reason this is a primitive and not three lines in every UI."""
+    set_account_allowlist_resolver(lambda scope: frozenset())
+
+    assert account_allows_tool("read_note", None, None) is True
+    assert account_allows_tool("read_note", SCOPE, "admin") is True
+    assert account_allows_tool("read_note", SCOPE, "user") is False
+
+
+def test_the_read_side_raises_what_the_resolver_raises():
+    """Each caller owns its fail-closed: the funnel refuses the call, a lister
+    drops the entry. Swallowing it here would make both fail OPEN."""
+    def boom(scope):
+        raise RuntimeError("backend down")
+    set_account_allowlist_resolver(boom)
+
+    with pytest.raises(RuntimeError):
+        account_allows_tool("read_note", SCOPE, "user")
+
+
+def test_the_read_side_and_the_funnel_agree():
+    """Same account, same tool, same verdict - stated as a contract because the
+    two were separate implementations of one rule until they were joined."""
+    set_account_allowlist_resolver(lambda scope: {"read_note"})
+
+    assert account_allows_tool("read_note", SCOPE, "user") is True
+    assert _tenant().execute("read_note", {}) == "NOTE: ok"
+
+    set_account_allowlist_resolver(lambda scope: frozenset())
+    assert account_allows_tool("read_note", SCOPE, "user") is False
+    assert "Security Error" in _tenant().execute("read_note", {})

@@ -31,6 +31,7 @@ EXPORTED = [
     "UploadVerdict",
     "VoiceTurnEngine",
     "__version__",
+    "account_allows_tool",
     "derive_peer_id",
     "describe_room_entry",
     "extract_pdf_markdown",

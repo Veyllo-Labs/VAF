@@ -1092,6 +1092,14 @@ async def _broadcast_tools_update(manager) -> None:
                         is_custom = name in all_custom
                         if is_custom and not _is_admin and name not in visible_custom:
                             continue
+                        # Same account filter as the get_tools handler - a refreshed
+                        # list must not quietly hand back what the allowlist removed.
+                        try:
+                            from vaf.core.tool_dispatch import account_allows_tool
+                            if not account_allows_tool(name, _scope, _role):
+                                continue
+                        except Exception:
+                            continue          # fail closed, like the funnel
                         entry = {
                             "name":        name,
                             "description": getattr(tool, "description", ""),
@@ -4039,6 +4047,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             from vaf.core.tool_contract import tool_category
             agent = manager.agent_instance
             if agent and hasattr(agent, "tools"):
+                # The first list a client ever sees. It had NO filter at all, so a
+                # restricted account was offered everything until the next refresh
+                # replaced it - the shortest-lived leak is still a leak.
+                _oc_scope = manager.get_connection_user(websocket)
+                _oc_role = manager.get_connection_user_role(websocket)
+
+                def _oc_allows(_name: str) -> bool:
+                    try:
+                        from vaf.core.tool_dispatch import account_allows_tool
+                        return account_allows_tool(_name, _oc_scope, _oc_role)
+                    except Exception:
+                        return False
                 tools_list = [
                     {
                         "name": name,
@@ -4046,6 +4066,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "category": tool_category(name, tool)
                     }
                     for name, tool in agent.tools.items()
+                    if _oc_allows(name)
                 ]
             elif manager.tools_cache:
                 tools_list = manager.tools_cache
@@ -6034,6 +6055,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             )
                         )
 
+                        def _gt_account_allows(_name: str) -> bool:
+                            """The account allowlist, as a LISTING question.
+
+                            Fails CLOSED per entry, the same polarity the funnel uses: a
+                            resolver that crashed must not turn a restricted account into
+                            an unrestricted list. One tool vanishing from a menu is a far
+                            smaller harm than one that should not be there at all."""
+                            try:
+                                from vaf.core.tool_dispatch import account_allows_tool
+                                return account_allows_tool(_name, _gt_scope, _gt_role)
+                            except Exception:
+                                return False
+
                         # Admins pass None so get_visible_tool_names_for_user returns ALL
                         _gt_filter_scope = None if _gt_is_admin else _gt_scope
 
@@ -6048,6 +6082,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 is_custom = name in all_custom_names
                                 # Non-admins: skip custom tools they can't see
                                 if is_custom and not _gt_is_admin and name not in visible_custom:
+                                    continue
+                                # ...and skip what the admin took away from this ACCOUNT.
+                                # This list feeds the '/' suggestions and the sub-agent
+                                # hotbar; without the filter a user whose admin disabled
+                                # coding_agent was offered it and only learned at dispatch
+                                # time that it was refused. The exemptions (no scope,
+                                # admin) live inside account_allows_tool, so this cannot
+                                # drift from the funnel's own answer.
+                                if not _gt_account_allows(name):
                                     continue
                                 entry = {
                                     "name":        name,

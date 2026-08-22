@@ -247,7 +247,8 @@
     "subAgentLibrarianName": "Bibliothekar",
     "subAgentLibrarianDesc": "Kennt sich in deinen Dateien aus: sucht, sortiert, räumt auf und sagt dir, was wo liegt.",
     "subAgentBrowserName": "Browser",
-    "subAgentBrowserDesc": "Steuert einen echten Browser: klickt durch Seiten, füllt Formulare aus und kommt an Logins vorbei."
+    "subAgentBrowserDesc": "Steuert einen echten Browser: klickt durch Seiten, füllt Formulare aus und kommt an Logins vorbei.",
+    "subAgentContextChipTitle": "Du hast das {agent}-Fenster offen - deine nächste Nachricht wird darauf bezogen, und der Agent weiß, dass er die Arbeit an {agent} abgeben kann"
   },
   "nav": {
     "settings": "Einstellungen",

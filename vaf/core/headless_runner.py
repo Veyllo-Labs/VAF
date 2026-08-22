@@ -1686,6 +1686,53 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # A sub-agent window is open. Same lane as the browser block above,
+                    # for the specialists that have no server-side session to read: the
+                    # client says which window it has open, web_server scopes it to that
+                    # session and validates the kind, and it is injected for THIS turn
+                    # and cleared - so closing the window needs no event of its own.
+                    #
+                    # State AND affordance, the lesson the browser block records: naming
+                    # where the person is, without saying what can be done about it, was
+                    # measured to change nothing about the model's behaviour.
+                    try:
+                        session_for_sw = session_mgr.load(task.session_id)
+                        sw_kind = ((getattr(session_for_sw, "runtime_state", None) or {})
+                                   .get("subagent_window") or "").strip()
+                        _SW = {
+                            "coder": ("the Coder", "coding_agent",
+                                      "writing and changing code in a project, running its "
+                                      "tests and checking the page it built"),
+                            "research": ("the Researcher", "research_agent",
+                                         "digging through many sources and coming back with a "
+                                         "written, sourced answer"),
+                            "document": ("the Document Writer", "document_agent",
+                                         "drafting and editing long documents, reports and letters"),
+                            "librarian": ("the Librarian", "librarian_agent",
+                                          "finding its way around the user's files: searching, "
+                                          "sorting, tidying and reporting what is where"),
+                        }
+                        if sw_kind in _SW:
+                            _label, _tool, _does = _SW[sw_kind]
+                            sw_block = (
+                                f"--- USER HAS {_label.upper()}'S WINDOW OPEN ---\n"
+                                f"They opened it themselves, so their message is most likely "
+                                f"about that work even when they do not name it.\n"
+                                f"{_label} handles {_does}.\n"
+                                f"To do that work, call the {_tool} tool - its run appears in "
+                                f"the window they are already looking at, so they watch it "
+                                f"happen rather than waiting on a silent reply.\n"
+                                f"An open window does NOT mean a run is going. If one already "
+                                f"is, you are told separately - then keep chatting and do not "
+                                f"start a second one.\n"
+                                f"---\n\n"
+                            )
+                            effective_input = sw_block + effective_input
+                            session_for_sw.runtime_state.pop("subagent_window", None)
+                            session_mgr.save(session_for_sw, sync_state=False)
+                    except Exception:
+                        pass
+
                     # Image viewer: while the Image Viewer is open, inject the open image's vision
                     # description into THIS turn only (so the agent can reason about the image the user
                     # is looking at). Stored in runtime_state by web_server.py and cleared here after use

@@ -177,6 +177,18 @@ Key rules:
 - `speaker_confirm_reply`: answer to a speaker-confirmation card. Payload: `{ confirmId, answer: "yes" | "no", name? }` (name only meaningful with `"no"`: stores a named third-party voice profile). The scope is taken from the CONNECTION identity, never from the client. Server responds with `speaker_confirm_result` (`ok`, `outcome`, `ack`, `confirmId`, optional `error`).
 - **Speech:** `process_audio` (`{ audio: base64, format?: "wav" }`; the frontend records via MediaRecorder, converts to 16 kHz mono WAV client-side and sets `format: "wav"`; if conversion fails it sends the raw WebM/OGG recording without a `format` field). The backend transcribes via the configured STT lane (cloud provider, Docker Whisper, or local faster-whisper). `speak` (`{ text }`) requests TTS synthesis; `stop_speech` (no payload) stops playback state.
 
+- **Sub-agent window context:** a `chat` message carries `subAgentWindow`
+  (`"coder" | "research" | "document" | "librarian"`) while that specialist's
+  window is open in this tab. The browser needs no such field - its context is
+  read SERVER-side from the lease at send time - but these windows exist only in
+  the tab, so the client states the fact. The server validates it against the
+  known kinds before storing it in `runtime_state["subagent_window"]` (it ends up
+  inside a prompt, so an unchecked client string would be an injection lane) and
+  DELETES it when the field is absent, which is the entire close mechanism: the
+  client stops sending, the block stops appearing, no close event to miss.
+  `headless_runner` injects it into that one turn and pops it. Guard:
+  `tests/test_subagent_window_context.py`.
+
 - **Interactive browser:** `browser_interactive_start` (`{ sessionId, session? }`)
   asks for the interactive lease on the sandbox browser (ownership-gated like every
   session command; identity from the CONNECTION; a repeat from the same window refreshes

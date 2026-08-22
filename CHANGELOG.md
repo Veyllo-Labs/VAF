@@ -20,6 +20,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the permission lookup fails.
 
 ### Added
+- **Your specialists now have a window you can just open.** Clicking a
+  sub-agent in the rail opens its window whether or not it is running, the way
+  the globe opens the browser, and clicking it again slides it away. While a
+  window is open the message box shows which specialist you are in - and the
+  agent is told the same thing, so "fix the failing test" typed with the Coder
+  open is understood as being about that work, and the agent knows it can hand
+  it straight to the Coder instead of answering into the void. Each specialist
+  wears its own colour there - the one its window already uses, so the
+  librarian is orange, the document writer teal, the researcher violet and the
+  browser stays blue; the coder keeps the black and white of a code editor.
 - **A hotbar for the sub-agents.** A plus below the globe opens a panel with the
   specialists the agent can hand work to - each with its own trade symbol - and
   the ones you pick sit in the rail from then on, one click from any chat. The

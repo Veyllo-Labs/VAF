@@ -557,6 +557,20 @@ const SUBAGENT_TRADE_ICON: Record<SubAgentKind, LucideIcon> = {
     librarian: BookOpen,
     browser: Globe,
 };
+// Each specialist's accent, taken from the view it already owns in SubAgentWindow
+// rather than invented here: the librarian's panel is orange, the document paper
+// teal, the research report violet, the browser sky. The coder deliberately has
+// none - its window is a code editor, black and white like the tools it imitates,
+// and giving it a hue would be the one that means nothing. These are accent
+// families, so the palette re-points them under .dark by itself; a `dark:` here
+// would replace the design system's colour with an ad-hoc one.
+const SUBAGENT_ACCENT: Record<SubAgentKind, { chip: string; icon: string }> = {
+    coder:     { chip: "text-gray-700 border-gray-300 bg-gray-100", icon: "text-gray-700" },
+    research:  { chip: "text-violet-600 border-violet-200 bg-violet-50/60", icon: "text-violet-600" },
+    document:  { chip: "text-teal-700 border-teal-200 bg-teal-50/60", icon: "text-teal-700" },
+    librarian: { chip: "text-orange-600 border-orange-200 bg-orange-50/60", icon: "text-orange-600" },
+    browser:   { chip: "text-sky-600 border-sky-200 bg-sky-50/60", icon: "text-sky-600" },
+};
 const SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map(([, kind]) => kind);
 // The browser is NOT offered here: it already has a permanent seat in the rail
 // (the globe), so listing it would let someone "add" a thing that is never
@@ -6748,6 +6762,13 @@ function VAFDashboardContent() {
                     mimeType: img.url.split(';')[0].replace('data:', '') || 'image/jpeg',
                 }))
             } : {}),
+            // Which specialist's window is open while this was typed. The browser's
+            // equivalent is captured SERVER-side from its lease and needs nothing
+            // from here; these windows have no server-side existence, so the fact
+            // has to travel with the turn - the shape the code and image viewers
+            // already use. Sent per turn while the window stays open, so closing it
+            // simply stops sending and the block disappears on its own.
+            ...(subAgentWindowKind ? { subAgentWindow: subAgentWindowKind } : {}),
         }));
         setAttachedImages([]);
         // One-shot marking: the region vision ran for this question — clear it so unrelated
@@ -7439,6 +7460,17 @@ function VAFDashboardContent() {
     // button, and no streamed state event restores it - so a hijacked coder would stay
     // hidden until the agent called the next sub-agent tool.
     const browserWindowBusy = isSubAgentRunning && subAgentState.agentKind !== 'browser';
+    // Which specialist's window is open right now (browser excluded - it has its
+    // own chip and its own richer context). One derivation, used by the chip in
+    // the composer AND by the field the turn carries, so what the user is told
+    // and what the model is told can never disagree.
+    const subAgentWindowKind: SubAgentKind | null =
+        subAgentState.isOpen && subAgentState.agentKind && subAgentState.agentKind !== 'browser'
+            ? subAgentState.agentKind
+            : null;
+    const subAgentWindowLabel = subAgentWindowKind
+        ? (tMain(`subAgent${subAgentWindowKind.charAt(0).toUpperCase()}${subAgentWindowKind.slice(1)}Name` as never) as string)
+        : '';
     // Sub-agent palette: the specialists the agent can hand work to, one plus
     // below the globe. Deliberately a full overlay rather than a dropdown - the
     // tiles carry an avatar and an explanation, and the same size as the memory
@@ -7506,6 +7538,26 @@ function VAFDashboardContent() {
             stopBrowserInteractiveIfAny();
         }, 340);
     };
+    // A hotbar icon opens ITS sub-agent's window, running or not - the same move
+    // the globe makes for the browser, minus the lease: these windows have no
+    // server-side session to claim, so opening one is purely a view change.
+    // Idle is a legitimate state here: the window then shows that kind's empty
+    // shell, which is what "show me the coder" means when nothing has run yet.
+    const toggleSubAgentWindow = useCallback((kind: SubAgentKind) => {
+        setSubAgentState(prev => {
+            if (prev.isOpen && prev.agentKind === kind) return prev;   // closed below
+            return { ...prev, agentKind: kind };
+        });
+        if (subAgentStateRef.current.isOpen && subAgentStateRef.current.agentKind === kind) {
+            // Second click on the icon that is already showing: close it, and let
+            // the dock's slide-out play - closeSubAgentWindow only flips isOpen,
+            // the animation lives in the dock and the window's exit hold.
+            closeSubAgentWindow(true);
+            return;
+        }
+        openSubAgentWindow(true);
+    }, []);
+
     const toggleBrowserWindow = () => {
         if (browserWindowBusy) return;
         if (browserWindowOpen) {
@@ -8053,18 +8105,20 @@ function VAFDashboardContent() {
                                 <button
                                     key={kind}
                                     type="button"
-                                    onClick={() => {
-                                        const mention = `/${SUBAGENT_TOOL_BY_KIND[kind]} `;
-                                        setInput(prev => (prev.trim() ? `${prev.replace(/\s*$/, '')} ${mention}` : mention));
-                                        inputRef.current?.focus();
-                                    }}
+                                    onClick={() => toggleSubAgentWindow(kind)}
+                                    aria-pressed={subAgentState.isOpen && subAgentState.agentKind === kind}
                                     aria-label={label}
                                     title={label}
                                     style={{ top: RAIL_STEP_TOP + i * RAIL_STEP }}
                                     className={cn(
                                         "absolute right-[19px] z-20 max-md:hidden h-7 flex items-center",
                                         "transition-[color,transform] duration-150",
-                                        "text-gray-400 hover:text-gray-700 hover:scale-110"
+                                        // Open wears the hover state permanently - the globe's own
+                                        // rule, so the rail speaks one language: whichever window is
+                                        // showing is the bright mark, the rest stay quiet.
+                                        subAgentState.isOpen && subAgentState.agentKind === kind
+                                            ? "text-gray-900 scale-110"
+                                            : "text-gray-400 hover:text-gray-700 hover:scale-110"
                                     )}
                                 >
                                     <Icon size={20} strokeWidth={2} />
@@ -9232,8 +9286,10 @@ function VAFDashboardContent() {
                                                 // on this one: the row is justify-end, so the auto margin is
                                                 // what splits "left group" from the right-aligned rest. With the
                                                 // browser chip present it carries it instead, or this chip would
-                                                // push the browser chip over to the token gauge.
-                                                !subAgentState.interactive?.active && "mr-auto"
+                                                // push the browser chip over to the token gauge. The sub-agent
+                                                // chip is the same case: it joins the left group, so whichever
+                                                // of the two is showing takes the margin off this one.
+                                                !subAgentState.interactive?.active && !subAgentWindowKind && "mr-auto"
                                             )}
                                             title={workspaceInfo.path}
                                             onClick={() => { setWorkspaceNavHist([]); setIsWorkspaceModalOpen(true); refreshWorkspace(); }}
@@ -9253,6 +9309,26 @@ function VAFDashboardContent() {
                                         >
                                             <Globe size={10} className="shrink-0" />
                                             <span>Browser</span>
+                                        </span>
+                                    )}
+                                    {/* Sub-agent chip: the same idea as the browser chip beside it -
+                                        you have this specialist's window open, so your next message
+                                        probably means it. Status only, not a button: the window it
+                                        names is already there. The browser keeps its own chip because
+                                        its context is richer (page, selection, screenshot). */}
+                                    {subAgentWindowKind && (
+                                        <span
+                                            className={cn(
+                                                "mr-auto inline-flex items-center gap-1 text-[10px] font-mono opacity-90 px-2 py-0.5 rounded border leading-none select-none",
+                                                SUBAGENT_ACCENT[subAgentWindowKind].chip
+                                            )}
+                                            title={tMain('subAgentContextChipTitle', { agent: subAgentWindowLabel })}
+                                        >
+                                            {(() => {
+                                                const Icon = SUBAGENT_TRADE_ICON[subAgentWindowKind];
+                                                return <Icon size={10} className="shrink-0" />;
+                                            })()}
+                                            <span>{subAgentWindowLabel}</span>
                                         </span>
                                     )}
                                     {(ragResults?.sources?.length > 0 || crossChatHints.length > 0) && (
@@ -10723,7 +10799,8 @@ function VAFDashboardContent() {
                                                                     <AgentAvatar mode="idle" lite noScene />
                                                                 </span>
                                                                 <span className={cn(
-                                                                    'absolute -bottom-1.5 -right-1.5 flex h-[27px] w-[27px] items-center justify-center rounded-full border-[1.5px] border-gray-300 bg-white text-gray-900'
+                                                                    'absolute -bottom-1.5 -right-1.5 flex h-[27px] w-[27px] items-center justify-center rounded-full border-[1.5px] border-gray-300 bg-white',
+                                                                    SUBAGENT_ACCENT[kind].icon
                                                                 )}>
                                                                     <Icon size={15} strokeWidth={2.4} />
                                                                 </span>

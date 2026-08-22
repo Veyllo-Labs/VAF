@@ -247,7 +247,8 @@
     "subAgentLibrarianName": "Librarian",
     "subAgentLibrarianDesc": "Finds its way around your files: searches, sorts, tidies and reports what is where.",
     "subAgentBrowserName": "Browser",
-    "subAgentBrowserDesc": "Drives a real browser: clicks through pages, fills forms and gets past logins."
+    "subAgentBrowserDesc": "Drives a real browser: clicks through pages, fills forms and gets past logins.",
+    "subAgentContextChipTitle": "You have the {agent} window open - your next message is read as being about it, and the agent knows it can hand the work to {agent}"
   },
   "nav": {
     "settings": "Settings",

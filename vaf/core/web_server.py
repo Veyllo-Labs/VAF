@@ -5465,6 +5465,34 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
+                        # Which sub-agent window this chat has open, if any. The browser's
+                        # equivalent below is read from its LEASE and needs nothing from the
+                        # client; these windows exist only in the tab, so the client states
+                        # the fact and this scopes it to the message's own session (already
+                        # ownership-checked on this path). Validated against the known kinds
+                        # rather than stored raw: it ends up in a prompt block, and an
+                        # unchecked client string in a prompt is an injection lane.
+                        _saw_kind = cmd.get("subAgentWindow")
+                        _known_kinds = ("coder", "research", "document", "librarian")
+                        try:
+                            loaded = session_mgr.load(session_id)
+                        except FileNotFoundError:
+                            loaded = None
+                        except Exception:
+                            loaded = None
+                        if loaded is not None:
+                            if not getattr(loaded, "runtime_state", None):
+                                loaded.runtime_state = {}
+                            if isinstance(_saw_kind, str) and _saw_kind in _known_kinds:
+                                if loaded.runtime_state.get("subagent_window") != _saw_kind:
+                                    loaded.runtime_state["subagent_window"] = _saw_kind
+                                    session_mgr.save(loaded, sync_state=False)
+                            elif "subagent_window" in loaded.runtime_state:
+                                # The delete branch IS the feature: close the window and the
+                                # block stops appearing, without any close event of its own.
+                                del loaded.runtime_state["subagent_window"]
+                                session_mgr.save(loaded, sync_state=False)
+
                         # Interactive browser context: while THIS chat's window drives the
                         # sandbox browser, the current page rides along with the message -
                         # URL + selected text into runtime_state (the code-viewer pattern,

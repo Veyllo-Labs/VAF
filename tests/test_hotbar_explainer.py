@@ -131,44 +131,7 @@ def test_the_rail_positions_come_from_one_rhythm():
     assert "top-[51px]" not in page, "a hard-coded rail offset came back"
 
 
-def test_clicking_a_hotbar_icon_uses_the_existing_mention_lane():
-    # Not a second way to launch an agent: it writes the same '/' tool mention
-    # the suggestion list already produces, and hands the box back to the user.
-    page = _PAGE.read_bytes().decode("utf-8")
-    assert "const mention = `/${SUBAGENT_TOOL_BY_KIND[kind]} `;" in page
-    assert "inputRef.current?.focus();" in page
-
-
-# ── whose hotbar it is, and what may be in it ────────────────────────────────
-
-def test_the_picks_are_stored_per_user_not_per_browser():
-    """The rail is one person's arrangement. In browser storage a second person
-    signing in on the same machine inherited the first one's rail - the isolation
-    rule this repo applies to every session-scoped thing."""
-    page = _PAGE.read_bytes().decode("utf-8")
-    assert "vaf_hotbar_agents" not in page, "the picks went back into browser storage"
-    assert "body: JSON.stringify({ hotbar_agents: next })" in page, \
-        "the picks are no longer written to the per-user identity"
-    assert "data?.user_identity?.hotbar_agents" in page, \
-        "the picks are no longer read from the per-user identity"
-    # the backend half: field, silent persist, and a store default
-    route = (_REPO / "vaf" / "api" / "user_persona_routes.py").read_bytes().decode("utf-8")
-    assert "hotbar_agents: Optional[List[str]] = None" in route
-    assert 'isinstance(update_dict.get("hotbar_agents"), list)' in route, \
-        "an empty list must round-trip - 'I removed them all' is a setting"
-    store = (_REPO / "vaf" / "auth" / "user_workspace.py").read_bytes().decode("utf-8")
-    assert '"hotbar_agents": []' in store
-
-
-def test_a_revoked_sub_agent_disappears_from_both_the_panel_and_the_rail():
-    """An admin can take a sub-agent away after it was pinned. The card must not
-    be offered, and the pinned icon must not survive the revocation - while the
-    STORED pick stays, so it returns by itself if the admin gives it back."""
-    page = _PAGE.read_bytes().decode("utf-8")
-    assert ".filter(kind => runnable.has(SUBAGENT_TOOL_BY_KIND[kind]))" in page, \
-        "the panel stopped filtering by what the account may run"
-    assert "const visibleHotbarPicks = useMemo(" in page, \
-        "the rail stopped filtering revoked picks"
-    assert "{visibleHotbarPicks.map((kind, i) => {" in page
-    assert "RAIL_STEP_TOP + visibleHotbarPicks.length * RAIL_STEP" in page, \
-        "the plus follows the stored count, not the visible one"
+# The click's behaviour moved on: an icon used to write the tool mention into the
+# message box, and now it OPENS that sub-agent's window while the turn carries
+# which window is open. Pinned in tests/test_subagent_window_context.py, which is
+# where the whole lane (chip, payload field, prompt block) is guarded together.

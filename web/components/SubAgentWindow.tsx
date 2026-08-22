@@ -4,7 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, FolderPlus, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -96,6 +96,15 @@ export type BrowserViewState = {
 };
 
 export type SubAgentWindowProps = {
+    /** Chat session whose workspace the idle librarian may browse. */
+    sessionId?: string | null;
+    /** Reports what the person is doing INSIDE the window (e.g. the folder an
+     *  idle window shows), so the chat turn can carry it to the agent the way
+     *  the browser carries its page. null = nothing notable / view left. */
+    onIdleContext?: (detail: string | null) => void;
+    /** Opens a workspace file through the app's one file-type wheel (image /
+     *  html / code / office each land in their viewer). Absolute path + name. */
+    onOpenWorkspaceFile?: (absPath: string, name: string) => void;
     isOpen: boolean;
     onClose: () => void;
     canClose?: boolean;
@@ -543,6 +552,9 @@ function DiffLines({ diff }: { diff: string }) {
 export default function SubAgentWindow({
     isOpen,
     onClose,
+    sessionId = null,
+    onIdleContext,
+    onOpenWorkspaceFile,
     canClose = true,
     mode = 'overlay',
     agentName,
@@ -639,6 +651,178 @@ export default function SubAgentWindow({
     };
 
     // ── VS-Code view (coding agent only) ──────────────────────────────────
+    // ── Idle librarian: browse this chat's workspace while no run is going ──
+    // The librarian's window used to be an empty shell until a run streamed data.
+    // Idle it now shows the chat's workspace through the SAME session-jailed
+    // endpoint the workspace modal uses - no new surface, no new jail - and the
+    // folders are clickable AS LONG AS the librarian itself is not working.
+    type IdleEntry = { name: string; isDir: boolean; size?: number; items?: number };
+    const [idleBrowse, setIdleBrowse] = useState<{
+        subpath: string; wsName: string; rootPath: string; entries: IdleEntry[]; loading: boolean; error: boolean;
+    }>({ subpath: '', wsName: '', rootPath: '', entries: [], loading: false, error: false });
+    const idleBrowseSeq = useRef(0);
+    // The folder the person picked as the Coder's PROJECT - the answer to "which
+    // existing project should the next run continue in". Travels to the agent via
+    // the context detail; coding_agent takes it as project_path. Component state:
+    // it lives and dies with the window, like the browse itself.
+    const [idleProject, setIdleProject] = useState<{ abs: string; label: string } | null>(null);
+    // Right-click affordances of the idle explorer: a small context menu and the
+    // inline draft row for a new folder. The menu is positioned ABSOLUTELY inside
+    // the explorer section (idleExplorerRef): the window animates with transforms,
+    // and position:fixed anchors to a transformed ancestor, not the viewport.
+    const [idleMenu, setIdleMenu] = useState<{ x: number; y: number; dirName: string | null } | null>(null);
+    const [newFolder, setNewFolder] = useState<{ value: string; error: string | null } | null>(null);
+    const idleExplorerRef = useRef<HTMLDivElement | null>(null);
+    const fetchIdleFolder = useCallback(async (subpath: string) => {
+        if (!sessionId) return;
+        const seq = ++idleBrowseSeq.current;
+        setIdleBrowse(prev => ({ ...prev, loading: true, error: false }));
+        try {
+            const res = await fetch(
+                `/api/session/workspace?sessionId=${encodeURIComponent(sessionId)}&subpath=${encodeURIComponent(subpath)}`,
+                { credentials: 'include' }
+            );
+            if (seq !== idleBrowseSeq.current) return;   // an older answer must not win
+            if (!res.ok) { setIdleBrowse(prev => ({ ...prev, loading: false, error: true })); return; }
+            const data = await res.json();
+            if (seq !== idleBrowseSeq.current) return;
+            const entries: IdleEntry[] = [
+                ...(Array.isArray(data.dirs) ? data.dirs.map((d: { name: string; items?: number }) =>
+                    ({ name: d.name, isDir: true, items: d.items })) : []),
+                ...(Array.isArray(data.files) ? data.files.map((f: { name: string; size?: number }) =>
+                    ({ name: f.name, isDir: false, size: f.size })) : []),
+            ];
+            setIdleBrowse({ subpath, wsName: data.name || '', rootPath: data.path || '', entries, loading: false, error: false });
+        } catch {
+            if (seq === idleBrowseSeq.current) setIdleBrowse(prev => ({ ...prev, loading: false, error: true }));
+        }
+    }, [sessionId]);
+
+    const openIdleMenu = (ev: React.MouseEvent, dirName: string | null) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const host = idleExplorerRef.current?.getBoundingClientRect();
+        setIdleMenu({
+            x: host ? Math.max(0, Math.min(ev.clientX - host.left, host.width - 190)) : 0,
+            y: host ? ev.clientY - host.top : 0,
+            dirName,
+        });
+    };
+    // "New folder" is the one write the idle explorer can do. The server applies
+    // the same jail as every workspace route; only the name travels from here,
+    // the parent is wherever the browse currently stands.
+    const createIdleFolder = async () => {
+        const name = (newFolder?.value || '').trim();
+        if (!name || !sessionId) return;
+        try {
+            const res = await fetch('/api/session/workspace/mkdir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ sessionId, subpath: idleBrowse.subpath, name }),
+            });
+            if (!res.ok) {
+                let detail: unknown = null;
+                try { detail = (await res.json())?.detail; } catch { /* body not JSON */ }
+                setNewFolder(prev => prev
+                    ? { ...prev, error: typeof detail === 'string' ? detail : 'Could not create the folder' }
+                    : prev);
+                return;
+            }
+            setNewFolder(null);
+            fetchIdleFolder(idleBrowse.subpath);
+        } catch {
+            setNewFolder(prev => prev ? { ...prev, error: 'Could not create the folder' } : prev);
+        }
+    };
+    const fmtBytesIdle = (b: number): string => {
+        if (!b || b < 0) return '';
+        const u = ['B', 'KB', 'MB', 'GB']; let i = 0; let n = b;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+    };
+    const idleEmptyLabel = 'This workspace is empty so far.';
+    const idleErrorLabel = 'The workspace could not be read.';
+    // What counts as "this kind has something of its own to show": any run data,
+    // streaming or finished. The finished state stays visible on purpose - idle
+    // browsing only fills the window when there is NOTHING else. Each kind's
+    // emptiness is judged on ITS view's own fields, not on a shared guess.
+    const libHasRunData = !!librarian && (
+        (librarian.entries?.length ?? 0) > 0 || (librarian.topFolders?.length ?? 0) > 0 ||
+        (librarian.activity?.length ?? 0) > 0 || !!librarian.currentFolder || !!librarian.search
+    );
+    const coderHasRunData = !!coder && (
+        (coder.fileTree?.length ?? 0) > 0 || (coder.tasks?.length ?? 0) > 0 ||
+        (coder.git?.commits?.length ?? 0) > 0 || (coder.loop ?? 0) > 0
+    );
+    // Idle fills a window INSIDE that window's own structure, never instead of
+    // it: the librarian browses in its folder-view layout, the coder gets the
+    // editor's own "no folder opened" state. Research and document keep their
+    // paper shells untouched - an empty paper IS their honest idle face.
+    const idleKind: 'coder' | 'librarian' | null =
+        inferredPresence === 'online' ? null
+            : agentKind === 'librarian' && !libHasRunData ? 'librarian'
+                : agentKind === 'coder' && !coderHasRunData ? 'coder'
+                    : null;
+    const IDLE_LABEL = { coder: 'Coder', librarian: 'Librarian' } as const;
+    // The workspace listing, translated into the shape the librarian's OWN
+    // folder view renders - so idle browsing looks like a librarian, not like
+    // a foreign widget parked in its window.
+    const idleFolder = idleKind === 'librarian' && idleBrowse.wsName ? {
+        path: idleBrowse.subpath ? `${idleBrowse.wsName}/${idleBrowse.subpath}` : idleBrowse.wsName,
+        name: idleBrowse.subpath ? (idleBrowse.subpath.split('/').pop() || idleBrowse.wsName) : idleBrowse.wsName,
+        fileCount: idleBrowse.entries.filter(e => !e.isDir).length,
+        folderCount: idleBrowse.entries.filter(e => e.isDir).length,
+        totalSize: idleBrowse.entries.reduce((a, e) => a + (e.size ?? 0), 0),
+        types: [] as Array<{ type: string; count: number }>,
+        entries: idleBrowse.entries.map(e => ({
+            name: e.name, type: e.isDir ? 'folder' : 'file', isDir: e.isDir,
+            sizeBytes: e.size ?? 0, items: e.items, modified: '', match: false,
+        })),
+    } : null;
+    const idleAbsFor = (name: string) => {
+        const base = idleBrowse.subpath
+            ? `${idleBrowse.rootPath}/${idleBrowse.subpath}` : idleBrowse.rootPath;
+        return `${base}/${name}`;
+    };
+    useEffect(() => {
+        if (!(isOpen && idleKind && sessionId)) return;
+        fetchIdleFolder(idleBrowse.subpath);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- subpath changes refetch via clicks
+    }, [isOpen, idleKind, sessionId, fetchIdleFolder]);
+    useEffect(() => {
+        // The composer's context mirror: while an idle window shows a folder, the
+        // person's next message probably means it - and when the view goes away
+        // (window closed, another kind, a run took over), the context does too.
+        // Reporting null IS the cleanup, so a stale folder can never ride along
+        // with an unrelated turn.
+        if (!onIdleContext) return;
+        if (isOpen && idleKind && idleBrowse.wsName) {
+            const where = idleBrowse.subpath ? `${idleBrowse.wsName}/${idleBrowse.subpath}` : idleBrowse.wsName;
+            const picked = idleKind === 'coder' && idleProject
+                ? `picked "${idleProject.label}" (${idleProject.abs}) as the Coder's project folder; `
+                : '';
+            onIdleContext(`${picked}browsing workspace folder "${where}" (${idleBrowse.entries.length} entries) in the ${IDLE_LABEL[idleKind]} window`);
+        } else {
+            onIdleContext(null);
+        }
+        return () => { onIdleContext(null); };
+    }, [isOpen, idleKind, idleBrowse.wsName, idleBrowse.subpath, idleBrowse.entries.length, idleProject, onIdleContext]);
+
+    // The context menu closes like every context menu: a click anywhere else, or
+    // Escape. The menu itself stops mousedown propagation so its items still fire.
+    useEffect(() => {
+        if (!idleMenu) return;
+        const close = () => setIdleMenu(null);
+        const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setIdleMenu(null); };
+        window.addEventListener('mousedown', close);
+        window.addEventListener('keydown', onKey);
+        return () => {
+            window.removeEventListener('mousedown', close);
+            window.removeEventListener('keydown', onKey);
+        };
+    }, [idleMenu]);
+
     const [editorDark, setEditorDark] = useState(false);
 
     // Bottom panel tabs (Console / Linter / Guards / Telemetry)
@@ -707,6 +891,19 @@ export default function SubAgentWindow({
         } catch {
             /* file not readable - keep current view */
         }
+    };
+    // Idle twin of openFileTab: the coder has no projectPath before a run, so
+    // idle files come from the chat workspace by ABSOLUTE path - same read-only
+    // tabs, same cap, served by the same /api/file the run explorer uses.
+    const openIdleTab = async (absPath: string, name: string) => {
+        if (openTabs.some(t => t.name === name)) { setActiveTab(name); return; }
+        try {
+            const res = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
+            if (!res.ok) return;
+            const text = await res.text();
+            setOpenTabs(prev => prev.some(t => t.name === name) ? prev : [...prev, { name, content: text.slice(0, 120000) }]);
+            setActiveTab(name);
+        } catch { /* file not readable - keep current view */ }
     };
     const closeFileTab = (name: string) => {
         setOpenTabs(prev => prev.filter(t => t.name !== name));
@@ -895,10 +1092,14 @@ export default function SubAgentWindow({
     const documentV = document ?? EMPTY_DOCUMENT;
     const librarianV = librarian ?? EMPTY_LIBRARIAN;
     const browserV = browser ?? EMPTY_BROWSER;
-    const coderLoading = !coder;
-    const researchLoading = !research;
-    const documentLoading = !document;
-    const librarianLoading = !librarian;
+    // The browser's rule, applied to everyone (it is written out a few lines
+    // below): only a run that is actually STARTING may say "Starting" - a
+    // hand-opened idle window with no run behind it must say what is true, or
+    // it announces an agent that was never called.
+    const coderLoading = !coder && inferredPresence === 'online';
+    const researchLoading = !research && inferredPresence === 'online';
+    const documentLoading = !document && inferredPresence === 'online';
+    const librarianLoading = !librarian && inferredPresence === 'online';
     // Two different situations look identical from here, and until this window could be
     // opened by hand only one of them existed: a run that is STARTING (the agent called
     // browser_agent, its state is on its way) and a window a person opened themselves with
@@ -1112,7 +1313,7 @@ export default function SubAgentWindow({
                                         <div key={`${index}-${line.slice(0, 24)}`} className="break-all">{line}</div>
                                     ))}
                                     {docActivity.length === 0 && (
-                                        <div className="text-gray-300">Waiting for output…</div>
+                                        <div className="text-gray-300">{isLive ? 'Waiting for output…' : 'No run yet.'}</div>
                                     )}
                                 </div>
                             </div>
@@ -1324,7 +1525,7 @@ export default function SubAgentWindow({
                                         <div key={`${index}-${line.slice(0, 20)}`} className="break-all">{line}</div>
                                     ))}
                                     {consoleLines.length === 0 && (
-                                        <div className="text-gray-300">Waiting for output…</div>
+                                        <div className="text-gray-300">{isLive ? 'Waiting for output…' : 'No run yet.'}</div>
                                     )}
                                 </div>
                             </div>
@@ -1352,12 +1553,15 @@ export default function SubAgentWindow({
         );
     }
 
-    if (mode === 'dock' && agentKind === 'librarian' && librarian?.currentFolder) {
+    if (mode === 'dock' && agentKind === 'librarian' && (librarian?.currentFolder || idleFolder)) {
         // ── Folder-browse view: the librarian opened a concrete folder; list its files
         // like a file manager and highlight search matches (read-only). Renders only with
-        // real folder data; the overview shell below covers the loading state. ──
+        // real folder data - OR, idle, with the chat's workspace synthesized into the
+        // same shape: idle browsing wears the librarian's own structure, and the rows
+        // become the person's to click until the librarian itself works here. ──
         const lib = librarian;
-        const cf = lib.currentFolder!;
+        const idleMode = !lib?.currentFolder && !!idleFolder;
+        const cf = (lib?.currentFolder ?? idleFolder)!;
         const fmtBytes = (b: number): string => {
             if (!b || b < 0) return '0 B';
             const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let n = b;
@@ -1365,7 +1569,7 @@ export default function SubAgentWindow({
             return `${i <= 1 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
         };
         const isLive = inferredPresence === 'online';
-        const query = lib.search?.query || null;
+        const query = lib?.search?.query || null;
         const hitCount = cf.entries.filter(e => e.match).length;
         const matches = cf.entries.filter(e => e.match);
         const TYPE_STYLE: Record<string, { bg: string; fg: string; bar: string }> = {
@@ -1403,15 +1607,17 @@ export default function SubAgentWindow({
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
                                     <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
-                                    <span className="truncate">{query ? <>Searching: <span className="font-mono">{cf.name}</span> for <span className="font-mono">{query}</span></> : <>Opening: <span className="font-mono">{cf.name}</span></>}</span>
+                                    <span className="truncate">{query ? <>Searching: <span className="font-mono">{cf.name}</span> for <span className="font-mono">{query}</span></> : idleMode ? <>Browsing: <span className="font-mono">{cf.name}</span></> : <>Opening: <span className="font-mono">{cf.name}</span></>}</span>
                                 </div>
                             </div>
                         </div>
                         <div className="flex flex-none items-center gap-2">
-                            <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
+                            {idleMode
+                                ? <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><FolderOpen size={9} /> IDLE - BROWSE FREELY</span>
+                                : <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>}
                             <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
-                                {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {lib.stage === 'done' ? 'Done' : (query ? 'Searching' : 'Reading')}{query ? ` · ${hitCount} hits` : ''}
+                                {isLive && lib?.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
+                                {lib?.stage === 'done' ? 'Done' : (query ? 'Searching' : 'Reading')}{query ? ` · ${hitCount} hits` : ''}
                             </span>
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
@@ -1422,7 +1628,15 @@ export default function SubAgentWindow({
                         <div className={`flex min-w-0 flex-1 flex-col ${WIN_CANVAS}`}>
                             {/* toolbar: back + breadcrumb + search */}
                             <div className={`flex h-10 flex-none items-center gap-2 border-b border-gray-200 ${WIN_BAR} px-3.5`}>
-                                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Overview"><ChevronLeft size={13} /></span>
+                                {idleMode && idleBrowse.subpath ? (
+                                    <button
+                                        onClick={() => fetchIdleFolder(idleBrowse.subpath.split('/').slice(0, -1).join('/'))}
+                                        className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-orange-50 hover:text-orange-700"
+                                        title="Up one folder" aria-label="Up one folder"
+                                    ><ChevronLeft size={13} /></button>
+                                ) : (
+                                    <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Overview"><ChevronLeft size={13} /></span>
+                                )}
                                 <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-gray-500">
                                     <span className="rounded px-1.5 py-0.5">~</span>
                                     {crumbs.slice(-3).map((c, i, arr) => (
@@ -1450,8 +1664,8 @@ export default function SubAgentWindow({
                                     <div className="text-[10.5px] text-gray-400">{cf.fileCount.toLocaleString('en-US')} files · {cf.folderCount} subfolders · {fmtBytes(cf.totalSize)}</div>
                                 </div>
                                 <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
-                                    {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
-                                    {lib.stage === 'done' ? 'read' : 'reading folder'}
+                                    {lib?.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : idleMode ? <Circle size={11} className="opacity-40" /> : <Loader2 size={11} className="animate-spin" />}
+                                    {lib?.stage === 'done' ? 'read' : 'reading folder'}
                                 </div>
                             </div>
                             {/* file listing */}
@@ -1462,8 +1676,20 @@ export default function SubAgentWindow({
                                 {cf.entries.map((e, i) => {
                                     const Icon = iconFor(e.type, e.isDir);
                                     const ts = styleFor(e.isDir ? 'folder' : e.type);
+                                    const idleClick = !idleMode ? undefined : () => {
+                                        if (e.isDir) {
+                                            fetchIdleFolder(idleBrowse.subpath ? `${idleBrowse.subpath}/${e.name}` : e.name);
+                                        } else {
+                                            onOpenWorkspaceFile?.(idleAbsFor(e.name), e.name);
+                                        }
+                                    };
                                     return (
-                                        <div key={`${e.name}-${i}`} className={cn("flex items-center gap-3 border-b border-[#e0e1e6] dark:border-[#262626] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]")}>
+                                        <div key={`${e.name}-${i}`}
+                                            onClick={idleClick}
+                                            role={idleMode ? 'button' : undefined}
+                                            tabIndex={idleMode ? 0 : undefined}
+                                            onKeyDown={idleMode ? (ev) => { if (ev.key === 'Enter') idleClick?.(); } : undefined}
+                                            className={cn("flex items-center gap-3 border-b border-[#e0e1e6] dark:border-[#262626] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]", idleMode && "cursor-pointer hover:bg-orange-50/60")}>
                                             <span className={cn("flex h-5 w-5 flex-none items-center justify-center rounded-md", ts.bg, ts.fg)}><Icon size={12} /></span>
                                             <span className={cn("min-w-0 flex-1 truncate text-[12.5px] text-gray-800", e.isDir && "font-semibold")}>{e.name}</span>
                                             {e.match && <span className="flex-none rounded bg-orange-100 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-orange-700">Match</span>}
@@ -1517,7 +1743,7 @@ export default function SubAgentWindow({
                             <div className="flex h-[28%] min-h-[110px] flex-none flex-col">
                                 <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
                                 <div ref={librarianActivityRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 font-mono text-[10px] leading-relaxed text-gray-500">
-                                    {lib.activity.map((a, i) => (
+                                    {(lib?.activity ?? []).map((a, i) => (
                                         <div key={i}><span className={cn(a.cls === 'ok' && 'text-emerald-600', a.cls === 'info' && 'text-blue-600', a.cls === 'warn' && 'text-amber-600', a.cls === 'scan' && 'text-orange-700')}>{a.text}</span></div>
                                     ))}
                                 </div>
@@ -1580,7 +1806,7 @@ export default function SubAgentWindow({
                             <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
                             <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
                                 {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {lib.stage === 'done' ? 'Done' : 'Scanning'}{lib.totalFiles ? ` · ${lib.totalFiles.toLocaleString('en-US')} files` : ''}
+                                {lib.stage === 'done' ? 'Done' : isLive ? 'Scanning' : 'Idle'}{lib.totalFiles ? ` · ${lib.totalFiles.toLocaleString('en-US')} files` : ''}
                             </span>
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
@@ -1605,7 +1831,7 @@ export default function SubAgentWindow({
                                     <div className="text-[22px] font-bold text-gray-900">{fmtBytes(lib.totalSize)}</div>
                                     <div className="text-[11px] text-gray-400">{lib.totalFiles.toLocaleString('en-US')} files · {lib.totalFolders.toLocaleString('en-US')} folders scanned</div>
                                     <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
-                                        {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
+                                        {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : isLive ? <Loader2 size={11} className="animate-spin" /> : <Circle size={11} className="opacity-40" />}
                                         {lib.stage === 'done' ? 'Map ready' : 'Building map'}
                                     </div>
                                 </div>
@@ -1906,6 +2132,60 @@ export default function SubAgentWindow({
                                         </div>
                                         <DiffLines diff={activeDiff.diff} />
                                     </div>
+                                ) : idleKind === 'coder' ? (
+                                    <div className={cn("flex h-full flex-col items-center justify-center gap-2 px-6 text-center", editorDark ? "text-gray-600" : "text-gray-300")}>
+                                        <FileCode size={22} className="opacity-40" />
+                                        {idleProject ? (<>
+                                            <p className="text-xs font-semibold">
+                                                Project: <span className="font-mono text-emerald-600">{idleProject.label}</span>
+                                            </p>
+                                            <p className="max-w-[300px] text-[11px] leading-relaxed">
+                                                The next Coder run continues in this folder. Tell the agent
+                                                what to change - or unset it with the green mark in the Explorer.
+                                            </p>
+                                        </>) : (<>
+                                            <p className="text-xs font-semibold">No project folder selected</p>
+                                            <p className="max-w-[300px] text-[11px] leading-relaxed">
+                                                Mark a folder in the Explorer (the circle on its row), or take
+                                                the folder you are in - the Coder then continues there. Or just
+                                                tell the agent what to build and it creates a fresh project.
+                                            </p>
+                                            {idleBrowse.rootPath && (
+                                                <button
+                                                    onClick={() => {
+                                                        const abs = idleBrowse.subpath
+                                                            ? `${idleBrowse.rootPath}/${idleBrowse.subpath}` : idleBrowse.rootPath;
+                                                        const label = idleBrowse.subpath
+                                                            ? (idleBrowse.subpath.split('/').pop() || idleBrowse.wsName)
+                                                            : idleBrowse.wsName;
+                                                        setIdleProject({ abs, label });
+                                                    }}
+                                                    className="mt-1 flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-gray-700 transition-colors hover:border-emerald-300 hover:text-emerald-700"
+                                                >
+                                                    <CheckCircle2 size={12} />
+                                                    {`Use "${idleBrowse.subpath ? (idleBrowse.subpath.split('/').pop() || idleBrowse.wsName) : idleBrowse.wsName}" as the project`}
+                                                </button>
+                                            )}
+                                            {idleBrowse.entries.some(en => en.isDir) && (
+                                                <div className="mt-2 flex max-w-[360px] flex-wrap items-center justify-center gap-1.5">
+                                                    <span className="w-full text-[10px] text-gray-400">or pick a folder in here:</span>
+                                                    {idleBrowse.entries.filter(en => en.isDir).slice(0, 8).map(en => (
+                                                        <button
+                                                            key={en.name}
+                                                            onClick={() => setIdleProject({ abs: idleAbsFor(en.name), label: en.name })}
+                                                            className="flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-0.5 font-mono text-[10px] text-gray-600 transition-colors hover:border-emerald-300 hover:text-emerald-700"
+                                                        >
+                                                            <Folder size={9} />
+                                                            {en.name}
+                                                        </button>
+                                                    ))}
+                                                    {idleBrowse.entries.filter(en => en.isDir).length > 8 && (
+                                                        <span className="text-[9px] text-gray-400">more in the Explorer</span>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </>)}
+                                    </div>
                                 ) : (
                                     <div className={cn("flex items-center gap-2 px-4 py-2 text-xs", editorDark ? "text-gray-600" : "text-gray-300")}>
                                         <Loader2 size={13} className="animate-spin opacity-60" />
@@ -1959,8 +2239,8 @@ export default function SubAgentWindow({
                                             </div>
                                         ) : (
                                             <div className="flex items-center gap-2 text-gray-300">
-                                                <Loader2 size={13} className="animate-spin opacity-50" />
-                                                <span className="text-xs">Waiting for output…</span>
+                                                {isLive && <Loader2 size={13} className="animate-spin opacity-50" />}
+                                                <span className="text-xs">{isLive ? 'Waiting for output…' : 'No run yet - the console fills when the agent works.'}</span>
                                             </div>
                                         )}
                                     </div>
@@ -2033,14 +2313,112 @@ export default function SubAgentWindow({
                         {/* ── Right sidebar: Explorer / Tasks / Source Control ── */}
                         <div className="flex w-[35%] min-w-[240px] max-w-[340px] flex-none flex-col border-l border-gray-200 bg-white">
                             {/* Explorer */}
-                            <div className="flex min-h-0 flex-[1.2] flex-col border-b border-gray-100">
+                            <div ref={idleExplorerRef} className="relative flex min-h-0 flex-[1.2] flex-col border-b border-gray-100">
                                 <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
                                     Explorer
                                     <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
                                         {coder.fileTree.length} files
                                     </span>
                                 </div>
-                                <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+                                <div
+                                    className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+                                    onContextMenu={idleKind === 'coder' ? (ev) => openIdleMenu(ev, null) : undefined}
+                                >
+                                    {idleKind === 'coder' ? (<>
+                                        {/* No run yet: the explorer browses the chat's workspace so
+                                            there is something real to open - folders drill in, files
+                                            open read-only in the tabs above, like any editor before a
+                                            project is picked. The moment a run starts, coder state
+                                            streams in and this yields to the run's own tree. */}
+                                        <div className="px-2 pb-1 font-mono text-[9px] text-gray-300">
+                                            {idleBrowse.wsName || 'workspace'}/{idleBrowse.subpath ? `${idleBrowse.subpath}/` : ''}
+                                        </div>
+                                        {idleBrowse.subpath && (
+                                            <button
+                                                onClick={() => fetchIdleFolder(idleBrowse.subpath.split('/').slice(0, -1).join('/'))}
+                                                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-gray-50"
+                                            >
+                                                <ChevronLeft size={11} className="flex-none text-gray-400" />
+                                                <span className="font-mono text-[11px] text-gray-500">..</span>
+                                            </button>
+                                        )}
+                                        {newFolder && (
+                                            <div className="mb-0.5">
+                                                <div className="flex items-center gap-2 rounded-md bg-gray-50 px-2 py-1">
+                                                    <FolderPlus size={11} className="flex-none text-gray-400" />
+                                                    <input
+                                                        autoFocus
+                                                        value={newFolder.value}
+                                                        onChange={(ev) => setNewFolder({ value: ev.target.value, error: null })}
+                                                        onKeyDown={(ev) => {
+                                                            if (ev.key === 'Enter') createIdleFolder();
+                                                            if (ev.key === 'Escape') setNewFolder(null);
+                                                        }}
+                                                        placeholder="New folder name - Enter creates it"
+                                                        className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-gray-700 outline-none placeholder:text-gray-400"
+                                                    />
+                                                    <button onClick={() => setNewFolder(null)} className="flex-none text-gray-400 hover:text-gray-600">
+                                                        <X size={10} />
+                                                    </button>
+                                                </div>
+                                                {newFolder.error && (
+                                                    <div className="px-2 pt-0.5 text-[9px] text-red-400">{newFolder.error}</div>
+                                                )}
+                                            </div>
+                                        )}
+                                        {idleBrowse.entries.map(e => {
+                                            const abs = idleAbsFor(e.name);
+                                            const isProject = idleProject?.abs === abs;
+                                            return (
+                                            <div
+                                                key={e.name}
+                                                onContextMenu={(ev) => openIdleMenu(ev, e.isDir ? e.name : null)}
+                                                className={cn(
+                                                    'group/idlerow flex w-full items-center gap-2 rounded-md px-2 py-1',
+                                                    e.name === viewingName ? 'bg-blue-50' : 'hover:bg-gray-50',
+                                                    isProject && 'bg-emerald-50'
+                                                )}
+                                            >
+                                                <button
+                                                    onClick={() => e.isDir
+                                                        ? fetchIdleFolder(idleBrowse.subpath ? `${idleBrowse.subpath}/${e.name}` : e.name)
+                                                        : openIdleTab(abs, e.name)}
+                                                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                                >
+                                                    {e.isDir
+                                                        ? <Folder size={11} className="flex-none text-gray-400" />
+                                                        : <FileCode size={11} className="flex-none text-gray-400" />}
+                                                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-700">{e.name}</span>
+                                                </button>
+                                                {e.isDir && (
+                                                    // The answer to "which project should the Coder work in":
+                                                    // visible on hover like every quiet row action, permanent
+                                                    // once chosen so the pick can be seen and cleared.
+                                                    <button
+                                                        onClick={(ev) => { ev.stopPropagation();
+                                                            setIdleProject(isProject ? null : { abs, label: e.name }); }}
+                                                        title={isProject ? 'Unset project folder' : 'Use as the project folder'}
+                                                        aria-pressed={isProject}
+                                                        className={cn(
+                                                            'flex-none rounded p-0.5 transition-colors',
+                                                            // Visible at rest: the welcome text points here, and a
+                                                            // control that only exists on hover cannot be found by
+                                                            // reading about it.
+                                                            isProject
+                                                                ? 'text-emerald-600'
+                                                                : 'text-gray-300 hover:text-emerald-600'
+                                                        )}
+                                                    >
+                                                        <CheckCircle2 size={12} />
+                                                    </button>
+                                                )}
+                                                <span className="flex-none text-[9px] text-gray-300">
+                                                    {e.isDir ? `${e.items ?? 0}` : formatSize(e.size ?? 0)}
+                                                </span>
+                                            </div>
+                                            );
+                                        })}
+                                    </>) : (<>
                                     <div className="px-2 pb-1 text-[9px] text-gray-300">{coder.projectName}/</div>
                                     {coder.fileTree.map(f => (
                                         <button
@@ -2059,7 +2437,50 @@ export default function SubAgentWindow({
                                             </span>
                                         </button>
                                     ))}
+                                    </>)}
                                 </div>
+                                {idleMenu && idleKind === 'coder' && (
+                                    <div
+                                        className="absolute z-30 w-[184px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
+                                        style={{ left: idleMenu.x, top: idleMenu.y }}
+                                        onMouseDown={(ev) => ev.stopPropagation()}
+                                        onContextMenu={(ev) => ev.preventDefault()}
+                                    >
+                                        {idleMenu.dirName && (() => {
+                                            const abs = idleAbsFor(idleMenu.dirName);
+                                            const isProject = idleProject?.abs === abs;
+                                            return (<>
+                                                <button
+                                                    onClick={() => {
+                                                        setIdleProject(isProject ? null : { abs, label: idleMenu.dirName! });
+                                                        setIdleMenu(null);
+                                                    }}
+                                                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-gray-700 hover:bg-gray-50"
+                                                >
+                                                    <CheckCircle2 size={11} className={isProject ? 'text-emerald-600' : 'text-gray-400'} />
+                                                    {isProject ? 'Unset project folder' : 'Use as the project folder'}
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        fetchIdleFolder(idleBrowse.subpath ? `${idleBrowse.subpath}/${idleMenu.dirName}` : idleMenu.dirName!);
+                                                        setIdleMenu(null);
+                                                    }}
+                                                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-gray-700 hover:bg-gray-50"
+                                                >
+                                                    <FolderOpen size={11} className="text-gray-400" />
+                                                    Open folder
+                                                </button>
+                                            </>);
+                                        })()}
+                                        <button
+                                            onClick={() => { setNewFolder({ value: '', error: null }); setIdleMenu(null); }}
+                                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-gray-700 hover:bg-gray-50"
+                                        >
+                                            <FolderPlus size={11} className="text-gray-400" />
+                                            New folder…
+                                        </button>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Tasks */}
@@ -2143,7 +2564,9 @@ export default function SubAgentWindow({
                                         </div>
                                     ))}
                                     {coder.tasks.length === 0 && steps.length === 0 && (
-                                        <div className="px-2 text-[10px] text-gray-300">Planning…</div>
+                                        <div className="px-2 text-[10px] text-gray-300">
+                                            {isLive ? 'Planning…' : 'No plan yet - it appears when a run starts.'}
+                                        </div>
                                     )}
                                 </div>
                             </div>

@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **Idle windows stop pretending to work.** A specialist window opened by hand
+  used to claim activity that did not exist: the Coder said "Planning…", every
+  window's banner said "Starting - waiting for the agent…", the Librarian said
+  "Scanning", consoles said "Waiting for output…" - all with no run behind
+  them. Every one of these now tells the truth while idle, and the spinners
+  only spin when something actually runs.
 - **You are no longer offered tools your account cannot use.** The per-user tool
   permission was enforced only when a tool was actually called, so a tool an
   administrator had disabled still appeared in the `/` suggestions - and the
@@ -20,6 +26,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the permission lookup fails.
 
 ### Added
+- **Specialist windows are useful while they rest, and windows you opened
+  stay yours.** Idle now moves INTO each window's own face instead of
+  replacing it. The Librarian shows this chat's workspace inside its own
+  folder view - the same explorer it uses when working, only now the rows
+  are yours to click: folders drill in, files open straight into the right
+  viewer (code, document, image, web page), until the Librarian itself
+  starts working. The Coder keeps its editor and, like any editor before a
+  project is opened, says so - while its Explorer offers the workspace, and
+  a clicked file opens read-only in its own tabs. Whatever folder you are
+  looking at travels with your next message, so "sort this" means the
+  folder on your screen. In the Coder you can also mark a folder as the
+  project - the next run then continues in exactly that folder instead of
+  creating a fresh one; the welcome screen offers the folders around you as
+  one-click picks, and a right-click in the Explorer opens a small context
+  menu that can pick a project, open a folder, or create a new folder right
+  there in the workspace. And every hand-opened specialist window follows
+  the browser's rule: it never closes itself after a run, successful or
+  not - only your own close or a chat switch ends it. A window that already
+  shows a finished run keeps showing it - that result is the useful view
+  after work.
 - **Your specialists now have a window you can just open.** Clicking a
   sub-agent in the rail opens its window whether or not it is running, the way
   the globe opens the browser, and clicking it again slides it away. While a

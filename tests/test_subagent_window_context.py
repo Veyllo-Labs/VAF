@@ -92,8 +92,10 @@ def test_closing_the_window_removes_the_fact_by_itself():
     # The delete branch is the whole close mechanism: the client simply stops
     # sending the field, so there is no close event that can be missed.
     src = _SERVER.read_bytes().decode("utf-8")
-    seg = src.split('_saw_kind = cmd.get("subAgentWindow")', 1)[1][:1400]
+    seg = src.split('_saw_kind = cmd.get("subAgentWindow")', 1)[1][:2800]
     assert 'del loaded.runtime_state["subagent_window"]' in seg
+    assert 'loaded.runtime_state.pop("subagent_window_detail", None)' in seg, \
+        "the detail outlives the window it described"
 
 
 def test_the_browser_keeps_its_own_richer_lane():
@@ -166,8 +168,12 @@ def test_each_accent_is_the_one_that_agents_own_window_uses():
 
     expected_hue = {"research": "violet", "document": "teal",
                     "librarian": "orange", "browser": "sky"}
-    view_start = {"research": "agentKind === 'research'", "document": "agentKind === 'document'",
-                  "librarian": "agentKind === 'librarian'", "browser": "agentKind === 'browser'"}
+    # Every view anchors on its dock branch: the bare kind strings now also
+    # appear in the idle-kind derivation far above the views themselves.
+    view_start = {"research": "mode === 'dock' && agentKind === 'research'",
+                  "document": "mode === 'dock' && agentKind === 'document'",
+                  "librarian": "mode === 'dock' && agentKind === 'librarian'",
+                  "browser": "mode === 'dock' && agentKind === 'browser'"}
     for kind, hue in expected_hue.items():
         row = re.search(rf"{kind}:\s*\{{ chip: \"([^\"]+)\"", table)
         assert row, f"{kind} has no accent"
@@ -176,3 +182,291 @@ def test_each_accent_is_the_one_that_agents_own_window_uses():
         seg = window.split(view_start[kind], 1)[1][:6000]
         assert f"-{hue}-" in seg, \
             f"{kind}'s window no longer uses {hue}; the chip and the view drifted apart"
+
+
+# ── the hand-open hold ────────────────────────────────────────────────────────
+
+def test_a_hand_opened_window_never_closes_itself_for_any_kind():
+    """The browser earned this rule first: a window the person opened stays until
+    THEY close it, because the shared manual-open flag is reset by every streamed
+    event's auto-open and the 3s auto-close then reaped hand-opened windows after
+    a run. The hold now stores the KIND the person opened, so the globe and every
+    hotbar specialist follow one rule - and the hold is exactly as wide as the
+    click (a hand-opened coder does not also hold a research view a run swapped
+    in, which is the per-kind semantics the browser always had)."""
+    page = _PAGE.read_bytes().decode("utf-8")
+    assert "const handOpenedKindRef = useRef<SubAgentKind | null>(null);" in page
+    assert "handOpenedKindRef.current && subAgentState.agentKind === handOpenedKindRef.current" in page, \
+        "the auto-close hold is no longer kind-generic"
+    assert "subAgentState.agentKind === 'browser' && browserManualOpenRef" not in page, \
+        "the browser-only hold came back"
+    # the toggle takes the hold on open and releases it on the person's own close
+    body = page.split("const toggleSubAgentWindow", 1)[1][:1400]
+    assert "handOpenedKindRef.current = kind;" in body
+    assert "handOpenedKindRef.current = null;" in body
+
+
+def test_the_hold_clears_on_session_switch_and_manual_close():
+    # A hold that outlives its chat pins the next chat's window open; one that
+    # survives the person's own close makes the X button lie.
+    page = _PAGE.read_bytes().decode("utf-8")
+    assert "handOpenedKindRef.current = null;   // the hand-opened window belongs to the previous chat" in page
+    assert "handOpenedKindRef.current = null;   // the person closed it: their hold is released" in page
+
+
+def test_the_give_back_still_belongs_to_the_browser_alone():
+    # The generalized hold must not widen the browser's interactive give-back:
+    # a hand-opened coder window must never start an interactive browser lease.
+    page = _PAGE.read_bytes().decode("utf-8")
+    assert "handOpenedKindRef.current === 'browser'" in page, \
+        "the give-back no longer checks that the BROWSER was the hand-opened kind"
+
+
+# ── what the person is DOING in the window ────────────────────────────────────
+
+def test_the_window_detail_is_flattened_and_capped_before_the_prompt():
+    """Client-sent prose that lands inside a prompt block: newlines or control
+    characters would let it impersonate the block's own structure ("--- ..."),
+    and an uncapped string is a token sink. Flatten and cap, never trust."""
+    src = _SERVER.read_bytes().decode("utf-8")
+    seg = src.split('_saw_detail = cmd.get("subAgentWindowDetail")', 1)[1][:900]
+    assert '" ".join(_saw_detail.split())[:200]' in seg, \
+        "the detail reaches the prompt without flattening or a cap"
+
+
+def test_the_detail_rides_only_with_a_valid_kind():
+    # The detail branch lives INSIDE the known-kind branch: without a valid kind
+    # nothing of the client's prose is stored at all.
+    src = _SERVER.read_bytes().decode("utf-8")
+    seg = src.split("_saw_kind in _known_kinds:", 1)[1]
+    stored_at = seg.find('loaded.runtime_state["subagent_window_detail"]')
+    else_at = seg.find("elif \"subagent_window\" in loaded.runtime_state:")
+    assert 0 < stored_at < else_at, "the detail is stored outside the validated-kind branch"
+
+
+def test_the_runner_says_what_the_person_is_doing():
+    block = _runner_block()
+    assert "Right now they are: {sw_detail}" in block, \
+        "the block no longer carries what the person is doing in the window"
+    src = _RUNNER.read_bytes().decode("utf-8")
+    assert 'session_for_sw.runtime_state.pop("subagent_window_detail", None)' in src, \
+        "the detail would repeat on every later turn"
+
+
+# ── the idle librarian ────────────────────────────────────────────────────────
+
+def _window_src() -> str:
+    return (_REPO / "web" / "components" / "SubAgentWindow.tsx").read_bytes().decode("utf-8")
+
+
+def test_the_idle_librarian_browses_through_the_existing_jailed_endpoint():
+    """No new surface: the idle browse rides the session-jailed workspace API the
+    workspace modal already uses. A second listing endpoint would be a second
+    jail to keep correct."""
+    win = _window_src()
+    assert "/api/session/workspace?sessionId=" in win
+    assert not re.search(r"/api/(files|browse|fs)\b", win), \
+        "the idle browse grew its own listing endpoint"
+
+
+def test_idle_lives_inside_each_windows_own_structure():
+    """The first cut of this replaced every window with one generic folder list -
+    the owner's verdict was blunt and right: each window HAS a structure, idle
+    must move INTO it. The librarian browses in its own folder view (the
+    workspace synthesized into the currentFolder shape), the coder gets the
+    editor's native no-folder-open state, and research/document keep their
+    paper shells untouched - an empty paper is their honest idle face."""
+    win = _window_src()
+    assert "inferredPresence === 'online' ? null" in win, \
+        "a running agent no longer suppresses the idle browse"
+    # no generic takeover branch may exist
+    assert "mode === 'dock' && idleKind && agentKind === idleKind" not in win, \
+        "the generic idle view that replaced the real windows came back"
+    # librarian: idle rides the EXISTING folder view
+    assert "(librarian?.currentFolder || idleFolder)" in win
+    assert "const idleMode = !lib?.currentFolder && !!idleFolder;" in win
+    # coder: idle rides the EXISTING explorer + editor
+    assert "idleKind === 'coder' ? (<>" in win
+    assert "No project folder selected" in win, \
+        "the editor's native welcome state (with the project pick) is gone"
+    # research/document deliberately have no idle browse of their own
+    assert "researchHasRunData" not in win and "documentHasRunData" not in win
+
+
+def test_the_idle_folder_reports_itself_and_cleans_up():
+    # The composer mirror: the folder rides with the next turn while shown, and
+    # reporting null IS the cleanup - a stale folder must never tag along with an
+    # unrelated message after the window closed or a run took over.
+    win = _window_src()
+    assert 'onIdleContext(`${picked}browsing workspace folder' in win
+    assert "return () => { onIdleContext(null); };" in win
+    page = _PAGE.read_bytes().decode("utf-8")
+    assert "{ subAgentWindowDetail: subAgentWindowDetailRef.current }" in page
+    assert "subAgentWindowKind && subAgentWindowDetailRef.current" in page, \
+        "a detail could be sent without its window kind"
+
+
+def test_stale_folder_answers_cannot_win_the_race():
+    # Two clicks in quick succession: the slower (older) response must not
+    # overwrite the newer folder - the classic fetch race.
+    win = _window_src()
+    # TWO checkpoints on purpose - after the fetch resolves and after the json
+    # parse - because both awaits are windows an older response can slip through.
+    assert win.count("if (seq !== idleBrowseSeq.current) return;") >= 2, \
+        "the idle browse lost one of its response-ordering checkpoints"
+
+
+def test_idle_files_open_the_way_each_window_natively_opens_things():
+    """The librarian hands files to the app's one file-type wheel (code viewer,
+    document viewer, image viewer - the routing every surface shares); the coder
+    opens them read-only in ITS OWN tabs, because that is what an editor does
+    with a file. Neither invents a second routing."""
+    win = _window_src()
+    assert "onOpenWorkspaceFile?.(idleAbsFor(e.name), e.name);" in win, \
+        "the librarian's idle rows stopped using the shared wheel"
+    assert ": openIdleTab(abs, e.name)}" in win, \
+        "the coder's idle explorer stopped opening files into its own tabs"
+    page = _PAGE.read_bytes().decode("utf-8")
+    assert "const openWorkspaceFileAt = useCallback(async (full: string, name: string)" in page
+    assert "onOpenWorkspaceFile={openWorkspaceFileAt}" in page, \
+        "the window no longer receives the shared opener"
+    # the modal's own click delegates too - one wheel, two callers
+    assert "await openWorkspaceFileAt(full, name);" in page
+
+
+# ── honest idle, and the coder's project pick ────────────────────────────────
+
+def test_no_window_claims_activity_while_nothing_runs():
+    """The UX lie the owner caught: an idle coder said "Planning…", every
+    hand-opened window said "Starting X - waiting for the agent…", the librarian
+    overview said "Scanning" - all with no run behind them. The browser wrote
+    the rule down long ago: only presence online may claim activity."""
+    win = _window_src()
+    assert "const coderLoading = !coder && inferredPresence === 'online';" in win
+    assert "const librarianLoading = !librarian && inferredPresence === 'online';" in win
+    assert "isLive ? 'Planning…' : 'No plan yet" in win
+    assert ": isLive ? 'Scanning' : 'Idle'}" in win
+    assert win.count("isLive ? 'Waiting for output…'") >= 3
+
+
+def test_the_pick_can_be_found_and_covers_the_current_folder():
+    """The owner's own question - "aber wie?" - was the finding: the mark only
+    existed on hover, so the welcome text pointed at an invisible control, and
+    the folder you are IN (including the workspace root, the most common
+    project) had no row to mark at all. The mark is visible at rest now, and
+    the welcome carries a button that takes the current folder."""
+    win = _window_src()
+    assert "'text-gray-300 hover:text-emerald-600'" in win, \
+        "the pick mark is hover-only again - unfindable by reading about it"
+    assert 'opacity-0' not in win.split("group/idlerow", 1)[1][:1600], \
+        "the pick mark hides until hover again"
+    assert 'as the project`}' in win, \
+        "the use-current-folder button is gone"
+
+
+def test_the_project_pick_reaches_the_coder_run():
+    """The pick is not decoration: it rides the context detail with its ABSOLUTE
+    path, and the runner's coder entry tells the model to pass exactly that as
+    coding_agent's project_path - the parameter the tool already has."""
+    win = _window_src()
+    assert 'setIdleProject(isProject ? null : { abs, label: e.name });' in win
+    assert 'as the Coder\'s project folder' in win, \
+        "the pick no longer rides the context detail"
+    block = _runner_block()
+    assert "project_path" in block, \
+        "the runner no longer tells the model how to use the picked folder"
+
+
+# ── the idle explorer's one write: New folder ────────────────────────────────
+
+def _mkdir(tmp_path, monkeypatch, name, subpath=""):
+    """Drive the REAL mkdir handler with only the workspace root faked - the
+    subpath jail and the name validation under test stay the product's own."""
+    import asyncio
+    from types import SimpleNamespace
+    import vaf.core.web_server as ws
+    monkeypatch.setattr(ws, "_resolve_session_workspace", lambda *a, **k: str(tmp_path))
+    req = ws.WorkspaceMkdirRequest(sessionId="s", subpath=subpath, name=name)
+    return asyncio.run(ws.create_session_workspace_folder(req, SimpleNamespace(client=None)))
+
+
+def test_new_folder_lands_inside_the_workspace(tmp_path, monkeypatch):
+    out = _mkdir(tmp_path, monkeypatch, "notes")
+    assert out["ok"] is True
+    assert (tmp_path / "notes").is_dir()
+
+
+def test_new_folder_refuses_names_that_leave_the_row(tmp_path, monkeypatch):
+    """The name is the only thing the client contributes, so it is the only
+    thing that can attack: separators, dotfiles and traversal all 400."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    for bad in ("../up", "a/b", ".hidden", "..", "", "   "):
+        with _pytest.raises(HTTPException) as e:
+            _mkdir(tmp_path, monkeypatch, bad)
+        assert e.value.status_code == 400, f"{bad!r} must be refused"
+    assert list(tmp_path.iterdir()) == [], "a refusal must create nothing"
+
+
+def test_new_folder_refuses_duplicates(tmp_path, monkeypatch):
+    import pytest as _pytest
+    from fastapi import HTTPException
+    _mkdir(tmp_path, monkeypatch, "twice")
+    with _pytest.raises(HTTPException) as e:
+        _mkdir(tmp_path, monkeypatch, "twice")
+    assert e.value.status_code == 409
+
+
+def test_new_folder_cannot_escape_through_the_subpath(tmp_path, monkeypatch):
+    """The parent folder comes from the browse's subpath and must pass the same
+    jail as the listing - this drives the real _resolve_workspace_subdir."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    with _pytest.raises(HTTPException) as e:
+        _mkdir(tmp_path, monkeypatch, "ok", subpath="../outside")
+    assert e.value.status_code == 400
+    assert not (tmp_path.parent / "outside").exists()
+
+
+def test_the_idle_explorer_offers_new_folder_through_a_context_menu():
+    """Right-click in the idle explorer opens a context menu whose New folder
+    writes through the jailed mkdir endpoint - carrying the session and the
+    folder the browse currently stands in, never a client-invented path."""
+    win = _window_src()
+    assert "onContextMenu={idleKind === 'coder' ? (ev) => openIdleMenu(ev, null) : undefined}" in win, \
+        "the explorer background lost its context menu"
+    assert "openIdleMenu(ev, e.isDir ? e.name : null)" in win, \
+        "the rows lost their context menu"
+    assert "'/api/session/workspace/mkdir'" in win
+    assert "sessionId, subpath: idleBrowse.subpath, name" in win, \
+        "the mkdir call no longer sends the browsed folder as the parent"
+    assert "New folder…" in win
+    assert win.count("Use as the project folder") >= 2, \
+        "the menu no longer carries the project pick the rows have"
+
+
+def test_the_welcome_offers_the_folders_beneath_you():
+    """While you stand in a folder, its subfolders show beneath the use-this-one
+    button as one-click picks - not only as rows in the Explorer sidebar."""
+    win = _window_src()
+    assert "or pick a folder in here:" in win
+    assert "setIdleProject({ abs: idleAbsFor(en.name), label: en.name })" in win, \
+        "the quick picks no longer travel as absolute paths"
+
+
+def test_the_one_file_opener_is_a_real_dependency_of_its_caller():
+    """The idle windows open files through `openWorkspaceFileAt`, and the
+    workspace modal's own opener now delegates to it. A delegate defined BELOW
+    its caller cannot appear in the caller's dependency array (temporal dead
+    zone), so the caller gets memoized without it and keeps the delegate from
+    an earlier render - which captures a stale WebSocket after a reconnect, and
+    the opened file then silently never reaches the agent. Order is the fix:
+    the delegate is defined first, so the dependency can be declared."""
+    page = _PAGE.read_bytes().decode("utf-8")
+    at = page.index("const openWorkspaceFileAt = useCallback")
+    caller = page.index("const openWorkspaceFile = useCallback")
+    assert at < caller, \
+        "openWorkspaceFileAt moved below its caller - its dependency cannot be declared there"
+    deps = page[caller:page.index("\n", page.index("}, [", caller))]
+    assert "openWorkspaceFileAt" in deps.rsplit("}, [", 1)[-1], \
+        "the delegate is not in the caller's dependency array - stale-closure lane is open"

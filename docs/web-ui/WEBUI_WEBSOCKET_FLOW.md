@@ -186,7 +186,12 @@ Key rules:
   inside a prompt, so an unchecked client string would be an injection lane) and
   DELETES it when the field is absent, which is the entire close mechanism: the
   client stops sending, the block stops appearing, no close event to miss.
-  `headless_runner` injects it into that one turn and pops it. Guard:
+  A sibling `subAgentWindowDetail` says what the person is DOING in the window
+  (the idle librarian sends the folder they are browsing); it is flattened to
+  one line and capped at 200 chars before it is stored - client prose that ends
+  up inside a prompt block must not be able to imitate the block's own
+  structure - and it lives and dies with the kind. `headless_runner` injects
+  both into that one turn and pops them. Guard:
   `tests/test_subagent_window_context.py`.
 
 - **Interactive browser:** `browser_interactive_start` (`{ sessionId, session? }`)

@@ -3392,13 +3392,11 @@ function VAFDashboardContent() {
         return `${workspaceInfo.path}${sub}/${name}`;
     }, [workspaceInfo?.path, workspaceInfo?.subpath]);
 
-    // Click a workspace file -> open it in the right panel AND make it visible to
-    // the agent (synced as a sidebar document, exactly like attaching a file).
-    // Documents (PDF, Office, Markdown, HTML, images, text) open in the
-    // DocumentViewer; genuine code files open in the CodeViewer (whose content
-    // already reaches the agent via the codeViewerFile chip on send).
-    const openWorkspaceFile = useCallback(async (name: string) => {
-        const full = workspaceFileAbsPath(name);
+    // The same wheel, addressable by absolute path: the idle sub-agent windows
+    // browse folders of their own, so they cannot go through the modal's
+    // current-folder state. One opener for every surface, or the file-type
+    // routing (image/html/code/office) forks per caller.
+    const openWorkspaceFileAt = useCallback(async (full: string, name: string) => {
         if (!full) return;
         const ext = (name.split('.').pop() || '').toLowerCase();
         // Images open in the dedicated Image Viewer — never the DocumentViewer — and are
@@ -3469,7 +3467,18 @@ function VAFDashboardContent() {
             setShowSubAgentPanel(true);
             setIsWorkspaceModalOpen(false);
         } catch { /* network/permission error - keep the workspace open */ }
-    }, [workspaceFileAbsPath, setDocumentViewerState, ws, currentSessionId, openImageInViewer]);
+    }, [setDocumentViewerState, ws, currentSessionId, openImageInViewer]);
+    // Click a workspace file -> open it in the right panel AND make it visible to
+    // the agent (synced as a sidebar document, exactly like attaching a file).
+    // Documents (PDF, Office, Markdown, HTML, images, text) open in the
+    // DocumentViewer; genuine code files open in the CodeViewer (whose content
+    // already reaches the agent via the codeViewerFile chip on send).
+    const openWorkspaceFile = useCallback(async (name: string) => {
+        const full = workspaceFileAbsPath(name);
+        if (!full) return;
+        await openWorkspaceFileAt(full, name);
+    }, [workspaceFileAbsPath, openWorkspaceFileAt]);
+
 
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
@@ -3753,11 +3762,14 @@ function VAFDashboardContent() {
     // with every worker view and is RESET by each auto-open when agent data
     // streams - which is precisely how a browser the person opened by hand got
     // auto-closed after an agent run (and, on a failed run, closed over an
-    // error). This one is set by the globe, cleared only by the person's own
-    // close or a session switch, and while it stands the browser window never
-    // closes itself: after an agent run - successful, failed or stopped - the
-    // window returns to the interactive mode instead.
-    const browserManualOpenRef = useRef(false);
+    // error). This one is set by the globe AND by the hotbar icons, cleared only
+    // by the person's own close or a session switch, and while the window shows
+    // the kind the person opened it never closes itself: after an agent run -
+    // successful, failed or stopped - it stays. It stores the KIND rather than a
+    // boolean so the hold is exactly as wide as the person's click: a hand-opened
+    // coder window does not also hold a research view a later run swapped in
+    // (the same per-kind semantics the browser had when it was a boolean).
+    const handOpenedKindRef = useRef<SubAgentKind | null>(null);
     // Current task has a custom view (coder/research/browser): keep the window
     // closed until the first custom data arrives — never flash the generic window.
     const subAgentCustomViewRef = useRef(false);
@@ -3970,7 +3982,7 @@ function VAFDashboardContent() {
         // Leaving only isOpen:false here is how session A's "running" coder kept
         // the stop button and the delegate avatar alive in session B.
         subAgentUserClosedRef.current = false;  // Reset for new session
-        browserManualOpenRef.current = false;   // the hand-opened browser belongs to the previous chat
+        handOpenedKindRef.current = null;   // the hand-opened window belongs to the previous chat
         const restoredSubAgent = sessionSubAgentStates.current[id] ?? IDLE_SUB_AGENT_STATE;
         // Restored with presence DEMOTED: while this chat was closed, its worker's
         // terminal event went to nobody, so the snapshot may claim "running" about
@@ -5518,14 +5530,14 @@ function VAFDashboardContent() {
                         // run, and the window it belonged to is this one. Hand the person
                         // the browser back instead of letting the window close over them -
                         // unless they closed it themselves in the meantime, which is the
-                        // one signal that outranks the give-back. browserManualOpenRef is
+                        // one signal that outranks the give-back. The hand-opened kind is
                         // the second, client-side trigger: the server's resumable only
                         // exists when the run EVICTED a live lease, but a hand-opened
                         // window whose lease had already ended (or whose run died in an
                         // error before any takeover) deserves its browser back just the
                         // same - the person's click is the fact, not the server's memory.
                         if (st === 'stopped' && String(data.reason ?? '') === 'agent_done'
-                            && (data.resumable || browserManualOpenRef.current)
+                            && (data.resumable || handOpenedKindRef.current === 'browser')
                             && subAgentStateRef.current.isOpen
                             && subAgentStateRef.current.agentKind === 'browser'
                             && !subAgentUserClosedRef.current) {
@@ -6769,6 +6781,8 @@ function VAFDashboardContent() {
             // already use. Sent per turn while the window stays open, so closing it
             // simply stops sending and the block disappears on its own.
             ...(subAgentWindowKind ? { subAgentWindow: subAgentWindowKind } : {}),
+            ...(subAgentWindowKind && subAgentWindowDetailRef.current
+                ? { subAgentWindowDetail: subAgentWindowDetailRef.current } : {}),
         }));
         setAttachedImages([]);
         // One-shot marking: the region vision ran for this question — clear it so unrelated
@@ -7410,13 +7424,13 @@ function VAFDashboardContent() {
     useEffect(() => {
         if (!subAgentState.isOpen) return;
         if (subAgentManualOpenRef.current) return;
-        // A browser window the person opened by hand NEVER closes itself - not
-        // after a successful agent run, not after a failed one. The agent only
-        // borrowed it; the give-back handler returns it to the interactive
-        // mode, and if that fails the window stays open showing why. Checked
-        // here and not via subAgentManualOpenRef, because every streamed agent
-        // event resets that shared flag on its auto-open.
-        if (subAgentState.agentKind === 'browser' && browserManualOpenRef.current) return;
+        // A window the person opened by hand NEVER closes itself - not after a
+        // successful agent run, not after a failed one. Any kind: the globe's
+        // browser and the hotbar's specialists follow one rule. Checked here and
+        // not via subAgentManualOpenRef, because every streamed agent event
+        // resets that shared flag on its auto-open; this ref survives those, and
+        // it is per KIND so the hold is exactly as wide as the person's click.
+        if (handOpenedKindRef.current && subAgentState.agentKind === handOpenedKindRef.current) return;
         if (!subAgentCanClose || interactiveDriving) {
             if (subAgentAutoCloseRef.current) {
                 clearTimeout(subAgentAutoCloseRef.current);
@@ -7468,6 +7482,13 @@ function VAFDashboardContent() {
         subAgentState.isOpen && subAgentState.agentKind && subAgentState.agentKind !== 'browser'
             ? subAgentState.agentKind
             : null;
+    // What the person is DOING inside the open window (the idle librarian's
+    // folder, later other views' states). A ref, not state: it rides along with
+    // the next send and re-renders nothing.
+    const subAgentWindowDetailRef = useRef<string | null>(null);
+    const handleSubAgentIdleContext = useCallback((detail: string | null) => {
+        subAgentWindowDetailRef.current = detail;
+    }, []);
     const subAgentWindowLabel = subAgentWindowKind
         ? (tMain(`subAgent${subAgentWindowKind.charAt(0).toUpperCase()}${subAgentWindowKind.slice(1)}Name` as never) as string)
         : '';
@@ -7530,7 +7551,7 @@ function VAFDashboardContent() {
     // person just asked for would be killed by the old window's timer.
     const pendingBrowserStopRef = useRef<number | null>(null);
     const closeBrowserWindowAnimated = () => {
-        browserManualOpenRef.current = false;   // the person closed it: their hold is released
+        handOpenedKindRef.current = null;   // the person closed it: their hold is released
         closeSubAgentWindow(true);
         if (pendingBrowserStopRef.current) window.clearTimeout(pendingBrowserStopRef.current);
         pendingBrowserStopRef.current = window.setTimeout(() => {
@@ -7552,9 +7573,11 @@ function VAFDashboardContent() {
             // Second click on the icon that is already showing: close it, and let
             // the dock's slide-out play - closeSubAgentWindow only flips isOpen,
             // the animation lives in the dock and the window's exit hold.
+            handOpenedKindRef.current = null;   // their hold ends with their close
             closeSubAgentWindow(true);
             return;
         }
+        handOpenedKindRef.current = kind;       // this window is the person's until THEY close it
         openSubAgentWindow(true);
     }, []);
 
@@ -7568,7 +7591,7 @@ function VAFDashboardContent() {
             window.clearTimeout(pendingBrowserStopRef.current);
             pendingBrowserStopRef.current = null;
         }
-        browserManualOpenRef.current = true;    // this window is the person's until THEY close it
+        handOpenedKindRef.current = 'browser';  // this window is the person's until THEY close it
         // The window picks its browser view off agentKind, so the button has to name the kind
         // it is opening. The last browser run's screenshot rides along on subAgentState and
         // reappears with the window; with no run behind it the window asks the server for the
@@ -9853,6 +9876,9 @@ function VAFDashboardContent() {
                                     agentKind={subAgentState.agentKind}
                                     status={subAgentState.status}
                                     presence={subAgentState.presence}
+                                    sessionId={currentSessionId}
+                                    onIdleContext={handleSubAgentIdleContext}
+                                    onOpenWorkspaceFile={openWorkspaceFileAt}
                                     currentFile={subAgentState.currentFile}
                                     codeContent={subAgentState.codeContent}
                                     artifactFile={subAgentState.artifactFile || subAgentState.currentFile}

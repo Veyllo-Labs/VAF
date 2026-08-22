@@ -2500,6 +2500,37 @@ async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Re
     return {"ok": True, "name": name, "size": len(data)}
 
 
+class WorkspaceMkdirRequest(BaseModel):
+    sessionId: str
+    subpath: str = ""
+    name: str
+
+
+@app.post("/api/session/workspace/mkdir")
+async def create_session_workspace_folder(req: WorkspaceMkdirRequest, request: Request):
+    """Create one folder inside the chat's workspace (the idle explorer's
+    context menu). Same jail as every workspace route: the session must be the
+    requester's own (_resolve_session_workspace) and the subpath cannot escape
+    the root (_resolve_workspace_subdir). The name is validated the way the
+    upload validates filenames - basename only, no dotfiles - because a name
+    is the only thing the client contributes here."""
+    root = _resolve_session_workspace(req.sessionId, request, create=True)
+    if not root:
+        raise HTTPException(status_code=404, detail="Session has no workspace")
+    path = _resolve_workspace_subdir(root, req.subpath)
+    name = os.path.basename((req.name or "").strip())
+    if not name or name.startswith('.') or name != (req.name or "").strip():
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+    target = os.path.join(path, name)
+    if os.path.exists(target):
+        raise HTTPException(status_code=409, detail="A file or folder with this name exists")
+    try:
+        os.mkdir(target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Create failed: {e}")
+    return {"ok": True, "name": name}
+
+
 class WorkspaceDeleteRequest(BaseModel):
     sessionId: str
     name: str
@@ -5484,13 +5515,29 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if not getattr(loaded, "runtime_state", None):
                                 loaded.runtime_state = {}
                             if isinstance(_saw_kind, str) and _saw_kind in _known_kinds:
-                                if loaded.runtime_state.get("subagent_window") != _saw_kind:
-                                    loaded.runtime_state["subagent_window"] = _saw_kind
+                                _sw_dirty = loaded.runtime_state.get("subagent_window") != _saw_kind
+                                loaded.runtime_state["subagent_window"] = _saw_kind
+                                # What the person is doing inside the window (the idle
+                                # librarian's folder). Client-sent prose that ends up in a
+                                # prompt, so it is flattened and capped rather than trusted:
+                                # newlines/control chars would let it impersonate the
+                                # block's own structure.
+                                _saw_detail = cmd.get("subAgentWindowDetail")
+                                if isinstance(_saw_detail, str) and _saw_detail.strip():
+                                    _clean = " ".join(_saw_detail.split())[:200]
+                                    if loaded.runtime_state.get("subagent_window_detail") != _clean:
+                                        loaded.runtime_state["subagent_window_detail"] = _clean
+                                        _sw_dirty = True
+                                elif "subagent_window_detail" in loaded.runtime_state:
+                                    del loaded.runtime_state["subagent_window_detail"]
+                                    _sw_dirty = True
+                                if _sw_dirty:
                                     session_mgr.save(loaded, sync_state=False)
                             elif "subagent_window" in loaded.runtime_state:
                                 # The delete branch IS the feature: close the window and the
                                 # block stops appearing, without any close event of its own.
                                 del loaded.runtime_state["subagent_window"]
+                                loaded.runtime_state.pop("subagent_window_detail", None)
                                 session_mgr.save(loaded, sync_state=False)
 
                         # Interactive browser context: while THIS chat's window drives the

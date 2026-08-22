@@ -1702,7 +1702,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _SW = {
                             "coder": ("the Coder", "coding_agent",
                                       "writing and changing code in a project, running its "
-                                      "tests and checking the page it built"),
+                                      "tests and checking the page it built. If the context "
+                                      "line above names a folder the user PICKED as the "
+                                      "project, pass that absolute path to coding_agent as "
+                                      "project_path so the run continues there instead of "
+                                      "creating a fresh project"),
                             "research": ("the Researcher", "research_agent",
                                          "digging through many sources and coming back with a "
                                          "written, sourced answer"),
@@ -1714,11 +1718,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         }
                         if sw_kind in _SW:
                             _label, _tool, _does = _SW[sw_kind]
+                            sw_detail = ((getattr(session_for_sw, "runtime_state", None) or {})
+                                         .get("subagent_window_detail") or "").strip()
                             sw_block = (
                                 f"--- USER HAS {_label.upper()}'S WINDOW OPEN ---\n"
                                 f"They opened it themselves, so their message is most likely "
                                 f"about that work even when they do not name it.\n"
-                                f"{_label} handles {_does}.\n"
+                                + (f"Right now they are: {sw_detail}\n" if sw_detail else "")
+                                + f"{_label} handles {_does}.\n"
                                 f"To do that work, call the {_tool} tool - its run appears in "
                                 f"the window they are already looking at, so they watch it "
                                 f"happen rather than waiting on a silent reply.\n"
@@ -1729,6 +1736,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             )
                             effective_input = sw_block + effective_input
                             session_for_sw.runtime_state.pop("subagent_window", None)
+                            session_for_sw.runtime_state.pop("subagent_window_detail", None)
                             session_mgr.save(session_for_sw, sync_state=False)
                     except Exception:
                         pass

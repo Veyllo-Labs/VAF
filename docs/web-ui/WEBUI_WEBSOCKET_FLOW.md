@@ -186,8 +186,10 @@ Key rules:
   inside a prompt, so an unchecked client string would be an injection lane) and
   DELETES it when the field is absent, which is the entire close mechanism: the
   client stops sending, the block stops appearing, no close event to miss.
-  A sibling `subAgentWindowDetail` says what the person is DOING in the window
-  (the idle librarian sends the folder they are browsing); it is flattened to
+  A sibling `subAgentWindowDetail` says what the person is DOING in the window:
+  the idle librarian and coder send the folder being browsed, and the coder adds
+  the folder marked as the project with its ABSOLUTE path, which the runner tells
+  the model to pass on as `coding_agent`'s `project_path`. It is flattened to
   one line and capped at 200 chars before it is stored - client prose that ends
   up inside a prompt block must not be able to imitate the block's own
   structure - and it lives and dies with the kind. `headless_runner` injects

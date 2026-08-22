@@ -611,3 +611,43 @@ def test_a_workspace_reached_through_a_linked_home_still_works(tmp_path, monkeyp
     asyncio.run(ws.delete_session_workspace_entry(
         ws.WorkspaceDeleteRequest(sessionId="s", subpath="sub", name="note.txt"), stub))
     assert not (real / "sub" / "note.txt").exists(), "a legitimate delete was refused"
+
+
+def test_the_idle_lane_does_not_survive_a_chat_switch():
+    """A window carries no trace of the chat it was open in before.
+
+    The idle lane is workspace-scoped state living in a component that does NOT
+    remount on a chat switch: the picked project, the listing, the draft row,
+    the read-only tabs. Left standing, chat B's window listed chat A's folders,
+    and chat A's absolute project path rode along on chat B's next message,
+    because the detail lives in a ref that is read at send time - so clearing
+    the detail is part of the reset, not a consequence of it.
+    """
+    win = _window_src()
+    assert "idleSessionRef" in win, "no session identity is tracked for the idle lane"
+    body = win.split("idleSessionRef.current = sessionId;", 1)[1].split("}, [sessionId", 1)[0]
+    for cleared in ("setIdleBrowse(", "setIdleProject(null)", "setNewFolder(null)",
+                    "setIdleMenu(null)", "setOpenTabs([])"):
+        assert cleared in body, f"a chat switch no longer clears {cleared}"
+    assert "onIdleContext?.(null)" in body, \
+        "the previous chat's window detail still rides along after a switch"
+    assert "idleBrowseSeq.current++" in body, \
+        "an in-flight listing from the previous chat can still land in the new one"
+
+
+def test_a_read_only_tab_is_identified_by_its_path_not_its_name():
+    """Two files may share a basename, and the explorer browses folders.
+
+    Identity by basename made `docs/README.md` and `src/README.md` one tab: the
+    second click silently re-selected the first, so the content on screen
+    belonged to a different file than the one the person clicked - and then
+    described to the agent.
+    """
+    win = _window_src()
+    assert "useState<Array<{ id: string; name: string; content: string }>>" in win, \
+        "tabs no longer carry an identity separate from their label"
+    idle = win.split("const openIdleTab", 1)[1][:700]
+    assert "t.id === absPath" in idle, "the idle tab opener dedupes by label again"
+    assert "t.name === name" not in idle, "the idle tab opener dedupes by label again"
+    assert "openTabs.find(t => t.id === activeTab)" in win, \
+        "the active tab is no longer resolved by identity"

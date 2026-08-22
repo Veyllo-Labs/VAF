@@ -676,6 +676,11 @@ export default function SubAgentWindow({
     const fetchIdleFolder = useCallback(async (subpath: string) => {
         if (!sessionId) return;
         const seq = ++idleBrowseSeq.current;
+        // The draft row belongs to the folder it was opened in, so a navigation
+        // dismisses it. Chosen over re-anchoring the create to that folder: an
+        // input left standing would write into a folder the person has left and
+        // can no longer see, which is the harder thing to explain afterwards.
+        setNewFolder(null);
         setIdleBrowse(prev => ({ ...prev, loading: true, error: false }));
         try {
             const res = await fetch(
@@ -714,6 +719,9 @@ export default function SubAgentWindow({
     const createIdleFolder = async () => {
         const name = (newFolder?.value || '').trim();
         if (!name || !sessionId) return;
+        // The folder this create is aimed at, and the browse it was aimed from.
+        const target = idleBrowse.subpath;
+        const seqAtSend = idleBrowseSeq.current;
         try {
             const res = await fetch('/api/session/workspace/mkdir', {
                 method: 'POST',
@@ -730,7 +738,13 @@ export default function SubAgentWindow({
                 return;
             }
             setNewFolder(null);
-            fetchIdleFolder(idleBrowse.subpath);
+            // Refetch only while the browse still stands where the create landed:
+            // a refetch is a FRESH call, so the two checkpoints inside
+            // fetchIdleFolder cannot protect the folder the person moved to. The
+            // sequence is the test rather than the subpath, because a navigation
+            // whose listing is still in flight has not written its subpath yet -
+            // exactly the case that loses the new folder's listing to the old one.
+            if (seqAtSend === idleBrowseSeq.current) fetchIdleFolder(target);
         } catch {
             setNewFolder(prev => prev ? { ...prev, error: 'Could not create the folder' } : prev);
         }
@@ -834,10 +848,14 @@ export default function SubAgentWindow({
     // tab, so all the live-view logic below (diff/stream priority, scroll-follow,
     // viewingName) stays unchanged — it just reads null while the Live tab is active.
     const LIVE_TAB = '__live__';
-    const [openTabs, setOpenTabs] = useState<Array<{ name: string; content: string }>>([]);
+    // A tab is IDENTIFIED by the file's absolute path and only LABELLED with its
+    // basename. Identity by basename made `docs/README.md` and `src/README.md`
+    // one tab: the second click silently re-selected the first, so the person
+    // read one file's content believing it was the other one's.
+    const [openTabs, setOpenTabs] = useState<Array<{ id: string; name: string; content: string }>>([]);
     const [activeTab, setActiveTab] = useState<string>(LIVE_TAB);
     const editorScrollRef = useRef<HTMLDivElement>(null);
-    const openedFile = activeTab === LIVE_TAB ? null : (openTabs.find(t => t.name === activeTab) ?? null);
+    const openedFile = activeTab === LIVE_TAB ? null : (openTabs.find(t => t.id === activeTab) ?? null);
     const openedFileRef = useRef(openedFile);
     openedFileRef.current = openedFile;
     // Basename of the file the agent is live-editing (matches the Live tab label).
@@ -881,13 +899,14 @@ export default function SubAgentWindow({
     const openFileTab = async (name: string) => {
         if (!coder?.projectPath) return;
         if (name === liveBasename) { setActiveTab(LIVE_TAB); return; }
-        if (openTabs.some(t => t.name === name)) { setActiveTab(name); return; }
+        const id = `${coder.projectPath}/${name}`;
+        if (openTabs.some(t => t.id === id)) { setActiveTab(id); return; }
         try {
-            const res = await fetch(`/api/file?path=${encodeURIComponent(`${coder.projectPath}/${name}`)}`);
+            const res = await fetch(`/api/file?path=${encodeURIComponent(id)}`);
             if (!res.ok) return;
             const text = await res.text();
-            setOpenTabs(prev => prev.some(t => t.name === name) ? prev : [...prev, { name, content: text.slice(0, 120000) }]);
-            setActiveTab(name);
+            setOpenTabs(prev => prev.some(t => t.id === id) ? prev : [...prev, { id, name, content: text.slice(0, 120000) }]);
+            setActiveTab(id);
         } catch {
             /* file not readable - keep current view */
         }
@@ -896,26 +915,29 @@ export default function SubAgentWindow({
     // idle files come from the chat workspace by ABSOLUTE path - same read-only
     // tabs, same cap, served by the same /api/file the run explorer uses.
     const openIdleTab = async (absPath: string, name: string) => {
-        if (openTabs.some(t => t.name === name)) { setActiveTab(name); return; }
+        if (openTabs.some(t => t.id === absPath)) { setActiveTab(absPath); return; }
         try {
             const res = await fetch(`/api/file?path=${encodeURIComponent(absPath)}`);
             if (!res.ok) return;
             const text = await res.text();
-            setOpenTabs(prev => prev.some(t => t.name === name) ? prev : [...prev, { name, content: text.slice(0, 120000) }]);
-            setActiveTab(name);
+            setOpenTabs(prev => prev.some(t => t.id === absPath) ? prev : [...prev, { id: absPath, name, content: text.slice(0, 120000) }]);
+            setActiveTab(absPath);
         } catch { /* file not readable - keep current view */ }
     };
-    const closeFileTab = (name: string) => {
-        setOpenTabs(prev => prev.filter(t => t.name !== name));
-        setActiveTab(cur => (cur === name ? LIVE_TAB : cur));
+    const closeFileTab = (id: string) => {
+        setOpenTabs(prev => prev.filter(t => t.id !== id));
+        setActiveTab(cur => (cur === id ? LIVE_TAB : cur));
     };
     // If a file the user opened read-only later becomes the agent's LIVE file, collapse
     // its static tab into the omnipresent Live tab — avoids a duplicate 'foo.py' tab and a
     // frozen snapshot shown while the real edits stream in the (then inactive) Live tab.
     useEffect(() => {
         if (!liveBasename) return;
+        // The collapse still matches on the LABEL (that is what the live tab shows),
+        // while the active tab is a path - so the derived opened file answers whether
+        // the tab being collapsed is the one on screen.
+        if (openedFileRef.current?.name === liveBasename) setActiveTab(LIVE_TAB);
         setOpenTabs(prev => (prev.some(t => t.name === liveBasename) ? prev.filter(t => t.name !== liveBasename) : prev));
-        setActiveTab(cur => (cur === liveBasename ? LIVE_TAB : cur));
     }, [liveBasename]);
     // Reset opened tabs on a new run: a different project dir...
     useEffect(() => {
@@ -934,6 +956,29 @@ export default function SubAgentWindow({
             setActiveTab(LIVE_TAB);
         }
     }, [inferredPresence]);
+    // ...and on a chat switch, together with the whole idle lane: every one of
+    // these belongs to the workspace of the chat it was picked in. Without this,
+    // chat B's window listed chat A's folders, and the picked project rode along
+    // on chat B's next message as chat A's absolute path (it travels through
+    // onIdleContext). Only IDLE state is cleared - the live view is rebuilt from
+    // props, and openTabs are read-only snapshots a run does not read.
+    // The listing is re-taken here rather than left to the fetch effect above:
+    // that effect closes over the PREVIOUS chat's subpath, and the sequence bump
+    // is what drops its answer on the floor.
+    const idleSessionRef = useRef(sessionId);
+    useEffect(() => {
+        if (idleSessionRef.current === sessionId) return;
+        idleSessionRef.current = sessionId;
+        idleBrowseSeq.current++;
+        setIdleBrowse({ subpath: '', wsName: '', rootPath: '', entries: [], loading: false, error: false });
+        setIdleProject(null);
+        setNewFolder(null);
+        setIdleMenu(null);
+        setOpenTabs([]);
+        setActiveTab(LIVE_TAB);
+        onIdleContext?.(null);   // no detail from the previous chat may ride along
+        if (isOpen && idleKind && sessionId) fetchIdleFolder('');
+    }, [sessionId, isOpen, idleKind, fetchIdleFolder, onIdleContext]);
 
     // ── Research view (research agent only) ───────────────────────────────
     const researchViewerRef = useRef<HTMLDivElement>(null);
@@ -1606,7 +1651,9 @@ export default function SubAgentWindow({
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    {/* Idle is a state of its own, not a run's presence: an idle
+                                        window must not paint a run tone it does not have. */}
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", idleMode ? "bg-gray-400" : presenceTone)} />
                                     <span className="truncate">{query ? <>Searching: <span className="font-mono">{cf.name}</span> for <span className="font-mono">{query}</span></> : idleMode ? <>Browsing: <span className="font-mono">{cf.name}</span></> : <>Opening: <span className="font-mono">{cf.name}</span></>}</span>
                                 </div>
                             </div>
@@ -1617,7 +1664,8 @@ export default function SubAgentWindow({
                                 : <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>}
                             <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
                                 {isLive && lib?.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {lib?.stage === 'done' ? 'Done' : (query ? 'Searching' : 'Reading')}{query ? ` · ${hitCount} hits` : ''}
+                                {/* Idle wins over every run word here: nothing is reading. */}
+                                {idleMode ? 'Idle' : lib?.stage === 'done' ? 'Done' : (query ? 'Searching' : 'Reading')}{query ? ` · ${hitCount} hits` : ''}
                             </span>
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
@@ -1665,9 +1713,28 @@ export default function SubAgentWindow({
                                 </div>
                                 <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
                                     {lib?.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : idleMode ? <Circle size={11} className="opacity-40" /> : <Loader2 size={11} className="animate-spin" />}
-                                    {lib?.stage === 'done' ? 'read' : 'reading folder'}
+                                    {/* The quiet circle already said idle; the word said the opposite. */}
+                                    {idleMode ? 'not reading' : lib?.stage === 'done' ? 'read' : 'reading folder'}
                                 </div>
                             </div>
+                            {/* The listing's own two states, which the rows cannot show: while a
+                                folder is being read the old rows are still up, and a failed read
+                                left them up for good - a folder that may not even exist any more,
+                                whose files answer with a dead path when clicked. */}
+                            {idleMode && idleBrowse.loading && (
+                                <div className="flex flex-none items-center gap-1.5 px-4 pb-1.5 text-[10.5px] text-gray-400">
+                                    <Loader2 size={10} className="animate-spin" /> Reading this folder…
+                                </div>
+                            )}
+                            {idleMode && idleBrowse.error && (
+                                <div className="flex flex-none items-center gap-2 px-4 pb-1.5 text-[10.5px] text-red-500">
+                                    <span className="truncate">{idleErrorLabel}</span>
+                                    <button
+                                        onClick={() => fetchIdleFolder(idleBrowse.subpath)}
+                                        className="flex-none rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-gray-600 hover:bg-orange-50 hover:text-orange-700"
+                                    >Retry</button>
+                                </div>
+                            )}
                             {/* file listing */}
                             <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
                                 <div className={`sticky top-0 flex items-center gap-3 border-b border-gray-200 ${WIN_CANVAS} px-3 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-gray-400`}>
@@ -1778,6 +1845,12 @@ export default function SubAgentWindow({
         const maxEntry = Math.max(1, ...lib.entries.map(e => e.sizeBytes || 0));
         const maxTop = Math.max(1, ...lib.topFolders.map(f => f.sizeBytes || 0));
         const hasCloud = lib.drives.some(d => d.kind === 'cloud');
+        // A hand-opened window with no run behind it and no listing yet: every
+        // number here would come from EMPTY_LIBRARIAN, so "0 B", "0 files, 0
+        // folders scanned" and "Building map" describe a filesystem nobody
+        // looked at. That is one round trip long normally, and permanent when
+        // the workspace request fails - so the window rests instead of counting.
+        const idleResting = idleKind === 'librarian' && !idleFolder;
         return (
             <div
                 className={cn(
@@ -1798,7 +1871,9 @@ export default function SubAgentWindow({
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
                                     <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
-                                    <span className="truncate">Analyzing: storage &amp; files · <span className="font-mono">{lib.root || '~'}</span></span>
+                                    <span className="truncate">{idleResting
+                                        ? <>Idle · nothing scanned</>
+                                        : <>Analyzing: storage &amp; files · <span className="font-mono">{lib.root || '~'}</span></>}</span>
                                 </div>
                             </div>
                         </div>
@@ -1827,6 +1902,28 @@ export default function SubAgentWindow({
                                 )}
                             </div>
                             <div ref={librarianViewerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
+                                {idleResting ? (
+                                    <div className="mb-2.5 flex items-baseline gap-2.5">
+                                        <div className="text-[15px] font-bold text-gray-900">Nothing scanned yet</div>
+                                        <div className="min-w-0 flex-1 truncate text-[11px] text-gray-400">
+                                            {idleBrowse.loading
+                                                ? 'Opening this chat\'s workspace…'
+                                                : idleBrowse.error
+                                                    ? idleErrorLabel
+                                                    : 'This window fills itself when the agent reads the file system.'}
+                                        </div>
+                                        {idleBrowse.error && (
+                                            <button
+                                                onClick={() => fetchIdleFolder(idleBrowse.subpath)}
+                                                className="flex-none rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-gray-600 hover:bg-orange-50 hover:text-orange-700"
+                                            >Retry</button>
+                                        )}
+                                        <div className="ml-auto flex flex-none items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                                            {idleBrowse.loading ? <Loader2 size={11} className="animate-spin" /> : <Circle size={11} className="opacity-40" />}
+                                            Idle
+                                        </div>
+                                    </div>
+                                ) : (
                                 <div className="mb-2.5 flex items-baseline gap-2.5">
                                     <div className="text-[22px] font-bold text-gray-900">{fmtBytes(lib.totalSize)}</div>
                                     <div className="text-[11px] text-gray-400">{lib.totalFiles.toLocaleString('en-US')} files · {lib.totalFolders.toLocaleString('en-US')} folders scanned</div>
@@ -1835,6 +1932,7 @@ export default function SubAgentWindow({
                                         {lib.stage === 'done' ? 'Map ready' : 'Building map'}
                                     </div>
                                 </div>
+                                )}
                                 <div className="flex flex-col gap-[3px]">
                                     {lib.entries.map((e, i) => {
                                         const big = (e.sizeBytes || 0) >= maxEntry * 0.5;
@@ -1913,10 +2011,16 @@ export default function SubAgentWindow({
                     <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
                         <div className="flex h-full items-center gap-1.5 bg-orange-600 px-2.5 font-bold text-white">VAF</div>
                         <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> READ ONLY</div>
+                        {idleResting ? (
+                            // Same reason as the numbers above: counts, a size and a root
+                            // "(reading)" would all be about a scan that never happened.
+                            <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">No scan yet</div>
+                        ) : (<>
                         <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{lib.totalFiles.toLocaleString('en-US')} files · {lib.totalFolders.toLocaleString('en-US')} folders</div>
                         <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {fmtBytes(lib.totalSize)}</div>
                         <div className="hidden h-full items-center gap-1.5 px-2.5 md:flex">Local{hasCloud ? ' · Google Drive' : ''}</div>
                         <div className="ml-auto flex h-full items-center gap-1.5 px-2.5 font-mono">{lib.root || '~'} (reading)</div>
+                        </>)}
                     </div>
                 </div>
             </div>
@@ -2058,17 +2162,18 @@ export default function SubAgentWindow({
                                 </button>
                                 {openTabs.map(t => (
                                     <div
-                                        key={t.name}
+                                        key={t.id}
+                                        title={t.id}
                                         className={cn(
                                             'group flex flex-none items-center gap-1 rounded-t-lg border border-b-0 py-1.5 pl-3 pr-1.5 font-mono text-[11px]',
-                                            activeTab === t.name
+                                            activeTab === t.id
                                                 ? (editorDark ? 'border-gray-200 bg-[#1e1e2e] font-semibold text-gray-200' : 'border-gray-100 bg-white font-semibold text-gray-900 shadow-sm')
                                                 : 'border-transparent text-gray-400 hover:text-gray-600'
                                         )}
                                     >
-                                        <button onClick={() => setActiveTab(t.name)} className="max-w-[130px] truncate">{t.name}</button>
+                                        <button onClick={() => setActiveTab(t.id)} className="max-w-[130px] truncate">{t.name}</button>
                                         <button
-                                            onClick={() => closeFileTab(t.name)}
+                                            onClick={() => closeFileTab(t.id)}
                                             className="rounded p-0.5 text-gray-300 opacity-60 transition hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100"
                                             aria-label={`Close ${t.name}`}
                                             title="Close tab"
@@ -2342,6 +2447,24 @@ export default function SubAgentWindow({
                                                 <span className="font-mono text-[11px] text-gray-500">..</span>
                                             </button>
                                         )}
+                                        {/* The rows below outlive their folder: they stay up while the
+                                            next one loads, and stay up for good when the read fails -
+                                            a listing of somewhere the person is no longer, whose files
+                                            open a dead path. */}
+                                        {idleBrowse.loading && (
+                                            <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] text-gray-400">
+                                                <Loader2 size={9} className="animate-spin" /> Reading…
+                                            </div>
+                                        )}
+                                        {idleBrowse.error && (
+                                            <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] text-red-400">
+                                                <span className="min-w-0 truncate">{idleErrorLabel}</span>
+                                                <button
+                                                    onClick={() => fetchIdleFolder(idleBrowse.subpath)}
+                                                    className="flex-none font-semibold text-gray-400 underline hover:text-gray-600"
+                                                >Retry</button>
+                                            </div>
+                                        )}
                                         {newFolder && (
                                             <div className="mb-0.5">
                                                 <div className="flex items-center gap-2 rounded-md bg-gray-50 px-2 py-1">
@@ -2375,7 +2498,9 @@ export default function SubAgentWindow({
                                                 onContextMenu={(ev) => openIdleMenu(ev, e.isDir ? e.name : null)}
                                                 className={cn(
                                                     'group/idlerow flex w-full items-center gap-2 rounded-md px-2 py-1',
-                                                    e.name === viewingName ? 'bg-blue-50' : 'hover:bg-gray-50',
+                                                    // by path, like the tab it stands for: a same-named file in
+                                                    // another folder is not the file that is open
+                                                    abs === openedFile?.id ? 'bg-blue-50' : 'hover:bg-gray-50',
                                                     isProject && 'bg-emerald-50'
                                                 )}
                                             >

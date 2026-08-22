@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A link inside a chat's workspace can no longer lead out of it.** Every
+  workspace lane (browsing, upload, delete and the new folder action) decided
+  "is this still inside the chat's folder" by comparing text. A symbolic link
+  that lives inside the workspace and points elsewhere passes that test, so the
+  read or write landed at the link's target instead. Containment is now decided
+  on resolved paths, for all four lanes at once, and a folder or file name that
+  carries a separator or an invisible character is refused as bad input instead
+  of failing as an internal error.
 - **Idle windows stop pretending to work.** A specialist window opened by hand
   used to claim activity that did not exist: the Coder said "Planning…", every
   window's banner said "Starting - waiting for the agent…", the Librarian said
@@ -26,6 +34,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the permission lookup fails.
 
 ### Added
+- **`vaf.contained_path`, `vaf.safe_entry_name`, `vaf.PathEscape`**: keeping a
+  path that came from outside inside the directory it may touch, now part of the
+  public framework surface. Containment is decided on resolved paths, so a
+  symlink cannot carry a caller out of the root, and a path that does not exist
+  yet still gets an answer, which is what a tool needs before it creates
+  anything. See docs/EMBEDDING.md.
 - **Specialist windows are useful while they rest, and windows you opened
   stay yours.** Idle now moves INTO each window's own face instead of
   replacing it. The Librarian shows this chat's workspace inside its own

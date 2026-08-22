@@ -1515,6 +1515,20 @@ Stable public surface (safe to build on):
   exported for tools that need the boundary around something other than a whole `run()`.
   Entering the write-mode jail needs no pre-provisioned per-user directories - the
   boundary is computed, not created, so a fresh tenant costs nothing to confine.
+- `vaf.contained_path(root, relative="", *, must_exist=False)` /
+  `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
+  path that came from OUTSIDE inside the directory it may touch. The jail above
+  answers which roots a caller owns; this answers whether a fragment or a single
+  name stays inside the one root you opened it against. Containment is decided on
+  RESOLVED paths, which is the whole point: a prefix comparison accepts a symlink
+  that lives inside the root and points anywhere on the host, and the write then
+  lands at the link's target while the string test still says "inside". VAF's own
+  workspace endpoints shipped that mistake, which is why this is a primitive and
+  not an example. `contained_path` answers for a path that does not exist yet, so
+  you can decide BEFORE creating; `must_exist=True` adds the existing-directory
+  requirement a listing needs. Both raise `PathEscape` (a `ValueError`), and
+  refuse rather than trim: silently rewriting `a/b` to `b` hands the caller a
+  different target than the one they named.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

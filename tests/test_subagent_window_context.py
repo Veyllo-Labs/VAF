@@ -19,8 +19,11 @@ Two things are different from the browser lane and both shape this design:
   measured note that naming where the person is, without saying what can be done
   about it, changed nothing about the model's behaviour.
 """
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
 _RUNNER = _REPO / "vaf" / "core" / "headless_runner.py"
@@ -470,3 +473,141 @@ def test_the_one_file_opener_is_a_real_dependency_of_its_caller():
     deps = page[caller:page.index("\n", page.index("}, [", caller))]
     assert "openWorkspaceFileAt" in deps.rsplit("}, [", 1)[-1], \
         "the delegate is not in the caller's dependency array - stale-closure lane is open"
+
+
+def _ws_module():
+    import vaf.core.web_server as ws
+    return ws
+
+
+def _planted_symlink_workspace(tmp_path):
+    """A workspace holding a link that points OUT of it.
+
+    Reachable in the product: the coder's shell runs with this very folder
+    bound writable, and an A2A room workspace holds content a foreign harness
+    wrote. Creating the link needs no privilege the runs do not already have.
+    """
+    root = tmp_path / "workspace"
+    root.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("host file")
+    os.symlink(outside, root / "shared")
+    return root, outside
+
+
+def test_no_workspace_lane_writes_through_a_planted_symlink(tmp_path, monkeypatch):
+    """Containment is decided on RESOLVED paths, for every lane at once.
+
+    All four share `_resolve_workspace_subdir`, which compared normalized
+    STRINGS: the joined path never leaves the root, so the prefix test passed
+    and the write landed at the link's target. Driving the real handlers here
+    rather than the helper is the point - the helper could be fixed while a
+    lane kept its own second copy of the old comparison.
+    """
+    import asyncio
+    import base64
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    ws = _ws_module()
+    root, outside = _planted_symlink_workspace(tmp_path)
+    monkeypatch.setattr(ws, "_resolve_session_workspace", lambda *a, **k: str(root))
+    monkeypatch.setattr(ws, "_requester_name", lambda request: "admin")
+    stub = SimpleNamespace(client=None)
+
+    lanes = [
+        ("mkdir", ws.create_session_workspace_folder,
+         ws.WorkspaceMkdirRequest(sessionId="s", subpath="shared", name="planted")),
+        ("upload", ws.upload_session_workspace_file,
+         ws.WorkspaceUploadRequest(sessionId="s", subpath="shared", filename="planted.txt",
+                                   content_base64=base64.b64encode(b"x").decode())),
+        ("delete", ws.delete_session_workspace_entry,
+         ws.WorkspaceDeleteRequest(sessionId="s", subpath="shared", name="keep.txt")),
+    ]
+    for label, handler, req in lanes:
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(handler(req, stub))
+        assert e.value.status_code == 400, f"{label} did not refuse the link"
+
+    assert not (outside / "planted").exists(), "mkdir wrote outside the workspace"
+    assert not (outside / "planted.txt").exists(), "upload wrote outside the workspace"
+    assert (outside / "keep.txt").exists(), "delete removed a file outside the workspace"
+
+
+def test_the_browse_listing_refuses_the_link_too(tmp_path, monkeypatch):
+    """Reading through the link is its own leak: the listing would show a
+    folder outside the workspace as if it belonged to the chat."""
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    ws = _ws_module()
+    root, _ = _planted_symlink_workspace(tmp_path)
+    monkeypatch.setattr(ws, "_resolve_session_workspace", lambda *a, **k: str(root))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ws.get_session_workspace(SimpleNamespace(client=None),
+                                             sessionId="s", subpath="shared"))
+    assert e.value.status_code == 400
+
+
+def test_the_workspace_lane_uses_the_framework_primitive(tmp_path):
+    """The conversion, not just the behaviour: a second hand-rolled prefix
+    comparison next to the primitive is how the two broken copies appeared in
+    the first place, so the lexical shape may not come back."""
+    src = _SERVER.read_bytes().decode("utf-8")
+    assert "from vaf.core.path_jail import" in src
+    body = src.split("def _resolve_workspace_subdir", 1)[1].split("\n@app", 1)[0]
+    assert "contained_path" in body
+    assert "startswith(root_norm" not in body, "the lexical containment is back"
+    delete = src.split("async def delete_session_workspace_entry", 1)[1][:1800]
+    assert "startswith(root_norm" not in delete, \
+        "the delete lane kept its own lexical copy of the containment"
+
+
+def test_a_bad_name_is_a_refusal_not_an_internal_error(tmp_path, monkeypatch):
+    """A null byte reaches os.mkdir as a ValueError, which a surface reports as
+    a 500 - an internal failure for what is plainly bad input."""
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    ws = _ws_module()
+    monkeypatch.setattr(ws, "_resolve_session_workspace", lambda *a, **k: str(tmp_path))
+    for bad in ("foo\x00bar", "line\nbreak", "a/b", "..", ".hidden", ""):
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(ws.create_session_workspace_folder(
+                ws.WorkspaceMkdirRequest(sessionId="s", subpath="", name=bad),
+                SimpleNamespace(client=None)))
+        assert e.value.status_code == 400, f"{bad!r} answered {e.value.status_code}"
+
+
+def test_a_workspace_reached_through_a_linked_home_still_works(tmp_path, monkeypatch):
+    """The root itself may lie under a link, and that is ordinary, not an
+    attack: a documents directory reached through a symlinked home is the
+    normal shape on more than one platform. Containment resolves both sides, so
+    such a workspace must behave exactly like a plain one - a delete inside it
+    is a delete, not an escape. A containment that mixes a resolved folder with
+    an unresolved root reports an upward walk here and refuses the lot."""
+    import asyncio
+    from types import SimpleNamespace
+    ws = _ws_module()
+    real = tmp_path / "real_home" / "workspace"
+    real.mkdir(parents=True)
+    (real / "sub").mkdir()
+    (real / "sub" / "note.txt").write_text("keep")
+    linked_home = tmp_path / "home"
+    os.symlink(tmp_path / "real_home", linked_home)
+    root_through_link = str(linked_home / "workspace")
+
+    monkeypatch.setattr(ws, "_resolve_session_workspace", lambda *a, **k: root_through_link)
+    monkeypatch.setattr(ws, "_requester_name", lambda request: "admin")
+    stub = SimpleNamespace(client=None)
+
+    listing = asyncio.run(ws.get_session_workspace(stub, sessionId="s", subpath="sub"))
+    assert [f["name"] for f in listing["files"]] == ["note.txt"]
+
+    out = asyncio.run(ws.create_session_workspace_folder(
+        ws.WorkspaceMkdirRequest(sessionId="s", subpath="sub", name="made"), stub))
+    assert out["ok"] is True and (real / "sub" / "made").is_dir()
+
+    asyncio.run(ws.delete_session_workspace_entry(
+        ws.WorkspaceDeleteRequest(sessionId="s", subpath="sub", name="note.txt"), stub))
+    assert not (real / "sub" / "note.txt").exists(), "a legitimate delete was refused"

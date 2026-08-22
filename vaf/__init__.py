@@ -19,15 +19,16 @@ if TYPE_CHECKING:
     from .tools.filesystem import user_jail
 
 __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
-           "RemoteRefused",
+           "PathEscape", "RemoteRefused",
            "RemoteRoom", "Room", "RoomError",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
-           "account_allows_tool", "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
+           "account_allows_tool", "contained_path", "derive_peer_id",
+           "describe_room_entry", "extract_pdf_markdown",
            "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "joined_rooms", "markers",
            "participant_key", "record_threat", "room_invitation",
-           "set_account_allowlist_resolver",
+           "safe_entry_name", "set_account_allowlist_resolver",
            "set_confirmation_bypass_resolver", "unread_counts", "user_jail"]
 
 
@@ -54,6 +55,16 @@ def __getattr__(name):
         # same blind spot - and log_helper itself is internal (see docs/EMBEDDING.md).
         from .core.log_helper import install_thread_excepthook
         return install_thread_excepthook
+    if name in ("PathEscape", "contained_path", "safe_entry_name"):
+        # Keep a caller-supplied path inside the directory it may touch. The
+        # jail above answers WHICH roots a caller owns; this answers whether a
+        # fragment or a name stays inside the one root you opened it against,
+        # decided on RESOLVED paths so a symlink planted in that root cannot
+        # carry a write out of it. Any tool that takes a path from a model, a
+        # request body or a peer needs this before it opens anything.
+        from .core.path_jail import PathEscape, contained_path, safe_entry_name
+        return {"PathEscape": PathEscape, "contained_path": contained_path,
+                "safe_entry_name": safe_entry_name}[name]
     if name == "user_jail":
         # Confine one tool run to the caller's own files. Declaring identity_kwargs tells
         # the dispatcher WHO is calling; this turns that answer into an actual boundary.

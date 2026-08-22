@@ -27,6 +27,7 @@ from vaf.core.config import Config
 from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
+from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
 from typing import Dict, Optional, List
 import logging
 from vaf.core.tray_context import TrayContext
@@ -2373,17 +2374,19 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
 
 
 def _resolve_workspace_subdir(root: str, subpath: str) -> str:
-    """Join a browse subpath onto the workspace root, refusing escapes."""
-    sub = (subpath or "").strip().strip("/")
-    if not sub:
-        return root
-    target = os.path.normpath(os.path.join(root, sub))
-    root_norm = os.path.normpath(root)
-    if target != root_norm and not target.startswith(root_norm + os.sep):
+    """Join a browse subpath onto the workspace root, refusing escapes.
+
+    Containment is `contained_path`, so it holds against a symlink inside the
+    workspace as well: this used to compare normalized strings, and a link
+    planted in a chat folder carried every caller of this - browse, upload,
+    delete, mkdir - to the link's target.
+    """
+    try:
+        return str(contained_path(root, subpath, must_exist=True))
+    except PathEscape as e:
+        if "not found" in str(e):
+            raise HTTPException(status_code=404, detail="Folder not found")
         raise HTTPException(status_code=400, detail="Invalid subpath")
-    if not os.path.isdir(target):
-        raise HTTPException(status_code=404, detail="Folder not found")
-    return target
 
 
 @app.get("/api/session/workspace")
@@ -2473,8 +2476,9 @@ async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Re
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     path = _resolve_workspace_subdir(root, req.subpath)
-    name = os.path.basename((req.filename or "").strip())
-    if not name or name.startswith('.') or name != req.filename.strip():
+    try:
+        name = safe_entry_name(req.filename)
+    except PathEscape:
         raise HTTPException(status_code=400, detail="Invalid filename")
     import base64 as _b64
     try:
@@ -2518,8 +2522,9 @@ async def create_session_workspace_folder(req: WorkspaceMkdirRequest, request: R
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     path = _resolve_workspace_subdir(root, req.subpath)
-    name = os.path.basename((req.name or "").strip())
-    if not name or name.startswith('.') or name != (req.name or "").strip():
+    try:
+        name = safe_entry_name(req.name)
+    except PathEscape:
         raise HTTPException(status_code=400, detail="Invalid folder name")
     target = os.path.join(path, name)
     if os.path.exists(target):
@@ -2549,12 +2554,19 @@ async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: R
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     folder = _resolve_workspace_subdir(root, req.subpath)
-    name = os.path.basename((req.name or "").strip())
-    if not name or name.startswith('.') or name != req.name.strip():
-        raise HTTPException(status_code=400, detail="Invalid name")
-    target = os.path.normpath(os.path.join(folder, name))
-    root_norm = os.path.normpath(root)
-    if target == root_norm or not target.startswith(root_norm + os.sep):
+    try:
+        # `folder` already came back contained in the workspace, so containing
+        # the entry within `folder` is the whole remaining question - and it is
+        # asked against the folder rather than the root because a relative path
+        # rebuilt between the two would compare a resolved folder with an
+        # unresolved root, which produces an upward walk on any host whose
+        # home or documents directory is itself a link.
+        name = safe_entry_name(req.name)
+        resolved = contained_path(folder, name)
+    except PathEscape:
+        raise HTTPException(status_code=400, detail="Invalid target")
+    target = str(resolved)
+    if resolved == Path(root).resolve():
         raise HTTPException(status_code=400, detail="Invalid target")
     if not os.path.exists(target):
         raise HTTPException(status_code=404, detail="Not found")
@@ -8785,15 +8797,12 @@ def _a2a_workspace_member_path(workspace, relative: str):
     Relative, no leading slash, no `..`, and the RESOLVED path must stay under
     the resolved workspace - which also catches a symlink pointing out.
     """
-    relative = str(relative or "").strip()
-    if (not relative or relative.startswith(("/", "\\"))
-            or ".." in relative.replace("\\", "/").split("/")):
+    if not str(relative or "").strip():
         raise HTTPException(status_code=400, detail="path must be relative, without ..")
-    root = workspace.resolve()
-    target = (workspace / relative).resolve()
-    if root != target and root not in target.parents:
-        raise HTTPException(status_code=400, detail="path must stay inside the workspace")
-    return target
+    try:
+        return contained_path(workspace, relative)
+    except PathEscape as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/a2a/rooms/{room_id}/files")

@@ -46,17 +46,18 @@ def test_facade_exports_exactly_the_documented_surface():
     none of them. Unique N for a new engine method: zero."""
     assert vaf.__version__
     assert sorted(vaf.__all__) == [
-        "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent", "RemoteRefused", "RemoteRoom",
+        "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
+        "PathEscape", "RemoteRefused", "RemoteRoom",
         "Room", "RoomError", "StoreError",
         "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName", "UploadVerdict",
         "VoiceTurnEngine",
         "__version__",
-        "account_allows_tool",
+        "account_allows_tool", "contained_path",
         "derive_peer_id", "describe_room_entry", "extract_pdf_markdown",
         "fold_room_tasks", "fold_room_votes", "inspect_upload",
         "install_thread_excepthook", "joined_rooms", "markers",
         "participant_key", "record_threat", "room_invitation",
-        "set_account_allowlist_resolver",
+        "safe_entry_name", "set_account_allowlist_resolver",
         "set_confirmation_bypass_resolver",
         "unread_counts", "user_jail",
     ]
@@ -79,6 +80,9 @@ def test_the_newly_public_names_actually_resolve():
     # same need. Import must stay cheap (stdlib at module level).
     assert callable(vaf.extract_pdf_markdown)
     assert callable(vaf.account_allows_tool)
+    assert callable(vaf.contained_path)
+    assert callable(vaf.safe_entry_name)
+    assert issubclass(vaf.PathEscape, ValueError)
     assert callable(vaf.set_account_allowlist_resolver)
     assert callable(vaf.set_confirmation_bypass_resolver)
 

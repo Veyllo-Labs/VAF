@@ -129,6 +129,10 @@ This is the contract. Treat it as a stable API.
   and `vaf.account_allows_tool` - its read side, for a surface that LISTS tools
   and must not offer what the account cannot run (contract in
   [EMBEDDING.md](EMBEDDING.md))
+- `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.PathEscape` - keeping a
+  path that arrived from outside inside the directory it may touch, decided on
+  RESOLVED paths so a symlink cannot lead out of the root
+  (contract in [EMBEDDING.md](EMBEDDING.md))
 - the `vaf.tools` entry-point group
 - documented config keys
 
@@ -141,7 +145,8 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   The names above that live in `vaf.core` but are re-exported on the façade
   (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
-  `account_allows_tool`) are the deliberate
+  `account_allows_tool`, `contained_path`, `safe_entry_name`,
+  `PathEscape`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

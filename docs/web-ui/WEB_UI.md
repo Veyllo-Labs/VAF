@@ -66,6 +66,7 @@ Singleton pattern manager that:
 - **Streaming Responses**: Live updates as agent generates responses. When the agent uses a tool, the text *after* the tool is shown in a **separate** assistant bubble (so you see: first answer → tool card → follow-up answer), instead of one bubble that keeps updating.
 - **Thinking Process**: Collapsible accordion showing agent's reasoning (`<think>` blocks)
 - **System Steps**: Timeline visualization of agent workflow steps
+- **Actions on a reply**: next to the timestamp under every agent reply sit four small buttons. **Read aloud** speaks it through TTS (it used to float beside the bubble on its own, which read as a different kind of control than the rest). **Save** writes that reply to a Markdown file through the host's own Save dialog (the desktop window's `save_text_as` bridge, a browser download elsewhere; both through `web/lib/download.ts`). **Copy** puts the same Markdown on the clipboard (`copyText` in `web/lib/clipboard.ts`, which falls back to a hidden textarea because `navigator.clipboard` does not exist outside a secure context, and a LAN user on plain HTTP is exactly that case). **Ask again** appears only on the NEWEST reply and only while the chat is idle: it arms on the first click and fires on the second, then discards that exchange and asks the same question again (see `regenerate_last_reply` in [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md)). All three read the cleaned answer, never the stored message text, which still carries the thinking block and the tool-call JSON.
 
 ### 2. Session Management
 
@@ -86,8 +87,11 @@ many frames have not been read.
 - **The order is not decided here.** `SessionManager.list_ui` puts rooms first, and
   the terminal app renders the same list in the same order. A surface that sorted for
   itself would be a second rule, and the two would drift.
-- **A room row is not a session row.** It cannot be renamed or deleted from the
-  sidebar, and clicking it sends `open_room`, never `load_session`. Its id is prefixed
+- **A room row is not a session row.** It is renamed from the sidebar the way a
+  conversation is, but the new name goes somewhere else: a room's topic lives in its
+  manifest, so the row sends `rename_room` rather than `rename_session`. It cannot be
+  deleted from the sidebar (a room is closed, not deleted), and clicking it sends
+  `open_room`, never `load_session`. Its id is prefixed
   (`room:<id>`) precisely so that a loader cannot accept it by accident. Every place
   the frontend picks a session on its own - the auto-load on connect and the fallback
   after a delete - filters the rooms out first, because the first entry in the list is
@@ -295,11 +299,12 @@ many frames have not been read.
 - **Auto-Open**: The panel opens when a sub-agent starts (via tool events/logs).
 - **Tool Card Toggle**: Clicking a sub-agent tool card expands details and opens the panel; collapsing the card closes the panel.
 - **Auto-Close Guard**: The panel does not auto-close while any sub-agent step is still running.
-- **Browser button**: A globe in the chat area's top-right corner opens and closes the
+- **Hotbar**: the specialists a person keeps within reach, sitting in the chat header's rail between the globe and the plus. The plus opens a palette of the available specialists (the browser is deliberately absent: the globe already is its permanent seat) and a pick is stored PER USER in `user_identity.json` under `hotbar_agents`, not in the browser, so it follows the account to another machine. What is shown is the picks minus anything that account may no longer run, filtered against the tools list the server already scopes per user, so a revoked specialist disappears from the rail without its pick being lost. Clicking one opens THAT specialist's window whether or not it is running, clicking it again closes it, and the open one is the rail's bright mark. Which window is open travels with the next message, so "sort this" means the folder on screen.
+- **Browser button**: A globe at the left of the chat header's rail opens and closes the
   browser window directly, and carries the open state as its own mark (one step brighter
-  and larger, the same language its hover uses). It is placed in the chat column rather
-  than the window, so it travels inward with the column when the dock opens, and it is
-  given the sidebar header's `h-16` band so it sits on the logo's optical line. Opening
+  and larger, the same language its hover uses). It sits in the chat column's own header
+  rather than in the window, so it travels inward with the column when the dock opens,
+  and that header IS the `h-16` band that puts it on the sidebar logo's optical line. Opening
   also asks the server for the INTERACTIVE stream (`browser_interactive_start`): with no
   agent run holding the browser, the window shows the sandbox Chromium fullscreen through
   a KasmVNC stream and the person drives it by hand - Chromium's own tabs and omnibox,
@@ -973,6 +978,16 @@ The Web UI runs alongside the CLI interface:
 - **Collapsible**: Details (args/result/output) are collapsible to save space; the open/close logic is unchanged (sub-agent tool cards still open the docked panel).
 - **Live Updates**: Updates in real-time as tool execution progresses
 
+### Chat Header
+
+- **In flow, not an overlay**: the first child of the chat column, `h-16`, so the scroller below simply gets 64px less height. Every scroll site in the file measures the scroller rather than the viewport, so none of them needs to know the header exists.
+- **The band the globe used to borrow**: the column and the sidebar are siblings of one flex row and start at the same y, so this header and the sidebar's logo header are the same height and the chat name, the logo and the rail land on one optical line. A change to that height now really does move all three.
+- **No edge**: it paints the column's own surface (`bg-white`, which folds) and has no border. The separation is the fade below it, not a rule.
+- **The name is the rename entry point**, on the sidebar's own lane: the same `editingId`, the same `submitRename`, the same `rename_session` command. `editingWhere` says which surface started the rename, because only a sidebar rename may pin the sidebar open, and only one field may mount at a time. The field itself is the shared `RenameInput` (the sidebar's two rows and the header). While a room is open the name half goes quiet: the room carries its own header inside the transcript, with its member count and whether the view is live.
+- **The rail runs left to right** at the end of the header, read in the same order it used to run downwards: the browser globe, the picked specialists, the plus that adds one. Every seat is one `RAIL_STEP` cell with its glyph centred, so centre-to-centre is the same for every pair whatever the glyph's size is. The group is right-aligned and grows leftward, which makes the plus a target that stays put. The palette's own pictogram runs the same axis, and animates the globe rather than the plus for the same reason: a drawing where the plus slides would teach a rhythm the rail does not keep.
+- **The fade below it** is a sibling of the scroller, `--chat-fog` to transparent over 40px, `pointer-events-none`. Text dissolves before it reaches the header instead of sliding under a hard edge. Not painted while a room is open (the room's own header is frosted on purpose) nor over an empty chat. The messages column reserves the same 40px so the first message can scroll clear of it.
+- **Small layout**: the header is `max-md:hidden` and the app's own top bar carries the name instead, read-only. One bar per layout; renaming there stays in the drawer, where the pencil already has a full touch target.
+
 ### Sidebar
 
 - **Collapsed**: 64px width (icon only)
@@ -986,10 +1001,19 @@ The Web UI runs alongside the CLI interface:
 - **States**: Disabled during loading, focus ring on interaction.
 - **Submit**: Enter key or click send button.
 
+### Escape
+
+- **Shared primitive** (`web/hooks/useEscapeLayer.ts`): ONE capture-phase `keydown` listener on `window` for the whole app, dispatching to the topmost registered layer and stopping the press there (`stopImmediatePropagation`). An overlay registers with `useEscapeLayer({ active, level, onEscape })` instead of binding its own listener.
+- **Why it is a registry and not a listener per overlay**: `stopPropagation` is consulted between the NODES of a dispatch path, never between two listeners on the same node, so a listener on `window` cannot stop a sibling listener on `window`. Every overlay binding its own meant one press dismissing two or three layers at once, and the calls written to prevent that were inert. A single listener over an ordered registry is the only shape that can decide whose press it is.
+- **`level` orders the layers**, higher answers first, and the convention is the overlay's own z-index number, so the ladder matches what the eye sees. Content nested inside one overlay and covering it (a draft row, a context menu, a confirmation) counts up from its parent's level. Equal levels break by registration order, latest first. The level is explicit rather than last-in-first-out because React runs child effects before parent effects, which would tie the order to mount timing instead of the screen.
+- **`onEscape: null` swallows the press** and dismisses nothing: the shape for a dialog whose Cancel is disabled while the work it guards is in flight, and for a surface Escape must never abort. It also keeps the layer underneath from answering in its place.
+- **Opting out is not registering.** With an empty registry no listener is bound at all, so an unconverted overlay behaves exactly as it did before the registry existed.
+- **Conversion ledger.** Converted: the chat's workspace explorer (five levels, see the Session Workspace Window section), the context window, the sub-agent palette, `ConfirmDialog`. Not converted yet: `SettingsModal`'s 22-branch stacked handler and its children (the largest site, and it carries real product decisions such as whether Escape discards an unsaved custom tool), `NotificationsModal`, the automation calendar pair, `CodeViewer` (its Escape discards unsaved edits with no dirty check, which is a decision, not a mechanical move), the connections dashboards, `SubAgentWindow`'s idle context menu. The ledger covers surfaces that bind Escape at all; one that binds nothing is simply not in it, and stays unaffected because an unregistered overlay behaves exactly as it did before the registry existed. A surface that must NOT be dismissed by Escape while it is up does not stay unregistered either: it registers with `onEscape: null`, which swallows the press so the layer underneath cannot answer in its place. The set that still hand-rolls a listener is a ratchet pinned by `tests/test_escape_answers_one_layer.py`.
+
 ### Confirm Dialog
 
 - **Shared primitive** (`web/components/ui/ConfirmDialog.tsx`): one yes/no question in front of something that is not cheap to take back. Callers own the wording (title, body, both labels) and nothing else; the body takes a string (rendered as one paragraph) or nodes for several.
-- **Behaviour**: the safe answer takes focus on open, so Enter on an untouched dialog does nothing costly, and `Escape` is bound in the **capture** phase so the modal underneath cannot close out from under it. Default stacking is `z-[80]`, above the modal that opened it.
+- **Behaviour**: the safe answer takes focus on open, so Enter on an untouched dialog does nothing costly, and `Escape` is registered as a **layer** at level 80 in the shared registry (see Escape above), above the modal that opened it, so one press answers the dialog and the modal underneath cannot close out from under it. Default stacking is `z-[80]`, and the level follows it (`escapeLevel`).
 - **Buttons**: the emphasis is deliberately inverted against the usual primary/secondary pair - the safe answer carries the emphasis fill and the confirming answer is the black button - because the confirmed action costs real work. The dark-mode mechanics are in [DARKMODE.md](DARKMODE.md).
 - **Reach**: one call site so far (the "Train tool now" confirmation). The rest of the app still confirms ad hoc: four sites call the browser's `window.confirm()`, and the destructive-dialog card markup is repeated verbatim in five more. Converting those is a separate sweep, deliberately not folded into the change that introduced this component.
 
@@ -1069,7 +1093,8 @@ Files and folders can be deleted from the tile hover actions; a confirmation dia
 - **Navigation:** folders open on click, a breadcrumb and a `..` row navigate back. Browsing is strictly confined to the chat folder - `subpath` values are resolved server-side against the workspace root and escapes are rejected with 400 (`_resolve_workspace_subdir`, which decides containment through `vaf.contained_path` on resolved paths, so a symlink inside the workspace does not lead out of it).
 - **Download** per file via the existing `GET /api/file?path=...` endpoint; file rows are draggable out of the browser (Chromium `DownloadURL`).
 - **Upload** via the footer button (multi-select) or by dropping files anywhere into the list - they land in the currently open folder. Sent as base64 JSON to `POST /api/session/workspace/upload` (25 MB cap, filename sanitized).
-- **New folder:** `POST /api/session/workspace/mkdir` creates one folder inside the currently browsed subpath (same jail, name validated like an upload filename: basename only, no dotfiles; duplicates answer 409). Consumed today by the idle Coder window's Explorer context menu.
+- **New folder:** `POST /api/session/workspace/mkdir` creates one folder inside the currently browsed subpath (same jail, name validated like an upload filename: basename only, no dotfiles; duplicates answer 409). Consumed by the idle Coder window's Explorer context menu and by the workspace window's own right-click menu (`web/app/page.tsx`): right-clicking the file area offers "New folder" (rendered as a draft tile in the grid; Enter creates, Escape cancels, a navigation dismisses it) and "Upload files"; right-clicking a folder tile adds "Open folder" and "Delete folder".
+- **Leaving the window:** Escape steps back one level, innermost first: the delete confirmation, then the right-click menu, then a half-typed folder name, then the search box in the index view, then the window itself. It goes through the shared Escape registry (see the Escape section), so one press dismisses one layer and never something behind the window; while a delete is actually running Escape is ignored, matching the greyed-out Cancel. Closing the window, by Escape or by the X or by clicking a file open, resets it through one shared path (`closeWorkspaceModal`): view, search, legend, navigation history, the dismissable layers and which workspace was being viewed. Without that reset the chip reopened the LAST VIEWED workspace, because it refreshes without naming a session, so a chat's own folder button could show another chat's files.
 - **Data source:** `GET /api/session/workspace?sessionId=...&subpath=...` lists non-hidden folders (with item counts) and files (size, modified).
 - **User isolation:** every one of these endpoints verifies session ownership (`metadata.user_scope_id` vs. the requesting user; local admin exempt; a session with NO recorded scope is admin-only, same policy as the WebSocket gate) and `GET /api/file` refuses downloads from another user's `VAF_Projects/<uid[:8]>/` subtree - see `docs/security/USER_ISOLATION.md`.
 - **Live refresh:** chip and window refresh on session switch, on every `file_created` event and after uploads.

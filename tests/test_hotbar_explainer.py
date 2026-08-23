@@ -65,6 +65,30 @@ def test_the_drawing_animates_nothing_that_repaints():
         assert props <= {"transform", "opacity"}, f"repainting property in the loop: {sorted(props)}"
 
 
+def test_the_drawing_runs_the_axis_the_rail_runs():
+    """The drawing exists to teach the rail, so it has to keep the rail's shape.
+    It taught a vertical strip on the window's right edge until the rail moved
+    into the chat header; a drawing left on the old axis is the exact drift this
+    file's other rhythm test is written against, and nothing else would notice.
+
+    Which element MOVES is part of the shape: the real group is right-aligned
+    and grows leftward, so a pick pushes the globe over while the plus keeps its
+    gutter. A drawing where the plus slides teaches the opposite."""
+    base = _section().split("@media (prefers-reduced-motion", 1)[0]
+    seats = re.search(r"\.vaf-hb-dot\s*\{([^}]*)\}", base)
+    assert seats and "top:" in seats.group(1), \
+        "the seats no longer share one top, so the rail is not a horizontal band"
+    for seat in ("globe", "slot", "plus"):
+        rule = re.search(rf"\.vaf-hb-{seat}\s*\{{(.*?)\}}", base, re.S)
+        assert rule and "right:" in rule.group(1), \
+            f"the {seat} is positioned on the old vertical axis again"
+    plus = re.search(r"\.vaf-hb-plus\s*\{(.*?)\}", base, re.S).group(1)
+    assert "animation:" not in plus, \
+        "the plus moves again - it keeps its gutter while the group grows leftward"
+    assert "translateX" in _section() and "translateY" not in _section(), \
+        "the rail's step animates on the vertical axis again"
+
+
 def test_reduced_motion_still_shows_the_end_state():
     # With animations off the drawing must not collapse to an empty frame:
     # the picked state is what the sentence next to it describes.
@@ -120,15 +144,20 @@ def test_the_rail_positions_come_from_one_rhythm():
     """The rail's spacing exists three times now: the plus, the picked agents,
     and the drawing that explains them. Hard-coded pixels in any of those three
     is how they drift apart - the drawing would then teach a rhythm the real
-    rail does not keep."""
+    rail does not keep.
+
+    The rail runs left to right in the chat header, so the step is a CELL WIDTH:
+    every seat is one cell with its glyph centred, and centre to centre is the
+    same for every pair whatever the glyph's own size is."""
     page = _PAGE.read_bytes().decode("utf-8")
-    assert "const RAIL_STEP = 33;" in page and "const RAIL_STEP_TOP = 51;" in page
-    # both movable rail buttons position themselves from the constants
-    assert "top: RAIL_STEP_TOP + i * RAIL_STEP" in page, "hotbar icons stopped using the step"
-    assert "top: RAIL_STEP_TOP + visibleHotbarPicks.length * RAIL_STEP" in page, \
-        "the plus stopped moving down as agents arrive"
-    # and no stale absolute top on those buttons
-    assert "top-[51px]" not in page, "a hard-coded rail offset came back"
+    assert "const RAIL_STEP = 33;" in page
+    assert "RAIL_STEP_TOP" not in page, "the vertical rail's top offset came back"
+    assert page.count("style={{ width: RAIL_STEP }}") == 3, \
+        "the globe, a pick and the plus are one cell each - a hand-sized seat drifts from the drawing"
+    # No hard-coded seat on either axis, and none of the offsets the shared right
+    # edge used to need.
+    for stale in ("top-[51px]", "left-[51px]", "w-[33px]", "right-[19px]", "right-[21px]"):
+        assert stale not in page, f"a hard-coded rail offset came back: {stale}"
 
 
 # The click's behaviour moved on: an icon used to write the tool mention into the

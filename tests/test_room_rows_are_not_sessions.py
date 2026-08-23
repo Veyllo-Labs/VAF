@@ -387,7 +387,9 @@ def test_a_room_row_carries_the_same_pair_a_conversation_does():
     """
     branch, _chat = _sidebar_branches()
 
-    assert "Edit2" in branch and "startEditing(s)" in branch
+    # The surface is named at the call site: only a rename begun in the SIDEBAR may
+    # pin the sidebar open, now that the chat header renames through the same lane.
+    assert "Edit2" in branch and "startEditing(s, 'sidebar')" in branch
     assert "Trash2" in branch and "setRoomToClose(s)" in branch
     assert "delete_session" not in branch, (
         "a room row reached the session deleter, which would not know what to delete")
@@ -403,8 +405,10 @@ def test_a_room_renames_in_the_sidebar_the_way_a_conversation_does():
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     branch, _chat = _sidebar_branches()
 
-    assert "startEditing(s)" in branch, "the pencil no longer edits in place"
-    assert "editingId === s.id" in branch and "submitRename()" in branch
+    assert "startEditing(s, 'sidebar')" in branch, "the pencil no longer edits in place"
+    assert "editingId === s.id && editingWhere === 'sidebar'" in branch, \
+        "the row would mount its field while a header rename is open, with two carets"
+    assert "submitRename" in branch
     assert "setRoomToRename" not in branch, "the room row still opens a rename dialog"
 
     body = source.split("const submitRename = () => {")[1][:900]

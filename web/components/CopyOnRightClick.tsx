@@ -26,11 +26,13 @@ export default function CopyOnRightClick() {
 
       e.preventDefault();
 
-      // Copy the already-active selection with execCommand. This is synchronous and does
-      // NOT trigger a clipboard *permission* request — important inside the QtWebEngine
-      // desktop window, where navigator.clipboard.writeText() fires a feature-permission
-      // request that crashes pywebview's Qt handler. Fall back to the async API only if
-      // execCommand is unavailable (e.g. a future plain-browser context).
+      // Copy the already-active selection with execCommand, which is synchronous and
+      // needs no secure context. That order is right here for a second reason too:
+      // the selection IS the payload, so there is nothing to hand the async API that
+      // it could copy more faithfully. (The permission request this once avoided no
+      // longer crashes the desktop window: clipboard access is enabled and the Qt
+      // handler replaced in vaf/core/desktop_window.py. Buttons that copy text they
+      // hold themselves go through lib/clipboard.ts instead.)
       let copied = false;
       try { copied = document.execCommand('copy'); } catch { copied = false; }
       if (!copied && navigator.clipboard?.writeText) {

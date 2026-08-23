@@ -325,7 +325,7 @@ The viewport is visible in both **dock mode** (right side panel) and **overlay m
 
 ### Interactive browser: driving the sandbox by hand
 
-The globe button in the chat's top-right corner (aligned with the sidebar logo) opens the
+The globe button at the left of the chat header's rail (in the `h-16` band that puts it on the sidebar logo's optical line) opens the
 browser window and, when no agent run holds the browser, asks the server for the
 INTERACTIVE stream (`browser_interactive_start`). The window then shows the container's
 Chromium fullscreen through a KasmVNC WebSocket stream - Chromium's own tabs, omnibox and

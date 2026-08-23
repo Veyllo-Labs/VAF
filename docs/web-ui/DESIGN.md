@@ -166,6 +166,11 @@ Use the dark accent color (same as primary buttons and settings nav) for the "on
 
 #### Full-Screen Modal Structure
 ```jsx
+// Dismissal: register the overlay with the shared Escape registry rather than
+// binding keydown here. Two window listeners both answer the same press.
+// See the Escape section in WEB_UI.md.
+useEscapeLayer({ active: isOpen, level: 60, onEscape: onClose });
+
 {/* Backdrop */}
 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
   {/* Modal Container */}
@@ -357,6 +362,8 @@ className="animate-in fade-in zoom-in-95 duration-200"
 | **Modals** | `z-50` | Primary modals |
 | **Nested Modals** | `z-[60]` | Modals over modals (e.g., Discord Wizard) |
 | **Tooltips/Popovers** | `z-[9999]` | Always on top (e.g., autocomplete) |
+
+These numbers double as Escape levels: an overlay registers with `useEscapeLayer` at its own z-index number, so the dismissal order and the visual order cannot drift apart (see the Escape section in [WEB_UI.md](WEB_UI.md)).
 
 ---
 

@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import dynamic from 'next/dynamic';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { downloadText } from '@/lib/download';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
 import NativeDocxEditor from '@/components/NativeDocxEditor';
 import type { NativeDocxDocument } from '@/lib/docxNative';
@@ -708,7 +709,6 @@ function LegacyDocumentEditor({
     const getDesktopApi = () => (window as unknown as {
         pywebview?: { api?: {
             render_pdf?: (html: string, name: string, mode: string) => Promise<unknown>;
-            save_text_as?: (content: string, name: string) => Promise<unknown>;
         } };
     }).pywebview?.api;
     const printBaseName = () => (displayFile || 'document').replace(/\.[^.]+$/, '') || 'document';
@@ -799,23 +799,11 @@ function LegacyDocumentEditor({
         }
     };
 
-    const downloadHTML = async () => {
-        // Desktop: native Save-As dialog writes the current content to disk.
-        const api = getDesktopApi();
-        if (api?.save_text_as) {
-            await api.save_text_as(content, displayFile);
-            return;
-        }
-        const blob = new Blob([content], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = displayFile;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
+    // Native Save dialog in the desktop window, browser download everywhere else.
+    // Through the shared helper because this used to branch on the bridge's
+    // PRESENCE: a bridge that answered "not saved" left the person with no file
+    // and no message, and a cancelled dialog fell through to a download anyway.
+    const downloadHTML = () => downloadText(content, displayFile, 'text/html');
 
     const saveSelectionFromIframe = useCallback(() => {
         const doc = iframeRef.current?.contentDocument;

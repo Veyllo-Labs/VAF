@@ -12,6 +12,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A reopened chat shows its own pictures again.** A picture sent with a
+  message was stored and was still on the server, but reopening the chat left
+  the message without it: the browser rebuilt each message field by field when
+  it loaded a conversation, and the attachments were not among the fields it
+  carried over. They are now, so a chat looks the same after a reload as it did
+  when it was written.
+- **Copying now works where it quietly did nothing.** Six places offered a copy
+  button that could fail without saying so: the verification codes in the
+  Telegram and Discord setup, the device code in the GitHub setup, the network
+  address in Settings, a newly created user's password, and the two-factor key
+  during login. Reached over the local network rather than on the machine
+  itself, the browser does not offer the clipboard at all there, so the press
+  either did nothing or broke the dialog it was in. All of them now fall back to
+  a way of copying that works anywhere.
 - **A link inside a chat's workspace can no longer lead out of it.** Every
   workspace lane (browsing, upload, delete and the new folder action) decided
   "is this still inside the chat's folder" by comparing text. A symbolic link
@@ -33,7 +47,53 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only what that account may run, and it errs on the side of hiding an entry if
   the permission lookup fails.
 
+- **Escape closes the workspace window, and closes exactly one thing.** The
+  chat's workspace explorer could only be left through the X in its header:
+  Escape did nothing there, so a delete confirmation, which covers that X, left
+  no way out but answering it. Escape now steps back one level, innermost
+  first: the delete confirmation, then the right-click menu, then a half-typed
+  folder name, then the search box, then the window. It is also no longer a
+  press that dismisses two things at once. The app answers Escape in one place
+  now and hands it to the topmost thing on screen only, so a panel open beside
+  the chat no longer closes underneath the dialog you meant to leave.
+- **Reopening the workspace window lands where you expect.** Closing it kept
+  the folder you had drilled into, the workspace you had opened from the list
+  of all workspaces, and the search you had typed, so opening it again from a
+  chat could show another chat's files, or that list instead of the chat's own
+  folder, with a Back button that looked live and did nothing. Closing it now
+  clears all of that.
+
 ### Added
+- **Every chat has a header, and its name is where you rename it.** The chat's
+  name now stands at the top of the conversation, and clicking it renames the
+  chat right there, through the same lane the sidebar has always used. The
+  header has no edge of its own: it is the same colour as the page behind it,
+  and the text scrolling up dissolves into it instead of sliding under a line.
+  On a phone the app's own top bar carries the name instead, so there is still
+  only one bar.
+- **The specialists sit in that header now, left to right.** The globe, the
+  specialists you picked and the plus that adds one used to run down the right
+  edge of the conversation; they now run along the header, in the same order,
+  and the plus stays in one place instead of sliding down as specialists
+  arrive. Nothing about picking or opening them changed.
+- **An agent reply can be read aloud, saved, copied and asked again.** Next to
+  the timestamp under every reply sit four small actions. Read aloud moved here
+  from beside the bubble, where it sat alone and read as a different kind of
+  control than the rest; it now also reaches replies from a turn that used
+  tools, which never had it. Save writes that reply
+  to a Markdown file through your own system's Save dialog. Copy puts the same
+  Markdown on the clipboard, and now works over the local network too, where
+  the browser's own clipboard is simply not available and copying used to do
+  nothing at all. Ask again is offered on the newest reply only, and only while
+  the chat is idle: it asks once before it fires, then discards that exchange
+  and puts the same question again. It is refused while an answer is still
+  being written and while a specialist of that chat is still working, so
+  nothing that is still being produced can be thrown away.
+- **The workspace window gets a right-click menu.** Right-clicking the file
+  area of a chat's workspace offers "New folder" (a draft tile in the grid:
+  type the name, Enter creates it) and "Upload files"; right-clicking a
+  folder adds "Open folder" and "Delete folder". Until now a folder could
+  only be created here from the Coder window's idle Explorer.
 - **`vaf.contained_path`, `vaf.safe_entry_name`, `vaf.PathEscape`**: keeping a
   path that came from outside inside the directory it may touch, now part of the
   public framework surface. Containment is decided on resolved paths, so a

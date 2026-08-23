@@ -12,11 +12,15 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
+    Folder, FolderOpen, FolderPlus, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
     Lock, Unlock, Globe, Code2, MousePointer2, Microscope, PenLine, BookOpen,
+    Copy, RotateCcw,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
+import { useEscapeLayer } from '@/hooks/useEscapeLayer';
+import { copyText } from '@/lib/clipboard';
+import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
@@ -152,6 +156,11 @@ type Session = {
  * (first load, after a delete, after the list changes) all filter through here.
  */
 const isRoom = (s: Session) => s.kind === 'room';
+/** A chat's name as a person should read it. Nothing server-side writes `.json`
+ *  into a name any more, but old records carry it, and three places stripped it
+ *  by hand - two of them calling .replace() straight on a title the payload
+ *  types as possibly absent. */
+const chatLabel = (title?: string | null) => (title || '').replace('.json', '');
 const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s));
 
 type RoomMessage = {
@@ -311,6 +320,44 @@ function formatMessageTime(ts: number, timeFormat?: '24h' | '12h'): string {
     if (isYesterday) return `Yesterday ${time}`;
     if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`;
     return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ' ' + time;
+}
+
+/** File name for a saved reply. Derived from the reply's own time, not from the
+ * chat title: a title is free text a person wrote, so it carries spaces, slashes
+ * and names that do not belong in a file name on someone else's disk. */
+function replyFileName(ts: number): string {
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `vaf-reply-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.md`;
+}
+
+/** The rename field, in one place. It stood twice byte-identically, in the room
+ *  row and in the chat row, and the header is the third caller. Enter commits,
+ *  Escape discards, leaving the field commits, and a click inside must not reach
+ *  the row underneath. Module level on purpose: declared inside the page body it
+ *  would be a new component type on every render, remount, and drop the caret
+ *  mid-word. */
+function RenameInput({ value, onChange, onCommit, onCancel, className }: {
+    value: string;
+    onChange: (v: string) => void;
+    onCommit: () => void;
+    onCancel: () => void;
+    className?: string;
+}) {
+    return (
+        <input
+            autoFocus
+            className={cn("w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent", className)}
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            onKeyDown={e => {
+                if (e.key === 'Enter') onCommit();
+                if (e.key === 'Escape') onCancel();
+            }}
+            onBlur={onCommit}
+            onClick={e => e.stopPropagation()}
+        />
+    );
 }
 
 /** Day separator in chat: date at top (end) and bottom (continuation). */
@@ -577,11 +624,12 @@ const SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map(([, kind]) => k
 // absent and then wonder why removing it changes nothing.
 const HOTBAR_KINDS: SubAgentKind[] = SUBAGENT_KINDS.filter(k => k !== 'browser');
 // The rail's rhythm, in one place: the explainer drawing spaces its icons at
-// 1.67x the globe's width, which is 33px for the real 20px globe. RAIL_STEP_TOP
-// is where the first icon below the globe sits (its centre at 65; the globe's is
-// at 32, being top-0 in an h-16 box, and these buttons are h-7).
+// 1.67x the globe's width, which is 33px for the real 20px globe. The rail runs
+// left to right in the chat header, so this is a CELL WIDTH rather than an
+// offset: every seat is one cell with its glyph centred, which makes centre to
+// centre exactly 33 for every pair whatever the glyph's own size is, and retires
+// the two hand-nudged offsets the icons needed while they shared a right edge.
 const RAIL_STEP = 33;
-const RAIL_STEP_TOP = 51;
 
 // Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
 // Hard cap on the in-memory `messages` array. During Live-Mode the agent streams
@@ -2601,6 +2649,13 @@ function VAFDashboardContent() {
     const syncedSessions = useRef<Set<string>>(new Set());        // sessions whose history snapshot already arrived → re-entering an (empty) one shows no spinner flash
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
+    // WHICH row is being renamed is one question with one answer, and both
+    // surfaces read `editingId` for it - two answers is how a sidebar and a
+    // header come to disagree. WHERE the rename started is a second question:
+    // only a sidebar rename may pin the sidebar open over the chat, and only one
+    // field may mount, or two autoFocus inputs fight for the caret and the typing
+    // lands in whichever the browser happened to pick.
+    const [editingWhere, setEditingWhere] = useState<'sidebar' | 'header'>('sidebar');
     const [config, setConfig] = useState<any>({});
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [downloadModelStatus, setDownloadModelStatus] = useState<{
@@ -2847,12 +2902,19 @@ function VAFDashboardContent() {
     useEffect(() => {
         setWorkspaceInfo(null);
         workspaceSubpathRef.current = '';
+        setWorkspaceNewFolder(null);
+        setWorkspaceMenu(null);
         if (currentSessionId) refreshWorkspace(currentSessionId, '');
     }, [currentSessionId, refreshWorkspace]);
 
     const uploadWorkspaceFiles = useCallback(async (files: File[]) => {
         const wsSid = viewedWorkspaceSidRef.current ?? currentSessionId;
         if (!wsSid || !workspaceInfo?.path) return;
+        // The folder this batch was aimed at, captured like the session above:
+        // the loop reads a file and awaits a POST per file, so it outlives a
+        // navigation or a close, and re-reading the ref mid-flight sent the rest
+        // of the batch wherever the window had moved to (the root, after a close).
+        const wsSubpath = workspaceSubpathRef.current;
         setWorkspaceUploading(true);
         try {
             for (const file of files.slice(0, 10)) {
@@ -2870,7 +2932,7 @@ function VAFDashboardContent() {
                         sessionId: wsSid,
                         filename: file.name,
                         content_base64: base64,
-                        subpath: workspaceSubpathRef.current,
+                        subpath: wsSubpath,
                     }),
                 });
             }
@@ -2880,13 +2942,79 @@ function VAFDashboardContent() {
     }, [currentSessionId, workspaceInfo?.path, refreshWorkspace]);
     const [workspaceDragOver, setWorkspaceDragOver] = useState(false);
 
+    // Right-click context menu + "New folder" draft tile for the folder view.
+    // Creating a folder is the one write besides upload; the server applies the
+    // same jail as every workspace route, so only the NAME travels from here -
+    // the parent is whatever folder is open when the draft is confirmed.
+    const [workspaceMenu, setWorkspaceMenu] = useState<{ x: number; y: number; dirName: string | null } | null>(null);
+    const [workspaceNewFolder, setWorkspaceNewFolder] = useState<{ value: string; error: string | null } | null>(null);
+    const workspaceBrowserRef = useRef<HTMLDivElement>(null);
+    const openWorkspaceMenu = useCallback((ev: React.MouseEvent, dirName: string | null) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const host = workspaceBrowserRef.current;
+        const rect = host?.getBoundingClientRect();
+        setWorkspaceMenu({
+            // The browser pane scrolls itself, so the menu is anchored in CONTENT
+            // coordinates (viewport offset + scrollTop) - anchored to the viewport
+            // it would drift as soon as the list is scrolled.
+            x: host && rect ? Math.max(0, Math.min(ev.clientX - rect.left, rect.width - 210)) : 0,
+            y: host && rect ? ev.clientY - rect.top + host.scrollTop : 0,
+            dirName,
+        });
+    }, []);
+    // Closes like every context menu: a click anywhere else, or Escape. The menu
+    // itself stops mousedown propagation so its items still fire. The Escape half
+    // is a layer in the shared registry (see the explorer's ladder below): a
+    // second window listener would answer the same press as the window hosting
+    // it, and both would act.
+    useEffect(() => {
+        if (!workspaceMenu) return;
+        const close = () => setWorkspaceMenu(null);
+        window.addEventListener('mousedown', close);
+        return () => window.removeEventListener('mousedown', close);
+    }, [workspaceMenu]);
+    const createWorkspaceFolder = useCallback(async () => {
+        const name = (workspaceNewFolder?.value || '').trim();
+        const wsSid = viewedWorkspaceSidRef.current ?? currentSessionId;
+        if (!name || !wsSid) return;
+        try {
+            const res = await fetch(`${getApiBase()}/api/session/workspace/mkdir`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: wsSid, subpath: workspaceSubpathRef.current, name }),
+            });
+            if (!res.ok) {
+                let detail: unknown = null;
+                try { detail = (await res.json())?.detail; } catch { /* body not JSON */ }
+                setWorkspaceNewFolder(prev => prev
+                    ? { ...prev, error: typeof detail === 'string' ? detail : 'Could not create the folder' }
+                    : prev);
+                return;
+            }
+            setWorkspaceNewFolder(null);
+            // A sid-less refresh re-lists whatever folder is on screen NOW, which
+            // stays correct even if the person navigated while the create ran.
+            await refreshWorkspace();
+        } catch {
+            setWorkspaceNewFolder(prev => prev ? { ...prev, error: 'Could not create the folder' } : prev);
+        }
+    }, [workspaceNewFolder, currentSessionId, refreshWorkspace]);
+
     // Explorer-style navigation: history stack for the Back button, Up = parent folder
     const [workspaceNavHist, setWorkspaceNavHist] = useState<string[]>([]);
     const navigateWorkspace = useCallback((sub: string) => {
+        // The draft tile and the context menu belong to the folder they were
+        // opened in - a navigation dismisses both rather than re-anchoring a
+        // create to a folder the person can no longer see.
+        setWorkspaceNewFolder(null);
+        setWorkspaceMenu(null);
         setWorkspaceNavHist(prev => [...prev, workspaceSubpathRef.current]);
         refreshWorkspace(undefined, sub);
     }, [refreshWorkspace]);
     const workspaceGoBack = useCallback(() => {
+        setWorkspaceNewFolder(null);
+        setWorkspaceMenu(null);
         setWorkspaceNavHist(prev => {
             if (prev.length === 0) return prev;
             const next = [...prev];
@@ -2943,6 +3071,12 @@ function VAFDashboardContent() {
         workspaceSubpathRef.current = '';
         setWorkspaceNavHist([]);
         setWorkspaceView('folder');
+        // Same rule as every other navigation: a draft row and a context menu
+        // belong to the folder they were opened in. Left standing they came back
+        // in ANOTHER workspace, and the create resolves its parent when Enter is
+        // pressed, so the folder would have been made where the name was never typed.
+        setWorkspaceNewFolder(null);
+        setWorkspaceMenu(null);
         refreshWorkspace(sid, '');
     }, [refreshWorkspace]);
     const renameWorkspace = useCallback(async (sid: string, current: string) => {
@@ -2990,6 +3124,71 @@ function VAFDashboardContent() {
             setWorkspaceDeleteTarget(null);
         }
     }, [currentSessionId, workspaceDeleteTarget, refreshWorkspace, refreshAllWorkspaces]);
+    // ONE way out of the explorer: the X, Escape, and the four places that close
+    // it to show a file. Closing kept every piece of state it had, and the chip
+    // that reopens it refreshes without naming a session, so the next opening
+    // resolved to the LAST VIEWED workspace: opening a chat's own folder could
+    // show another chat's files, or the index instead of a folder, with a Back
+    // button emptied by the previous visit. The dismissable layers have to go
+    // too, or a draft row typed before the close reappears over the next one.
+    const closeWorkspaceModal = useCallback(() => {
+        setIsWorkspaceModalOpen(false);
+        setWorkspaceView('folder');
+        setWorkspaceSearch('');
+        setWorkspaceSearchHits(null);
+        setWorkspaceSearching(false);
+        setShowWorkspaceLegend(false);
+        setWorkspaceNavHist([]);
+        setWorkspaceMenu(null);
+        setWorkspaceNewFolder(null);
+        setWorkspaceDeleteTarget(null);
+        setWorkspaceDragOver(false);
+        workspaceSubpathRef.current = '';
+        viewedWorkspaceSidRef.current = null;
+    }, []);
+    // Every rung below is keyed on the render guard of the thing it dismisses,
+    // never on its state alone: a layer registered while its own UI is not
+    // painted answers the press and changes nothing the person can see, and the
+    // press is spent. The window is on screen in both views; the menu and the
+    // draft row live in the folder view only.
+    const workspaceWindowOnScreen = isWorkspaceModalOpen && (workspaceView === 'index' || !!workspaceInfo?.path);
+    const workspaceFolderPaneOnScreen = isWorkspaceModalOpen && workspaceView === 'folder' && !!workspaceInfo?.path;
+    // The explorer's Escape ladder: one press is one step back, topmost first.
+    // Levels are the shared convention (the overlay's own z-index, content nested
+    // inside it counting up), so one press can never dismiss two of these at once
+    // the way separate window listeners did.
+    // Two deliberate omissions, so they do not read as gaps: the legend is inline
+    // disclosure inside the scroll area and covers nothing, and folder depth is
+    // not a step. The tree is unboundedly deep, so Escape out of the tenth
+    // subfolder would be ten presses while Back sits in the toolbar.
+    useEscapeLayer({
+        active: workspaceWindowOnScreen && !!workspaceDeleteTarget,
+        level: 104,
+        // While the delete runs the dialog's own Cancel is disabled. Escape must
+        // not be a second, unguarded exit, and it must not reach the window
+        // underneath either: that would close the explorer with the target still
+        // set, and the confirmation would stand again on the next opening.
+        onEscape: workspaceDeleting ? null : () => setWorkspaceDeleteTarget(null),
+    });
+    useEscapeLayer({
+        active: workspaceFolderPaneOnScreen && !!workspaceMenu,
+        level: 103,
+        onEscape: () => setWorkspaceMenu(null),
+    });
+    useEscapeLayer({
+        active: workspaceFolderPaneOnScreen && !!workspaceNewFolder,
+        level: 102,
+        onEscape: () => setWorkspaceNewFolder(null),
+    });
+    useEscapeLayer({
+        // The raw value, not a trimmed one: the field paints its Clear button on
+        // exactly this, so a query of only spaces shows a way to clear and must
+        // have one, instead of handing the press to the window underneath.
+        active: isWorkspaceModalOpen && workspaceView === 'index' && workspaceSearch.length > 0,
+        level: 101,
+        onEscape: () => setWorkspaceSearch(''),
+    });
+    useEscapeLayer({ active: workspaceWindowOnScreen, level: 100, onEscape: closeWorkspaceModal });
     // xraySection state removed - Context Window modal now shows only overview diagram
 
     // Agent Brain: working memory, plan, tasks, intent, team state
@@ -3034,6 +3233,16 @@ function VAFDashboardContent() {
     // message timestamp (stable, mirrors expandedBotMsgs). No entry → use the natural state
     // (expanded while the turn runs, collapsed once it answers / for history).
     const [timelineExpand, setTimelineExpand] = useState<Map<number, boolean>>(new Map());
+    // "Copied" feedback for the per-reply actions, keyed by the message timestamp
+    // for the same reason as the two maps above: a message can be removed or
+    // spliced, so an array index points at a different bubble a moment later.
+    const [copiedMsgTs, setCopiedMsgTs] = useState<number | null>(null);
+    // "Ask again" is a two-step press: the first arms it, the second sends. A
+    // modal for a one-click action is heavier than the action, but discarding an
+    // answer on a single stray click is worse, so the button asks in place.
+    const [regenArmed, setRegenArmed] = useState<number | null>(null);
+    // Why the server refused, shown where the press happened.
+    const [regenNotice, setRegenNotice] = useState<string | null>(null);
     const BOT_COLLAPSE_THRESHOLD = 800; // chars — shorter replies stay fully visible
     const BOT_COLLAPSED_PREVIEW = 300;  // chars shown when collapsed
     // Reset offset when session changes so we always start at the bottom.
@@ -3403,7 +3612,7 @@ function VAFDashboardContent() {
         // NOT synced as sidebar documents, so opening one never RAG-indexes it as text.
         if (isImageFile(name)) {
             openImageInViewer(full, name, `${getApiBase()}/api/file?path=${encodeURIComponent(full)}`);
-            setIsWorkspaceModalOpen(false);
+            closeWorkspaceModal();
             return;
         }
         // Binary/office documents that need the DocumentViewer's rich rendering.
@@ -3416,13 +3625,13 @@ function VAFDashboardContent() {
         if (isHtmlFile(name)) {
             setHtmlViewerState({ isOpen: true, filePath: full, title: name });
             setShowSubAgentPanel(true);
-            setIsWorkspaceModalOpen(false);
+            closeWorkspaceModal();
             return;
         }
         if (!docExts.has(ext) && (isCodeFile(name) || isTextFile(name))) {
             setCodeViewerState({ isOpen: true, filePath: full, title: name });
             setShowSubAgentPanel(true);
-            setIsWorkspaceModalOpen(false);
+            closeWorkspaceModal();
             return;
         }
         try {
@@ -3465,9 +3674,9 @@ function VAFDashboardContent() {
                 return { ...prev, isOpen: true, documents: newList };
             });
             setShowSubAgentPanel(true);
-            setIsWorkspaceModalOpen(false);
+            closeWorkspaceModal();
         } catch { /* network/permission error - keep the workspace open */ }
-    }, [setDocumentViewerState, ws, currentSessionId, openImageInViewer]);
+    }, [setDocumentViewerState, ws, currentSessionId, openImageInViewer, closeWorkspaceModal]);
     // Click a workspace file -> open it in the right panel AND make it visible to
     // the agent (synced as a sidebar document, exactly like attaching a file).
     // Documents (PDF, Office, Markdown, HTML, images, text) open in the
@@ -4927,7 +5136,7 @@ function VAFDashboardContent() {
                         const row = sessionsRef.current.find(s => s.id === id);
                         setChatToDelete({
                             id,
-                            title: (row?.title || '').replace('.json', ''),
+                            title: chatLabel(row?.title),
                             isThinking: (row as { source?: string } | undefined)?.source === 'thinking',
                         });
                     } else if (data.deleted) {
@@ -5686,6 +5895,10 @@ function VAFDashboardContent() {
                             content: m.content,
                             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
                             kind: m.kind,   // proactive bubble tag -> re-plays the avatar animation on reload/chat-switch
+                            // The backend has always sent these for a user message that carried
+                            // an attachment; this rebuild dropped them, so a reloaded chat lost
+                            // its own pictures. Same class as the diffs/activity fields before.
+                            images: m.images,
                             _order: idx,
                             toolId: m.toolId,
                             toolName: m.toolName,
@@ -6232,6 +6445,18 @@ function VAFDashboardContent() {
                 else if (data.type === 'autosuggest_result') {
                     setSuggestion(data.suggestion || '');
                 }
+                else if (data.type === 'regenerate_refused') {
+                    // The server holds the authority on whether a turn or a specialist
+                    // is still running, so the answer comes back rather than being
+                    // predicted here. Nothing was discarded when this arrives.
+                    setRegenArmed(null);
+                    setRegenNotice(
+                        data.reason === 'busy' ? tMain('msgActionRegenerateBusy')
+                            : data.reason === 'subagent' ? tMain('msgActionRegenerateSubagent')
+                                : tMain('msgActionRegenerateFailed')
+                    );
+                    setTimeout(() => setRegenNotice(null), 4000);
+                }
                 else if (data.type === 'generation_stopped') {
                     // Update per-session loading state
                     if (data.sessionId) {
@@ -6562,17 +6787,8 @@ function VAFDashboardContent() {
         return () => { cancelled = true; };
     }, [isContextModalOpen, currentSessionId]);
 
-    // ESC: close context modal
-    useEffect(() => {
-        if (!isContextModalOpen) return;
-        const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                setIsContextModalOpen(false);
-            }
-        };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isContextModalOpen]);
+    // ESC: close the context window. Level 100 is its own z-[100].
+    useEscapeLayer({ active: isContextModalOpen, level: 100, onEscape: () => setIsContextModalOpen(false) });
 
     const stopGeneration = () => {
         if (!ws || !currentSessionId) return;
@@ -7269,9 +7485,10 @@ function VAFDashboardContent() {
         };
     }, [releaseMic]);
 
-    const startEditing = (s: Session) => {
+    const startEditing = (s: Session, where: 'sidebar' | 'header') => {
         setEditingId(s.id);
-        setEditName(s.title.replace(".json", ""));
+        setEditingWhere(where);
+        setEditName(chatLabel(s.title));
     };
 
     const submitRename = () => {
@@ -7529,12 +7746,8 @@ function VAFDashboardContent() {
             return next;
         });
     }, []);
-    useEffect(() => {
-        if (!subAgentPaletteOpen) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSubAgentPaletteOpen(false); };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [subAgentPaletteOpen]);
+    // Level 85 is the palette's own z-[85].
+    useEscapeLayer({ active: subAgentPaletteOpen, level: 85, onEscape: () => setSubAgentPaletteOpen(false) });
     const sendBrowserInteractive = useCallback((msg: Record<string, unknown>) => {
         if (ws?.readyState === WebSocket.OPEN && currentSessionId) {
             ws.send(JSON.stringify({ ...msg, sessionId: currentSessionId }));
@@ -7623,6 +7836,15 @@ function VAFDashboardContent() {
     // and each was wrong in one direction on the owner's screen. Alignment
     // never appears as a literal at the call sites: tailwind-merge would let
     // a later literal silently win over these variables.
+    // The name of the chat that is open, in ONE place: the desktop header and the
+    // small layout's bar both read this, so they cannot come to show different
+    // names for the same chat. Empty while a room is open, because a room carries
+    // its own header inside the transcript, with its member count and whether the
+    // view is live.
+    const currentChatTitle = useMemo(() => {
+        if (roomView || !currentSessionId) return '';
+        return chatLabel(sessions.find(s => s.id === currentSessionId)?.title);
+    }, [roomView, currentSessionId, sessions]);
     const chatWidthClass = anyDockPanelOpen ? 'max-w-3xl mx-auto' : 'max-w-4xl mx-auto';
     const messagesAreaWidthClass = anyDockPanelOpen ? 'max-w-5xl mx-auto' : 'max-w-6xl mx-auto';
 
@@ -7673,6 +7895,15 @@ function VAFDashboardContent() {
                 <button type="button" onClick={() => setDrawerOpen(true)} aria-label="Menu" className="p-2.5 -ml-1 rounded-lg text-gray-700 hover:bg-gray-100 active:bg-gray-200 touch-target">
                     <Menu size={22} />
                 </button>
+                {/* The same name the desktop header shows, from the same derivation. Two
+                    boxes rather than one, for a structural reason: the desktop header lives
+                    INSIDE the chat column so it travels inward when the dock opens, while
+                    this bar is a sibling of the whole row. Read only here - renaming stays
+                    in the drawer, where the pencil already has a full touch target and this
+                    bar has no room for one. */}
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">
+                    {currentChatTitle}
+                </span>
             </div>
             {pendingContactReplies.length > 0 && (
                 <div className="shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center gap-4 flex-wrap">
@@ -7798,7 +8029,7 @@ function VAFDashboardContent() {
                     Zero-width below md, where the aside is a fixed drawer instead. */}
                 <div className="relative shrink-0 md:w-16 max-md:w-0">
                 <aside
-                    data-editing={editingId ? 'true' : undefined}
+                    data-editing={editingId && editingWhere === 'sidebar' ? 'true' : undefined}
                     className={cn(
                     "group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 transition-[width,transform] duration-300 shadow-lg dark:shadow-none overflow-hidden",
                     // While renaming a chat, pin the sidebar open (it only expands on hover otherwise)
@@ -7807,7 +8038,7 @@ function VAFDashboardContent() {
                     // z-50 on desktop, because the expanded panel now overlays the chat
                     // column and has to clear the composer's own gradient bar (z-40).
                     "md:absolute md:inset-y-0 md:left-0",
-                    editingId ? "md:w-72 md:z-50" : "md:w-16 md:hover:w-72 md:z-50",
+                    editingId && editingWhere === 'sidebar' ? "md:w-72 md:z-50" : "md:w-16 md:hover:w-72 md:z-50",
                     "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:z-50 max-md:shadow-2xl",
                     drawerOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
                 )}>
@@ -7875,18 +8106,12 @@ function VAFDashboardContent() {
                                     </span>
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
-                                        {editingId === s.id ? (
-                                            <input
-                                                autoFocus
-                                                className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
+                                        {editingId === s.id && editingWhere === 'sidebar' ? (
+                                            <RenameInput
                                                 value={editName}
-                                                onChange={e => setEditName(e.target.value)}
-                                                onKeyDown={e => {
-                                                    if (e.key === 'Enter') submitRename();
-                                                    if (e.key === 'Escape') setEditingId(null);
-                                                }}
-                                                onBlur={submitRename}
-                                                onClick={e => e.stopPropagation()}
+                                                onChange={setEditName}
+                                                onCommit={submitRename}
+                                                onCancel={() => setEditingId(null)}
                                             />
                                         ) : (
                                             <span className={cn("truncate text-sm transition-colors",
@@ -7915,7 +8140,7 @@ function VAFDashboardContent() {
                                             {!s.closed && (
                                                 <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900"
-                                                        onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
+                                                        onClick={(e) => { e.stopPropagation(); startEditing(s, 'sidebar'); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600"
                                                         onClick={(e) => { e.stopPropagation(); setRoomToClose(s); }} />
                                                 </div>
@@ -7948,30 +8173,24 @@ function VAFDashboardContent() {
                                     )}
 
                                     <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
-                                        {editingId === s.id ? (
-                                            <input
-                                                autoFocus
-                                                className="w-full text-xs border-b border-gray-500 focus:outline-none bg-transparent"
+                                        {editingId === s.id && editingWhere === 'sidebar' ? (
+                                            <RenameInput
                                                 value={editName}
-                                                onChange={e => setEditName(e.target.value)}
-                                                onKeyDown={e => {
-                                                    if (e.key === 'Enter') submitRename();
-                                                    if (e.key === 'Escape') setEditingId(null);
-                                                }}
-                                                onBlur={submitRename}
-                                                onClick={e => e.stopPropagation()}
+                                                onChange={setEditName}
+                                                onCommit={submitRename}
+                                                onCancel={() => setEditingId(null)}
                                             />
                                         ) : (
                                             <span className={cn("truncate text-sm transition-colors", currentSessionId === s.id && !roomView ? "font-medium text-gray-900" : "text-gray-600")}>
-                                                {s.title.replace(".json", "")}
+                                                {chatLabel(s.title)}
                                             </span>
                                         )}
 
                                         {/* Action Icons (Hover Only) */}
                                         <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
-                                            {!editingId && (
+                                            {!(editingId && editingWhere === 'sidebar') && (
                                                 <>
-                                                    <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
+                                                    <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s, 'sidebar'); }} />
                                                     <Trash2 size={12} className="text-gray-400 hover:text-red-600" onClick={(e) => {
                                                         e.stopPropagation();
                                                         const isThinking = (s as { source?: string }).source === 'thinking';
@@ -8074,104 +8293,140 @@ function VAFDashboardContent() {
                     of dead air between chat and window - measured on screen). */}
                 <div className="flex-1 flex overflow-hidden pr-[5px] transition-all duration-300 ease-out">
                     <div className="flex-1 flex flex-col relative bg-white overflow-hidden">
-                        {/* Browser entry point, in the chat column's top-right corner. It hangs off
-                            THIS column, not the window, so it travels inward when the right dock
-                            opens; the message area is centred and never reaches this corner, so
-                            nothing is covered. It is not positioned by a top offset but given the
-                            sidebar header's own h-16 band and centred inside it: the aside and this
-                            column are siblings of one flex row and start at the same y, so the same
-                            band puts this icon on the exact optical line as the logo, and a later
-                            change to the header height moves both together. The colours are one
-                            pair, not two: the folding palette maps gray-400 to a quiet mid tone on
-                            both themes, and gray-700 folds DARKER on light while it folds LIGHTER
-                            on dark - which is exactly the hover direction wanted on each theme.
-                            Hidden below md: the small layout has its own top bar and the message
-                            column runs edge to edge there, so this corner is not free. */}
-                        <button
-                            type="button"
-                            onClick={toggleBrowserWindow}
-                            disabled={browserWindowBusy}
-                            aria-pressed={browserWindowOpen}
-                            aria-label={tMain('browserWindowAria')}
-                            title={browserWindowBusy
-                                ? tMain('browserWindowBusy')
-                                : browserWindowOpen ? tMain('closeBrowserWindow') : tMain('openBrowserWindow')}
-                            className={cn(
-                                "absolute top-0 right-[19px] z-20 max-md:hidden h-16 flex items-center transition-[color,transform] duration-150",
-                                // Open wears the hover state permanently, so the active mark speaks the
-                                // same language the hover already taught: one step brighter and larger.
-                                browserWindowBusy
-                                    ? "text-gray-300 cursor-default"
-                                    : browserWindowOpen
-                                        ? "text-gray-900 scale-110"
-                                        : "text-gray-400 hover:text-gray-700 hover:scale-110"
-                            )}
-                        >
-                            <Globe size={20} />
-                        </button>
-                        {/* Sub-agent palette opener: directly below the globe, deliberately
-                            one step quieter than it (smaller glyph, paler resting tone) so the
-                            rail keeps ONE primary mark. Same hover vocabulary as every other
-                            rail button - one shade brighter and slightly larger - and the same
-                            max-md:hidden, because the small layout has no free corner here. */}
-                        {/* The hotbar itself: the picked specialists, between the globe and
-                            the plus, in the rhythm the explainer drawing sets. Clicking one
-                            writes its tool mention into the message box and puts the cursor
-                            behind it - the same '/' mention the suggestion list already
-                            produces, so this is a shortcut to an existing lane and not a
-                            second way to start an agent. */}
-                        {visibleHotbarPicks.map((kind, i) => {
-                            const Icon = SUBAGENT_TRADE_ICON[kind];
-                            const cap = kind.charAt(0).toUpperCase() + kind.slice(1);
-                            const label = tMain(`subAgent${cap}Name` as never) as string;
-                            return (
+                        {/* The chat header. It IS the h-16 band the globe used to borrow: the
+                            aside and this column are siblings of one flex row and start at the
+                            same y, so this element and the sidebar's logo header are the same
+                            height, and the chat name, the logo and the rail land on one optical
+                            line. IN FLOW, not an overlay: the scroller below is flex-1 inside an
+                            overflow-hidden column, so it simply gets 64px less height and every
+                            scroll site in this file keeps working untouched - they all measure the
+                            scroller, none of them the viewport. No border and the column's own
+                            background: the separation is the fade below, not an edge. Hidden below
+                            md, where the app's own top bar carries the name instead. */}
+                        <div className="shrink-0 h-16 flex items-center gap-3 pl-6 pr-[12px] bg-white relative z-20 max-md:hidden">
+                            <div className="min-w-0 flex-1">
+                                {editingId === currentSessionId && editingWhere === 'header' ? (
+                                    <RenameInput
+                                        value={editName}
+                                        onChange={setEditName}
+                                        onCommit={submitRename}
+                                        onCancel={() => setEditingId(null)}
+                                        className="max-w-[28rem] text-sm"
+                                    />
+                                ) : currentChatTitle ? (
+                                    // Clicking the name renames it, through the sidebar's own lane:
+                                    // the same editingId, the same submitRename, the same command.
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const s = sessions.find(x => x.id === currentSessionId);
+                                            if (s) startEditing(s, 'header');
+                                        }}
+                                        title={tMain('chatHeaderRename')}
+                                        className="max-w-full truncate text-sm font-medium text-gray-800 hover:text-gray-900 rounded px-1 -ml-1 hover:bg-gray-100 transition-colors"
+                                    >
+                                        {currentChatTitle}
+                                    </button>
+                                ) : null}
+                            </div>
+                            {/* The rail, turned. It ran top to bottom on the column's right edge and
+                                now runs left to right at the end of this header, read in the same
+                                order: the browser globe, the picked specialists, the plus that adds
+                                one. Every seat is one RAIL_STEP cell with its glyph centred, so
+                                centre to centre is the same 33px for every pair whatever the glyph's
+                                own size is, and the two hand-nudged right offsets the shared edge
+                                needed are gone. The group is right-aligned and grows leftward, which
+                                makes the plus a target that stays put instead of sliding as picks
+                                arrive. */}
+                            <div className="flex items-center shrink-0">
+                                {/* The colours are one pair, not two: the folding palette maps
+                                    gray-400 to a quiet mid tone on both themes, and gray-700 folds
+                                    DARKER on light while it folds LIGHTER on dark, which is exactly
+                                    the hover direction wanted on each theme. */}
                                 <button
-                                    key={kind}
                                     type="button"
-                                    onClick={() => toggleSubAgentWindow(kind)}
-                                    aria-pressed={subAgentState.isOpen && subAgentState.agentKind === kind}
-                                    aria-label={label}
-                                    title={label}
-                                    style={{ top: RAIL_STEP_TOP + i * RAIL_STEP }}
+                                    onClick={toggleBrowserWindow}
+                                    disabled={browserWindowBusy}
+                                    aria-pressed={browserWindowOpen}
+                                    aria-label={tMain('browserWindowAria')}
+                                    title={browserWindowBusy
+                                        ? tMain('browserWindowBusy')
+                                        : browserWindowOpen ? tMain('closeBrowserWindow') : tMain('openBrowserWindow')}
+                                    style={{ width: RAIL_STEP }}
                                     className={cn(
-                                        "absolute right-[19px] z-20 max-md:hidden h-7 flex items-center",
-                                        "transition-[color,transform] duration-150",
-                                        // Open wears the hover state permanently - the globe's own
-                                        // rule, so the rail speaks one language: whichever window is
-                                        // showing is the bright mark, the rest stay quiet.
-                                        subAgentState.isOpen && subAgentState.agentKind === kind
-                                            ? "text-gray-900 scale-110"
-                                            : "text-gray-400 hover:text-gray-700 hover:scale-110"
+                                        "h-16 flex items-center justify-center shrink-0 transition-[color,transform] duration-150",
+                                        // Open wears the hover state permanently, so the active mark
+                                        // speaks the language the hover already taught: one step
+                                        // brighter and larger.
+                                        browserWindowBusy
+                                            ? "text-gray-300 cursor-default"
+                                            : browserWindowOpen
+                                                ? "text-gray-900 scale-110"
+                                                : "text-gray-400 hover:text-gray-700 hover:scale-110"
                                     )}
                                 >
-                                    <Icon size={20} strokeWidth={2} />
+                                    <Globe size={20} />
                                 </button>
-                            );
-                        })}
-                        <button
-                            type="button"
-                            onClick={() => setSubAgentPaletteOpen(true)}
-                            aria-haspopup="dialog"
-                            aria-expanded={subAgentPaletteOpen}
-                            aria-label={tMain('subAgentPaletteAria')}
-                            title={tMain('openSubAgentPalette')}
-                            style={{ top: RAIL_STEP_TOP + visibleHotbarPicks.length * RAIL_STEP }}
-                            className={cn(
-                                // The step comes from the explainer drawing, which is the same rail: there
-                                // the centre-to-centre step is 1.67x the globe's own width. Applied to the
-                                // real 20px globe that is 33px, so the plus centre sits at 65 (the globe's
-                                // is at 32, being top-0 in an h-16 box). Measured, not guessed - and the
-                                // picked agents inherit the same step, pushing the plus down as they
-                                // arrive, exactly as the drawing shows.
-                                "absolute right-[21px] z-20 max-md:hidden h-7 flex items-center",
-                                "transition-[color,transform,top] duration-150",
-                                subAgentPaletteOpen
-                                    ? "text-gray-900 scale-110"
-                                    : "text-gray-400 opacity-60 hover:text-gray-700 hover:opacity-100 hover:scale-110"
-                            )}
-                        >
-                            <Plus size={16} strokeWidth={2.25} />
-                        </button>
+                                {/* The hotbar itself: the picked specialists, between the globe and
+                                    the plus. Clicking one opens THAT specialist's window, running or
+                                    not, and clicking it again closes it - the same move the window's
+                                    own close makes. */}
+                                {visibleHotbarPicks.map((kind) => {
+                                    const Icon = SUBAGENT_TRADE_ICON[kind];
+                                    const cap = kind.charAt(0).toUpperCase() + kind.slice(1);
+                                    const label = tMain(`subAgent${cap}Name` as never) as string;
+                                    return (
+                                        <button
+                                            key={kind}
+                                            type="button"
+                                            onClick={() => toggleSubAgentWindow(kind)}
+                                            aria-pressed={subAgentState.isOpen && subAgentState.agentKind === kind}
+                                            aria-label={label}
+                                            title={label}
+                                            style={{ width: RAIL_STEP }}
+                                            className={cn(
+                                                "h-16 flex items-center justify-center shrink-0",
+                                                "transition-[color,transform] duration-150",
+                                                // Open wears the hover state permanently - the globe's
+                                                // own rule, so the rail speaks one language: whichever
+                                                // window is showing is the bright mark, the rest stay
+                                                // quiet.
+                                                subAgentState.isOpen && subAgentState.agentKind === kind
+                                                    ? "text-gray-900 scale-110"
+                                                    : "text-gray-400 hover:text-gray-700 hover:scale-110"
+                                            )}
+                                        >
+                                            {/* 16px, the size the chat rows on the other side of the
+                                                window already use, so a glyph means the same thing at
+                                                the same size wherever it stands. The globe keeps 20:
+                                                it is the rail's one primary mark. */}
+                                            <Icon size={16} strokeWidth={2} />
+                                        </button>
+                                    );
+                                })}
+                                {/* Sub-agent palette opener: the last seat, deliberately one step
+                                    quieter than the globe (smaller glyph, paler resting tone) so the
+                                    rail keeps ONE primary mark. */}
+                                <button
+                                    type="button"
+                                    onClick={() => setSubAgentPaletteOpen(true)}
+                                    aria-haspopup="dialog"
+                                    aria-expanded={subAgentPaletteOpen}
+                                    aria-label={tMain('subAgentPaletteAria')}
+                                    title={tMain('openSubAgentPalette')}
+                                    style={{ width: RAIL_STEP }}
+                                    className={cn(
+                                        "h-16 flex items-center justify-center shrink-0",
+                                        "transition-[color,transform] duration-150",
+                                        subAgentPaletteOpen
+                                            ? "text-gray-900 scale-110"
+                                            : "text-gray-400 opacity-60 hover:text-gray-700 hover:opacity-100 hover:scale-110"
+                                    )}
+                                >
+                                    <Plus size={16} strokeWidth={2.25} />
+                                </button>
+                            </div>
+                        </div>
                         {/* ── Prompt Navigator (right rail, DeepSeek-style) ── */}
                         {(() => {
                             const userPrompts = messages.filter(m => m.role === 'user' && String(m.content ?? '').trim());
@@ -8234,6 +8489,24 @@ function VAFDashboardContent() {
                                 </div>
                             );
                         })()}
+                        {/* Text dissolves before it reaches the header instead of sliding under a
+                            hard edge. The same four stops as the sidebar list's fade, flipped: the
+                            tuned curve is what reads as fading to nothing, where a two-stop ramp
+                            reads as a bar with a soft edge. A SIBLING of the scroller, never a
+                            child, or it would scroll away with the content. Its endpoint is
+                            --chat-fog, the surface tone this column and the sidebar share, so a
+                            hardcoded white cannot glow across the top of a dark column. Not painted
+                            while a room is open (the room's own header is frosted on purpose so its
+                            messages stay readable under it) and not over an empty chat, where
+                            nothing is scrolling. */}
+                        {!roomView && messages.length > 0 && (
+                            <div
+                                className="absolute top-16 left-0 right-0 h-10 pointer-events-none z-10 max-md:hidden"
+                                style={{
+                                    background: 'linear-gradient(to bottom, rgb(var(--chat-fog)) 0%, rgb(var(--chat-fog) / 0.92) 35%, rgb(var(--chat-fog) / 0.5) 65%, transparent 100%)',
+                                }}
+                            />
+                        )}
                         <div className={cn("vaf-chat-col flex-1 overflow-y-auto p-6 max-md:p-3", voiceCallActive && "voice-call-hide-avatars")} ref={containerRef}>
                             {/* The conversation slides up to make room for the vote panel and
                                 back down when it goes - a transition on the padding, so the
@@ -8241,7 +8514,11 @@ function VAFDashboardContent() {
                                 Padding and not height: this column is what scrolls, and its
                                 bottom is the only thing the docked composer overlaps. */}
                             <div className={cn(messagesAreaWidthClass,
-                                "space-y-2 transition-[padding] duration-300 ease-out")}
+                                "space-y-2 transition-[padding] duration-300 ease-out",
+                                // The fade's own band, reserved so the first message can scroll
+                                // clear of it instead of sitting permanently half erased. Not
+                                // below md: there is no header there.
+                                !roomView && "pt-10 max-md:pt-0")}
                                 style={{ paddingBottom: `${128 + dockHeight}px` }}>
                                 {/* An agent room, rendered INSIDE the ordinary chat area. The chat's own
                                     frame stays exactly as it is - sidebar, header, composer - and only
@@ -8731,29 +9008,8 @@ function VAFDashboardContent() {
                                                                                     <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? cleanAnswer : displayAnswer}</ChatMarkdown></div>
                                                                                 )}
                                                                             </div>
-                                                                            {isBot && (
-                                                                                <button
-                                                                                    onClick={(e) => {
-                                                                                        e.stopPropagation();
-                                                                                        if (playingMessageId === trueIndex) handleStopSpeech();
-                                                                                        else handleSpeak(trueIndex, cleanAnswer);
-                                                                                    }}
-                                                                                    className="ml-2 mb-1 p-1.5 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all opacity-40 hover:opacity-100 data-[active=true]:opacity-100 shrink-0"
-                                                                                    data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
-                                                                                    title={playingMessageId === trueIndex ? "Stop Speaking" : "Read Aloud"}
-                                                                                >
-                                                                                    {loadingMessageId === trueIndex ? (
-                                                                                        <Loader2 size={14} className="animate-spin" />
-                                                                                    ) : playingMessageId === trueIndex ? (
-                                                                                        <div className="relative">
-                                                                                            <Volume2 size={14} className="text-gray-600" />
-                                                                                            <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
-                                                                                        </div>
-                                                                                    ) : (
-                                                                                        <Volume2 size={14} />
-                                                                                    )}
-                                                                                </button>
-                                                                            )}
+                                                                            {/* Read aloud lives with the other actions on this reply, under
+                                                                                the bubble next to the time, not floating beside it. */}
                                                                         </div>
                                                                     )}
                                                                     {/* User message: inline image thumbnails */}
@@ -8827,6 +9083,100 @@ function VAFDashboardContent() {
                                                                         <span className="text-[10px] font-medium text-red-500/80 mr-1.5">{tMain('voiceAgentTag')}</span>
                                                                     )}
                                                                     <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
+                                                                    {/* Actions on the answer itself, next to its time. `cleanAnswer` is the
+                                                                        source, never msg.content (that carries the thinking block and the
+                                                                        tool-call JSON) and never the rendered DOM (a long past reply shows
+                                                                        only a 300-char preview). Always visible at low opacity rather than
+                                                                        hover-revealed: touch has no hover, and the speaker button beside the
+                                                                        bubble already sets that precedent. */}
+                                                                    {/* Not on a workflow bubble: its text is the internal
+                                                                        [WORKFLOW_ASYNC:...] marker the card is rendered from,
+                                                                        so saving or copying it would hand over an id, not an
+                                                                        answer. */}
+                                                                    {isBot && cleanAnswer.trim() !== '' && !parseWorkflowAsync(answer) && (
+                                                                        <span className="inline-flex items-center gap-0.5 align-middle">
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    if (playingMessageId === trueIndex) handleStopSpeech();
+                                                                                    else handleSpeak(trueIndex, cleanAnswer);
+                                                                                }}
+                                                                                className="ml-1 p-1 max-md:p-2 rounded-full text-gray-400 opacity-40 transition-all hover:bg-gray-100 hover:text-gray-600 hover:opacity-100 data-[active=true]:opacity-100"
+                                                                                data-active={playingMessageId === trueIndex || loadingMessageId === trueIndex}
+                                                                                title={playingMessageId === trueIndex ? tMain('msgActionSpeakStop') : tMain('msgActionSpeak')}
+                                                                                aria-label={playingMessageId === trueIndex ? tMain('msgActionSpeakStop') : tMain('msgActionSpeak')}
+                                                                            >
+                                                                                {loadingMessageId === trueIndex ? (
+                                                                                    <Loader2 size={12} className="animate-spin" />
+                                                                                ) : playingMessageId === trueIndex ? (
+                                                                                    <span className="relative flex">
+                                                                                        <Volume2 size={12} className="text-gray-600" />
+                                                                                        <span className="absolute -inset-1 rounded-full bg-gray-400/20 animate-ping" />
+                                                                                    </span>
+                                                                                ) : (
+                                                                                    <Volume2 size={12} />
+                                                                                )}
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => downloadText(cleanAnswer, replyFileName(msg.timestamp))}
+                                                                                className="p-1 max-md:p-2 rounded-full text-gray-400 opacity-40 transition-all hover:bg-gray-100 hover:text-gray-600 hover:opacity-100"
+                                                                                title={tMain('msgActionDownload')}
+                                                                                aria-label={tMain('msgActionDownload')}
+                                                                            >
+                                                                                <Download size={12} />
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={async () => {
+                                                                                    if (!await copyText(cleanAnswer)) return;
+                                                                                    setCopiedMsgTs(msg.timestamp);
+                                                                                    setTimeout(() => setCopiedMsgTs(cur => (cur === msg.timestamp ? null : cur)), 1400);
+                                                                                }}
+                                                                                className="p-1 max-md:p-2 rounded-full text-gray-400 opacity-40 transition-all hover:bg-gray-100 hover:text-gray-600 hover:opacity-100"
+                                                                                title={copiedMsgTs === msg.timestamp ? tMain('msgActionCopied') : tMain('msgActionCopy')}
+                                                                                aria-label={tMain('msgActionCopy')}
+                                                                            >
+                                                                                {copiedMsgTs === msg.timestamp
+                                                                                    ? <Check size={12} className="text-emerald-500" />
+                                                                                    : <Copy size={12} />}
+                                                                            </button>
+                                                                            {/* Ask again: only on the NEWEST reply, and only while the chat is
+                                                                                idle. Regenerating an older reply would silently discard every
+                                                                                exchange after it, because those were written in the context of
+                                                                                the answer being replaced.
+                                                                                Never on a bubble the agent produced on its own (a timer, a
+                                                                                nudge, a thinking note): no question was asked for it, so
+                                                                                "ask it again" would rewind an earlier, unrelated exchange. */}
+                                                                            {isLastMessage && !isGenerating && !msg.kind && messages.some(m => m.role === 'user') && (
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        if (regenArmed !== msg.timestamp) {
+                                                                                            setRegenArmed(msg.timestamp);
+                                                                                            setTimeout(() => setRegenArmed(cur => (cur === msg.timestamp ? null : cur)), 3000);
+                                                                                            return;
+                                                                                        }
+                                                                                        setRegenArmed(null);
+                                                                                        ws?.send(JSON.stringify({ type: 'regenerate_last_reply', sessionId: currentSessionId }));
+                                                                                    }}
+                                                                                    className={cn(
+                                                                                        "p-1 max-md:p-2 rounded-full transition-all hover:bg-gray-100 hover:text-gray-600",
+                                                                                        regenArmed === msg.timestamp
+                                                                                            ? "text-amber-600 opacity-100"
+                                                                                            : "text-gray-400 opacity-40 hover:opacity-100"
+                                                                                    )}
+                                                                                    title={regenArmed === msg.timestamp ? tMain('msgActionRegenerateConfirm') : tMain('msgActionRegenerate')}
+                                                                                    aria-label={tMain('msgActionRegenerate')}
+                                                                                >
+                                                                                    <RotateCcw size={12} />
+                                                                                </button>
+                                                                            )}
+                                                                            {isLastMessage && regenArmed === msg.timestamp && (
+                                                                                <span className="text-[10px] text-amber-600">{tMain('msgActionRegenerateConfirm')}</span>
+                                                                            )}
+                                                                            {isLastMessage && regenNotice && (
+                                                                                <span className="text-[10px] text-gray-400">{regenNotice}</span>
+                                                                            )}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             )}
                                                             {/* Show status steps below the active message if streaming */}
@@ -9979,7 +10329,7 @@ function VAFDashboardContent() {
                                     </div>
                                 )}
                                 <button
-                                    onClick={() => setIsWorkspaceModalOpen(false)}
+                                    onClick={closeWorkspaceModal}
                                     className="ml-auto shrink-0 p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
                                 >
                                     <span className="sr-only">Close</span>
@@ -9993,7 +10343,14 @@ function VAFDashboardContent() {
                         <div className="shrink-0 flex items-center gap-2 border-b border-gray-100 bg-white px-6 py-2.5">
                             <button
                                 onClick={() => {
-                                    if (workspaceNavHist.length === 0 && !workspaceInfo?.subpath) { setWorkspaceView('index'); refreshAllWorkspaces(); }
+                                    if (workspaceNavHist.length === 0 && !workspaceInfo?.subpath) {
+                                        // Leaving the folder pane is a navigation like any other: the
+                                        // draft row and the menu belong to the folder behind it.
+                                        setWorkspaceNewFolder(null);
+                                        setWorkspaceMenu(null);
+                                        setWorkspaceView('index');
+                                        refreshAllWorkspaces();
+                                    }
                                     else { workspaceGoBack(); }
                                 }}
                                 className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
@@ -10131,10 +10488,12 @@ function VAFDashboardContent() {
                         {/* File browser (folders + files, scoped to the chat folder) */}
                         {workspaceView === 'folder' && workspaceInfo?.path && (
                         <div
+                            ref={workspaceBrowserRef}
                             className={cn(
                                 "vaf-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-3 transition-colors",
                                 workspaceDragOver && "bg-violet-50/60"
                             )}
+                            onContextMenu={(e) => openWorkspaceMenu(e, null)}
                             onDragOver={(e) => { e.preventDefault(); setWorkspaceDragOver(true); }}
                             onDragLeave={() => setWorkspaceDragOver(false)}
                             onDrop={(e) => {
@@ -10151,6 +10510,25 @@ function VAFDashboardContent() {
                             )}
                             {/* Explorer-style icon grid */}
                             <div className="grid content-start gap-1 p-2 [grid-template-columns:repeat(auto-fill,minmax(130px,1fr))]">
+                                {workspaceNewFolder && (
+                                    <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-violet-200 bg-violet-50/40 px-2 py-3 text-center">
+                                        <Folder size={44} strokeWidth={1} className="text-amber-300" fill="#fef3c7" />
+                                        <input
+                                            autoFocus
+                                            value={workspaceNewFolder.value}
+                                            onChange={(ev) => setWorkspaceNewFolder({ value: ev.target.value, error: null })}
+                                            // Escape is not handled here: it is level 102 of the
+                                            // window's ladder, which answers before this input ever
+                                            // sees the press. A branch here would read live and be dead.
+                                            onKeyDown={(ev) => { if (ev.key === 'Enter') createWorkspaceFolder(); }}
+                                            placeholder="New folder"
+                                            className="w-full rounded border border-violet-200 bg-white px-1 py-0.5 text-center text-xs font-medium text-gray-800 outline-none placeholder:text-gray-300 focus:border-violet-400"
+                                        />
+                                        {workspaceNewFolder.error
+                                            ? <span className="w-full break-words text-[10px] leading-tight text-red-500">{workspaceNewFolder.error}</span>
+                                            : <span className="text-[10px] text-gray-300">Enter creates it, Esc cancels</span>}
+                                    </div>
+                                )}
                                 {workspaceInfo.dirs.map(d => (
                                     <div
                                         key={`dir-${d.name}`}
@@ -10158,6 +10536,7 @@ function VAFDashboardContent() {
                                         tabIndex={0}
                                         onClick={() => navigateWorkspace(workspaceInfo.subpath ? `${workspaceInfo.subpath}/${d.name}` : d.name)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') navigateWorkspace(workspaceInfo.subpath ? `${workspaceInfo.subpath}/${d.name}` : d.name); }}
+                                        onContextMenu={(e) => openWorkspaceMenu(e, d.name)}
                                         className="group relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-3 text-center transition-colors hover:border-violet-100 hover:bg-violet-50/60"
                                         title={`${d.name} (${d.items} ${d.items === 1 ? 'item' : 'items'})`}
                                     >
@@ -10226,12 +10605,60 @@ function VAFDashboardContent() {
                                         </div>
                                     );
                                 })}
-                                {workspaceInfo.dirs.length === 0 && workspaceInfo.files.length === 0 && (
+                                {workspaceInfo.dirs.length === 0 && workspaceInfo.files.length === 0 && !workspaceNewFolder && (
                                     <div className="col-span-full flex h-48 items-center justify-center text-sm text-gray-300">
-                                        This folder is empty — drop files here to upload.
+                                        This folder is empty - drop files here to upload, or right-click for a new folder.
                                     </div>
                                 )}
                             </div>
+                            {workspaceMenu && (
+                                <div
+                                    className="absolute z-30 w-[200px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
+                                    style={{ left: workspaceMenu.x, top: workspaceMenu.y }}
+                                    onMouseDown={(ev) => ev.stopPropagation()}
+                                    // Sealed like the mousedown half: preventDefault alone does not stop
+                                    // the event reaching the pane's own handler, which would re-anchor the
+                                    // menu under the cursor and drop the folder it was opened for.
+                                    onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
+                                >
+                                    {workspaceMenu.dirName && (
+                                        <>
+                                            <button
+                                                onClick={() => navigateWorkspace(workspaceInfo.subpath ? `${workspaceInfo.subpath}/${workspaceMenu.dirName}` : workspaceMenu.dirName!)}
+                                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+                                            >
+                                                <FolderOpen size={12} className="text-gray-400" />
+                                                Open folder
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    const d = workspaceInfo.dirs.find(x => x.name === workspaceMenu.dirName);
+                                                    setWorkspaceDeleteTarget({ name: workspaceMenu.dirName!, isDir: true, items: d?.items });
+                                                    setWorkspaceMenu(null);
+                                                }}
+                                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+                                            >
+                                                <Trash2 size={12} className="text-gray-400" />
+                                                Delete folder…
+                                            </button>
+                                        </>
+                                    )}
+                                    <button
+                                        onClick={() => { setWorkspaceNewFolder({ value: '', error: null }); setWorkspaceMenu(null); }}
+                                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+                                    >
+                                        <FolderPlus size={12} className="text-gray-400" />
+                                        New folder…
+                                    </button>
+                                    <button
+                                        onClick={() => { setWorkspaceMenu(null); workspaceFileInputRef.current?.click(); }}
+                                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+                                    >
+                                        <Upload size={12} className="text-gray-400" />
+                                        Upload files…
+                                    </button>
+                                </div>
+                            )}
                         </div>
                         )}
 
@@ -10850,8 +11277,8 @@ function VAFDashboardContent() {
                                 with an inner shadow so it reads as depth rather than as a
                                 second surface. What picking one does, drawn rather than
                                 listed: the pointer opens the hotbar, picks a tile, and the
-                                pick ends up in the rail below the globe - then the same in
-                                reverse. Styles and the shared 12s timeline: globals.css. */}
+                                pick takes its seat in the rail beside the globe - then the
+                                same in reverse. Styles and the shared 12s timeline: globals.css. */}
                             <div className="w-[36%] min-w-[420px] max-w-[620px] flex-none border-l border-gray-200 bg-gray-50 shadow-inner flex flex-col gap-5 px-6 pt-6 pb-8 max-md:hidden">
                                 {/* Order matters: the window and its rail icons first, the
                                     panel last, so the panel that opens sits OVER the icons

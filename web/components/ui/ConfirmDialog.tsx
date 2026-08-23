@@ -25,6 +25,7 @@
 'use client';
 
 import React, { useEffect, useRef } from 'react';
+import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 
 export interface ConfirmDialogProps {
     open: boolean;
@@ -37,11 +38,13 @@ export interface ConfirmDialogProps {
     onCancel: () => void;
     /** Stacking context. Must sit above whatever opened it. */
     zIndexClass?: string;
+    /** Escape level. Follows the stacking, so it answers before what it covers. */
+    escapeLevel?: number;
 }
 
 export default function ConfirmDialog({
     open, title, body, confirmLabel, cancelLabel, onConfirm, onCancel,
-    zIndexClass = 'z-[80]',
+    zIndexClass = 'z-[80]', escapeLevel = 80,
 }: ConfirmDialogProps) {
     const cancelRef = useRef<HTMLButtonElement>(null);
     // The handler is read through a ref so the listener below can depend on
@@ -59,17 +62,12 @@ export default function ConfirmDialog({
         if (open) cancelRef.current?.focus();
     }, [open]);
 
-    // Capture phase, and it stops propagation: the modals underneath bind their
-    // own Escape on window in the bubble phase, and would otherwise close out
-    // from under this dialog instead of it answering first.
-    useEffect(() => {
-        if (!open) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') { e.stopPropagation(); latestCancel.current(); }
-        };
-        window.addEventListener('keydown', onKey, true);
-        return () => window.removeEventListener('keydown', onKey, true);
-    }, [open]);
+    // Escape is a layer in the shared registry, above the modal that opened this
+    // dialog, so one press answers the question and the modal underneath cannot
+    // close out from under it. Its own listener could not do that any more once
+    // the registry existed: both would be capture-phase listeners on window, and
+    // the one bound first wins a press the other never sees.
+    useEscapeLayer({ active: open, level: escapeLevel, onEscape: () => latestCancel.current() });
 
     if (!open) return null;
 

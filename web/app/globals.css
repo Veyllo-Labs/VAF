@@ -62,7 +62,7 @@
 .dark .vaf-doc-paper {
   /* SURFACE ramp (backgroundColor + gradient stops) */
   --sfc-white: 255 255 255;
-  --chat-fog: 255 255 255; /* sidebar chat-list fog fade endpoint (matches sidebar bg) */
+  --chat-fog: 255 255 255; /* the bg-white SURFACE tone: the sidebar list and the chat header both fade to it, so it must match that surface, never the page */
   --sfc-gray-50: 249 250 251;
   --sfc-gray-100: 243 244 246;
   --sfc-gray-200: 229 231 235;
@@ -206,7 +206,7 @@
   --ring: 217 91% 60%;
   --planbox-ink: #ececec; /* plan-step box ink goes light in dark mode */
 
-  --chat-fog: 32 32 32; /* #202020 = the bg-white sidebar tone (fog must match it, not the page) */
+  --chat-fog: 32 32 32; /* #202020 = the bg-white surface tone; two surfaces fade to it now (sidebar list, chat header), so it tracks that surface and not the page */
   /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
      stay untouched: brand-dark elements remain dark); text folds 400..900 to
      light (50..300 + white stay untouched: light text on dark elements). */
@@ -1185,6 +1185,15 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    picked state is a second element fading in over the plain tile for exactly
    that reason. Timings are one 12s timeline shared by every element, so the
    stages cannot drift apart; the percentages are noted in the keyframes.
+
+   The rail here runs left to right along the window's header band, the way the
+   real one does. Only the SEATS were turned: the window, its masks, the panel,
+   the tiles and the whole 12s timeline are untouched, because the window's top
+   and right edges were already the two real ones and a header band needs no
+   other frame. Which element moves did change with the axis, and it had to: the
+   real group is right-aligned and grows leftward, so a pick pushes the GLOBE
+   over while the plus keeps its gutter. Drawing the plus as the mover would
+   teach a rhythm the rail does not keep.
    ═══════════════════════════════════════════════════════════════════════ */
 .vaf-hb-demo { position: relative; width: 100%; min-height: 380px; }
 
@@ -1221,22 +1230,28 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   -webkit-mask-composite: source-in;
   mask-composite: intersect;
 }
+/* The rail sits in the window's HEADER band and runs left to right, so the seats
+   are offsets from the right edge on one shared top. The plus is the fixed one:
+   the real group is right-aligned and grows leftward, so a pick pushes the globe
+   over and the plus stays where the pointer last found it. */
 .vaf-hb-dot {
-  position: absolute; right: 30px; width: 28px; height: 28px;
+  position: absolute; top: 30px; width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   color: rgb(var(--txt-gray-400));
 }
-.vaf-hb-globe { top: 44px; }
+.vaf-hb-globe {
+  right: 70px;
+  animation: vafHbGlobe 12s linear infinite;
+}
 .vaf-hb-slot {
-  top: 84px; opacity: 0;
+  right: 70px; opacity: 0;
   animation: vafHbSlot 12s linear infinite;
 }
 .vaf-hb-plus {
   /* NOT txt-gray-300: the text ramp only folds 400..900, so that variable does
      not exist at all - the colour silently fell back to the inherited one.
      One step quieter than the rail's tone is opacity, never a lighter ink. */
-  top: 84px; opacity: .62;
-  animation: vafHbPlus 12s linear infinite;
+  right: 30px; opacity: .62;
 }
 
 /* the panel the plus opens: over the window, over the icons, and simplified */
@@ -1275,12 +1290,16 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     2.7s at a tile 22.5% | 2.9s picked 24.17% | 3.4s closed 28.33%
     3.9s in the rail 32.5% | 6.5s back at the plus 54.17% | 7.2s open 60%
     8.4s dropped 70% | 8.9s closed 74.17% | 9.4s bare 78.33% | loop 12s */
+/* The two stops at the plus share one y now: the plus no longer moves when a
+   pick lands, so the pointer returns to exactly where it clicked the first
+   time. Its x never changed - the plus kept the same gutter, only the rail
+   turned underneath it. */
 @keyframes vafHbCursor {
   0%,     3%      { transform: translate(-290px, 250px); }
-  8.33%,  14.17%  { transform: translate(-48px, 94px); }
+  8.33%,  14.17%  { transform: translate(-48px, 40px); }
   22.5%,  28.33%  { transform: translate(-298px, 94px); }
   32.5%,  47%     { transform: translate(-290px, 250px); }
-  54.17%, 60%     { transform: translate(-48px, 134px); }
+  54.17%, 60%     { transform: translate(-48px, 40px); }
   68.33%, 74.17%  { transform: translate(-298px, 94px); }
   78.33%, 100%    { transform: translate(-290px, 250px); }
 }
@@ -1316,18 +1335,19 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   32.5%,  74.17%  { opacity: 1; transform: scale(1); }
   78.33%, 100%    { opacity: 0; transform: scale(.4); }
 }
-@keyframes vafHbPlus {
-  0%,     28.33%  { transform: translateY(0); }
-  32.5%,  74.17%  { transform: translateY(40px); }
-  78.33%, 100%    { transform: translateY(0); }
+@keyframes vafHbGlobe {
+  0%,     28.33%  { transform: translateX(0); }
+  32.5%,  74.17%  { transform: translateX(-40px); }
+  78.33%, 100%    { transform: translateX(0); }
 }
 
 /* Anyone who asked their system not to animate gets the end state, still. */
 @media (prefers-reduced-motion: reduce) {
   .vaf-hb-cursor, .vaf-hb-ring, .vaf-hb-popup,
-  .vaf-hb-pick, .vaf-hb-slot, .vaf-hb-plus { animation: none; }
+  .vaf-hb-pick, .vaf-hb-slot, .vaf-hb-globe { animation: none; }
   .vaf-hb-popup { opacity: 1; transform: scale(1); }
   .vaf-hb-pick { opacity: 1; }
   .vaf-hb-slot { opacity: 1; transform: scale(1); }
+  .vaf-hb-globe { transform: translateX(-40px); }
   .vaf-hb-cursor { transform: translate(-298px, 94px); }
 }

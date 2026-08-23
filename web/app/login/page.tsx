@@ -12,6 +12,7 @@ import {
     Zap, Cpu, HardDrive, Sun, Moon, SunMoon, Bot, Dices
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { copyText } from '@/lib/clipboard';
 import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
@@ -1198,7 +1199,7 @@ export default function LoginPage() {
                                                 <p className="text-xs text-gray-500 text-center mb-1.5">{t('manualKeyHint')}</p>
                                                 <button
                                                     type="button"
-                                                    onClick={() => { try { navigator.clipboard?.writeText(twoFASecret); setSecretCopied(true); setTimeout(() => setSecretCopied(false), 1500); } catch { /* clipboard unavailable */ } }}
+                                                    onClick={() => { copyText(twoFASecret); setSecretCopied(true); setTimeout(() => setSecretCopied(false), 1500); }}
                                                     className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-200 hover:bg-gray-100 active:bg-gray-200 transition-colors font-mono text-sm tracking-wider text-gray-800"
                                                     title={t('copyToClipboard')}
                                                 >

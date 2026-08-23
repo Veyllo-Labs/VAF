@@ -9,6 +9,7 @@ import {
     MessageCircle, Shield, Loader2, AlertCircle, CheckCircle2, UserPlus
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 /** Use relative /api/ so Next.js rewrites to backend (127.0.0.1:8001). */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
@@ -56,8 +57,8 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
         }
     }, [currentStep, verificationCode]);
 
-    const handleCopyCode = () => {
-        navigator.clipboard.writeText(verificationCode);
+    const handleCopyCode = async () => {
+        await copyText(verificationCode);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };

@@ -53,6 +53,7 @@ import {
     Mail, Phone, Cloud, Terminal, FileText, Clock, Send, List, Plug, Github
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
@@ -2085,10 +2086,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
-                // ConfirmDialog is absent from this stack on purpose: it binds
-                // Escape itself in the CAPTURE phase and stops propagation, so it
-                // always answers before this bubble-phase handler. A branch here
-                // would be dead code that reads like a live one.
+                // ConfirmDialog is absent from this stack on purpose: it registers
+                // an Escape layer at level 80 in the shared registry, which answers
+                // the press and stops it there, so it always answers before this
+                // handler. A branch here would be dead code that reads like a live
+                // one. This whole stack is the largest site not yet converted to
+                // that registry (see the Escape section in docs/web-ui/WEB_UI.md).
                 // Check topmost modal first
                 if (codeModal) {
                     setCodeModal(null);
@@ -4592,11 +4595,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         const portsText = accessUrlData ? `${accessUrlData.port} (${tLocalNet('portAccess')}), ${accessUrlData.backend_port} (${tLocalNet('portBackend')})` : '';
                                         if (!thisDeviceUrl && !lanUrl && !apiHost) return null;
                                         const copyUrl = (url: string) => {
-                                            if (url && navigator.clipboard) {
-                                                navigator.clipboard.writeText(url);
-                                                setNetworkLinkCopied(true);
-                                                setTimeout(() => setNetworkLinkCopied(false), 2000);
-                                            }
+                                            if (!url) return;
+                                            copyText(url);
+                                            setNetworkLinkCopied(true);
+                                            setTimeout(() => setNetworkLinkCopied(false), 2000);
                                         };
                                         return (
                                             <div className={cn(
@@ -7705,7 +7707,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
                         <div className="flex justify-end gap-2 pt-1">
                             <button
-                                onClick={() => { navigator.clipboard?.writeText(createdUserCreds.password); }}
+                                onClick={() => { copyText(createdUserCreds.password); }}
                                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
                             >
                                 {tCommon('copy')}

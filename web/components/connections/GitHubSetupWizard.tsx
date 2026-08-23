@@ -11,6 +11,7 @@ import {
     Copy, Check
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 /** GitHub logo (official mark) as black SVG. */
 function GitHubLogo({ className }: { className?: string }) {
@@ -411,7 +412,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                         <div className="relative group mt-2">
                                             <div 
                                                 onClick={() => {
-                                                    navigator.clipboard.writeText(deviceFlow.user_code);
+                                                    copyText(deviceFlow.user_code);
                                                     setCopied(true);
                                                     setTimeout(() => setCopied(false), 2000);
                                                     window.open(deviceFlow.verification_uri, '_blank');

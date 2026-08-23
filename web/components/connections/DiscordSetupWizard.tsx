@@ -9,6 +9,7 @@ import {
     MessageCircle, Shield, Loader2, AlertCircle, CheckCircle2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 interface DiscordSetupWizardProps {
     isOpen: boolean;
@@ -55,8 +56,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
         }
     }, [currentStep, verificationCode]);
 
-    const handleCopyCode = () => {
-        navigator.clipboard.writeText(verificationCode);
+    const handleCopyCode = async () => {
+        await copyText(verificationCode);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };

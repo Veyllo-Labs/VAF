@@ -15,6 +15,51 @@ jobs:
     with:
       matrix: '{"include":[{"os":"ubuntu-latest","python-version":"3.10"},{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.12"}]}'
 
+  web-build:
+    # The frontend is what a user actually looks at, and until this job existed
+    # NOTHING in the pipeline installed or built it: a Next minor bump entered
+    # the lock, every gate stayed green against a dev machine's months-old
+    # node_modules, and the first computer to resolve that lock was a user's Mac
+    # - where the build failed and the app never came up (v0.1.0a24).
+    #
+    # `npm ci` rather than `npm install` on purpose: it installs the COMMITTED
+    # lock and fails outright when the lock and package.json disagree, which is
+    # the other half of the same incident. Three operating systems because npm
+    # resolves optional and platform-gated packages differently on each, so a
+    # green Linux install proves nothing about a Mac.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install from the committed lock
+        working-directory: web
+        run: npm ci
+      - name: Build the frontend
+        working-directory: web
+        run: npm run build
+      - name: The build must not dirty the working tree
+        # Next regenerates next-env.d.ts and npm can touch the lock. Whatever a
+        # build writes has to be either committed or listed in the updater's
+        # self-churn allowlist, or the next `vaf update` aborts on a dirty tree
+        # for an edit the user never made.
+        shell: bash
+        run: |
+          DIRTY="$(git status --porcelain -- web/)"
+          if [ -n "$DIRTY" ]; then
+            echo "The web build modified tracked files:" >&2
+            echo "$DIRTY" >&2
+            echo "Commit them, or add them to _SELF_CHURN_PATHS in vaf/cli/cmd/update.py." >&2
+            exit 1
+          fi
+
   lock-sync:
     # Supply-chain gate: requirements.lock is the hash-pinned (pip-compile --generate-hashes)
     # resolution of requirements.txt. This job regenerates it and fails if it differs from the

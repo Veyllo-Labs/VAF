@@ -104,7 +104,57 @@ if [ -n "$WEB_CHANGED" ]; then
         echo ".next under the live app breaks the session it is serving)." >&2
         exit 1
     fi
+    # A build against a STALE node_modules is the green that is not earned:
+    # a Next minor bump entered the lock, this stage kept building with the
+    # months-old copy on disk, and the first machine to resolve the lock was a
+    # user's (v0.1.0a24, the frontend never came up). Comparing what is
+    # INSTALLED against what is LOCKED catches that offline and in a second.
+    # Only two signals are used, because a naive set difference is a false-
+    # positive machine: the lock legitimately holds ~80 more entries than any
+    # one platform installs (os/cpu-gated and optional packages).
+    node - <<'NODE'
+const fs = require('fs');
+const lock = JSON.parse(fs.readFileSync('web/package-lock.json', 'utf8')).packages || {};
+let installed;
+try {
+    installed = JSON.parse(fs.readFileSync('web/node_modules/.package-lock.json', 'utf8')).packages || {};
+} catch {
+    console.error('ERROR: web/node_modules is missing or was not installed by npm.');
+    console.error('Run: (cd web && npm ci)');
+    process.exit(1);
+}
+const problems = [];
+for (const [name, meta] of Object.entries(installed)) {
+    if (!name) continue;
+    const want = lock[name];
+    if (!want) { problems.push(`${name}: installed ${meta.version}, absent from the lock`); continue; }
+    if (want.version && meta.version && want.version !== meta.version) {
+        problems.push(`${name}: installed ${meta.version}, lock wants ${want.version}`);
+    }
+}
+if (problems.length) {
+    console.error('ERROR: web/node_modules disagrees with web/package-lock.json:');
+    for (const p of problems.slice(0, 20)) console.error('  ' + p);
+    if (problems.length > 20) console.error(`  ... and ${problems.length - 20} more`);
+    console.error('The build would test something users never get. Run: (cd web && npm ci)');
+    process.exit(1);
+}
+NODE
+    # Whatever the BUILD writes has to be committed or known to the updater, or
+    # the next `vaf update` aborts on a dirty tree the user never caused (that
+    # deadlock has happened twice: package-lock.json, then next-env.d.ts).
+    # Compared before against after, so work in progress is not mistaken for it.
+    WEB_BEFORE="$(git status --porcelain -- web/)"
     (cd web && npm run build)
+    WEB_AFTER="$(git status --porcelain -- web/)"
+    WEB_NEW="$(comm -13 <(printf '%s\n' "$WEB_BEFORE" | sort) \
+                        <(printf '%s\n' "$WEB_AFTER" | sort))"
+    if [ -n "$WEB_NEW" ]; then
+        echo "ERROR: the web build itself modified tracked files:" >&2
+        echo "$WEB_NEW" >&2
+        echo "Commit them, or list them in _SELF_CHURN_PATHS (vaf/cli/cmd/update.py)." >&2
+        exit 1
+    fi
     echo "    OK"
 else
     echo "    SKIPPED (no web/ changes against origin/main)"

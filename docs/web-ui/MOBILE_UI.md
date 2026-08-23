@@ -190,8 +190,11 @@ Already in place; reuse, don't reinvent:
 
 From `web/`:
 
-- Types: `node node_modules/typescript/bin/tsc --noEmit` (ignore the pre-existing
-  `SoulWizard.test.tsx` noise).
+- Types: `node node_modules/typescript/bin/tsc --noEmit`. It is clean: test files
+  are excluded from the type check in `tsconfig.json`, because web/ has no test
+  runner and the one `__tests__` file cannot resolve its imports. Next 16.3 runs
+  the tsc CLI instead of its own filtering checker, so what tsc says here is what
+  the production build says.
 - Build: `node node_modules/next/dist/bin/next build` (must exit 0). `next lint` was
   removed in Next 16 - rely on `tsc`.
 - The app serves a prebuilt `.next`; a visible change needs a rebuild **and** an app

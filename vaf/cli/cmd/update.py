@@ -115,7 +115,15 @@ def _install_python_deps(root: Path) -> None:
 # sources, safe to restore). npm rewrote web/package-lock.json on install,
 # which then DEADLOCKED every future update at the dirty-tree pre-check -
 # live incident: a Mac stuck on a7 with four newer releases available.
-_SELF_CHURN_PATHS = ("web/package-lock.json",)
+_SELF_CHURN_PATHS = (
+    "web/package-lock.json",
+    # Next rewrites this generated file on every build (16.3 added a
+    # root-params reference to it), so a machine that has ever built the
+    # frontend carries the edit forever. It is the same deadlock as the
+    # lockfile above, one file further along: the pre-check saw a dirty
+    # tree the user never touched and refused every later update.
+    "web/next-env.d.ts",
+)
 
 
 def _split_self_churn(porcelain: str) -> "tuple[list[str], list[str]]":

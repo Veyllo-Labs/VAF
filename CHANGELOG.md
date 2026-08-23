@@ -11,6 +11,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The app comes up again after updating.** On a fresh install the frontend
+  refused to build, so the update finished and then the window never showed
+  anything but the splash screen. A test file that no test runner has ever run
+  sat inside the production type check; the frontend framework used to discard
+  its errors and, from its latest version on, no longer does. Test files are
+  excluded from the build's type check now, which is what they always were in
+  effect.
+- **An update no longer blocks every update after it.** Building the frontend
+  rewrites a generated file, and the updater read that as an unsaved change of
+  yours and refused to continue - the same deadlock a lockfile caused once
+  before. Anyone whose update left them stuck can update again.
+
+### Changed
+- **The frontend is built in CI now, on Linux, macOS and Windows.** Nothing in
+  the pipeline installed or built it before, so a dependency bump could pass
+  every check and still leave users with an app that would not start. The build
+  installs strictly from the committed lockfile, so a lockfile that disagrees
+  with the dependency list fails loudly instead of being quietly worked around.
+
+
 ## [0.1.0a24] - 2026-08-23
 
 ### Fixed

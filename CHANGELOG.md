@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A chat no longer dies with a provider error when the agent corrects
+  itself.** When the agent caught itself claiming a tool result it had not
+  received, it re-asked with a correction, and on Veyllo that second request
+  came back as an error twice in a row, leaving the raw error text where the
+  answer belonged. Measured against the gateway: it refuses a request in which
+  the agent speaks again after a tool result without the conversation being
+  handed back to the person. The correction now travels as such a turn, which
+  is what the same code already does for local models, and the identical
+  request that failed comes back answered.
 - **A reopened chat shows its own pictures again.** A picture sent with a
   message was stored and was still on the server, but reopening the chat left
   the message without it: the browser rebuilt each message field by field when

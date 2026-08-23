@@ -12,6 +12,7 @@ import re
 
 from vaf.core.agent import (
     _SYNTHETIC_TC_ID_RE,
+    _close_assistant_after_tool_result,
     _downgrade_synthetic_tool_exchanges,
     _synth_tool_call_id,
 )
@@ -210,6 +211,101 @@ def test_prepare_messages_repair_and_fold_compose_for_veyllo():
     assert assts[0]["content"] == ""
     assert "tool_calls" not in assts[0]
     assert not any(m.get("role") == "tool" for m in out)
+
+
+# ── an assistant turn after a tool result must be closed by a user turn ───────
+#
+# Measured against the live gateway with an id it had just issued, one variable
+# at a time: the loop step (ends on tool) and a post-tool system nudge both pass,
+# an assistant turn appended after the tool result fails, and a user turn behind
+# it makes the identical history pass again. The gateway reports that as "The
+# reasoning_content in the thinking mode must be passed back", which is
+# misleading - the field was present in every failing probe.
+
+def _tool_turn():
+    return [
+        {"role": "user", "content": "what time is it?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": GENUINE_ID, "type": "function",
+             "function": {"name": "get_time", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": GENUINE_ID, "content": "11:45"},
+    ]
+
+
+def test_a_correction_after_a_tool_result_travels_as_a_user_turn():
+    """The live shape: a self-correction retry appends the reply it just got
+    plus an instruction to redo it. Without the conversion the gateway 400s."""
+    out = _close_assistant_after_tool_result(_tool_turn() + [
+        {"role": "assistant", "content": "It is 11:45."},
+        {"role": "system", "content": "CORRECTION NEEDED: restate it."},
+    ])
+    assert [m["role"] for m in out] == ["user", "assistant", "tool", "assistant", "user"]
+    assert out[-1]["content"] == "CORRECTION NEEDED: restate it."
+
+
+def test_the_loop_step_and_a_post_tool_nudge_are_left_alone():
+    """Both measured at 200. A guard that also rewrote these would turn a
+    working request into a user turn nobody wrote."""
+    loop_step = _tool_turn()
+    assert _close_assistant_after_tool_result(list(loop_step)) == loop_step
+    nudged = _tool_turn() + [{"role": "system", "content": "answer now"}]
+    assert _close_assistant_after_tool_result(list(nudged)) == nudged
+
+
+def test_a_history_already_closed_by_a_user_turn_is_untouched():
+    """The system nudge here comes AFTER the user turn, so the request already
+    ends the way the gateway wants. Converting it anyway would rewrite an
+    instruction into a message the person never sent, on a request that was
+    fine - which is why the case carries both a user turn and a system one."""
+    closed = _tool_turn() + [
+        {"role": "assistant", "content": "It is 11:45."},
+        {"role": "user", "content": "and tomorrow?"},
+        {"role": "system", "content": "keep it short"},
+    ]
+    assert _close_assistant_after_tool_result(list(closed)) == closed
+
+
+def test_a_history_without_a_tool_result_is_untouched():
+    plain = [{"role": "user", "content": "hi"},
+             {"role": "assistant", "content": "hello"},
+             {"role": "system", "content": "be brief"}]
+    assert _close_assistant_after_tool_result(list(plain)) == plain
+
+
+def test_the_named_boundary_invents_no_user_turn():
+    """Nothing behind the assistant turn means nothing to convert. Inventing a
+    user message would put words in the person's mouth; the gateway's own 400
+    is the signal if a lane ever produces this."""
+    bare = _tool_turn() + [{"role": "assistant", "content": "It is 11:45."}]
+    assert _close_assistant_after_tool_result(list(bare)) == bare
+
+
+def test_prepare_messages_closes_the_correction_for_veyllo_only():
+    """The wiring, and its gate: the conversion is a veyllo wire requirement,
+    so another API provider's history must come back byte-identical."""
+    from vaf.core.agent import Agent
+
+    class _Stub:
+        _thinking_reply_context = None
+        filename = "api"
+        model_display_name = ""
+        config = {}
+        provider = "veyllo"
+
+        def _consolidate_system_messages(self, messages):
+            return messages
+
+    history = _tool_turn() + [
+        {"role": "assistant", "content": "<think>t</think>It is 11:45."},
+        {"role": "system", "content": "CORRECTION NEEDED: restate it."},
+    ]
+    out = Agent._prepare_messages(_Stub(), [dict(m) for m in history])
+    assert out[-1]["role"] == "user", "the correction still travels as a system turn"
+
+    other = _Stub()
+    other.provider = "openai"
+    out2 = Agent._prepare_messages(other, [dict(m) for m in history])
+    assert out2[-1]["role"] == "system", "the veyllo-only guard leaked to another provider"
 
 
 def test_the_deepseek_family_gets_reasoning_content_passed_back():

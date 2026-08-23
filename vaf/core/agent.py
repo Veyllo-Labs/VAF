@@ -417,6 +417,66 @@ def _synth_tool_call_id() -> str:
 _SYNTHETIC_TC_ID_RE = re.compile(r"^(call_synth_|extracted_\d|call_[0-9a-f]{8}$)")
 
 
+def _close_assistant_after_tool_result(messages):
+    """Veyllo: an assistant turn that FOLLOWS a tool result must be closed by a
+    user turn, or the gateway refuses the whole request.
+
+    Measured against the live gateway with a genuine `call_00_` id it had just
+    issued, one variable at a time (`veyllo-chat`):
+
+        user, assistant(tool_calls), tool                        -> 200
+        user, assistant(tool_calls), tool, system                -> 200
+        user, assistant(tool_calls), tool, user                  -> 200
+        user, assistant(tool_calls), tool, assistant             -> 400
+        user, assistant(tool_calls), tool, assistant, system     -> 400
+        user, assistant(tool_calls), tool, assistant, user       -> 200
+
+    So the normal loop step is fine and a post-tool system nudge is fine; what
+    the gateway rejects is an assistant turn appended after a tool result with
+    no user turn behind it. It answers that with "The reasoning_content in the
+    thinking mode must be passed back to the API", which is misleading: the
+    field was present in every failing probe above and absent from a passing
+    one. See docs/llm/LLM_BACKEND_FACTS.md for the whole measured table.
+
+    The shape is not hypothetical - it is what a self-correction retry builds
+    when it appends the reply it just received plus an instruction to redo it
+    (result grounding, agent.py; the live incident that produced this guard).
+
+    The repair is the one this codebase already uses for the same shape on
+    strict local templates: a mid-run system message becomes a USER turn IN
+    PLACE (consolidate_system_messages in api_backend.py, written for Qwen's
+    "Assistant response prefill is incompatible with enable_thinking"). Same
+    mechanism, a second provider, a different measurement behind it. Only the
+    trailing instruction is converted; leading system turns are untouched,
+    because an API provider takes as many of those as it likes.
+
+    NAMED BOUNDARY: when nothing follows the assistant turn there is no message
+    to convert and this returns the input unchanged. Inventing a user turn
+    would put words in the person's mouth. No lane in the tree produces that
+    shape today - every self-correction appends its instruction - and if one
+    ever does, the gateway's own 400 is the signal.
+    """
+    last_tool = -1
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "tool":
+            last_tool = i
+    if last_tool < 0:
+        return messages
+    tail = messages[last_tool + 1:]
+    if not any(m.get("role") == "assistant" for m in tail):
+        return messages          # the loop step itself, or a bare nudge: both fine
+    if any(m.get("role") == "user" for m in tail):
+        return messages          # already closed
+    convertible = [i for i, m in enumerate(tail)
+                   if m.get("role") == "system" and str(m.get("content") or "").strip()]
+    if not convertible:
+        return messages          # the named boundary above
+    out = list(messages)
+    idx = last_tool + 1 + convertible[-1]
+    out[idx] = {"role": "user", "content": str(out[idx].get("content") or "")}
+    return out
+
+
 def _downgrade_synthetic_tool_exchanges(messages):
     """Veyllo: replace tool exchanges with VAF-minted ids by plain text on the
     OUTBOUND copy.
@@ -12935,6 +12995,11 @@ class Agent:
             # streams) are folded into plain text pre-send; genuine exchanges
             # replay byte-identical. See _downgrade_synthetic_tool_exchanges.
             messages = _downgrade_synthetic_tool_exchanges(messages)
+            # ... and it rejects an assistant turn appended after a tool result
+            # unless a user turn closes it, with the same misleading error text.
+            # Runs AFTER the fold: that one can turn a tool exchange into system
+            # notes, and this guard must see the shape that actually goes out.
+            messages = _close_assistant_after_tool_result(messages)
 
         is_gemma = getattr(self, "is_gemma_local", "gemma" in self.filename.lower())
         if not is_gemma:

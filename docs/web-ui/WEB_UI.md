@@ -311,7 +311,9 @@ many frames have not been read.
   native mouse/keyboard. Always the persistent mode: logins survive without a switch of
   our own (the browser itself asks about remembering them). When the agent's own
   `browser_agent` run holds the browser, the window keeps today's agent view instead; the
-  agent always wins the shared browser and evicts an interactive session at run start.
+  agent always wins the browser it is given and evicts an interactive session at run
+  start - the person's OWN session, because each user scope browses in its own instance
+  while the per-user pool serves it (`browser_pool_max`, default 2).
   Details and the lease/ticket model:
   [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#interactive-browser-driving-the-sandbox-by-hand).
   The mark means open, not on top - the dock's single slot gives every viewer priority

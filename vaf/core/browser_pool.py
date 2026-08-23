@@ -1,24 +1,29 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Per-user browser instances: real partitions, resource-gated, opt-in.
+"""Per-user browser instances: real partitions, resource-gated, on by default.
 
-The shared vaf-browser container time-shares one Chromium between everyone
-(one lease at a time, a scrub on every change of hands). This pool is the
-second stage: when VAF_BROWSER_POOL_MAX is set above zero, each user scope
-gets a browser CONTAINER of their own - their own profile volume (history,
-saved passwords and downloads become legitimately per-user instead of state
-to wipe), their own CDP and stream endpoints, and therefore PARALLEL use:
-two users browse at the same time in two different browsers.
+Each user scope gets a browser CONTAINER of their own - their own profile
+volume (history, saved passwords and downloads become legitimately per-user
+instead of state to wipe), their own CDP and stream endpoints, and therefore
+PARALLEL use: two users browse at the same time in two different browsers.
+The shared vaf-browser container is what remains for everyone the pool cannot
+serve; there one Chromium is time-shared (one lease at a time, a scrub on
+every change of hands), which is isolation by lease rather than by partition.
 
-Deliberately an env knob like its siblings (VAF_BROWSER_MAX_PARALLEL,
-VAF_BROWSER_CDP_URL), default OFF: a pooled instance costs the full container
-(~1-2 GB RAM), so the operator opts in with a number they can afford, and a
-free-memory floor refuses new instances before the machine starts swapping.
-Whenever the pool cannot serve - disabled, at capacity, low memory, docker
-unreachable, image unknown - the caller falls back to the shared container
-and its handover scrub, so the pool can only ever ADD isolation, never lose
-the browser entirely.
+`browser_pool_max` decides how many instances may run at once, default 2,
+because an instance costs a full container (~1-2 GB RAM) and two is the
+smallest number at which a second person is not sharing a browser. Raising it
+is an operator decision about RAM: see the pool section in
+docs/agents/BROWSER_AGENT.md. A free-memory floor refuses new instances before
+the machine starts swapping, and 0 turns the pool off entirely. All three
+knobs are config keys with a VAF_BROWSER_POOL_* environment override, so a
+deployment can pin them without writing the config file.
+
+Whenever the pool cannot serve - switched off, at capacity, low memory, docker
+unreachable, image unknown - the caller falls back to the shared container and
+its handover scrub, so the pool can only ever ADD isolation, never lose the
+browser entirely.
 
 Instances are cloned from the shared container's own image and network (read
 via docker inspect at first use), published loopback-only on ephemeral host
@@ -45,26 +50,62 @@ _VOLUME_PREFIX = "vaf-browser-profile-"
 _NETWORK_PREFIX = "vaf-browser-net-"
 
 
-def pool_max() -> int:
-    """How many per-user instances may RUN at once. 0 (default) disables the pool."""
+# The three defaults live here as well as in Config.DEFAULTS: an embedder that
+# builds on vaf.core without a config file still gets a working pool. A guard
+# test pins the two copies together so they cannot drift.
+DEFAULT_POOL_MAX = 2
+DEFAULT_MIN_FREE_MB = 2500
+DEFAULT_IDLE_S = 900.0
+
+
+def _config_get(key: str):
+    """One config value, or None where there is no readable config (an embedder
+    without a config file, a test with no home). The single seam the tests stub."""
     try:
-        return max(0, int(os.environ.get("VAF_BROWSER_POOL_MAX", "0") or 0))
+        from vaf.core.config import Config
+        return Config.get(key)
     except Exception:
-        return 0
+        return None
+
+
+def _setting(env_var: str, config_key: str):
+    """One pool knob: the environment override first, then the config key.
+
+    The env var is the operator's escape hatch (pin it in a deployment without
+    writing the config file), the config key is what Settings writes. Returns
+    None when neither answers. An explicit 0 is a REAL value here ("pool off",
+    "no memory floor"), so this never folds a value away with `or <default>` -
+    that idiom would silently turn a deliberate 0 back into the default.
+    """
+    raw = os.environ.get(env_var)
+    if raw is not None and str(raw).strip() != "":
+        return raw
+    return _config_get(config_key)
+
+
+def pool_max() -> int:
+    """How many per-user instances may RUN at once. 0 disables the pool."""
+    try:
+        raw = _setting("VAF_BROWSER_POOL_MAX", "browser_pool_max")
+        return DEFAULT_POOL_MAX if raw is None else max(0, int(raw))
+    except Exception:
+        return DEFAULT_POOL_MAX
 
 
 def _min_free_mb() -> int:
     try:
-        return max(0, int(os.environ.get("VAF_BROWSER_POOL_MIN_FREE_MB", "2500") or 2500))
+        raw = _setting("VAF_BROWSER_POOL_MIN_FREE_MB", "browser_pool_min_free_mb")
+        return DEFAULT_MIN_FREE_MB if raw is None else max(0, int(raw))
     except Exception:
-        return 2500
+        return DEFAULT_MIN_FREE_MB
 
 
 def _idle_stop_s() -> float:
     try:
-        return max(60.0, float(os.environ.get("VAF_BROWSER_POOL_IDLE_S", "900") or 900))
+        raw = _setting("VAF_BROWSER_POOL_IDLE_S", "browser_pool_idle_seconds")
+        return DEFAULT_IDLE_S if raw is None else max(60.0, float(raw))
     except Exception:
-        return 900.0
+        return DEFAULT_IDLE_S
 
 
 def _scope_hash(scope: str) -> str:

@@ -592,14 +592,19 @@ This is controlled by the `channel_tools_unrestricted` setting (Settings → Adv
 
 ### Concurrency / Multi-user
 
-By default, `browser_agent` serialises all calls - only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the call waits in a queue for up to **120 seconds** before giving up with a "Browser agent is busy" message.
+This section is about the SHARED browser container. Two people do not normally meet
+there any more: the per-user pool below is on by default and gives each of them a
+browser of its own. The shared container is what remains for everyone the pool cannot
+serve, and everything here describes that fallback.
+
+On it, `browser_agent` serialises all calls - only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the call waits in a queue for up to **120 seconds** before giving up with a "Browser agent is busy" message.
 
 This avoids memory exhaustion and tab interference in the shared Chromium container.
 
-To allow **2 parallel sessions** on a machine with sufficient RAM (≥ 8 GB):
+To allow **2 parallel sessions** on the shared container, on a machine with sufficient RAM (≥ 8 GB):
 
 ```bash
-# .env  (or system environment before starting VAF)
+# System environment before starting VAF (see "Where these settings go" below)
 VAF_BROWSER_MAX_PARALLEL=2
 ```
 
@@ -615,14 +620,63 @@ The practical limits are:
 
 ### Per-user browser pool (parallel use)
 
-```bash
-# .env  (or system environment before starting VAF)
-VAF_BROWSER_POOL_MAX=2            # default 0 = pool off, everyone shares one browser
-VAF_BROWSER_POOL_MIN_FREE_MB=2500 # refuse NEW instances below this free-memory floor
-VAF_BROWSER_POOL_IDLE_S=900       # stop an unused instance after this long (data kept)
-```
+**On by default.** Up to two people at a time get a browser container of their own;
+everyone beyond that shares the fallback container described above. Three config keys
+govern it, all admin-only:
 
-With the pool on, each user scope gets a browser CONTAINER of their own
+| Config key | Default | What it decides |
+|---|---|---|
+| `browser_pool_max` | `2` | How many per-user browsers may run at once. `0` switches the pool off. |
+| `browser_pool_min_free_mb` | `2500` | Free-memory floor; below it no NEW instance is started. |
+| `browser_pool_idle_seconds` | `900` | When an unused instance is stopped to give its RAM back (data kept). |
+
+#### Raising the number of parallel browsers
+
+Budget about **2 GB of RAM per concurrently active user** - that is the container's own
+memory cap - and leave the free-memory floor beneath what the machine still has free.
+A 32 GB machine comfortably carries 4 to 6; a 8 GB machine should stay at 2.
+
+Three ways to change it, in the order most people will use them:
+
+1. **Settings > Advanced > Browser pool** (admin only). Set "Parallel browsers" to the
+   number you want and save. It takes effect for the next browser that is opened; no
+   restart, and browsers already running are left alone.
+2. **`~/.vaf/config.json`** - the same keys, if you would rather edit the file:
+   ```json
+   {
+     "browser_pool_max": 4,
+     "browser_pool_min_free_mb": 2500,
+     "browser_pool_idle_seconds": 900
+   }
+   ```
+   Save while VAF is stopped, or use the Settings UI, which writes the file safely under
+   a lock.
+3. **Environment variables**, for a deployment that pins the value outside the config
+   file. They OVERRIDE the config keys, so a machine can be capped no matter what an
+   admin sets in the UI:
+   ```bash
+   # System environment of the process that starts VAF (see below)
+   VAF_BROWSER_POOL_MAX=4
+   VAF_BROWSER_POOL_MIN_FREE_MB=2500
+   VAF_BROWSER_POOL_IDLE_S=900
+   ```
+
+**If raising the number appears to do nothing**, the free-memory floor is the usual
+reason: an instance is only created while at least `browser_pool_min_free_mb` is free,
+and otherwise the caller quietly falls back to the shared browser. The decision is
+logged - look for `[browser_pool] at capacity` or `[browser_pool] low memory` in the
+`webui` domain log. To switch the pool off entirely, set `browser_pool_max` to `0`.
+
+#### Where these settings go
+
+The VAF server reads its environment from the process that starts it - a shell, a
+systemd unit, a service wrapper. It does **not** read a `.env` file; nothing in the
+Python runtime loads one. `~/.vaf/compose.env` is passed to `docker compose` only, so
+variables placed there reach the containers, never the server. Anything a config key
+covers is better set through Settings or `config.json`, which need no restart of the
+shell that launched VAF.
+
+Each user scope gets a browser CONTAINER of their own
 (`vaf/core/browser_pool.py`): their own profile volume - history, browser-saved
 passwords and downloads become legitimately per-user instead of state the handover
 scrub has to wipe (a dedicated instance is never scrubbed and never profile-wiped) -
@@ -642,9 +696,13 @@ container IP and drive it. A per-instance network leaves each browser with no pe
 all. The filtering DNS resolvers compose gives the shared container are passed to each
 instance too, so the DNS hardening applies there as well.
 
-The pool only ever ADDS isolation: whenever it cannot serve - disabled (the default),
-at capacity, free memory below the floor, docker unreachable - the caller falls back
-to the shared container and its handover scrub. An idle instance is stopped (never
+The pool only ever ADDS isolation: whenever it cannot serve - switched off
+(`browser_pool_max` at `0`), at capacity, free memory below the floor, docker
+unreachable, the shared container missing as the image template, or no user scope on
+the call - the caller falls back to the shared container and its handover scrub. That
+fallback is also where the named residual of the quick scrub still applies, so a
+machine that runs the pool at capacity is not uniformly partitioned; see
+[USER_ISOLATION.md](../security/USER_ISOLATION.md). An idle instance is stopped (never
 removed: the container and its profile volume stay) and wakes on the next use; a
 stopped instance keeps its port mapping, so endpoints stay stable. Budget roughly
 1-2 GB RAM per concurrently active user. Needs the same docker CLI access the stop
@@ -659,7 +717,8 @@ interactive start conservatively during workflow browser runs.
 ### Downloads
 
 ```bash
-# .env  (or system environment before starting VAF)
+# System environment of the process that starts VAF (never a .env file:
+# nothing in the Python runtime loads one)
 VAF_BROWSER_DOWNLOADS=workspace   # default; "off" denies downloading outright
 ```
 
@@ -684,7 +743,8 @@ Pinned by `tests/test_browser_interactive.py`.
 ### Uploads: the workspace, mirrored in
 
 ```bash
-# .env  (or system environment before starting VAF)
+# System environment of the process that starts VAF (never a .env file:
+# nothing in the Python runtime loads one)
 VAF_BROWSER_WORKSPACE_SYNC=on   # default; "off" mirrors nothing
 ```
 
@@ -709,7 +769,8 @@ too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
 ### Handover scrub depth
 
 ```bash
-# .env  (or system environment before starting VAF)
+# System environment of the process that starts VAF (never a .env file:
+# nothing in the Python runtime loads one)
 VAF_BROWSER_SCRUB=quick   # default; "full" adds the profile wipe
 ```
 
@@ -950,7 +1011,7 @@ instance.
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
-| **Single browser instance** | By default all tasks share one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). `VAF_BROWSER_POOL_MAX` lifts this: each user gets their own browser container and runs in parallel (see [Per-user browser pool](#per-user-browser-pool-parallel-use)). |
+| **Shared browser beyond the pool** | Each of the first `browser_pool_max` users (default 2) gets their own browser container and runs in parallel (see [Per-user browser pool](#per-user-browser-pool-parallel-use)). Everyone beyond that shares one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). Raising the pool size raises the number of people who never meet there. |
 | **Live view frame rate** | Chat runs stream the browser live (KasmVNC, watch-only). The screenshot lanes (workflow tile, spawned child) stay at ~1 frame/1.5 s - sufficient for monitoring. |
 
 ---

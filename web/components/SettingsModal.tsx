@@ -1191,7 +1191,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             ? [tVoice('provider'), tVoice('stt'), tVoice('tts')]
             : [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
-        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair')]);
+        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('browserPool')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
@@ -5187,6 +5187,32 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
+                                </Section>
+                                <Section title={tAdvanced('browserPool')}>
+                                    <p className="text-xs text-gray-500 mb-4">{tAdvanced('browserPoolIntro')}</p>
+                                    <Input
+                                        label={tAdvanced('browserPoolMax')}
+                                        value={localConfig.browser_pool_max ?? 2}
+                                        onChange={(v: string) => handleChange('browser_pool_max', Math.max(0, Math.min(16, parseInt(v) || 0)))}
+                                        type="number"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolMaxDesc')}</p>
+                                    <div className="h-4" />
+                                    <Input
+                                        label={tAdvanced('browserPoolMinFree')}
+                                        value={localConfig.browser_pool_min_free_mb ?? 2500}
+                                        onChange={(v: string) => handleChange('browser_pool_min_free_mb', Math.max(0, parseInt(v) || 0))}
+                                        type="number"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolMinFreeDesc')}</p>
+                                    <div className="h-4" />
+                                    <Input
+                                        label={tAdvanced('browserPoolIdle')}
+                                        value={localConfig.browser_pool_idle_seconds ?? 900}
+                                        onChange={(v: string) => handleChange('browser_pool_idle_seconds', Math.max(60, parseInt(v) || 900))}
+                                        type="number"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolIdleDesc')}</p>
                                 </Section>
                             </div>
                         )}

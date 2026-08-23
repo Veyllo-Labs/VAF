@@ -521,12 +521,21 @@ The persistent cookie/login store for the browser agent is keyed by user scope a
 
 ### Interactive browser (`vaf/core/browser_interactive.py`)
 
-The web UI's interactive browser drives the SAME shared Chromium container the agent
-uses, so its isolation is a lease, not a partition:
+**The default is a partition.** `browser_pool_max` (default 2, admin-only) gives each of
+that many user scopes a browser CONTAINER of their own, with its own profile volume and
+its own docker network - see the pool bullet at the end of this section. Everything in
+between describes the SHARED container, which is what the pool falls back to: for
+everyone beyond `browser_pool_max`, and whenever the pool cannot serve (free memory
+below `browser_pool_min_free_mb`, docker unreachable, the shared container missing as
+the image template, or `browser_pool_max` set to `0`). On that container the interactive
+browser and the agent drive the same Chromium, and the isolation is a lease, not a
+partition:
 
 - **One lease at a time**, bound to the `user_scope_id` of the WebSocket CONNECTION
   (never the message). A different user asking while a lease stands gets `busy`,
-  deliberately without learning whose lease it is; only an admin may evict.
+  deliberately without learning whose lease it is; only an admin may evict. With the
+  pool serving, a second user does not reach this arbitration at all: they get their
+  own browser instead of `busy`.
 - **Handover scrub:** when the browser changes hands to a DIFFERENT scope - an
   interactive lease, an agent run (`stop_for_agent_run` carries the run's scope), or an
   unknown jar after a server restart - the shared state is scrubbed before the new
@@ -541,7 +550,8 @@ uses, so its isolation is a lease, not a partition:
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
   lane is: the credential is in the request itself.
-- **Named residual:** in the default `quick` mode the handover scrub does not reach the
+- **Named residual, on the shared container only:** in the default `quick` mode the
+  handover scrub does not reach the
   profile FILES of the container's single Chromium: browsing HISTORY (chrome://history
   shows the previous holder's pages), passwords saved via Chromium's own password
   manager (Login Data, offered back to the next holder by autofill), autofill entries,
@@ -554,12 +564,15 @@ uses, so its isolation is a lease, not a partition:
   way: it is the holder's own files by construction, it is purged unread on a scope
   change so the next person can neither read nor upload it, and the full scrub wipes
   it with the profile.
-- **The genuine partition is the per-user pool** (`VAF_BROWSER_POOL_MAX`, see the pool
+- **The genuine partition is the per-user pool** (`browser_pool_max`, default 2,
+  admin-only, overridable by `VAF_BROWSER_POOL_MAX`; see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
   browser container with its own profile volume AND its own docker network, so nothing
   is shared with anyone and users browse in PARALLEL; hand-over scrubbing then only
-  guards the shared fallback container the pool degrades to at capacity, and a dedicated
-  instance is never scrubbed or profile-wiped. The per-instance network is load-bearing
+  guards the shared fallback container, and a dedicated
+  instance is never scrubbed or profile-wiped. Raising `browser_pool_max` raises the
+  number of people who are partitioned rather than scrubbed, which is why the residual
+  above is a property of the fallback and not of the product. The per-instance network is load-bearing
   rather than tidiness: inside the container CDP and the KasmVNC socket listen on
   0.0.0.0 without authentication (safe only because the host publishes them on loopback),
   so on one shared bridge a page in user A's browser could dial user B's container
@@ -634,6 +647,7 @@ The `/api/security/*` surface (overview, events, skill actions) is admin-only (`
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
 | Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id | OS |
+| Live browser (interactive + agent) | Per-scope container, profile volume and docker network for the first `browser_pool_max` scopes (default 2, admin-only); beyond that a shared container with one lease at a time and a handover scrub, whose quick mode leaves profile files behind | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |

@@ -3,8 +3,10 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The per-user browser pool, tested without docker.
 
-The docker CLI sits behind one seam (`browser_pool._docker`); these tests pin
-the DECISIONS: the pool is off by default and never surprises a small install,
+The docker CLI sits behind one seam (`browser_pool._docker`) and the config
+behind another (`browser_pool._config_get`); these tests pin the DECISIONS:
+two people get a browser of their own by default while an explicit 0 still
+switches the pool off entirely, the environment overrides the config key,
 capacity and the memory floor refuse politely (shared fallback, never an
 error), instances are adopted across VAF restarts, container names carry a
 scope HASH rather than the scope, and the manager registry hands out one
@@ -76,6 +78,10 @@ def _done(code, out="", err=""):
 @pytest.fixture
 def pool(monkeypatch):
     monkeypatch.delenv("VAF_BROWSER_POOL_MAX", raising=False)
+    # Neither the machine's own config file nor the environment may decide what
+    # these tests measure: with the config seam answering None every knob falls
+    # to the module default, which is the state a test then varies on purpose.
+    monkeypatch.setattr(bp, "_config_get", lambda key: None)
     fake = _FakeDocker()
     monkeypatch.setattr(bp, "_docker", fake)
     monkeypatch.setattr(bp, "_mem_available_mb", lambda: 16000)
@@ -86,9 +92,78 @@ def pool(monkeypatch):
     return p
 
 
-def test_pool_is_off_by_default_and_touches_nothing(pool):
+def test_the_suite_itself_can_never_start_a_browser_container():
+    """Counter-proof for the conftest's `_browser_pool_off` fixture, deliberately
+    written WITHOUT the `pool` fixture so it sees what every other test sees.
+
+    With the default at 2, any test that reaches a browser resolution path on a
+    machine with docker creates a real container, network and profile volume that
+    nothing cleans up. This assertion is the half that makes that fixture more
+    than a claim."""
+    assert bp.pool_max() == 0
+
+
+def test_two_people_get_a_browser_of_their_own_by_default(pool):
+    """The default is a partition, not a lease: with nothing configured, two
+    scopes resolve to two different containers instead of sharing one."""
+    a = pool.resolve("scope-a")
+    b = pool.resolve("scope-b")
+    assert a is not None and b is not None
+    assert a.container_name != b.container_name
+
+
+def test_an_explicit_zero_still_switches_the_pool_off(pool, monkeypatch):
+    """0 has to survive both lanes. The `or <default>` idiom this codebase uses
+    everywhere else would read it as "unset" and hand back the default instead,
+    which would make the off switch unreachable."""
+    monkeypatch.setattr(bp, "_config_get", lambda key: 0 if key == "browser_pool_max" else None)
+    assert bp.pool_max() == 0
     assert pool.resolve("scope-a") is None
     assert pool._test_docker.calls == []
+
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "0")
+    assert bp.pool_max() == 0
+
+
+def test_the_environment_overrides_the_config_key(pool, monkeypatch):
+    """A deployment pins the knob without writing the config file."""
+    monkeypatch.setattr(bp, "_config_get", lambda key: 5 if key == "browser_pool_max" else None)
+    assert bp.pool_max() == 5
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
+    assert bp.pool_max() == 1
+    # An empty variable is not an override: it is how a shell unsets one.
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "")
+    assert bp.pool_max() == 5
+
+
+def test_the_config_key_drives_the_memory_floor_and_the_idle_timeout(pool, monkeypatch):
+    values = {"browser_pool_min_free_mb": 4000, "browser_pool_idle_seconds": 120}
+    monkeypatch.setattr(bp, "_config_get", lambda key: values.get(key))
+    assert bp._min_free_mb() == 4000
+    assert bp._idle_stop_s() == 120.0
+    monkeypatch.setenv("VAF_BROWSER_POOL_MIN_FREE_MB", "1000")
+    monkeypatch.setenv("VAF_BROWSER_POOL_IDLE_S", "60")
+    assert bp._min_free_mb() == 1000
+    assert bp._idle_stop_s() == 60.0
+
+
+def test_module_defaults_and_config_defaults_cannot_drift():
+    """Two copies of the same number: the module default serves an embedder with
+    no config file, Config.DEFAULTS serves the app. A silent split would make
+    the app and the library disagree about how many browsers may run."""
+    from vaf.core.config import Config
+    assert Config.DEFAULTS["browser_pool_max"] == bp.DEFAULT_POOL_MAX
+    assert Config.DEFAULTS["browser_pool_min_free_mb"] == bp.DEFAULT_MIN_FREE_MB
+    assert float(Config.DEFAULTS["browser_pool_idle_seconds"]) == bp.DEFAULT_IDLE_S
+
+
+def test_the_pool_knobs_are_admin_only():
+    """Every instance carries a 2 GB memory cap, so the count and the floor are
+    the machine's RAM budget: a non-admin LAN account must not be able to raise
+    them, and browser_ is not one of the admin-only PREFIXES."""
+    from vaf.core.config import Config
+    for key in ("browser_pool_max", "browser_pool_min_free_mb", "browser_pool_idle_seconds"):
+        assert Config.is_global_config_key(key), key
 
 
 def test_instance_is_created_with_hashed_name_and_loopback_ports(pool, monkeypatch):

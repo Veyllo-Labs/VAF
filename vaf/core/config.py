@@ -618,6 +618,17 @@ class Config:
         # Docker mode is only for Desktop/Tray mode for isolation
         "use_docker": True,                                        # Desktop: Run backend/frontend in Docker
 
+        # Per-user browser pool: how many people may have a browser CONTAINER of
+        # their own at the same time. Each instance is a real partition (own
+        # profile volume, own docker network), so two users browse in parallel
+        # instead of time-sharing one Chromium behind a lease and a scrub.
+        # 0 turns the pool off and sends everyone back to the shared container.
+        # The matching VAF_BROWSER_POOL_* environment variables override these,
+        # so a deployment can pin them without writing the config file.
+        "browser_pool_max": 2,                                     # Concurrently running per-user browsers (0 = off)
+        "browser_pool_min_free_mb": 2500,                          # Refuse a NEW instance below this free-memory floor
+        "browser_pool_idle_seconds": 900,                          # Stop an unused instance after this long (data kept)
+
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
         # Connections: WhatsApp (Baileys via Node, per-user auth, whitelist with phone_number)
@@ -940,6 +951,13 @@ class Config:
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",
+        # Per-user browser pool: every instance is a container with a 2 GB memory
+        # cap, so the count and the free-memory floor ARE the machine's RAM
+        # budget - a LAN user raising either (or lowering the floor to zero)
+        # could start browsers until the host swaps. The idle timeout decides how
+        # long that memory stays committed. browser_ is NOT a global prefix, so
+        # these need explicit entries (precedent: the learn_ spend keys below).
+        "browser_pool_max", "browser_pool_min_free_mb", "browser_pool_idle_seconds",
         # Local vision projector: a llama-server LAUNCH argument (code execution
         # surface) - never user-writable.
         "vision_local_mmproj",

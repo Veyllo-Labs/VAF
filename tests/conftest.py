@@ -218,6 +218,37 @@ def _isolated_store_dirs(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _browser_pool_off():
+    """No test may start a browser CONTAINER, so the pool is switched off for the
+    whole suite.
+
+    The other isolation fixtures redirect where the suite WRITES; this one is about
+    what it STARTS. `browser_pool_max` defaults to 2, and any test that reaches a
+    browser resolution path with a docker daemon present will therefore create a
+    real container, a docker network and a profile volume on the developer's
+    machine - none of which a tmp_path can catch and none of which a test removes.
+    It is not hypothetical: the default was flipped from 0 to 2 and
+    `test_render_page_never_raises` immediately started `vaf-browser-u-<hash>` and
+    rendered the live internet through it, which is also why it stopped failing the
+    way it was written to fail.
+
+    The env var is the seam because it is the layer the pool consults FIRST, so
+    this holds no matter what the config file or `Config.DEFAULTS` say. A test that
+    is about the pool itself (`tests/test_browser_pool.py`) deletes or overrides
+    the variable per test and drives the stubbed docker seam instead.
+    """
+    import os
+
+    previous = os.environ.get("VAF_BROWSER_POOL_MAX")
+    os.environ["VAF_BROWSER_POOL_MAX"] = "0"
+    yield
+    if previous is None:
+        os.environ.pop("VAF_BROWSER_POOL_MAX", None)
+    else:
+        os.environ["VAF_BROWSER_POOL_MAX"] = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolated_threat_db(tmp_path_factory):
     """The known-bad hash list is MACHINE-global by design, so it is machine-global
     under test too unless something redirects it.

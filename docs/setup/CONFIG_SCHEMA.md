@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (322 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (325 keys).
 
 ## How configuration is set
 
@@ -352,6 +352,9 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `use_docker` | `True` | Use Docker-backed services (DB/Redis/TTS/...). |
+| `browser_pool_max` | `2` | Admin-only. How many people may have a browser CONTAINER of their own at the same time, each with its own profile and its own container network. `0` switches the pool off and sends everyone back to the one shared browser, where a lease and a handover scrub stand in for the partition. Every instance costs roughly 1-2 GB of RAM, so raising this is a memory decision: budget about 2 GB per concurrently active user and keep `browser_pool_min_free_mb` beneath what stays free. Overridden by `VAF_BROWSER_POOL_MAX`. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#per-user-browser-pool-parallel-use). |
+| `browser_pool_min_free_mb` | `2500` | Admin-only. Free-memory floor: below it no NEW instance is started and the caller falls back to the shared browser. Raising `browser_pool_max` without headroom above this floor changes nothing, which is the usual reason a raised pool appears to do nothing. Overridden by `VAF_BROWSER_POOL_MIN_FREE_MB`. |
+| `browser_pool_idle_seconds` | `900` | Admin-only. How long an unused instance stays up before it is stopped to give the RAM back. The container and its profile volume survive, so the person's history and logins come back with them. Minimum 60. Overridden by `VAF_BROWSER_POOL_IDLE_S`. |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
 | `theme` | `vaf` | Terminal colour theme for both terminal lanes; catalog in `vaf/cli/themes.py`. The default is monochrome. Changed by `t` / `theme <name>` in the app, or the Theme row in `vaf settings`. |

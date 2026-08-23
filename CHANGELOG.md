@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a24] - 2026-08-23
+
 ### Fixed
 - **The searching magnifier is back, at full size.** The scene where the agent
   hunts with a magnifier and the search dust flares up had been switched off in

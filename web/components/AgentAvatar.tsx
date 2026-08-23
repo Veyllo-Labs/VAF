@@ -193,7 +193,41 @@ const LITE: Partial<Record<AvatarMode, string>> = {
     confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
 };
 
-export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, noScene = false, tint, eyePulseRef }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; noScene?: boolean; tint?: { body?: string; dot?: string }; eyePulseRef?: React.Ref<HTMLSpanElement> }) {
+// The specialists, and the colour each one wears. Both live here because this file owns what
+// an agent LOOKS like, and both were previously written out by hand in two other places: the
+// union in page.tsx and again in SubAgentWindow's props, the colours in page.tsx and again as
+// loose Tailwind classes on eight window headers. One list means a new specialist is added
+// once. The accents are the ones the windows already used, so nothing changes colour today.
+export type SubAgentKind = 'coder' | 'research' | 'document' | 'librarian' | 'browser';
+
+// These are accent FAMILIES, so the palette re-points them under .dark by itself; a `dark:`
+// here would replace the design system's colour with an ad-hoc one. The coder deliberately
+// has none - its window is a code editor, black and white like the tools it imitates, and
+// giving it a hue would be the one that means nothing.
+export const SUBAGENT_ACCENT: Record<SubAgentKind, { chip: string; icon: string }> = {
+    coder:     { chip: "text-gray-700 border-gray-300 bg-gray-100", icon: "text-gray-700" },
+    research:  { chip: "text-violet-600 border-violet-200 bg-violet-50/60", icon: "text-violet-600" },
+    document:  { chip: "text-teal-700 border-teal-200 bg-teal-50/60", icon: "text-teal-700" },
+    librarian: { chip: "text-orange-600 border-orange-200 bg-orange-50/60", icon: "text-orange-600" },
+    browser:   { chip: "text-sky-600 border-sky-200 bg-sky-50/60", icon: "text-sky-600" },
+};
+
+// The specialist skin: what turns a flat accent into a body with depth. Held here rather
+// than at the call site because it is one design decision for every trade, and it is
+// COLOURLESS on purpose - black and white at low alpha over whatever accent the caller
+// supplies, so a new specialist needs no entry and the dark theme keeps re-pointing only
+// the accent itself. Radial from the middle outward: lighter at the centre, darker at the
+// rim, then a bright inner edge that holds the square together on a dark surface.
+// The depth is the gradient alone. An earlier version added a bright inner edge to hold the
+// square together on a dark surface; at the 28px of a window header that edge stops reading as
+// a highlight and becomes a white outline around the figure, which is not what the agent looks
+// like anywhere else. The darkening toward the rim already gives the body its shape.
+export const SPECIALIST_SKIN = {
+    bodyImage: 'radial-gradient(circle at 50% 50%, rgba(255,255,255,.14) 0%, '
+        + 'rgba(0,0,0,.10) 38%, rgba(0,0,0,.46) 100%)',
+};
+
+export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, noScene = false, tint, eyePulseRef }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; noScene?: boolean; tint?: { body?: string; dot?: string; bodyImage?: string }; eyePulseRef?: React.Ref<HTMLSpanElement> }) {
     // Settle-to-neutral transition (docs/web-ui/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
@@ -316,6 +350,14 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const sceneAllowed = !isMobile && !noScene;
     const toolScene = sceneAllowed ? TOOL_SCENES[shown] : undefined;
     const awayScene = sceneAllowed ? AWAY_SCENES[shown] : undefined;
+    // Where the wide scene cannot be drawn, web search still gets its MAGNIFIER - just one
+    // sized to the 36px cell instead of the 108px stage. Suppressing the scene was right (a
+    // lens handle floating under a tool card is not an agent), but it left searching with the
+    // figure's bare look-around, and a search that looks like nothing in particular is the
+    // one activity people watch for. Keyed on the REQUESTED mode plus the settled fallback,
+    // so it appears with the motion rather than during the cross-fade.
+    const compactSearch = !sceneAllowed && !dim
+        && TOOL_SCENES[mode]?.cls === 'search' && shown === 'search';
     // A tool scene (or delegate) extends a prop to the agent's RIGHT. Reserving that as layout WIDTH would
     // shove the whole content column (timeline / bubble) rightward every time a tool runs. Instead keep the
     // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
@@ -590,9 +632,13 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         back to their rest pose, so the next animation starts from neutral. */}
                     <div style={{
                         position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
-                        boxShadow: (shown === 'blocked' || shown === 'delegate')
+                        // The skin rides ON the accent: a colourless radial over the flat
+                        // colour, plus its inner edge. Both are opt-in, so an untinted agent
+                        // keeps exactly the body it has always had.
+                        backgroundImage: tint?.bodyImage,
+                        boxShadow: ((shown === 'blocked' || shown === 'delegate')
                             ? `0 5px 14px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,${isDark ? '0.08' : '0.05'})`
-                            : (lightBody ? lightBodyLift : 'none'),
+                            : (lightBody ? lightBodyLift : 'none')),
                         transformOrigin: act ? 'center' : 'center bottom',
                         animation: settling ? 'none' : bodyAnimation,
                         transition: 'transform 0.2s ease',
@@ -619,9 +665,74 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                             }} />
                         </span>
                     </div>
+                    {/* The compact magnifier. A SIBLING of the body, not a child: the body carries
+                        its own squash-and-stretch, and riding along would distort the lens. Colour
+                        comes from the eye's ink so it reads on the dark square in both themes and
+                        flips with `invert`; geometry and motion live in globals.css. */}
+                    {compactSearch && (
+                        <span className="vaf-ag-lens" style={{ borderColor: dotColor }}>
+                            <span className="vaf-ag-lens-grip" style={{ backgroundColor: dotColor }} />
+                            <span className="vaf-ag-lens-glint" style={{ backgroundColor: dotColor }} />
+                        </span>
+                    )}
                 </div>
                 )}
             </div>
         </div>
     );
+}
+
+
+/** The agent that a sub-agent window belongs to, seated top-left in its header.
+ *
+ * Replaces the generic trade glyph that stood there: a window is that specialist's
+ * workplace, so the specialist itself should be the thing you see, wearing its own
+ * colour. One component for all eight window headers - the coder's two, the document's,
+ * the research one, the librarian's two and the browser's two - because eight
+ * hand-placed seats are eight chances to drift apart, and a new specialist should get
+ * its header without a ninth.
+ *
+ * The figure is 36px and the seat is 28px, so it is scaled rather than redrawn; the
+ * body takes the trade's accent through `currentColor` exactly as the picker tiles do,
+ * and the coder keeps its plain body for the reason SUBAGENT_ACCENT states.
+ */
+export function WindowAgentSeat({ kind, mode = 'idle', className }:
+    { kind: SubAgentKind; mode?: AvatarMode; className?: string }) {
+    const tinted = kind !== 'coder';
+    return (
+        <span
+            className={[
+                'flex h-7 w-7 flex-none items-center justify-center overflow-hidden rounded-md',
+                tinted ? SUBAGENT_ACCENT[kind].icon : '',
+                className || '',
+            ].filter(Boolean).join(' ')}
+            aria-hidden="true"
+        >
+            <span className="block origin-center" style={{ transform: 'scale(0.778)' }}>
+                {/* `lite` drops the blob-morph only: the seat still breathes when idle and
+                    still works when working, which is the point - it is the same creature as
+                    the one in the chat header and must not sit frozen while it runs. Several
+                    of these can be on screen at once, hence lite rather than the full morph. */}
+                <AgentAvatar
+                    mode={mode}
+                    lite
+                    noScene
+                    tint={tinted ? { body: 'currentColor', ...SPECIALIST_SKIN } : undefined}
+                />
+            </span>
+        </span>
+    );
+}
+
+/** The window's presence, as the seat's animation.
+ *
+ * One mapping for all eight headers so a running librarian and a running coder move the
+ * same way, and the same way the main agent does: working while it runs, the idle breath
+ * while it waits, the error pose when it failed. The status dot beside the title says the
+ * same thing in a colour; a seat that stayed still while the dot said "Running" would be
+ * the figure contradicting its own label. */
+export function seatModeFor(presence: 'online' | 'error' | string | null | undefined): AvatarMode {
+    if (presence === 'online') return 'working';
+    if (presence === 'error') return 'error';
+    return 'idle';
 }

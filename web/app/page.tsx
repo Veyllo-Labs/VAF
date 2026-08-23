@@ -24,7 +24,7 @@ import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
-import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
+import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
 import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
 import { VoiceCallLayer } from '@/components/VoiceCallLayer';
 import { VoiceCallBar } from '@/components/VoiceCallBar';
@@ -571,7 +571,6 @@ function isThinkingModePrompt(content: string): boolean {
 // Sub-agent custom-view kind, derived from the tool name the moment the main agent CALLS the sub-agent —
 // so the matching custom window opens immediately (in a loading state) instead of waiting for streamed data.
 // Single source of truth for both detection and the immediate open.
-type SubAgentKind = 'coder' | 'research' | 'document' | 'librarian' | 'browser';
 const SUBAGENT_KIND_BY_TOOL: Array<[RegExp, SubAgentKind]> = [
     [/coding_agent/i, 'coder'],
     [/research_agent/i, 'research'],
@@ -603,20 +602,6 @@ const SUBAGENT_TRADE_ICON: Record<SubAgentKind, LucideIcon> = {
     document: PenLine,
     librarian: BookOpen,
     browser: Globe,
-};
-// Each specialist's accent, taken from the view it already owns in SubAgentWindow
-// rather than invented here: the librarian's panel is orange, the document paper
-// teal, the research report violet, the browser sky. The coder deliberately has
-// none - its window is a code editor, black and white like the tools it imitates,
-// and giving it a hue would be the one that means nothing. These are accent
-// families, so the palette re-points them under .dark by itself; a `dark:` here
-// would replace the design system's colour with an ad-hoc one.
-const SUBAGENT_ACCENT: Record<SubAgentKind, { chip: string; icon: string }> = {
-    coder:     { chip: "text-gray-700 border-gray-300 bg-gray-100", icon: "text-gray-700" },
-    research:  { chip: "text-violet-600 border-violet-200 bg-violet-50/60", icon: "text-violet-600" },
-    document:  { chip: "text-teal-700 border-teal-200 bg-teal-50/60", icon: "text-teal-700" },
-    librarian: { chip: "text-orange-600 border-orange-200 bg-orange-50/60", icon: "text-orange-600" },
-    browser:   { chip: "text-sky-600 border-sky-200 bg-sky-50/60", icon: "text-sky-600" },
 };
 const SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map(([, kind]) => kind);
 // The browser is NOT offered here: it already has a permanent seat in the rail
@@ -11248,8 +11233,22 @@ function VAFDashboardContent() {
                                                                 trade. `lite` drops the heavier idle animation:
                                                                 several of these are on screen at once. */}
                                                             <span className="relative z-10 flex-none h-[56px] w-[56px]">
-                                                                <span className="block origin-top-left scale-[1.556]">
-                                                                    <AgentAvatar mode="idle" lite noScene />
+                                                                {/* The specialist wears its own accent: the BODY takes the
+                                                                    trade's colour, the eye stays white, so the agent is
+                                                                    still the same creature and you can tell which one it
+                                                                    is before reading the name. The colour is not repeated
+                                                                    here - the wrapper carries the accent class this tile
+                                                                    already uses for its badge and the tint reads it as
+                                                                    `currentColor`, so the dark theme re-points both at
+                                                                    once and there is no second list to keep in step.
+                                                                    The CODER keeps the plain body on purpose, for the
+                                                                    reason SUBAGENT_ACCENT states: its window is a code
+                                                                    editor, black and white like the tools it imitates. */}
+                                                                <span className={cn('block origin-top-left scale-[1.556]',
+                                                                    kind !== 'coder' && SUBAGENT_ACCENT[kind].icon)}>
+                                                                    <AgentAvatar mode="idle" lite noScene
+                                                                        tint={kind === 'coder' ? undefined
+                                                                            : { body: 'currentColor', ...SPECIALIST_SKIN }} />
                                                                 </span>
                                                                 <span className={cn(
                                                                     'absolute -bottom-1.5 -right-1.5 flex h-[27px] w-[27px] items-center justify-center rounded-full border-[1.5px] border-gray-300 bg-white',

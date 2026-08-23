@@ -157,13 +157,17 @@ def test_the_open_agent_is_the_bright_mark_in_the_rail():
 
 
 def test_each_accent_is_the_one_that_agents_own_window_uses():
-    """Rule 2: the accent now exists twice - in the specialist's view inside
-    SubAgentWindow and on the chip/badge that stand for it elsewhere. Taking the
-    hue from the view is the whole point; a chip in a colour its own window never
-    shows would teach the wrong association."""
-    page = _PAGE.read_bytes().decode("utf-8")
+    """The accent is declared ONCE, next to the figure it colours, and has to keep
+    matching what the specialist's own view paints with. A chip in a colour its own
+    window never shows would teach the wrong association.
+
+    The table used to sit in page.tsx; it moved to AgentAvatar.tsx when the window
+    headers started seating the agent itself, so both readers take it from one place.
+    This test follows the table rather than the file, which is the point of the move.
+    """
     window = (_REPO / "web" / "components" / "SubAgentWindow.tsx").read_bytes().decode("utf-8")
-    table = page.split("const SUBAGENT_ACCENT", 1)[1].split("};", 1)[0]
+    avatar = (_REPO / "web" / "components" / "AgentAvatar.tsx").read_bytes().decode("utf-8")
+    table = avatar.split("const SUBAGENT_ACCENT", 1)[1].split("};", 1)[0]
 
     # the coder is deliberately hueless - a code editor is black and white
     assert re.search(r"coder:\s*\{ chip: \"text-gray-", table), \
@@ -651,3 +655,45 @@ def test_a_read_only_tab_is_identified_by_its_path_not_its_name():
     assert "t.name === name" not in idle, "the idle tab opener dedupes by label again"
     assert "openTabs.find(t => t.id === activeTab)" in win, \
         "the active tab is no longer resolved by identity"
+
+
+def test_every_window_header_seats_its_own_agent():
+    """A window is a specialist's workplace, so its header shows that specialist -
+    the figure in its trade's colour - not a generic glyph.
+
+    Guarded because there are EIGHT headers (the coder's two, the document's, the
+    research one, the librarian's two, the browser's two) and hand-placing a seat
+    in each is eight chances to drift. They all render one component, so a ninth
+    window gets its header for free; the count here is what notices when someone
+    goes back to writing an icon by hand.
+    """
+    win = _window_src()
+    seats = win.count("<WindowAgentSeat ")
+    assert seats == 8, f"expected one seat per window header, found {seats}"
+    for kind in ("coder", "research", "document", "librarian", "browser"):
+        assert f'kind="{kind}"' in win, f"{kind}'s window lost its agent"
+    # The seat ANIMATES on the window's state, the same fact the status dot colours
+    # itself from: a figure sitting still under a "Running" label is the avatar
+    # contradicting its own caption.
+    assert win.count("<WindowAgentSeat mode={seatMode}") == 8, \
+        "a header seat stopped following its window's presence"
+    assert "const seatMode = seatModeFor(inferredPresence);" in win, \
+        "the seat's mode is no longer derived from the window's own presence"
+    # The old shape: a bordered box with a lucide glyph standing in for the agent.
+    assert 'rounded-md border border-gray-200 bg-white text-gray-700">\n' not in win, \
+        "a hand-placed header glyph came back"
+
+
+def test_the_specialist_look_has_one_home():
+    """The kinds and their accents were written out three times: the union in
+    page.tsx, again in the window's props, and the colours again as loose Tailwind
+    classes on the headers. They live with the figure now, and this fails if a
+    copy grows back - a second list is how two views end up disagreeing about what
+    colour the librarian is.
+    """
+    avatar = (_REPO / "web" / "components" / "AgentAvatar.tsx").read_text(encoding="utf-8")
+    page = (_REPO / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "export type SubAgentKind" in avatar and "export const SUBAGENT_ACCENT" in avatar
+    assert "type SubAgentKind = 'coder'" not in page, "page.tsx declared the union again"
+    assert "const SUBAGENT_ACCENT" not in page, "page.tsx declared the accent map again"
+    assert "SUBAGENT_ACCENT" in page, "page.tsx no longer reads the shared accents"

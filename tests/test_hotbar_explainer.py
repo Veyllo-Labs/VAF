@@ -140,6 +140,29 @@ def test_the_browser_is_not_offered_as_a_pick():
         "the tiles stopped deriving from the browser-excluded list"
 
 
+def test_a_specialist_tile_wears_its_own_accent_without_a_second_colour_list():
+    """The palette tile tints the agent's BODY with the trade's accent and leaves
+    the eye white, so the creature stays the same and the trade is readable
+    before the name is.
+
+    The invariant worth guarding is not the colour, it is where the colour comes
+    from: `currentColor` inherited from the accent class the tile already uses
+    for its badge. A hex here would be a second list beside SUBAGENT_ACCENT,
+    and the two would drift the first time the dark palette moves one of them.
+    """
+    page = _PAGE.read_text(encoding="utf-8")
+    tile = page.split("visibleHotbarPicks.map", 1)[1] if "visibleHotbarPicks.map" in page else page
+    tile = page.split("toggleHotbarPick(kind)", 1)[1].split("</button>", 1)[0]
+    assert "body: 'currentColor', ...SPECIALIST_SKIN" in tile, \
+        "the palette tile stopped tinting the specialist's body from the accent class"
+    assert "kind === 'coder' ? undefined" in tile, "the coder lost its plain body"
+    assert "dot:" not in tile, "the eye is being tinted too - it stays white"
+    # The accent must reach the avatar as a CLASS, not as a value copied here.
+    assert "SUBAGENT_ACCENT[kind].icon" in tile
+    for hexish in ("#ea580c", "#7c3aed", "#0f766e", "orange-600 ", "violet-600 "):
+        assert hexish not in tile, f"a colour value was copied into the tile: {hexish}"
+
+
 def test_the_rail_positions_come_from_one_rhythm():
     """The rail's spacing exists three times now: the plus, the picked agents,
     and the drawing that explains them. Hard-coded pixels in any of those three

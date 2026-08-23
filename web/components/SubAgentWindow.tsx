@@ -5,6 +5,7 @@
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, FolderPlus, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
+import { WindowAgentSeat, seatModeFor } from '@/components/AgentAvatar';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -594,6 +595,9 @@ export default function SubAgentWindow({
                 ? 'online'
                 : 'idle';
     const presenceLabel = inferredPresence === 'online' ? 'Running' : inferredPresence === 'error' ? 'Error' : 'Idle';
+    // The seat in the header animates on the same fact the status dot colours itself
+    // from, so the figure and its label can never disagree.
+    const seatMode = seatModeFor(inferredPresence);
     const presenceTone = inferredPresence === 'online'
         ? 'bg-emerald-500'
         : inferredPresence === 'error'
@@ -1211,9 +1215,7 @@ export default function SubAgentWindow({
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
-                                <FileCode size={14} />
-                            </div>
+                            <WindowAgentSeat mode={seatMode} kind="document" />
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Document Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -1420,9 +1422,7 @@ export default function SubAgentWindow({
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
-                                <Globe size={14} />
-                            </div>
+                            <WindowAgentSeat mode={seatMode} kind="research" />
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">{agentName || 'Research Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -1645,9 +1645,7 @@ export default function SubAgentWindow({
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-orange-600">
-                                <FolderOpen size={14} />
-                            </div>
+                            <WindowAgentSeat mode={seatMode} kind="librarian" />
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -1864,9 +1862,7 @@ export default function SubAgentWindow({
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-orange-600">
-                                <FolderOpen size={14} />
-                            </div>
+                            <WindowAgentSeat mode={seatMode} kind="librarian" />
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -2086,9 +2082,7 @@ export default function SubAgentWindow({
                         <div className={`flex min-w-0 flex-1 flex-col ${WIN_CANVAS_ALT}`}>
                             <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                                 <div className="flex items-center gap-3">
-                                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
-                                        <Terminal size={14} />
-                                    </div>
+                                    <WindowAgentSeat mode={seatMode} kind="coder" />
                                     <div>
                                         <div className="text-xs font-semibold text-gray-900">{agentName}</div>
                                         <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -2800,7 +2794,7 @@ export default function SubAgentWindow({
                     <div className="flex h-full w-full flex-col">
                         <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                             <div className="flex min-w-0 items-center gap-3">
-                                <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-sky-600"><Globe size={14} /></div>
+                                <WindowAgentSeat mode={seatMode} kind="browser" />
                                 <div className="min-w-0">
                                     <div className="text-xs font-semibold text-gray-900">Browser</div>
                                     <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -2875,7 +2869,7 @@ export default function SubAgentWindow({
                     {/* Header - the interactive window's header, naming the agent as driver */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-sky-600"><Globe size={14} /></div>
+                            <WindowAgentSeat mode={seatMode} kind="browser" />
                             <div className="min-w-0">
                                 <div className="text-xs font-semibold text-gray-900">Browser</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
@@ -3081,9 +3075,7 @@ export default function SubAgentWindow({
                 <div className={cn(`flex flex-1 flex-col ${WIN_CANVAS_ALT}`, !hasWorkflow && "rounded-l-2xl")}>
                     <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex items-center gap-3">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
-                                <Terminal size={14} />
-                            </div>
+                            <WindowAgentSeat mode={seatMode} kind="coder" />
                             <div>
                                 <div className="text-xs font-semibold text-gray-900">{agentName}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">

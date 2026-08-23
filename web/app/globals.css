@@ -790,6 +790,35 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   80%  { transform: scale(1.10,1.10); }
   100% { transform: scale(1.06,1.06); }
 }
+/* Compact magnifier: web_search where the 108px scene has no room (the actions-timeline
+   gutter, the mobile column). It lives inside the agent's own 36px cell and sweeps on the
+   SAME 3.4s clock and the SAME phase as emoSearch below, so the lens is wherever the eye is
+   looking - one movement, not two. transform/opacity only (see docs/web-ui/AgentAvatar.md).
+   Colours are set inline by AgentAvatar so the lens follows the eye's ink and `invert`.
+   The lens rides the LOWER band of the cell: the eye owns the middle, and at the left end of
+   the sweep the two would otherwise land on the same pixels and read as one white blob. */
+.vaf-ag-lens { position:absolute; left:3px; top:21px; width:11px; height:11px;
+  border-radius:50%; border:2px solid #fff; box-sizing:border-box;
+  animation:agLensSweep 3.4s ease-in-out infinite; will-change:transform; }
+.vaf-ag-lens-grip { position:absolute; right:-3.5px; bottom:-2.5px; width:5px; height:2px;
+  background:#fff; border-radius:2px; transform:rotate(45deg); }
+.vaf-ag-lens-glint { position:absolute; left:1.5px; top:1.5px; width:2.5px; height:2.5px;
+  border-radius:50%; background:#fff; opacity:0;
+  animation:agLensGlint 3.4s ease-in-out infinite; }
+@keyframes agLensSweep {
+  0%,100% { transform: translateX(9px)  scale(1);    }
+  15%,25% { transform: translateX(0)    scale(1);    }
+  50%     { transform: translateX(9px)  scale(1);    }
+  75%     { transform: translateX(16px) scale(1);    }
+  82%     { transform: translateX(16px) scale(1.12); }
+  90%     { transform: translateX(16px) scale(1);    }
+}
+@keyframes agLensGlint { 0%,74%,100% { opacity:0; } 82% { opacity:.95; } 90% { opacity:0; } }
+@media (prefers-reduced-motion: reduce) {
+  .vaf-ag-lens { animation:none; transform:translateX(9px); }
+  .vaf-ag-lens-glint { animation:none; opacity:0; }
+}
+
 @keyframes emoSearch {
   0%,100% { transform: translateX(0)    translateY(0)    scale(1,1);     }
   15% { transform: translateX(-8px) translateY(1px)  scale(1.05,0.96); }

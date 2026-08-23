@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import { Fragment, ReactNode, useLayoutEffect, useRef } from 'react';
+import { Fragment, ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -37,8 +37,18 @@ interface Props {
 // is 11px tall, so its centre is 13 + 11/2 = 18.5px below the item's top.
 const RAIL_DOT_CENTER = 13 + 11 / 2;
 
+// A wide tool scene (the web_search magnifier and its dust, the browse globe, ...) leans LEFT out of
+// the gutter so its props land where they were drawn, and the widest of them needs this much room.
+// Whether that room exists is a QUESTION, not a constant: on a roomy window the chat column has
+// plenty of empty margin to the left and the full scene belongs there, which is where it ran for two
+// months. It is only against a narrow column that the lean has nowhere to go and drags the agent off
+// its rail. So the timeline measures instead of deciding once, and the compact in-place fallback is
+// what a genuinely cramped row gets.
+const SCENE_ROOM_PX = 80;
+
 export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, expanded, onToggle, children }: Props) {
     const isMobile = useIsMobile();
+    const [roomForScene, setRoomForScene] = useState(false);
     const rowRef = useRef<HTMLDivElement | null>(null);
     const avaRef = useRef<HTMLDivElement | null>(null);
     const railRef = useRef<HTMLSpanElement | null>(null);
@@ -62,6 +72,12 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
     const reflow = () => {
         const row = rowRef.current, ava = avaRef.current, rail = railRef.current;
         if (!row) return;
+        // Measured against the chat COLUMN, not the viewport: the sidebar owns everything left of
+        // it, and a scene that leans over the sidebar is worse than no scene. Setting the same
+        // boolean is a no-op in React, so this is safe to run on every reflow.
+        const col = row.closest('.vaf-chat-col') as HTMLElement | null;
+        setRoomForScene(!!col
+            && row.getBoundingClientRect().left - col.getBoundingClientRect().left >= SCENE_ROOM_PX);
         const items = itemRefs.current.filter(Boolean) as HTMLDivElement[];
         if (rail) {
             rail.style.height = expanded && items.length
@@ -126,11 +142,12 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 ref={avaRef}
                 className="shrink-0 self-start transition-transform duration-300 ease-out will-change-transform"
             >
-                {/* noScene: the rail gutter has cards directly to the right, so the wide
-                    tool/away scenes (magnifier, globe, ...) would be clipped under them and
-                    their lean would shove the walking dot far left - the design here is the
-                    plain living dot on the rail; scene modes fall back to in-place motion. */}
-                <AgentAvatar mode={avatarMode} dim={avatarDim} noScene />
+                {/* The wide scenes are allowed here whenever the column has room to the left for
+                    their lean - measured above. That is the normal case on a desktop window, and
+                    it is how web_search looked for the two months before the room was assumed
+                    away rather than measured. A cramped column falls back to the compact
+                    in-place motion instead of a clipped scene. */}
+                <AgentAvatar mode={avatarMode} dim={avatarDim} noScene={!roomForScene} />
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col">

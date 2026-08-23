@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The searching magnifier is back, at full size.** The scene where the agent
+  hunts with a magnifier and the search dust flares up had been switched off in
+  the actions timeline because it was assumed there was no room for it. There
+  usually is: the timeline now measures the space beside the chat column and
+  plays the whole scene whenever it fits, which on a normal window is always.
+  Only a genuinely cramped column, or a phone, falls back - and that fallback is
+  no longer a figure merely glancing about, but a compact magnifier sweeping
+  inside the agent's own square, on the same clock and in the same phase as the
+  glance.
 - **A chat no longer dies with a provider error when the agent corrects
   itself.** When the agent caught itself claiming a tool result it had not
   received, it re-asked with a correction, and on Veyllo that second request
@@ -73,6 +82,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   clears all of that.
 
 ### Added
+- **A specialist's window shows the specialist.** The generic glyph in the top
+  left of every sub-agent window is now the agent itself, wearing its trade's
+  colour, so a window is recognisable as that specialist's workplace at a
+  glance. All eight window headers draw the same seat, and the kinds and their
+  colours are declared once instead of in three places.
+- **Each specialist wears its own colour in the picker.** In the sub-agent
+  window the researcher, the document writer and the librarian now carry their
+  trade's colour in the agent's body while the eye stays white, so you can tell
+  them apart before reading the name. The coder keeps the plain body: its
+  workplace is a code editor, black and white like the tools it imitates.
 - **Every chat has a header, and its name is where you rename it.** The chat's
   name now stands at the top of the conversation, and clicking it renames the
   chat right there, through the same lane the sidebar has always used. The

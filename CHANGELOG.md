@@ -24,12 +24,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   yours and refused to continue - the same deadlock a lockfile caused once
   before. Anyone whose update left them stuck can update again.
 
+### Fixed
+- **A button you cannot read no longer appears in dark mode.** Hovering the
+  update button turned it dark while its label stayed dark, so the label
+  vanished. The dark theme re-points the colour named "white" to its dark
+  surface tone, and these buttons asked for "white" on hover; every other
+  button of the same shape already asked for the light grey it meant. The same
+  slip is fixed in the confirmation dialog and on the microphone gate's drag
+  handle, which was supposed to light up and never did.
+
 ### Changed
 - **The frontend is built in CI now, on Linux, macOS and Windows.** Nothing in
   the pipeline installed or built it before, so a dependency bump could pass
   every check and still leave users with an app that would not start. The build
   installs strictly from the committed lockfile, so a lockfile that disagrees
   with the dependency list fails loudly instead of being quietly worked around.
+  It found such a disagreement immediately: the committed lockfile was missing a
+  package that stricter npm versions insist on, which is why installing on a Mac
+  failed. It is regenerated here, and accepted by both npm versions now.
 
 
 ## [0.1.0a24] - 2026-08-23

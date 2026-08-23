@@ -27,6 +27,12 @@ jobs:
     # the other half of the same incident. Three operating systems because npm
     # resolves optional and platform-gated packages differently on each, so a
     # green Linux install proves nothing about a Mac.
+    #
+    # The node version pins the npm version, and that decides whether the lock is
+    # accepted at all: npm 10.9.8 (node 22) refused a lock that npm 11 had happily
+    # written, which is exactly how a developer machine stayed green while users
+    # could not install. Regenerate the lock with the npm this job runs, not with
+    # whatever is on your machine:  npx npm@10.9.8 install --package-lock-only
     strategy:
       fail-fast: false
       matrix:

@@ -218,8 +218,8 @@ export function VoiceCallBar() {
                                     {/* Quiet by default (gray, no glow); lights up only
                                         while hovered or dragged (user decision). */}
                                     <span className={`shrink-0 w-[3px] h-7 rounded transition-all duration-150 ${gateDrag
-                                        ? 'bg-gray-800 dark:bg-white shadow-[0_0_4px_rgba(0,0,0,0.35)] dark:shadow-[0_0_6px_rgba(255,255,255,0.7)]'
-                                        : 'bg-gray-400 dark:bg-gray-500 group-hover:bg-gray-800 dark:group-hover:bg-white group-hover:shadow-[0_0_4px_rgba(0,0,0,0.35)] dark:group-hover:shadow-[0_0_6px_rgba(255,255,255,0.7)]'}`} />
+                                        ? 'bg-gray-800 dark:bg-[#f5f5f5] shadow-[0_0_4px_rgba(0,0,0,0.35)] dark:shadow-[0_0_6px_rgba(255,255,255,0.7)]'
+                                        : 'bg-gray-400 dark:bg-gray-500 group-hover:bg-gray-800 dark:group-hover:bg-[#f5f5f5] group-hover:shadow-[0_0_4px_rgba(0,0,0,0.35)] dark:group-hover:shadow-[0_0_6px_rgba(255,255,255,0.7)]'}`} />
                                     {(gateHover || gateDrag) && (
                                         <ChevronRight size={10} strokeWidth={3}
                                             className="shrink-0 -ml-[2px] text-gray-800 dark:text-white" />

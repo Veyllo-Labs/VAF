@@ -784,7 +784,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                 {canApply && phase.kind === 'available' && (
                                     <button
                                         onClick={() => setPhase({ kind: 'confirm', latest: phase.latest, releaseUrl: phase.releaseUrl })}
-                                        className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium transition-colors"
+                                        className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
                                     >
                                         {tM('updateNow')}
                                     </button>
@@ -793,7 +793,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                     <>
                                         <button
                                             onClick={() => applyUpdate(phase.latest)}
-                                            className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium transition-colors"
+                                            className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium transition-colors"
                                         >
                                             {tM('confirmUpdate')}
                                         </button>
@@ -985,7 +985,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                         </p>
                                         <button
                                             onClick={() => window.location.reload()}
-                                            className="h-10 px-5 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium"
+                                            className="h-10 px-5 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium"
                                         >
                                             {tM('reloadNow')}
                                         </button>
@@ -1011,7 +1011,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                         <p className="text-xs text-gray-400">{tM('failedLogHint')}</p>
                                         <button
                                             onClick={() => { setPhase({ kind: 'idle' }); loadUpdateState(); loadServices(); }}
-                                            className="h-10 px-5 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium"
+                                            className="h-10 px-5 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium"
                                         >
                                             {tCommon('close')}
                                         </button>
@@ -1041,7 +1041,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                                             </button>
                                             <button
                                                 onClick={() => window.location.reload()}
-                                                className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none text-sm font-medium"
+                                                className="h-10 px-4 rounded-lg bg-gray-900 text-white hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none text-sm font-medium"
                                             >
                                                 {tM('reloadNow')}
                                             </button>

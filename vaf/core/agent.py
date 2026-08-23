@@ -4832,15 +4832,21 @@ class Agent:
         except Exception:
             pass
 
-    def load_session_context(self, session_id: str):
+    def load_session_context(self, session_id: str, *, force: bool = False):
         """
         Swap the agent's context to a specific session.
         Prevents cross-contamination between TUI and Web UI.
+
+        `force=True` rebuilds the history even when this agent is already on that
+        session. Needed whenever the STORED transcript changed underneath a live
+        agent - a rewind, or an edit made out of band - because the in-memory
+        history is otherwise authoritative and the agent would keep answering
+        from the version the store no longer holds.
         """
         from vaf.core.subagent_ipc import set_current_session_id
-        
+
         # Check if we are already in this session
-        if hasattr(self, 'current_session_id') and self.current_session_id == session_id:
+        if not force and hasattr(self, 'current_session_id') and self.current_session_id == session_id:
             return
 
         # Load new session data

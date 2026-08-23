@@ -61,6 +61,10 @@ BRANCHES_WITH_CLIENT_SESSION_ID = {
     # manager. Both branches still gate the sessionId with _ws_session_owner_ok
     # so this file's invariant has no exceptions to reason about.
     "browser_interactive_start", "browser_interactive_stop",
+    # Asking the newest exchange again DELETES stored messages, so this one takes
+    # the strict gate (no allow_missing): there is nothing to regenerate in a
+    # session that does not exist.
+    "regenerate_last_reply",
 }
 
 

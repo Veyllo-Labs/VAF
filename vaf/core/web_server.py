@@ -695,6 +695,99 @@ def _session_record_exists(session_id) -> bool:
         return True          # cannot tell -> treat as present -> ask
 
 
+def _clean_history_text(text: str) -> str:
+    """Strip legacy rich-markup from a stored assistant message.
+
+    Old sessions carry terminal markup ([dim] ... [/dim]) where the web UI
+    expects think tags, so a reloaded chat would otherwise show the markup as
+    literal text.
+    """
+    import re as _re
+    if not text:
+        return ""
+    text = _re.sub(r'\[dim\]', '<think>', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\[white dim\]', '<think>', text, flags=_re.IGNORECASE)
+    text = _re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=_re.IGNORECASE)
+    text = text.replace('[/dim]', '</think>')
+    if '<think>' in text and '</think>' not in text:
+        text = text.replace('[/]', '</think>')
+    text = _re.sub(r'\[\/?[^\]]+\]', '', text)
+    return text
+
+
+def _history_projection(loaded, sid) -> list:
+    """The stored session as the chat transcript the web UI renders.
+
+    One function because there were two hand copies of this loop, and they had
+    already drifted: only one of them turned a user message's images back into
+    URLs, so the same chat showed its own attachments on one path and not on the
+    other. Every surface that repaints a transcript goes through here.
+
+    Not pure: for a thinking session it POPS the stored user reply, which is
+    what makes that reply appear exactly once. Both copies did this, and moving
+    it here keeps that property rather than duplicating the side effect.
+    """
+    out = []
+    for msg in getattr(loaded, "messages", None) or []:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+        timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
+        meta = (msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None)) or {}
+        if role == "assistant":
+            content = _clean_history_text(content)
+        entry = {"role": role, "content": content, "timestamp": timestamp}
+        _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
+        if _kind:
+            entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
+        if role == "user" and meta and meta.get("images"):
+            from urllib.parse import quote as _urlquote
+            _img_entries = []
+            for img in meta["images"]:
+                if img.get("path"):
+                    # File on disk -> serve via /api/file (per-user isolation enforced there).
+                    _img_entries.append({
+                        "url": f"/api/file?path={_urlquote(str(img['path']))}",
+                        "name": img.get("name", "image"),
+                    })
+                elif img.get("data"):
+                    # Legacy inline base64 -> data: URL.
+                    _img_entries.append({
+                        "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img['data']}",
+                        "name": img.get("name", "image"),
+                    })
+            entry["images"] = _img_entries
+        if role == "tool":
+            # Metadata dict first, then the top-level keys the backend actually stores.
+            tool_name = (meta.get("toolName") if meta else None) or (
+                msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", None))
+            tool_id = (meta.get("toolId") if meta else None) or (
+                msg.get("tool_call_id") if isinstance(msg, dict) else getattr(msg, "tool_call_id", None))
+            tool_status = (meta.get("toolStatus") if meta else None)
+            if tool_name is not None:
+                entry["toolName"] = tool_name
+            if tool_id is not None:
+                entry["toolId"] = tool_id
+            # Content present means the tool answered.
+            entry["toolStatus"] = tool_status or ("completed" if content else "running")
+        out.append(entry)
+
+    if sid and str(sid).startswith("thinking_"):
+        try:
+            from vaf.core.thinking_mode import pop_user_reply_for_session
+            reply_data = pop_user_reply_for_session(sid)
+            if reply_data:
+                preview = (reply_data.get("reply") or "").strip()
+                if preview:
+                    out.append({
+                        "role": "user",
+                        "content": f"User replied: {preview}",
+                        "timestamp": reply_data.get("at"),
+                    })
+        except Exception:
+            pass
+    return out
+
+
 def _session_is_active(session_id) -> bool:
     """Is a turn running or queued in THIS chat - the queue is the authority.
 
@@ -4146,77 +4239,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # Should not happen for newly created session, but safety first
                 loaded = Session(id=sid, name="New Chat")
 
-            import re
-            def clean_history_text(text):
-                if not text: return ""
-                text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
-                text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
-                text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
-                text = text.replace('[/dim]', '</think>')
-                if '<think>' in text and '</think>' not in text:
-                    text = text.replace('[/]', '</think>')
-                text = re.sub(r'\[\/?[^\]]+\]', '', text)
-                return text
-
-            frontend_messages = []
-            for msg in loaded.messages:
-                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
-                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
-                timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
-                meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
-                if role == "assistant":
-                    content = clean_history_text(content)
-                entry = {"role": role, "content": content, "timestamp": timestamp}
-                _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
-                if _kind:
-                    entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
-                if role == "user" and meta and meta.get("images"):
-                    from urllib.parse import quote as _urlquote
-                    _img_entries = []
-                    for img in meta["images"]:
-                        if img.get("path"):
-                            # File on disk → serve via /api/file (per-user isolation enforced there).
-                            _img_entries.append({
-                                "url": f"/api/file?path={_urlquote(str(img['path']))}",
-                                "name": img.get("name", "image"),
-                            })
-                        elif img.get("data"):
-                            # Legacy inline base64 → data: URL.
-                            _img_entries.append({
-                                "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img['data']}",
-                                "name": img.get("name", "image"),
-                            })
-                    entry["images"] = _img_entries
-                if role == "tool":
-                    # Try metadata dict first, then fall back to top-level keys
-                    # (backend stores tool info as top-level: name, tool_call_id)
-                    tool_name = (meta.get("toolName") if meta else None) or msg.get("name")
-                    tool_id = (meta.get("toolId") if meta else None) or msg.get("tool_call_id")
-                    tool_status = (meta.get("toolStatus") if meta else None)
-                    if tool_name is not None:
-                        entry["toolName"] = tool_name
-                    if tool_id is not None:
-                        entry["toolId"] = tool_id
-                    # If tool has content (result), it completed successfully
-                    entry["toolStatus"] = tool_status or ("completed" if content else "running")
-                frontend_messages.append(entry)
-
-            # If this is a thinking session and we have a stored user reply, append it once
-            if sid and str(sid).startswith("thinking_"):
-                try:
-                    from vaf.core.thinking_mode import pop_user_reply_for_session
-                    reply_data = pop_user_reply_for_session(sid)
-                    if reply_data:
-                        preview = (reply_data.get("reply") or "").strip()
-                        if preview:
-                            frontend_messages.append({
-                                "role": "user",
-                                "content": f"User replied: {preview}",
-                                "timestamp": reply_data.get("at"),
-                            })
-                except Exception:
-                    pass
-
+            frontend_messages = _history_projection(loaded, sid)
             is_active = _session_is_active(sid)
 
             await websocket.send_json({
@@ -4542,65 +4565,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         )
                         
                         # Helper to clean historical messages (same logic as run.py)
-                        import re
-                        def clean_history_text(text):
-                            if not text: return ""
-                            # Convert rich dim to think tags
-                            text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
-                            text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
-                            text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
-                            text = text.replace('[/dim]', '</think>')
-                            if '<think>' in text and '</think>' not in text:
-                                text = text.replace('[/]', '</think>')
-                            # Strip remaining tags
-                            text = re.sub(r'\[\/?[^\]]+\]', '', text)
-                            return text
                         
                         # 3. Send history to Frontend
                         # Serialize messages for JSON (include tool metadata so UI shows tool names, not "Unknown Tool")
-                        frontend_messages = []
-                        for msg in loaded.messages:
-                            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
-                            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
-                            timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
-                            meta = msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None) or {}
-                            # Clean content if it's from assistant (remove legacy artifacts)
-                            if role == "assistant":
-                                content = clean_history_text(content)
-                            entry = {"role": role, "content": content, "timestamp": timestamp}
-                            _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
-                            if _kind:
-                                entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
-                            if role == "tool":
-                                # Try metadata dict first, then fall back to top-level keys
-                                # (backend stores tool info as top-level: name, tool_call_id)
-                                tool_name = (meta.get("toolName") if meta else None) or (msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", None))
-                                tool_id = (meta.get("toolId") if meta else None) or (msg.get("tool_call_id") if isinstance(msg, dict) else getattr(msg, "tool_call_id", None))
-                                tool_status = (meta.get("toolStatus") if meta else None)
-                                if tool_name is not None:
-                                    entry["toolName"] = tool_name
-                                if tool_id is not None:
-                                    entry["toolId"] = tool_id
-                                # If tool has content (result), it completed successfully
-                                entry["toolStatus"] = tool_status or ("completed" if content else "running")
-                            frontend_messages.append(entry)
-
-                        # If this is a thinking session and we have a stored user reply, append it once
-                        if sid and str(sid).startswith("thinking_"):
-                            try:
-                                from vaf.core.thinking_mode import pop_user_reply_for_session
-                                reply_data = pop_user_reply_for_session(sid)
-                                if reply_data:
-                                    preview = (reply_data.get("reply") or "").strip()
-                                    if preview:
-                                        frontend_messages.append({
-                                            "role": "user",
-                                            "content": f"User replied: {preview}",
-                                            "timestamp": reply_data.get("at"),
-                                        })
-                            except Exception:
-                                pass
-
+                        frontend_messages = _history_projection(loaded, sid)
                         is_active = _session_is_active(sid)
 
                         await websocket.send_json({
@@ -8520,6 +8488,136 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "sessionId": session_id,
                             "subagentsKept": subagents_kept,
                         })
+
+                elif type == "regenerate_last_reply":
+                    # Ask the newest exchange again. The person judged the answer
+                    # unwanted and said so with a click; the transcript rewinds to
+                    # their message and it is asked once more.
+                    #
+                    # This is not the bounce the never-erase invariant forbids
+                    # (vaf/core/agent.py, the team-await gate): that one fired on a
+                    # heuristic, mid-turn, against an answer the person wanted. This
+                    # fires on an explicit click, between turns, on a settled bubble.
+                    # Which is why the gates below are absolute rather than advisory.
+                    from vaf.core.task_queue import TaskQueue
+                    from vaf.core.session import truncate_to_last_user_turn
+                    session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    if not session_id:
+                        continue
+                    # OWNERSHIP. The id comes from the payload and this DELETES stored
+                    # messages, so the gate is the strict one: there is nothing to
+                    # regenerate in a session that does not exist.
+                    _ok_regen, _ = _ws_session_owner_ok(websocket, session_id)
+                    if not _ok_regen:
+                        log("API", f"Access denied: regenerate_last_reply {session_id} not owned by caller")
+                        await websocket.send_json({"type": "error", "message": "Access denied"})
+                        continue
+                    _tq_regen = TaskQueue()
+                    # Never mid-run. The running turn holds an index into the live
+                    # history it captured when it started, so cutting underneath it
+                    # misaligns every later slice with no error at all, and the runner
+                    # writes the whole session back when it finishes, which would undo
+                    # the cut anyway.
+                    if _tq_regen.is_busy_for_session(str(session_id)):
+                        await websocket.send_json({
+                            "type": "regenerate_refused", "sessionId": session_id, "reason": "busy",
+                        })
+                        continue
+                    # Never while a specialist of this chat is still working. Its result
+                    # is delivered later and would answer a question no longer in the
+                    # transcript, and a sub-agent result is never dropped silently.
+                    # PENDING counts as working: a task exists from the moment it is
+                    # created, and it only becomes "active" once its process is up, so
+                    # checking active alone lets a spawn still in flight slip through.
+                    try:
+                        from vaf.core.subagent_ipc import get_ipc as _get_ipc_regen
+                        _ipc_regen = _get_ipc_regen()
+                        if (_ipc_regen.get_active_tasks(session_id=str(session_id))
+                                or _ipc_regen.get_pending_tasks(session_id=str(session_id))):
+                            await websocket.send_json({
+                                "type": "regenerate_refused", "sessionId": session_id, "reason": "subagent",
+                            })
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        _sm_regen = SessionManager()
+                        # repoint=False: reading another session must not change what
+                        # "current" means, and must not push its runtime state into the
+                        # live registry.
+                        _loaded_regen = _sm_regen.load(str(session_id), restore_state=False, repoint=False)
+                        _removed_regen = truncate_to_last_user_turn(_loaded_regen)
+                        _user_text = str(getattr(_removed_regen, "content", "") or "") if _removed_regen else ""
+                        if not _user_text:
+                            await websocket.send_json({
+                                "type": "regenerate_refused", "sessionId": session_id, "reason": "nothing",
+                            })
+                            continue
+                        _sm_regen.save(_loaded_regen)
+                    except Exception as _regen_err:
+                        log("WebServer", f"regenerate_last_reply failed for {session_id}: {_regen_err}")
+                        await websocket.send_json({
+                            "type": "regenerate_refused", "sessionId": session_id, "reason": "error",
+                        })
+                        continue
+                    # The browser keeps its own copy of the transcript and re-injects
+                    # anything the server no longer sends as an "orphan". Without this
+                    # the discarded answer comes straight back.
+                    await websocket.send_json({"type": "context_checkpoint", "session_id": str(session_id)})
+                    _regen_msgs = _history_projection(_loaded_regen, str(session_id))
+                    # The question goes back on screen right away. It was just removed
+                    # from the record and the runner only writes it again when the turn
+                    # ends, so without this the new answer would appear under the
+                    # previous one with nothing asking it, and a turn that uses a tool
+                    # would group the two answers into one bubble.
+                    from datetime import datetime as _dt_regen
+                    _regen_ask = {"role": "user", "content": _user_text,
+                                  "timestamp": _dt_regen.now().isoformat()}
+                    _regen_imgs = ((getattr(_removed_regen, "metadata", None) or {}).get("images")) or []
+                    if _regen_imgs:
+                        from urllib.parse import quote as _q_regen
+                        _regen_ask["images"] = [
+                            {"url": (f"/api/file?path={_q_regen(str(_i['path']))}" if _i.get("path")
+                                     else f"data:{_i.get('mime_type', 'image/jpeg')};base64,{_i.get('data', '')}"),
+                             "name": _i.get("name", "image")}
+                            for _i in _regen_imgs
+                        ]
+                    _regen_msgs.append(_regen_ask)
+                    # Every view of this chat, not only the tab that pressed: a second
+                    # window on the same session would otherwise keep showing the reply
+                    # that no longer exists.
+                    await manager.broadcast_to_session(str(session_id), {
+                        "type": "history_update",
+                        "messages": _regen_msgs,
+                        "sessionId": str(session_id),
+                        "isActive": True,
+                        "currentStatus": "thinking",
+                    })
+                    _regen_scope = manager.get_connection_user(websocket)
+                    _regen_username = manager.get_connection_username(websocket)
+                    _regen_role = manager.get_connection_user_role(websocket)
+                    _regen_meta = {"origin_channel": "web", "task_class": "interactive",
+                                   "enqueue_session_id": str(session_id),
+                                   # The stored transcript changed under a live agent, whose
+                                   # in-memory history is otherwise authoritative: without
+                                   # this the worker answers from the reply just discarded.
+                                   "force_reload": True}
+                    if _regen_scope:
+                        _regen_meta["user_scope_id"] = _regen_scope
+                        _regen_meta["enqueue_user_scope_id"] = str(_regen_scope)
+                    if _regen_username:
+                        _regen_meta["username"] = _regen_username
+                    if _regen_role:
+                        _regen_meta["role"] = _regen_role
+                    # The question travels whole, image included. Re-sending the text
+                    # alone would re-ask about a picture the model can no longer see,
+                    # and the record would lose the attachment with it.
+                    if _regen_imgs:
+                        _regen_meta["images"] = _regen_imgs
+                    manager.subscribe_to_session(websocket, str(session_id))
+                    _tq_regen.add(session_id=str(session_id), input_text=_user_text,
+                                  source="web", metadata=_regen_meta)
+                    log("WebServer", f"Regenerate requested for session {session_id}")
 
                 elif type == "browser_interactive_start":
                     # A person asks to drive the sandbox browser by hand. Identity

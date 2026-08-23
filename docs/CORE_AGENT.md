@@ -210,9 +210,13 @@ shape: [EMBEDDING.md](EMBEDDING.md).
   `history[0]`).
 - `get_live_session_subagents()` - session-scoped, heartbeat-verified list of
   running sub-agents (use this, never process-global state).
-- `load_session_context(session_id)` - swap the agent onto a persisted
+- `load_session_context(session_id, *, force=False)` - swap the agent onto a persisted
   session: rebinds identity from session metadata, re-inits the prompt, and
-  replays messages preserving tool-call linkage.
+  replays messages preserving tool-call linkage. It returns immediately when the
+  agent is already on that session; `force=True` rebuilds anyway, which is what a
+  rewind or any out-of-band edit of the stored transcript needs, because the
+  in-memory history is otherwise authoritative and the agent would keep answering
+  from a version the store no longer holds.
 - Hot reload: `reload_builtin_tools()` (new in-tree files only),
   `reload_custom_tools()`, `reload_mcp_tools()`,
   `reload_api_backend(*, force=False)`.

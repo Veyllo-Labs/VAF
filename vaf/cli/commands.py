@@ -71,6 +71,11 @@ COMMANDS: Tuple[Command, ...] = (
     Command("undo", "Roll back the last code change", lane="agent",
             confirm="Undo the last snapshot? Files on disk are rewritten."),
     Command("restore", "Restore the full context from the archive", lane="agent"),
+    # Deliberate: whole-conversation only, and no redo command beside it. A
+    # scrolling transcript has no per-message cursor and no "the reply you just
+    # saw" to point at, which is what the web UI's per-reply actions address. The
+    # rewind itself is a session primitive (`truncate_to_last_user_turn`), so a
+    # `/redo` here is a few lines the day a terminal user asks for one.
     Command("export", "Write this conversation to a file", args="<file>",
             lane="agent"),
     Command("room", "Show an agent room as a group chat", args="<id>",

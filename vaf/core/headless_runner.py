@@ -939,9 +939,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 except Exception:
                     pass
 
-                # Load Session Context
+                # Load Session Context. `force_reload` says the STORED transcript
+                # changed under a live agent (a rewind): the in-memory history is
+                # otherwise authoritative, so without this the worker answers from
+                # the very reply the store no longer has.
                 try:
-                    agent.load_session_context(task.session_id)
+                    agent.load_session_context(
+                        task.session_id,
+                        force=bool((getattr(task, "metadata", None) or {}).get("force_reload")),
+                    )
                     # Persist user to session metadata so load_session_context gets it on next load
                     # Also persist telegram_chat_id for sessions from Telegram (needed when subagent completes later)
                     if (

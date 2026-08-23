@@ -313,6 +313,8 @@ Set `"tool_loop_unlimited": true` in config to disable the hard limit entirely (
 
 **`clear_last_assistant` is suppressed in thinking mode.** All retry/correction flows (empty response, false promise, result grounding) and the team-await hold emit `clear_last_assistant` to drop the *just-produced* faulty bubble before the correction. These all route through one guard, `_clear_last_assistant_ui`, which is a **no-op during a thinking (background) run** (`_emit_to_web_ui()` is False then). Rationale: in a background pass the "last assistant" bubble is the user's *previous real answer*, not anything produced this turn - clearing it would replace a real message. Background runs must only ever append below, never replace.
 
+A person pressing "ask again" is a different actor and is not covered by that rule. `regenerate_last_reply` (`vaf/core/web_server.py`) discards a settled exchange on an explicit click, never on a heuristic, never mid-turn, and never while a sub-agent of that chat is still working; the cut itself is `truncate_to_last_user_turn` (`vaf/core/session.py`), which no retry path may call.
+
 ### Best Practices for Long Conversations
 
 To maintain maximum "depth" and accuracy in very long sessions (especially when using API providers like DeepSeek or OpenAI):

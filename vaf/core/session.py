@@ -307,6 +307,58 @@ def turn_context_messages_since_last_user(history: List[Dict], user_input: str) 
     return out
 
 
+def truncate_to_last_user_turn(session: "Session") -> Optional["Message"]:
+    """Drop the newest exchange: the last user message and everything after it.
+
+    Returns the removed user MESSAGE, so a caller can ask the same question
+    again exactly as it was asked, or None when the session holds no user
+    message at all. The whole message rather than its text, because what was
+    asked is not only words: an image travels in the message's metadata, and a
+    caller that re-sends the text alone re-asks a question about a picture the
+    model can no longer see.
+
+    The cut is at a USER boundary and never inside a turn. That is not a
+    convenience, it is the only cut that keeps the stored record valid: an
+    assistant message carrying ``tool_calls`` and its matching ``role:"tool"``
+    results are one unit, and a cut between them leaves an orphan that the
+    pre-send repair silently deletes from the wire while the stored record keeps
+    it. The model would then answer over a turn that never happened.
+
+    Taking the user message too is what makes the re-run a REPLACEMENT rather
+    than an append: the turn's persistence compares the last stored user message
+    with the incoming one and treats a match as a continuation, so a surviving
+    user message would stack the new answer under the old one.
+
+    Deliberately NOT touched: the timeline chain (a hash chain over events that
+    really happened, and deleting entries paints it as tampered), the cost
+    ledger (a re-run is a second paid call and both belong in the usage view),
+    and anything the discarded turn wrote elsewhere - saved memories, created
+    files, sent messages. Those left the session; only the transcript rewinds.
+    """
+    messages = getattr(session, "messages", None)
+    if not messages:
+        return None
+    cut = None
+    for i in range(len(messages) - 1, -1, -1):
+        role = messages[i].role if hasattr(messages[i], "role") else messages[i].get("role")
+        if role == "user":
+            cut = i
+            break
+    if cut is None:
+        return None
+    removed = messages[cut]
+    session.messages = messages[:cut]
+    # The re-run counts its own turn again. Without this the exchange is counted
+    # twice, and the count schedules memory compaction.
+    try:
+        count = int(session.runtime_state.get("user_turn_count", 0))
+        session.runtime_state["user_turn_count"] = max(0, count - 1)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    session.updated_at = datetime.now().isoformat()
+    return removed
+
+
 def _generate_session_id() -> str:
     """
     Generate a human-friendly session ID: <color><6 digits>

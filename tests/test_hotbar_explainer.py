@@ -22,7 +22,7 @@ _PAGE = _REPO / "web" / "app" / "page.tsx"
 
 
 def _css() -> str:
-    return _CSS.read_bytes().decode("utf-8")
+    return _CSS.read_text(encoding="utf-8")
 
 
 def _section() -> str:
@@ -34,7 +34,7 @@ def _section() -> str:
 
 
 def test_every_class_the_markup_uses_has_a_rule():
-    used = set(re.findall(r"vaf-hb-[a-z0-9-]+", _PAGE.read_bytes().decode("utf-8")))
+    used = set(re.findall(r"vaf-hb-[a-z0-9-]+", _PAGE.read_text(encoding="utf-8")))
     assert used, "the explainer markup vanished from page.tsx"
     # Only the base rules count. The reduced-motion block names most of the
     # same classes, and counting it would let a class whose ONLY mention is
@@ -104,7 +104,7 @@ def test_the_hotbar_lists_exactly_the_windows_sub_agents():
     kinds from SUBAGENT_KIND_BY_TOOL rather than listing them again, and this
     pins that the derivation is still in place - a hand-written second list is
     how one of them silently loses an agent."""
-    page = _PAGE.read_bytes().decode("utf-8")
+    page = _PAGE.read_text(encoding="utf-8")
     assert "SUBAGENT_KINDS: SubAgentKind[] = SUBAGENT_KIND_BY_TOOL.map" in page, \
         "the hotbar stopped deriving its kinds from the window's registry"
     kinds = set(re.findall(r"\[/\w+/i, '(\w+)'\]", page))
@@ -118,7 +118,7 @@ def test_the_hotbar_lists_exactly_the_windows_sub_agents():
 def test_every_tile_has_wording_in_every_locale():
     # The tiles build their message keys from the kind at runtime, so a missing
     # key is not a compile error - next-intl throws when the panel opens.
-    page = _PAGE.read_bytes().decode("utf-8")
+    page = _PAGE.read_text(encoding="utf-8")
     kinds = set(re.findall(r"\[/\w+/i, '(\w+)'\]", page))
     for locale in ("en", "de"):
         catalogue = json.loads(
@@ -134,7 +134,7 @@ def test_every_tile_has_wording_in_every_locale():
 def test_the_browser_is_not_offered_as_a_pick():
     # It already owns a permanent seat in the rail (the globe). Offering it
     # would let someone add a thing that is never absent.
-    page = _PAGE.read_bytes().decode("utf-8")
+    page = _PAGE.read_text(encoding="utf-8")
     assert "const HOTBAR_KINDS: SubAgentKind[] = SUBAGENT_KINDS.filter(k => k !== 'browser');" in page
     assert "HOTBAR_KINDS\n" in page and ".map(kind => {" in page, \
         "the tiles stopped deriving from the browser-excluded list"
@@ -149,7 +149,7 @@ def test_the_rail_positions_come_from_one_rhythm():
     The rail runs left to right in the chat header, so the step is a CELL WIDTH:
     every seat is one cell with its glyph centred, and centre to centre is the
     same for every pair whatever the glyph's own size is."""
-    page = _PAGE.read_bytes().decode("utf-8")
+    page = _PAGE.read_text(encoding="utf-8")
     assert "const RAIL_STEP = 33;" in page
     assert "RAIL_STEP_TOP" not in page, "the vertical rail's top offset came back"
     assert page.count("style={{ width: RAIL_STEP }}") == 3, \

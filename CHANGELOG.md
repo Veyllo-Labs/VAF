@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a25] - 2026-08-24
+
 ### Fixed
 - **The app comes up again after updating.** On a fresh install the frontend
   refused to build, so the update finished and then the window never showed

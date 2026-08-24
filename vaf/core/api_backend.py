@@ -310,6 +310,20 @@ class OpenAIProvider(BaseAIProvider):
                     
         except Exception as e:
             err_str = str(e)
+            # A provider that does not know `allowed_tools` answers 400 and the
+            # turn is lost, not merely expensive. The capability is declared per
+            # provider and probed, but it can also be per MODEL, which no registry
+            # can know in advance. So the first refusal retires the shape for this
+            # process and the request is retried plainly: one lost round trip
+            # instead of every later one.
+            if isinstance(tool_choice, dict) and tool_choice.get("type") == "allowed_tools" \
+                    and "tool_choice" in err_str.lower():
+                self.allowed_tools_refused = True
+                UI.event("Backend", "provider refused allowed_tools; retrying without it",
+                         style="warning")
+                yield from self.chat_completion(messages, temperature, max_tokens, stream,
+                                                model, tools, "auto")
+                return
             UI.error(f"{self.provider_name.upper()} Provider Error: {err_str}")
             try:
                 from vaf.core.log_helper import append_domain_log

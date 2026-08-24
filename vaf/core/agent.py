@@ -8335,6 +8335,102 @@ class Agent:
         # branch only fires when message 0 is not a system message to begin with.
         return [prepared_messages[0], {"role": "system", "content": block_content}, *prepared_messages[1:]]
 
+    # The tools that are ALWAYS in the array where the provider can restrict
+    # callability separately. Order is fixed, because the array is inside the
+    # request's cached prefix and a reordering is a different array.
+    #
+    # Measured on this installation: 124 registered tools serialise to 32,490
+    # tokens, so sending all of them is a bad trade even fully cached (about
+    # 3,249 effective per request against 1,059 for a routed three at full
+    # price). These twenty-three come to roughly 10,000 tokens, or 1,000
+    # effective, and unlike the routed set they also let the system prompt and
+    # the conversation behind them stay cached - which is where the actual saving
+    # is. Everything else stays reachable through search_tools, whose result is
+    # folded back into the active set for the next turn.
+    STABLE_TOOL_CORE = (
+        # The way out of the set. Without these a tool outside it is unreachable.
+        "list_tools", "search_tools",
+        # Memory and state: the agent must be able to read and write these on any
+        # turn, whatever the router decided the turn was about.
+        "update_intent", "update_working_memory", "memory_search", "memory_save",
+        "memory_update", "update_user_identity", "set_timer",
+        # Delegation. These four are one family (SUBAGENT_TOOLS) and travel
+        # together: a main agent that can start one but not answer about another
+        # is the gap this list exists to avoid.
+        "coding_agent", "librarian_agent", "research_agent", "document_agent",
+        # Common enough to be worth holding resident rather than discovering.
+        "web_search", "read_file", "list_files", "write_file", "analyze_image",
+        "send_to_user", "use_skill", "create_automation", "python_sandbox",
+        "browser_agent",
+    )
+
+    def _resident_tool_names(self):
+        """The array's contents for this session: the core, plus whatever was
+        genuinely needed since. Grows only, never shrinks and never reorders, so
+        a session converges on a stable array after the first few turns."""
+        resident = getattr(self, "_resident_tools", None)
+        if resident is None:
+            resident = [t for t in self.STABLE_TOOL_CORE if t in self.tools]
+            self._resident_tools = resident
+        for name in (self._active_tools or []):
+            if name in self.tools and name not in resident:
+                resident.append(name)          # appended, so the head stays put
+        return resident
+
+    def _supports_allowed_tools(self) -> bool:
+        """Provider capability, declared in the registry and probed per provider.
+
+        Never guessed: this is a vendor extension and a gateway that does not know
+        it answers 400, which breaks the turn rather than merely costing money.
+        `_allowed_tools_broken` is the per-process retreat after a provider proves
+        it at run time, so one 400 costs one request and not every later one.
+        """
+        try:
+            # The retreat is recorded on the PROVIDER, because that is where the
+            # refusal arrives and what survives a manager swap.
+            if getattr(getattr(self.api_backend, "provider", None), "allowed_tools_refused", False):
+                return False
+        except Exception:
+            pass
+        try:
+            from vaf.core.provider_registry import PROVIDER_SPECS
+            spec = PROVIDER_SPECS.get(getattr(self.api_backend, "provider_name", "") or "")
+            return bool(spec and spec.supports_allowed_tools)
+        except Exception:
+            return False
+
+    def _tools_and_choice(self, disable_tools: bool):
+        """The tools array and the tool_choice for ONE request.
+
+        Two things that used to be one. The router still decides what this turn is
+        about; that decision now shapes `tool_choice` instead of the array, so the
+        array can stay byte-identical and the whole request behind it stays
+        cached. Where the provider cannot restrict callability separately, this
+        falls back to exactly what it did before.
+        """
+        if disable_tools:
+            return None, "none"
+        if not self._supports_allowed_tools():
+            return self.TOOLS, ("auto" if self.tools else "none")
+
+        resident = self._resident_tool_names()
+        previous = self._active_tools
+        try:
+            self._active_tools = list(resident)
+            tools = self.TOOLS
+        finally:
+            self._active_tools = previous
+        if not tools:
+            return None, "none"
+
+        allowed = [t for t in (previous or resident) if t in resident]
+        if not allowed or len(allowed) >= len(resident):
+            return tools, "auto"
+        return tools, {"type": "allowed_tools", "allowed_tools": {
+            "mode": "auto",
+            "tools": [{"type": "function", "function": {"name": n}} for n in allowed],
+        }}
+
     def _append_turn_block(self, prepared_messages):
         """Append the turn block AFTER the conversation, per request, never into history.
 
@@ -9194,9 +9290,10 @@ class Agent:
                             prepared_messages, self._memory_system_block(memory_context)
                         )
                     prepared_messages = self._append_turn_block(prepared_messages)
-                    # Disable tools if requested
-                    current_tools = self.TOOLS if not disable_tools else None
-                    tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
+                    # Disable tools if requested. Where the provider can restrict
+                    # callability without a different array, the router's pick
+                    # becomes the restriction and the array stays byte-identical.
+                    current_tools, tool_choice = self._tools_and_choice(disable_tools)
                     if current_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
                         tool_choice = self._force_tool_choice  # forced-resolution node: model MUST emit a tool
                         self._force_tool_choice_used = True     # only the first generation is forced

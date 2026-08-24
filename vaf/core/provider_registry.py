@@ -51,6 +51,19 @@ class ProviderSpec:
     models_url: Optional[str] = None
     models_base_config_key: Optional[str] = None  # build "<config base>/models" (veyllo)
     models_auth: str = "bearer"  # "bearer" | "x-api-key" | "query-key"
+    # Tool restriction WITHOUT rebuilding the tools array. Where a provider
+    # supports it, the router's per-turn pick becomes a `tool_choice` restriction
+    # and the array itself stays byte-identical, which is what keeps the
+    # request's cached prefix alive: measured against a live account, swapping
+    # the allowed subset costs nothing (99.3 per cent either way) while shrinking
+    # the array to that same subset is a DIFFERENT array and pays full price.
+    # Default False, and it stays False for every provider that has not been
+    # PROBED: this is a vendor extension, and a gateway that does not know it
+    # answers 400 on the chat lane, which breaks the turn rather than merely
+    # costing money. Anthropic needs no flag for a different reason: a
+    # tool_choice change there invalidates only the messages tier, never tools
+    # or system.
+    supports_allowed_tools: bool = False
     # Vision
     vision_capable: bool = False
     vision_default_model: Optional[str] = None  # None + capable -> Config.get_default_model(name)
@@ -67,6 +80,7 @@ PROVIDER_SPECS: Dict[str, ProviderSpec] = {
             label="OpenAI",
             coder_base_url="https://api.openai.com/v1",
             models_url="https://api.openai.com/v1/models",
+            supports_allowed_tools=True,  # probed on gpt-4o-mini: subset swap costs nothing
             vision_capable=True,
         ),
         ProviderSpec(

@@ -25,6 +25,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **The agent keeps a steady set of tools instead of a new one every message.** It used
+  to be handed only the handful of tools it seemed to need right then, which sounds
+  frugal but meant every message looked new to the provider and nothing at all could be
+  reused, not the tools and not the instructions or the conversation behind them. It now
+  carries a fixed set of the tools it always needs, memory, delegation and the ability to
+  look for others, and simply restricts which of them it may reach for on a given turn.
+  Anything outside that set is still found and added the moment it is needed, and stays
+  for the rest of the conversation. Measured against a live account: seven in ten tokens
+  of a chat request are now reused, and the same conversation costs a third less. On
+  providers that cannot express this, nothing changes.
 - **The agent's instructions stopped being rewritten on every message.** Alongside the
   clock, two more parts of the instructions changed from turn to turn: the guidance the
   agent loads for the current kind of task, and the list naming which tools it may reach

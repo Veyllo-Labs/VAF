@@ -25,6 +25,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **A block that came and went no longer sits at the very front of the agent's
+  instructions.** Providers charge far less for the part of a request they have seen
+  before, but only for the stretch at the beginning that is unchanged. One status
+  block was inserted ahead of everything else whenever the agent switched into
+  planning mode, and switched off again two turns later, which made the whole
+  request look new every time. Measured on a live account, the chat request was
+  paying full price on every single turn while a neighbouring lane on the same
+  account paid a tenth. The block is unchanged and still shown, it now sits at the
+  end of the instructions instead of the start.
 - **The usage view counted every call's tokens against the wrong call.** Providers
   report what a request cost in a final piece of the response that carries no text,
   so VAF recorded the figures but read them one step too early: each call was booked

@@ -544,7 +544,25 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         # without it. See docs/agents/ACTION_TAG.md.
         _action_on = bool(Config.get("action_tag_enabled", False))
 
-        # 0. MISSION STATUS (Orchestrator feedback)
+        # MISSION STATUS (orchestrator feedback). Rendered here, where its inputs
+        # are at hand, and APPENDED AT THE END, where it costs only itself.
+        #
+        # It used to be the first thing in the prompt, and that made it the single
+        # most expensive block in the product. Providers cache on the leading
+        # tokens of a request, so a block at position 0 that appears and
+        # disappears invalidates EVERYTHING behind it. Measured on a live account:
+        # toggling this module moves the first differing character from somewhere
+        # deep in the prompt to character 0, and the provider then reports a nought
+        # per cent cache hit on a thirteen-thousand-token request. Its trigger is
+        # not rare either - thirty-eight keywords activate the module, among them
+        # words as ordinary as "alle", "plan" and "review", and it decays two turns
+        # later, so a normal conversation switches it on and off repeatedly.
+        #
+        # The text is unchanged, and so is its authority: it is still in the system
+        # message, now at the end, which is where the user-identity block already
+        # sits for the same reason (a late instruction is followed at least as
+        # well as an early one).
+        mission_status = ""
         if "orchestrator" in self.active_modules:
             plan_exists = False
             if self.mpm:
@@ -565,7 +583,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             else:
                 status_part.append("💡 Plan is active. Execute one step at a time. Use `checkpoint_context` after completing a major task.")
             
-            parts.append("\n".join(status_part) + "\n")
+            mission_status = "\n".join(status_part) + "\n"
 
         # 1. CORE IDENTITY & PERSONA (Soul)
         
@@ -1196,6 +1214,10 @@ Then use the results to answer. Do NOT guess from your training data!
 
             identity_block += "\n</user_context>"
             parts.append(identity_block)
+
+        # Last, for the reason given where it is built.
+        if mission_status:
+            parts.append(mission_status)
 
         full_prompt = "\n".join(parts)
         try:

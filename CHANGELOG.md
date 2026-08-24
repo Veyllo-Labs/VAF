@@ -11,6 +11,36 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The interactive browser works on Apple Silicon.** Its window stayed empty and
+  the server answered a 502, and it could not be repaired either, because the
+  browser image refused to build on an arm64 machine at all: the build fetched the
+  display server package for the wrong processor and the install broke off. The
+  processor is now taken from the builder instead of defaulting to Intel, and a
+  build that cannot tell which processor it is for stops and says how to tell it,
+  rather than guessing. On an Intel machine the guess happened to be right, which
+  is why this never showed up anywhere else.
+- **A browser that shows you nothing is no longer called healthy.** The browser
+  container has two halves: the part the agent steers and the part you actually
+  see. Only the first was checked, so a container whose picture never came up was
+  handed out as working and greeted you with an error the moment you opened it.
+  Both halves are checked now, in the container itself and before a browser is
+  handed to you, and the log names which half failed and what to do about it.
+- **The containers VAF builds itself are rebuilt when you start it.** The browser
+  and the speech container are built from the source on your machine rather than
+  downloaded, and starting VAF reused whatever had been built before, however old.
+  One machine ran an image sixteen days behind its own code, missing a whole
+  feature, with everything reporting healthy the entire time. Updating could not
+  have fixed it either, because updating never rebuilds these. They are rebuilt on
+  start now, which costs seconds when nothing changed. A build that fails also
+  reports what the builder said instead of blaming the clock.
+- **A release cannot be published unless the frontend builds first.** The release
+  check ran the Python tests only, so a version could be published, and offered to
+  everyone as an update, without the web interface having been built on any
+  machine. That is exactly how the previous release shipped an app that stopped at
+  the splash screen. The frontend is now built on Linux, macOS and Windows before
+  a release is created.
+
 ## [0.1.0a25] - 2026-08-24
 
 ### Fixed

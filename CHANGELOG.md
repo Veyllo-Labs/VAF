@@ -34,6 +34,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   have fixed it either, because updating never rebuilds these. They are rebuilt on
   start now, which costs seconds when nothing changed. A build that fails also
   reports what the builder said instead of blaming the clock.
+- **You get the browser back when the agent is done with it.** If you had opened
+  the interactive browser yourself, the agent only borrows it and is supposed to
+  hand it back at the end, on the page it left behind. Instead the window stayed
+  in the agent view for good, with neither control nor that page. The browser can
+  run as your own instance or as the shared one, and which of the two you get is
+  decided separately when you open it and again when an agent starts. If that
+  answer changed in between, the agent handed the browser back to a different one
+  than you were holding, so the message that you may take over was never sent at
+  all and your window waited for it forever. The hand-back now follows your
+  session wherever it is.
 - **A release cannot be published unless the frontend builds first.** The release
   check ran the Python tests only, so a version could be published, and offered to
   everyone as an update, without the web interface having been built on any

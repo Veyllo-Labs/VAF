@@ -25,6 +25,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **Two things happening at once can no longer make a call vanish from the spend
+  record.** The daily record is read, updated and written back as a whole, and several
+  parts of VAF write into the same one: the web workers, the tray, background runs and
+  every coding sub-process. Two of them starting at the same moment each wrote their own
+  total, and whichever finished last overwrote the other, so a call was simply never
+  counted. A half-written file read back as an empty record, which reset the day and
+  left the daily spend limit with nothing to measure until the next write. Writers now
+  take turns, per account, so two accounts never wait on each other.
 - **What the agent did during a turn is no longer rewritten the moment the turn ends.**
   Every finished turn used to have its intermediate steps replaced by a short summary.
   That kept the conversation small, but it changed the middle of what gets sent, and a

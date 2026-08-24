@@ -551,6 +551,44 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     return est
 
 
+@contextmanager
+def _ledger_lock(path: Path):
+    """Serialise one ledger's read-modify-write across processes.
+
+    This is a read, a merge and a write on a file that several writers share:
+    the web worker threads, the tray, the headless runner and every coder
+    subprocess all book into the same file for the same account. Two writers that
+    read the same starting point both write their own total and the later one
+    wins, so a call disappears - and a torn file reads back as an empty ledger,
+    which resets the day and disarms the spend cap until the next write.
+
+    Not hypothetical: during the round that added the cache counters, a manual
+    correction to this file was silently reverted by a process that had read it
+    before the correction and wrote afterwards.
+
+    Per LEDGER, not global: two accounts have no reason to block each other, and
+    the config lock next door guards a different file. Degrades to unlocked on
+    timeout or when filelock is unavailable, on the same reasoning the config
+    lock states: a late write beats no write, and accounting must never break a
+    call.
+    """
+    lock = None
+    try:
+        from filelock import FileLock
+        lock = FileLock(str(path) + ".lock")
+        lock.acquire(timeout=10)
+    except Exception:
+        lock = None
+    try:
+        yield
+    finally:
+        try:
+            if lock is not None:
+                lock.release()
+        except Exception:
+            pass
+
+
 def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
                  *, lane: Optional[str] = None, provider: Optional[str] = None,
                  reported: bool = True, estimated: bool = False) -> float:
@@ -561,6 +599,18 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
     try:
         path = _ledger_path(user_scope_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        with _ledger_lock(path):
+            return _record_spend_locked(path, estimate, lane=lane, provider=provider,
+                                        reported=reported, estimated=estimated)
+    except Exception:
+        return 0.0
+
+
+def _record_spend_locked(path: Path, estimate: CostEstimate,
+                         *, lane: Optional[str] = None, provider: Optional[str] = None,
+                         reported: bool = True, estimated: bool = False) -> float:
+    """The read-modify-write itself. Called only with the ledger lock held."""
+    try:
         day = _today()
         data = {}
         if path.exists():

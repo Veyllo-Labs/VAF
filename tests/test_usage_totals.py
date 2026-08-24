@@ -1006,3 +1006,38 @@ def test_the_cache_totals_survive_the_log_being_deleted(spend_dir):
     assert after["cache_read_tokens"] == 8400
     assert after["cache_measured_calls"] == before["cache_measured_calls"]
     assert after["cache_measured_input_tokens"] == before["cache_measured_input_tokens"]
+
+
+def test_concurrent_writers_do_not_lose_a_call(spend_dir, monkeypatch):
+    """The ledger is a read-modify-write on a file several processes share: web
+    worker threads, the tray, the headless runner and every coder subprocess book
+    into the same file for the same account. Two writers that read the same
+    starting point both write their own total and the later one wins, so a call
+    disappears.
+
+    Not hypothetical. During the round that added the cache counters, a manual
+    correction to a live ledger was silently reverted by a process that had read
+    it before the correction and wrote afterwards.
+
+    MUTATION: remove the `with _ledger_lock(path)` span and this goes red, with
+    fewer calls recorded than were made. It is a race, so it is driven hard
+    enough to lose reliably rather than once in a while."""
+    import threading
+
+    WRITERS, EACH = 8, 12
+
+    def book():
+        for _ in range(EACH):
+            record_spend(None, estimate_cost("openai", "gpt-4o", 100, 10), provider="openai")
+
+    threads = [threading.Thread(target=book) for _ in range(WRITERS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    totals = usage_totals(days=30)["totals"]
+    assert totals["calls"] == WRITERS * EACH, (
+        f"{WRITERS * EACH} calls were booked, {totals['calls']} survived: the ledger lost "
+        f"updates, and every lost one is spend the cap never sees")
+    assert totals["input_tokens"] == WRITERS * EACH * 100

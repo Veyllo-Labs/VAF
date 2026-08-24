@@ -286,10 +286,16 @@ When a runtime is present (or has just been set up), the installer manages the s
 3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
 4. **Apply Changes - two-phase**: it brings up the core registry-image services first
    (`postgres redis sandbox stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
-   database the app needs to boot, then starts those optional services best-effort. `up -d`:
+   database the app needs to boot, then starts those optional services best-effort with `--build`.
+   `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)
    - Recreates services whose configuration changed
    - Leaves unchanged, running services untouched
+   - Does NOT rebuild local images on its own, which is why `tts` and `vaf-browser` are started
+     with `--build`: they are built from this repository rather than pulled, so without it a
+     checkout that moves ahead of its images keeps running the old ones and nothing says so.
+     An unchanged build context is a cache hit and costs seconds. Note that `vaf update` never
+     builds an image either, so an image cannot be repaired by updating.
 
 > **Note:** Data in named volumes (e.g., `vaf_memory_pgdata`) is never lost during `up -d`. Only container images and configuration are updated.
 

@@ -31,6 +31,10 @@ VAF's sandbox isolation is enforced entirely at the **Docker container level**. 
 
 See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and security details.
 
+The browser container is a separate sandbox with its own design doc and is NOT covered here: see
+[`BROWSER_AGENT.md`](../agents/BROWSER_AGENT.md) for its image, ports and health probe, and section 5 of
+[`USER_ISOLATION.md`](USER_ISOLATION.md) for the per-user browser pool.
+
 ---
 
 ## Smart Auto-Start

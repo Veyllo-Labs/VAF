@@ -43,7 +43,7 @@ The browser container is part of `docker-compose.memory.yml` and starts automati
 docker compose -f docker-compose.memory.yml up -d
 ```
 
-On first run, Docker builds the `vaf-browser` image from `docker/browser/Dockerfile` (~30 seconds). Subsequent starts are instant.
+On first run, Docker builds the `vaf-browser` image from `docker/browser/Dockerfile` (~30 seconds). Later starts pass `--build` too: an unchanged build context is a cache hit and costs seconds, while a changed one is rebuilt rather than silently reused. Without that, a checkout that moves ahead of its images keeps running the old ones with nothing to show for it.
 
 ### Verify it's running
 
@@ -856,7 +856,8 @@ When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC
 ## Docker Container Details
 
 **Image:** built from `docker/browser/Dockerfile`  
-**Base:** `debian:bookworm-slim` + Chromium from Debian repos + the KasmVNC server (version-pinned vendor .deb, checksum-verified; it is BOTH the X server the headed Chromium renders into and the WebSocket stream of that display)
+**Base:** `debian:bookworm-slim` + Chromium from Debian repos + the KasmVNC server (version-pinned vendor .deb, checksum-verified; it is BOTH the X server the headed Chromium renders into and the WebSocket stream of that display)  
+**Architecture:** amd64 and arm64 are both built, each against its own pinned KasmVNC checksum. The target comes from BuildKit's `TARGETARCH`, and the Dockerfile declares that ARG WITHOUT a default on purpose: BuildKit fills the predefined platform ARGs only when they carry no value of their own, so a default wins over the injected value and an arm64 machine would build an arm64 image around an amd64 package. An empty or unsupported value stops the build instead of guessing.
 
 **Licence boundary (KasmVNC is GPL-2.0).** As things stand VAF distributes none of
 it: the Dockerfile fetches an unmodified, version-pinned vendor `.deb`, and the image
@@ -872,7 +873,7 @@ someone deliberately takes that on, this stays a local build.
 **Internal port:** `9223` (CDP), exposed as `9222` via socat  
 **Memory limit:** 2 GB (`shm_size: 1gb`)  
 **User:** non-root (`browser:browser`)  
-**Health check:** `curl http://localhost:9222/json/version` every 10 seconds
+**Health check:** every 10 seconds, and BOTH halves have to answer: CDP on `9222` and the KasmVNC stream on `6901`. They fail apart, so checking one proves nothing about the other. An image built before the stream existed serves CDP perfectly while nothing listens on 6901, and a CDP-only check called that container healthy - the pool then handed it out and the ticket route answered 502 on the first human click. `BrowserPool._wait_healthy` applies the same two-part probe before an instance is handed out, fetching the very path the ticket route serves.
 
 The container runs a **supervised** Chromium process **headed under a virtual X display (KasmVNC's Xkasmvnc)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
 
@@ -887,6 +888,10 @@ browser context and would otherwise inherit whatever the previous user left behi
 
 `entrypoint.sh` is copied into the image at build time, so a change to it (or the Dockerfile) needs
 a rebuild, not a plain `restart` (which reuses the old image and keeps the old baked-in script).
+
+Starting the stack through VAF now does this for you: the locally built services (browser, TTS) are
+started with `--build`. The command below is what to run when you build by hand, and what to reach
+for when the log says the KasmVNC stream did not answer.
 
 ```bash
 docker compose -f docker-compose.memory.yml up -d --build vaf-browser

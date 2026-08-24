@@ -42,6 +42,99 @@ SPEND_FORMAT = "spend-1-9c14f7"
 # admin's ledger).
 _UNSET = object()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROMPT-CACHE USAGE: ONE SHAPE
+# ─────────────────────────────────────────────────────────────────────────────
+# Providers cache the leading tokens of a request and bill what they served from
+# that cache at a fraction of the input price. Every one of them reports it under
+# a different name, and some report nothing at all, so the numbers are normalised
+# HERE, once, next to the pricing arithmetic that has to agree with them.
+#
+# `cache_measured` is the load-bearing key and it is a positive statement, not an
+# absence. Without it a provider that reports nothing is indistinguishable from a
+# provider that reported a genuine zero, and a hit rate averaged over both is a
+# lie in the direction that hides the problem. An explicitly reported 0 IS a
+# measurement (a cache miss) and counts as measured.
+#
+# Every key is ALWAYS present, and that is a fix rather than a style: the per-call
+# dicts are overwritten key by key and never reset between calls, so a call that
+# wrote nothing would silently inherit the previous call's cache numbers.
+
+
+def _field(obj, name):
+    """One read that works on an SDK model and on a raw JSON dict alike."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _first_reported(*values):
+    """The first value a provider actually sent, where 0 is a value and None is not."""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def cache_usage(read=None, write=None, *, in_input: bool = True) -> dict:
+    """The four cache keys for one call. `None` means the provider said nothing.
+
+    `in_input` records whether the two counts are already inside the provider's
+    own prompt total. They are for OpenAI, DeepSeek and Google; they are NOT for
+    Anthropic, whose `input_tokens` excludes both. That is a property of the
+    RESPONSE, so it travels with the measurement instead of being parked in a
+    price table keyed on the model, which would get an Anthropic model proxied
+    through an OpenAI-shaped gateway backwards.
+    """
+    reported_read = _first_reported(read)
+    reported_write = _first_reported(write)
+    return {
+        "cache_read_tokens": reported_read or 0,
+        "cache_write_tokens": reported_write or 0,
+        "cache_measured": reported_read is not None or reported_write is not None,
+        "cache_in_input": bool(in_input),
+    }
+
+
+def blank_request_usage() -> dict:
+    """The per-call usage shape, every key present and zeroed. Never raises."""
+    return {"input_tokens": 0, "output_tokens": 0, **cache_usage()}
+
+
+def cache_usage_from_openai(usage) -> dict:
+    """Cache counts off an OpenAI-compatible `usage`, whatever the vendor calls them.
+
+    One reader for every OpenAI-shaped provider, because the spellings differ but
+    the meaning does not: `prompt_tokens_details.cached_tokens` is the documented
+    OpenAI field that OpenRouter, Groq and xAI also use; DeepSeek documents only
+    `prompt_cache_hit_tokens` and sometimes carries the standard one as well, so
+    the standard field is tried first and its own name is the fallback; Mistral
+    puts a bare `cached_tokens` on the usage object. None of them charges a
+    cache-write premium except through the OpenRouter passthrough, so a zero
+    write is the truth for most of them rather than a gap.
+    """
+    try:
+        details = _field(usage, "prompt_tokens_details")
+        read = _first_reported(
+            _field(details, "cached_tokens"),
+            _field(usage, "prompt_cache_hit_tokens"),
+            _field(usage, "cached_tokens"),
+        )
+        write = _first_reported(
+            _field(details, "cache_write_tokens"),
+            _field(usage, "cache_write_tokens"),
+        )
+        return cache_usage(read, write, in_input=True)
+    except Exception:
+        return cache_usage()
+
 # USD per 1M tokens (input, output). Public list prices, rounded up rather than
 # down - this table decides when a cap trips, so erring low would be the
 # expensive direction.

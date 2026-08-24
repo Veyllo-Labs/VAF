@@ -538,3 +538,59 @@ def test_a_call_the_provider_never_reported_is_not_booked_as_a_cache_miss(monkey
 
     assert booked, "an unreported call was not booked at all"
     assert (booked["kwargs"].get("cache") or {}).get("cache_measured") is not True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THE PRODUCT SAYS ABOUT ITS OWN NUMBERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_non_admin_never_receives_a_money_field():
+    """/api/usage/me shows an account its own consumption and withholds the cost
+    of the instance's API keys. The filter used to be a DENYLIST, so every field
+    the ledger learned went out by default until somebody noticed: `currencies`
+    had been going out since it was added, and `cache_saved` would have been the
+    second. It is an allowlist now, so this test pins the POLICY rather than one
+    field name.
+
+    MUTATION: put any money field back in _OWN_FIELDS and this goes red."""
+    import re
+
+    from vaf.api import config_routes
+
+    src = pathlib.Path(config_routes.__file__).read_text(encoding="utf-8")
+    allow = re.search(r"_OWN_FIELDS = \(([^)]*)\)", src, re.S)
+    assert allow, "the non-admin row filter is no longer an allowlist"
+    fields = set(re.findall(r'"([a-z_]+)"', allow.group(1)))
+    for money in ("usd", "currencies", "cache_saved", "token_share", "call_share"):
+        assert money not in fields, f"`{money}` is money or a comparison and reaches a non-admin"
+    assert "cache_read_tokens" in fields, "an account cannot see its own cache consumption"
+
+
+def test_the_product_no_longer_claims_it_ignores_cache_discounts():
+    """Three places told the reader the amounts apply no cache discount. They do
+    now, so all three had to change in the same round: a report whose stated
+    method is not the method used is worse than one that says nothing.
+
+    Rule 2 prefers a guard over a prose rule, so the claim is pinned here."""
+    from vaf.api import config_routes
+    from vaf.core import cost as cost_mod
+
+    for module in (cost_mod, config_routes):
+        text = pathlib.Path(module.__file__).read_text(encoding="utf-8")
+        assert "no cache hits" not in text, f"{module.__name__} still claims it ignores cache"
+        assert "without cache" not in text, f"{module.__name__} still claims it ignores cache"
+
+
+def test_the_pricing_change_is_in_the_changelog():
+    """A displayed cost figure and an enforced spend cap both change, which is
+    the definition of user-facing in this repo."""
+    text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+    unreleased = text.split("## [Unreleased]", 1)[1].split("\n## ", 1)[0].lower()
+    # Specific on purpose. A bare search for "cache" passed on an unrelated entry
+    # that merely mentioned a caching SETTING, which is the vacuous shape this
+    # round was just caught on twice.
+    assert "spend limit" in unreleased or "daily limit" in unreleased, (
+        "the [Unreleased] section does not mention that the spend limit's arithmetic changed")
+    assert "cached rate" in unreleased, (
+        "the [Unreleased] section does not say a cached prompt is priced differently now")

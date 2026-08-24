@@ -125,9 +125,24 @@ async def get_usage_me(request: Request, days: int = 30) -> Dict[str, Any]:
     # cost of the instance's API keys is the operator's business, and so is any
     # comparison against the other accounts, which is why no share is sent
     # either (a percentage of a total is a statement about everyone else).
+    # An ALLOWLIST, not a denylist. A list of what to REMOVE has to be extended
+    # every time the ledger learns a new field, and it is only ever noticed when
+    # somebody looks: `currencies` is a per-currency amount that has been going
+    # out with this response since it was added, and `cache_saved` is a second
+    # one. Naming what a caller may SEE means the next field this row grows is
+    # withheld by default and has to be added deliberately.
+    _OWN_FIELDS = (
+        "scope", "username", "last_active",
+        # Their own consumption, which is the point of the view.
+        "input_tokens", "output_tokens", "tokens", "tokens_recorded",
+        "calls", "no_usage_calls", "estimated_tokens",
+        # Cache TOKENS are consumption too. `cache_saved` is money and is not here.
+        "cache_read_tokens", "cache_write_tokens",
+        "cache_measured_calls", "cache_measured_input_tokens",
+    )
+
     def _own(row: dict) -> dict:
-        return {k: v for k, v in row.items()
-                if k not in ("usd", "token_share", "call_share", "unknown_model_calls")}
+        return {k: v for k, v in row.items() if k in _OWN_FIELDS}
 
     rows = [_own(r) for r in rows]
     totals = dict(rows[0]) if rows else {"input_tokens": 0, "output_tokens": 0,
@@ -283,8 +298,11 @@ async def export_usage(
         + ". Token counts are the figures each provider reported for calls it "
         "billed; they are not counted by this software and do not depend on any "
         "tokenizer. Monetary amounts are ESTIMATES: they are calculated from "
-        "published list prices per million tokens, without cache, batch or "
-        "off-peak discounts and without long-context surcharges, so they can "
+        "published list prices per million tokens. Prompt tokens a provider "
+        "reported as served from its cache are priced at that provider's "
+        "published cached-input rate, and at the full input rate where it "
+        "publishes none; batch and off-peak discounts and long-context "
+        "surcharges are not applied, so the amounts can "
         "differ from an invoice. A model that is not in the price list is priced "
         "at the most expensive entry, which makes the amount an upper bound. "
         "Amounts are reported in the currency each provider publishes and are "

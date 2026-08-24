@@ -25,6 +25,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **An account without admin rights no longer receives cost amounts in the usage
+  view.** The page has always been meant to show you your own consumption and to
+  keep what the instance's API keys cost to the operator, and the filter that did
+  that named the fields to remove rather than the fields to send. Anything the
+  records learned afterwards therefore went out by default: the per-currency
+  amount has been included since it was added, and the new figure for what
+  caching saved would have followed it. The filter now names what may be sent, so
+  a field added later is withheld until somebody decides otherwise. Your own token
+  and call counts are unchanged, including how much of your prompt was served from
+  a cache.
 - **The cost figure now counts what a cached prompt actually costs, and the daily
   spend limit counts with it.** Every provider serves the repeated part of a long
   conversation from a cache and bills it at a fraction of the normal price, and none

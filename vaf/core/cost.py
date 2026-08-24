@@ -141,10 +141,14 @@ def cache_usage_from_openai(usage) -> dict:
 #
 # PROVIDER_PRICING is the source, PRICES is the flat index derived from it, so a
 # price can never be right in the comparison panel and stale in the estimate.
-# Standard list prices only: no cache hits, no batch/off-peak discount, no
+# List prices, with ONE discount applied: a prompt token the provider itself
+# reported as served from its cache is priced at that provider's published
+# cached-input rate (the multipliers below), because that is what the invoice
+# says and the figure feeds a spend cap. No batch or off-peak discount and no
 # long-context surcharge - a comparison built from each provider's best case
-# would flatter whichever one has the most discount programmes. DeepSeek is
-# quoted at PEAK (off-peak is half), OpenAI at short-context.
+# would flatter whichever one has the most discount programmes, and unlike a
+# cache hit those are not reported per call. DeepSeek is quoted at PEAK
+# (off-peak is half), OpenAI at short-context.
 #
 # CURRENCY IS NOT CONVERTED. Veyllo publishes EUR, everyone else USD, and this
 # module does not carry an exchange rate it would have to keep current - so the

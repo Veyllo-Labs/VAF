@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import logging
 import os
 import sys
 import platform
@@ -13,6 +14,8 @@ import time
 import requests
 from pathlib import Path
 from vaf.cli.ui import UI
+
+_log = logging.getLogger(__name__)
 from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
 from vaf.core.log_helper import get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
@@ -321,6 +324,33 @@ def is_selectable_model(filename: str) -> bool:
     return True
 
 
+def _mmproj_filename_in_repo(repo_id: str) -> str:
+    """The projector file this repo actually ships, or "" when it ships none.
+
+    Asked instead of assumed. The name was hardcoded to "mmproj-F16.gguf" with the
+    note that Qwen and Gemma both use it; only the Qwen half is true. Gemma's GGUF
+    repos name theirs after the model (mmproj-google_gemma-4-E4B-it-f16.gguf), so
+    the download raised EntryNotFoundError, the broad except below swallowed it,
+    and the server started blind for every Gemma user - with nothing in the log and
+    a Settings page that looked correct.
+
+    Preference order f16, bf16, then whatever projector exists: f16 is what the
+    llama.cpp builds here expect, and picking deterministically keeps two runs on
+    the same machine from choosing different files.
+    """
+    from huggingface_hub import HfApi
+    files = [f for f in HfApi().list_repo_files(repo_id=repo_id)
+             if "mmproj" in f.lower() and f.lower().endswith(".gguf")]
+    if not files:
+        return ""
+    for want in ("f16", "bf16"):
+        for f in sorted(files):
+            # "-f16" also matches inside "-bf16", so anchor on the separator
+            if f.lower().rsplit(".", 1)[0].endswith("-" + want):
+                return f
+    return sorted(files)[0]
+
+
 def resolve_mmproj_for(model_path: str) -> str:
     """Local vision: path of the mmproj (multimodal projector) to launch the
     llama server with, or "" when local vision is off / unresolvable.
@@ -370,22 +400,31 @@ def resolve_mmproj_for(model_path: str) -> str:
                         repo_id = v_repo
                 except Exception:
                     repo_id = None
-            filename = "mmproj-F16.gguf"
-        if not filename:
-            return ""
+            # Deliberately NOT asked yet: the local name below is derived from the
+            # MODEL, so an already downloaded projector resolves without knowing
+            # what the repo calls it. Asking here would spend a network round trip
+            # on every server start and make a fully provisioned machine depend on
+            # the hub being reachable.
+            filename = ""
         if ref:
             # Explicit ref: the user manages the filename.
-            local = os.path.join(models_dir, filename)
+            local = os.path.join(models_dir, filename) if filename else ""
         else:
-            # Auto path: PER-MODEL local name. Qwen and Gemma repos both ship
-            # "mmproj-F16.gguf" - a shared name in the one models/ dir would
-            # pair the wrong projector with the wrong model after a voice
-            # swap (broken vision or a crashed server for ALL lanes).
+            # Auto path: PER-MODEL local name. Upstream names collide across
+            # repos (Qwen ships "mmproj-F16.gguf"), and a shared name in the one
+            # models/ dir would pair the wrong projector with the wrong model
+            # after a voice swap (broken vision or a crashed server for ALL lanes).
             stem = os.path.splitext(os.path.basename(model_path))[0]
             local = os.path.join(models_dir, f"mmproj-{stem}.gguf")
-        if os.path.exists(local):
+        if local and os.path.exists(local):
             return local
         if not repo_id:
+            return ""
+        if not filename:
+            # Only now, and only because something has to be fetched: ask the repo
+            # what it actually ships instead of assuming a name.
+            filename = _mmproj_filename_in_repo(repo_id)
+        if not filename:
             return ""
         from huggingface_hub import hf_hub_download
         UI.event("System", f"Downloading vision projector {filename} ({repo_id})...", style="dim")
@@ -396,6 +435,10 @@ def resolve_mmproj_for(model_path: str) -> str:
             os.replace(got, local)
         return local
     except Exception as e:
+        # Into the LOG, not only onto the screen: the UI line is gone the moment
+        # the pane scrolls, and this failure is otherwise invisible - the server
+        # starts fine, just blind, and every later symptom points somewhere else.
+        _log.warning("Vision projector unavailable for %s: %s", model_path, e)
         UI.event("System", f"Vision projector unavailable: {e}", style="yellow")
         return ""
 

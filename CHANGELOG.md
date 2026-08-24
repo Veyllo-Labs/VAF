@@ -25,6 +25,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **Provider errors reach the log again.** When a model provider refused a request,
+  VAF showed the error in the chat but wrote nothing to `logs/backend_*.log`, even though
+  the debugging guide has always said that is where provider errors go. The line meant to
+  write it named a module that does not exist, and because the write is wrapped in a
+  catch-all the failure was silent, for every provider, since the line was written. It
+  writes now. A check was added alongside it: an import naming a module that was never
+  there now fails the test suite instead of quietly removing a feature.
 - **The first-run setup no longer looks like a login, and its step bar fits on one
   line.** The header above every setup step announced "User Login" on a page where
   nobody has an account yet; during setup it now says so, in your language. The bar

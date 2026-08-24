@@ -309,7 +309,7 @@ class OpenAIProvider(BaseAIProvider):
             err_str = str(e)
             UI.error(f"{self.provider_name.upper()} Provider Error: {err_str}")
             try:
-                from vaf.core.domain_log import append_domain_log
+                from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"{self.provider_name}_api_error: {err_str}")
             except Exception:
                 pass
@@ -558,7 +558,7 @@ class AnthropicProvider(BaseAIProvider):
             err_str = str(e)
             UI.error(f"Anthropic Provider Error: {err_str}")
             try:
-                from vaf.core.domain_log import append_domain_log
+                from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"anthropic_api_error: {err_str}")
             except Exception:
                 pass
@@ -840,7 +840,7 @@ class GoogleProvider(BaseAIProvider):
             err_str = str(e)
             UI.error(f"Google Provider Error: {err_str}")
             try:
-                from vaf.core.domain_log import append_domain_log
+                from vaf.core.log_helper import append_domain_log
                 append_domain_log("backend", f"google_api_error: {err_str}")
             except Exception:
                 pass

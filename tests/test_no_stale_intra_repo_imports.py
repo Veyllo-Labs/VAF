@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""A `from vaf.x import y` must name something `vaf.x` actually has.
+"""A `from vaf.x import y` must name something `vaf.x` actually has, and `vaf.x` must exist.
 
 THE CLASS, not the incident. Deleting a private helper is a two-line change in the file
 that defines it and an ImportError in every other file that named it - and this repository
@@ -24,6 +24,14 @@ names dynamically (PEP 562 `__getattr__`, conditional definitions), so those mod
 exempted by NAME below, with the reason. The check is "the target module does not define
 this and does not define names dynamically", which is narrow enough to be free of noise and
 still catches a deletion.
+
+THE MISSING MODULE IS THE STRONGER FORM, and the name check alone cannot see it: it resolves
+the target module first and skips what it cannot find, so an import naming a module that was
+never there passes silently. Measured, from the change that produced the second test: three
+sites in `api_backend.py` imported `append_domain_log` from `vaf.core.domain_log`, a module
+that has never existed - the real one is `vaf.core.log_helper`. All three sat inside
+`except Exception: pass` on the provider error path, so provider errors never reached
+`logs/backend_*.log` while `docs/DEBUGGING.md` promised they would.
 """
 import ast
 import pathlib
@@ -84,9 +92,8 @@ def _module_file(dotted: str) -> pathlib.Path | None:
     return package if package.exists() else None
 
 
-def test_no_import_names_something_its_module_does_not_define():
-    """One stale name is a feature that disappears without a stack trace."""
-    stale = []
+def _vaf_import_nodes():
+    """Every absolute `from vaf... import ...` in the tree, as (source, node) pairs."""
     for source in sorted(VAF.rglob("*.py")):
         try:
             tree = ast.parse(source.read_bytes().decode())
@@ -95,26 +102,51 @@ def test_no_import_names_something_its_module_does_not_define():
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
-            if not node.module.startswith("vaf") or node.module in DYNAMIC_MODULES:
+            if node.module.startswith("vaf"):
+                yield source, node
+
+
+def test_no_import_names_something_its_module_does_not_define():
+    """One stale name is a feature that disappears without a stack trace."""
+    stale = []
+    for source, node in _vaf_import_nodes():
+        if node.module in DYNAMIC_MODULES:
+            continue
+        target = _module_file(node.module)
+        if target is None or target == source:
+            continue
+        defined = _defined_names(target)
+        if defined is None:                          # dynamic target
+            continue
+        for alias in node.names:
+            if alias.name == "*" or alias.name in defined:
                 continue
-            target = _module_file(node.module)
-            if target is None or target == source:
+            # A submodule of a package is a legitimate `from pkg import sub`.
+            if _module_file(f"{node.module}.{alias.name}") is not None:
                 continue
-            defined = _defined_names(target)
-            if defined is None:                      # dynamic target
-                continue
-            for alias in node.names:
-                if alias.name == "*" or alias.name in defined:
-                    continue
-                # A submodule of a package is a legitimate `from pkg import sub`.
-                if _module_file(f"{node.module}.{alias.name}") is not None:
-                    continue
-                stale.append(
-                    f"{source.relative_to(ROOT)}:{node.lineno} imports "
-                    f"{alias.name!r} from {node.module}, which does not define it"
-                )
+            stale.append(
+                f"{source.relative_to(ROOT)}:{node.lineno} imports "
+                f"{alias.name!r} from {node.module}, which does not define it"
+            )
     assert not stale, (
         "stale intra-repo import(s):\n  " + "\n  ".join(stale) +
         "\nThese raise ImportError at the call, and in this repository that usually happens "
         "inside `except Exception: pass` - so the feature disappears and nothing fails."
+    )
+
+
+def test_no_import_names_a_vaf_module_that_does_not_exist():
+    """A module that was never there is the name check's blind spot, not a rarer case."""
+    missing = []
+    for source, node in _vaf_import_nodes():
+        if _module_file(node.module) is None:
+            missing.append(
+                f"{source.relative_to(ROOT)}:{node.lineno} imports from "
+                f"{node.module}, which does not exist"
+            )
+    assert not missing, (
+        "import(s) from a module that does not exist:\n  " + "\n  ".join(missing) +
+        "\nThe name check above resolves the module first and skips what it cannot find, so "
+        "this form passes it silently. Inside the usual `except Exception: pass` it removes a "
+        "feature with no stack trace and no failing test."
     )

@@ -25,6 +25,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **Four provider settings can no longer be changed by everyone on the network.**
+  Whether Anthropic caches the prompt, whether Anthropic and Google show their
+  reasoning, and which endpoint the browser agent, local vision and the failover
+  lane send their prompts to were all writable by any non-admin account on the
+  machine's network. The first three decide what every request on the instance
+  sends and therefore what everyone's tokens cost; the last decides where prompts
+  leave the machine. All four are now admin-only, like the other backend settings
+  around them. If you changed one of them from a non-admin account, ask an admin
+  to set it instead.
 - **Provider errors reach the log again.** When a model provider refused a request,
   VAF showed the error in the chat but wrote nothing to `logs/backend_*.log`, even though
   the debugging guide has always said that is where provider errors go. The line meant to

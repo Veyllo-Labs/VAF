@@ -1012,6 +1012,19 @@ class Config:
         "prompt_log_full_enabled",
         "secure_store_kek_backend",
         "context_archive_max_age_days",
+        # Provider request policy. These four are read with an inline default
+        # instead of from DEFAULTS, so no prefix covers them and each needs an
+        # explicit entry (precedent: the learn_ spend keys above).
+        # `local_api_url` decides WHERE the API-backend consumers (browser agent,
+        # local vision, cloud-to-local failover) send their prompts, which makes
+        # it an egress decision rather than a preference. The three toggles change
+        # what every request on the instance sends, and therefore what everyone's
+        # requests cost: thinking tokens are billed, and the prompt cache is the
+        # difference between a cached and a full-price input token.
+        "local_api_url",
+        "anthropic_prompt_cache",
+        "anthropic_thinking",
+        "google_thinking",
     ])
 
     @classmethod

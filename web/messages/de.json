@@ -1,12 +1,13 @@
 {
   "onboarding": {
+    "headerSetup": "Erste Einrichtung",
     "stepAdmin": "Admin",
     "stepAgentName": "Name",
     "agentNameHeader": "Dein Agent",
     "agentNameTitle": "Wie soll dein Agent heissen?",
-    "agentNameSubtitle": "Der Name, unter dem dein Agent auftritt - im Chat, in Agenten-Raeumen und wenn er sich anderen vorstellt. Du kannst ihn spaeter jederzeit aendern.",
+    "agentNameSubtitle": "Der Name, unter dem dein Agent auftritt - im Chat, in Agenten-Räumen und wenn er sich anderen vorstellt. Du kannst ihn später jederzeit ändern.",
     "agentNameLabel": "Name des Agenten",
-    "agentNameHint": "Leer lassen uebernimmt den Vorschlag. Der Wuerfel schlaegt einen neuen vor.",
+    "agentNameHint": "Leer lassen übernimmt den Vorschlag. Der Würfel schlägt einen neuen vor.",
     "agentNameDice": "Anderen Namen vorschlagen",
     "stepSoul": "Soul",
     "stepVeyllo": "Veyllo API",

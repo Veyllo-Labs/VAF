@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The first-run setup no longer looks like a login, and its step bar fits on one
+  line.** The header above every setup step announced "User Login" on a page where
+  nobody has an account yet; during setup it now says so, in your language. The bar
+  underneath it has five steps but was laid out on a grid built for four, so the
+  last step dropped underneath the fourth instead of standing next to it, and the
+  "Veyllo API" label broke over two lines. Both are fixed, and two German lines on
+  the agent-name step got their umlauts back.
 - **The interactive browser works on Apple Silicon.** Its window stayed empty and
   the server answered a 502, and it could not be repaired either, because the
   browser image refused to build on an arm64 machine at all: the build fetched the

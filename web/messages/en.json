@@ -1,5 +1,6 @@
 {
   "onboarding": {
+    "headerSetup": "User Onboarding",
     "stepAdmin": "Admin",
     "stepAgentName": "Name",
     "agentNameHeader": "Your agent",

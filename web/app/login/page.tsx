@@ -39,6 +39,14 @@ function WakingAvatar() {
 // Where users create a Veyllo API key (marketing site; the key is *validated* against veyllo_base_url).
 const VEYLLO_CREATE_URL = 'https://veyllo.app';
 
+// The progress bar alternates circle / connector / circle, so the circles sit in the ODD
+// grid columns and a label belongs under column 2*idx+1. Tailwind only emits classes it
+// finds as literals in the source, so the mapping is spelled out rather than computed -
+// and it has one entry per step, which is what keeps it honest: adding a sixth step
+// without widening this list (and the grid template below it) drops the label into the
+// wrong column. The list and `grid-cols-[...]` must be grown together.
+const STEP_LABEL_COLUMNS = ['col-start-1', 'col-start-3', 'col-start-5', 'col-start-7', 'col-start-9'];
+
 export default function LoginPage() {
     const router = useRouter();
     // Default to login; only show wizard when API explicitly says needs_setup: true (no admin yet)
@@ -505,6 +513,12 @@ export default function LoginPage() {
     const onboardingCurrentStep =
         step === 'create_admin' ? 1 : step === 'agent_name' ? 2 : step === 'soul_wizard' ? 3 : step === 'veyllo_api' ? 4 : step === 'setup_2fa' ? 5 : 0;
     const showOnboardingProgress = onboardingCurrentStep >= 1;
+    // First-run setup borrows this page's header, so the subtitle has to name which of the
+    // two the visitor is actually in: 'login' and '2fa' are the sign-in lane, every other
+    // step belongs to the wizard. Only the wizard half is translated, because the sign-in
+    // card below it is English throughout - a lone German subtitle over an English form
+    // reads worse than the honest mismatch.
+    const isSetupStep = step !== 'login' && step !== '2fa';
 
     // WebKit/WKWebView (the macOS desktop window) fix for the "double-play" step
     // animation. framer-motion v10 runs opacity/transform via the WAAPI
@@ -528,11 +542,11 @@ export default function LoginPage() {
                 <div className="mb-8 text-center">
                     {step === '2fa' ? <WakingAvatar /> : <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />}
                     <h1 className="text-2xl font-bold text-gray-900">Veyllo Agentic Framework</h1>
-                    <p className="text-sm text-gray-500 mt-1">User Login</p>
+                    <p className="text-sm text-gray-500 mt-1">{isSetupStep ? t('headerSetup') : 'User Login'}</p>
                 </div>
             )}
             {showOnboardingProgress && (
-                <div className="w-full max-w-md mb-6 grid grid-cols-[2rem_1fr_2rem_1fr_2rem_1fr_2rem] gap-y-2 gap-x-0 items-center">
+                <div className="w-full max-w-md mb-6 grid grid-cols-[2rem_1fr_2rem_1fr_2rem_1fr_2rem_1fr_2rem] gap-y-2 gap-x-0 items-center">
                     {onboardingSteps.map((s, idx) => (
                         <React.Fragment key={s.id}>
                             <div
@@ -560,12 +574,13 @@ export default function LoginPage() {
                     {onboardingSteps.map((s, idx) => (
                         <div
                             key={`label-${s.id}`}
-                            className={cn(
-                                'text-xs text-center',
-                                idx === 0 ? 'col-start-1 col-span-1' : idx === 1 ? 'col-start-3 col-span-1' : idx === 2 ? 'col-start-5 col-span-1' : 'col-start-7 col-span-1'
-                            )}
+                            className={cn('text-xs text-center col-span-1', STEP_LABEL_COLUMNS[idx])}
                         >
-                            <span className={idx === onboardingCurrentStep - 1 ? 'text-gray-900 font-medium' : 'text-gray-500'}>
+                            {/* The label is wider than the 2rem circle column it is centred on and
+                                is meant to spill into the connectors on either side. Without the
+                                nowrap a two-word label ("Veyllo API") breaks over two lines and
+                                pushes the row out of alignment with its neighbours. */}
+                            <span className={cn('whitespace-nowrap', idx === onboardingCurrentStep - 1 ? 'text-gray-900 font-medium' : 'text-gray-500')}>
                                 {s.label}
                             </span>
                         </div>

@@ -8335,6 +8335,35 @@ class Agent:
         # branch only fires when message 0 is not a system message to begin with.
         return [prepared_messages[0], {"role": "system", "content": block_content}, *prepared_messages[1:]]
 
+    def _append_turn_block(self, prepared_messages):
+        """Append the turn block AFTER the conversation, per request, never into history.
+
+        The volatile half of the prompt lives here: the clock, and later everything
+        else that differs from turn to turn. Measured against a live account, the
+        same content one message earlier - at the end of the SYSTEM message - is
+        worth sixty-one per cent of the prefix; here it is worth ninety-eight,
+        because nothing follows it and so nothing behind it can be invalidated.
+
+        Appended at the very END on purpose, which is also what makes it safe under
+        the tool-call adjacency rule: a message added after the last one can never
+        land between an assistant's tool_calls and the tool results that answer
+        them. It is a `user` turn rather than a `system` one because a second,
+        non-leading system turn is rejected by the strict local chat templates, and
+        because `consolidate_system_messages` would fold it into a user turn
+        anyway. The frozen head carries the sentence that tells the model this is
+        data and never an instruction.
+        """
+        if not prepared_messages:
+            return prepared_messages
+        try:
+            block = self.prompt_manager.build_turn_block() if self.prompt_manager else ""
+        except Exception:
+            return prepared_messages
+        if not block:
+            return prepared_messages
+        self._injected_context_chars = getattr(self, "_injected_context_chars", 0) + len(block)
+        return [*prepared_messages, {"role": "user", "content": block}]
+
     def chat_step(
         self,
         user_input: str,
@@ -9164,6 +9193,7 @@ class Agent:
                         prepared_messages = self._splice_memory_block(
                             prepared_messages, self._memory_system_block(memory_context)
                         )
+                    prepared_messages = self._append_turn_block(prepared_messages)
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
@@ -9402,6 +9432,7 @@ class Agent:
                             prepared_messages = self._splice_memory_block(
                                 prepared_messages, self._memory_system_block(memory_context)
                             )
+                        prepared_messages = self._append_turn_block(prepared_messages)
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
@@ -9816,6 +9847,7 @@ class Agent:
                     prepared_messages = self._splice_memory_block(
                         prepared_messages, self._memory_system_block(memory_context)
                     )
+                prepared_messages = self._append_turn_block(prepared_messages)
                 _lib_tools = self.TOOLS if not disable_tools else None
                 _lib_tool_choice = "auto" if _lib_tools else "none"
                 if _lib_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:

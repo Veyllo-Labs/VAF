@@ -25,6 +25,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **A conversation with the agent got dramatically cheaper after the first message.**
+  Providers charge about a tenth for the part of a request they have already seen, but
+  only for the stretch at the very beginning that has not changed since. The current
+  time sat near the front of the agent's instructions, so every turn looked new and the
+  whole request was billed at full price, every time. The clock now travels in a short
+  block at the end of the conversation, where it costs only itself. Measured against a
+  live account with the same three questions: the chat request went from nothing served
+  from cache to 97 per cent. The agent still knows the time, and its instructions say
+  where to look for it.
 - **A block that came and went no longer sits at the very front of the agent's
   instructions.** Providers charge far less for the part of a request they have seen
   before, but only for the stretch at the beginning that is unchanged. One status

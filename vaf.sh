@@ -52,7 +52,13 @@ backend_is_up() {
     # Fallback when curl is missing: is anything listening on the API port?
     # Scheme-agnostic (so it also covers TLS mode), but only proves a listener
     # exists, not that the backend is actually healthy.
-    ss -tlnp 2>/dev/null | grep -q ":${BACKEND_PORT} "
+    # lsof first: `ss` is iproute2 and does not exist on macOS at all, so an
+    # ss-only probe answered "nothing listening" there no matter what was running.
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"${BACKEND_PORT}" -sTCP:LISTEN >/dev/null 2>&1
+    else
+        ss -tlnp 2>/dev/null | grep -q ":${BACKEND_PORT} "
+    fi
 }
 
 # ============================================================
@@ -281,7 +287,15 @@ cmd_stop() {
 
     # 6. Release VAF ports (8001 = web server, 8080 = llama, 3000 = Next.js)
     for PORT in 8001 8080 3000; do
-        PID_ON_PORT=$(ss -tlnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+        # Two Linux-isms in one line before this: `ss` (iproute2, absent on macOS)
+        # and `grep -oP` (a GNU extension BSD grep refuses outright with "invalid
+        # option -- P"). So on a Mac the port was never released, and `vaf.sh stop`
+        # left the web UI holding 3000 while reporting that it had stopped.
+        PID_ON_PORT=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+        if [ -z "$PID_ON_PORT" ] && command -v ss >/dev/null 2>&1; then
+            # sed, not grep -oP: the capture works on both BSD and GNU.
+            PID_ON_PORT=$(ss -tlnp 2>/dev/null | grep ":$PORT " | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1 || true)
+        fi
         if [ -n "$PID_ON_PORT" ]; then
             kill -TERM "$PID_ON_PORT" 2>/dev/null || true
             ok "Port $PORT released"

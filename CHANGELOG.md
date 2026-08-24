@@ -25,6 +25,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **The usage view counted every call's tokens against the wrong call.** Providers
+  report what a request cost in a final piece of the response that carries no text,
+  so VAF recorded the figures but read them one step too early: each call was booked
+  with the previous call's token counts, and the very first call of a session was
+  booked with a rough guess instead. Totals over a long session came out close
+  enough that nothing looked wrong, while any single line was somebody else's. The
+  figures are now read after the response ends, including when a reply is cut short.
+  Records written before this are not corrected; they were never far off in total.
 - **An account without admin rights no longer receives cost amounts in the usage
   view.** The page has always been meant to show you your own consumption and to
   keep what the instance's API keys cost to the operator, and the filter that did

@@ -1349,14 +1349,35 @@ class APIBackendManager:
         self.last_request_usage = blank_request_usage()
 
         # Execute via provider
-        for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):
-            # Sync usage stats back to manager. `update` rather than two named
-            # assignments: a field the provider learns to report must not need a
-            # second edit here to survive the trip (it did, twice).
+        try:
+            for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):
+                # Sync usage stats back to manager. `update` rather than two named
+                # assignments: a field the provider learns to report must not need a
+                # second edit here to survive the trip (it did, twice).
+                self._sync_usage_from_provider()
+                yield chunk
+        finally:
+            # AND once after the stream ends, which is the sync that actually
+            # carries the numbers. A provider reports its usage in a trailing
+            # chunk that carries no choices, so it records the figures and yields
+            # NOTHING for them: the per-chunk sync above runs for the last chunk
+            # that had content and never again. Measured before this line
+            # existed, three calls in a row booked 3/4 (an estimate), then 10/2,
+            # then 10/4 while the provider had reported 10/2, 10/4, 10/2 - every
+            # call billed the previous call's tokens, and the first one billed a
+            # guess. The per-chunk sync stays because a reader watching a live
+            # stream wants the running figure; this one is what makes the final
+            # one true. In `finally`, so an abandoned generator settles too.
+            self._sync_usage_from_provider()
+
+    def _sync_usage_from_provider(self) -> None:
+        """Copy the provider's counters onto this manager, whatever they hold."""
+        try:
             self.session_usage["input_tokens"] = self.provider.usage["input_tokens"]
             self.session_usage["output_tokens"] = self.provider.usage["output_tokens"]
             self.last_request_usage.update(self.provider.last_request_usage)
-            yield chunk
+        except Exception:
+            pass  # accounting must never break a call
 
     def chat_completion_stream(self, messages, temperature=0.7, max_tokens=4096, model=None, tools=None, tool_choice=None):
         """Streaming chat completion - alias for chat_completion with stream=True."""

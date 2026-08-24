@@ -483,6 +483,64 @@ def test_the_local_lane_reports_no_cache_rather_than_a_zero_one(monkeypatch):
         ["cache_measured"] is False
 
 
+class _TrailingUsageProvider:
+    """A provider shaped like the real ones: the usage arrives LAST and yields nothing.
+
+    Every OpenAI-compatible server sends its usage in a final chunk that carries
+    no choices, so the provider records the figures and the caller sees no chunk
+    for them. A fake that records before it yields hides exactly the defect this
+    test exists for.
+    """
+
+    def __init__(self):
+        self.provider_name = "openai"
+        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = blank_request_usage()
+        self.call = 0
+
+    def chat_completion(self, *args, **kwargs):
+        self.call += 1
+        yield f"answer {self.call}"          # a content chunk
+        # ... and now the trailing usage-only chunk, which yields nothing.
+        self.usage["input_tokens"] += 100 * self.call
+        self.usage["output_tokens"] += self.call
+        self.last_request_usage.update({
+            "input_tokens": 100 * self.call, "output_tokens": self.call,
+            **cache_usage(80 * self.call, 0, in_input=True)})
+
+
+def test_a_call_books_its_own_tokens_and_not_the_previous_call_s(monkeypatch):
+    """MUTATION: take the sync out of the `finally` in `_chat_single` and this
+    goes red, because the per-chunk sync never runs again after the last chunk
+    that had content.
+
+    Measured against the live API before the fix: three calls in a row booked an
+    estimate, then the first call's tokens, then the second's, while the provider
+    had reported its own each time. Every call billed the previous one."""
+    from vaf.core import cost as cost_mod
+    from vaf.core.api_backend import APIBackendManager
+
+    booked = []
+    monkeypatch.setattr(cost_mod, "record_call", lambda *a, **k: booked.append((a, k)))
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {}
+    mgr.provider = _TrailingUsageProvider()
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.last_request_usage = blank_request_usage()
+
+    for expected in (1, 2, 3):
+        before = dict(mgr.session_usage)
+        list(mgr._chat_single(_MSGS, model="gpt-4o-mini"))
+        mgr._record_call_usage(before, "gpt-4o-mini")
+        args, kwargs = booked[-1]
+        assert args[2] == 100 * expected, (
+            f"call {expected} booked {args[2]} input tokens, not its own {100 * expected}")
+        assert args[3] == expected
+        assert kwargs["cache"]["cache_read_tokens"] == 80 * expected
+
+
 def test_the_manager_lane_books_its_cache_read(monkeypatch):
     """THE test this round was missing, and the reason it was missing is worth
     stating: the propagation guard above drives `_chat_single` and stops where

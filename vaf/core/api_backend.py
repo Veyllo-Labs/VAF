@@ -13,6 +13,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
 from vaf.core.config import Config
+from vaf.core.cost import blank_request_usage
 from vaf.cli.ui import UI
 
 # Configure logging
@@ -74,7 +75,7 @@ class BaseAIProvider(ABC):
         self.provider_name = provider_name
         self.api_key = api_key
         self.usage = {"input_tokens": 0, "output_tokens": 0}
-        self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = blank_request_usage()
 
     @abstractmethod
     def chat_completion(
@@ -866,7 +867,7 @@ class APIBackendManager:
         self.api_key = resolve_api_key(provider, caller_config)
         self.provider = self._create_provider()
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
-        self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = blank_request_usage()
         self._failover_pinned_idx = 0  # sticky link when failover_return_to_primary is off
         # Optional structured-event callback (set via Agent.set_event_sink):
         # emits llm_start/llm_end around every chat completion. None = off.
@@ -1066,9 +1067,11 @@ class APIBackendManager:
         finally:
             if link_mgr is not self:
                 try:
-                    lr = link_mgr.last_request_usage
-                    self.last_request_usage["input_tokens"] = lr.get("input_tokens", 0)
-                    self.last_request_usage["output_tokens"] = lr.get("output_tokens", 0)
+                    lr = dict(link_mgr.last_request_usage or {})
+                    # Merged over the blank shape, so a link that reports only
+                    # the two token counts still leaves this manager holding a
+                    # complete record rather than the previous call's remains.
+                    self.last_request_usage.update({**blank_request_usage(), **lr})
                     self.session_usage["input_tokens"] += lr.get("input_tokens", 0)
                     self.session_usage["output_tokens"] += lr.get("output_tokens", 0)
                 except Exception:
@@ -1309,13 +1312,23 @@ class APIBackendManager:
                     or isinstance(tool_choice, dict):
                 tool_choice = "auto"
 
+        # A per-call figure that is only ever WRITTEN, never reset, reports the
+        # previous call's numbers for any call the provider says nothing about -
+        # a stream that carries no usage chunk, a request that fails after the
+        # last one succeeded. Both sides start blank here, which is the single
+        # funnel: `provider.chat_completion` has exactly one caller and the
+        # provider classes are built nowhere but the factory above.
+        self.provider.last_request_usage = blank_request_usage()
+        self.last_request_usage = blank_request_usage()
+
         # Execute via provider
         for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):
-            # Sync usage stats back to manager
+            # Sync usage stats back to manager. `update` rather than two named
+            # assignments: a field the provider learns to report must not need a
+            # second edit here to survive the trip (it did, twice).
             self.session_usage["input_tokens"] = self.provider.usage["input_tokens"]
             self.session_usage["output_tokens"] = self.provider.usage["output_tokens"]
-            self.last_request_usage["input_tokens"] = self.provider.last_request_usage["input_tokens"]
-            self.last_request_usage["output_tokens"] = self.provider.last_request_usage["output_tokens"]
+            self.last_request_usage.update(self.provider.last_request_usage)
             yield chunk
 
     def chat_completion_stream(self, messages, temperature=0.7, max_tokens=4096, model=None, tools=None, tool_choice=None):

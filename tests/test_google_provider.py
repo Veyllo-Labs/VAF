@@ -223,4 +223,9 @@ def test_streaming_thought_and_tool_and_usage(cfg):
     tool = [d for d in payloads if "tool_calls" in d]
     assert tool and tool[0]["tool_calls"][0]["function"]["name"] == "web_search"
     # usage: output = candidates(7) + thoughts(3)
-    assert p.last_request_usage == {"input_tokens": 5, "output_tokens": 10}
+    # Asserted per key rather than against a whole-dict literal: the per-call
+    # usage record carries the prompt-cache counts too, and a literal would have
+    # to be widened again by whoever adds the next field, which is how the
+    # brittleness got here in the first place.
+    assert p.last_request_usage["input_tokens"] == 5
+    assert p.last_request_usage["output_tokens"] == 10

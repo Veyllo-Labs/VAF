@@ -119,3 +119,108 @@ def test_a_payload_it_cannot_read_is_unmeasured_rather_than_an_exception(payload
 
 def test_a_negative_count_cannot_reach_the_ledger():
     assert cache_usage(-5, -1)["cache_read_tokens"] == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROPAGATION: the pipe between the provider and the ledger
+# ─────────────────────────────────────────────────────────────────────────────
+# Capturing a number the pipe then eats is the failure mode that makes this whole
+# round look finished while measuring nothing: correct at the provider, zero at
+# the ledger, and no test red anywhere. The copies were hand-written key by key,
+# which is why `diffs` and `activity` had to be added twice on the WebSocket side
+# of this codebase before anyone noticed the pattern.
+
+
+def _bare_manager(provider):
+    """A manager without any real SDK client, in the shape `_chat_single` needs."""
+    from vaf.core.api_backend import APIBackendManager
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "openai"
+    mgr.config = {}
+    mgr.provider = provider
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.last_request_usage = blank_request_usage()
+    return mgr
+
+
+class _FakeProvider:
+    """Reports whatever it is told to, the way a real provider mutates in place."""
+
+    def __init__(self, *reports):
+        self.provider_name = "openai"
+        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.last_request_usage = blank_request_usage()
+        self._reports = list(reports)
+
+    def chat_completion(self, *args, **kwargs):
+        report = self._reports.pop(0) if self._reports else None
+        if report is not None:
+            self.usage["input_tokens"] += report.get("input_tokens", 0)
+            self.usage["output_tokens"] += report.get("output_tokens", 0)
+            self.last_request_usage.update(report)
+        yield "answer"
+
+
+_MSGS = [{"role": "user", "content": "hi"}]
+
+
+def test_the_pipe_carries_a_field_nobody_hand_listed():
+    """THE guard for the bug class. The canary is a key no copy in api_backend
+    names, so it can only arrive if the sync copies what it is given rather than
+    two fields it was taught. MUTATION: restore the two named assignments in
+    `_chat_single` and this goes red."""
+    provider = _FakeProvider({"input_tokens": 12, "output_tokens": 50,
+                              "cache_read_tokens": 8400, "cache_measured": True,
+                              "a_future_field": "canary"})
+    mgr = _bare_manager(provider)
+    list(mgr._chat_single(_MSGS, model="gpt-4o"))
+    assert mgr.last_request_usage["cache_read_tokens"] == 8400
+    assert mgr.last_request_usage["cache_measured"] is True
+    assert mgr.last_request_usage["a_future_field"] == "canary"
+
+
+def test_a_second_call_does_not_inherit_the_first_ones_cache_numbers():
+    """A per-call figure that is only ever written and never reset reports the
+    previous call for anything the provider says nothing about. MUTATION: drop
+    the reset in `_chat_single` and the second call reports 8400 again."""
+    provider = _FakeProvider({"input_tokens": 12, "output_tokens": 50,
+                              "cache_read_tokens": 8400, "cache_measured": True},
+                             None)
+    mgr = _bare_manager(provider)
+    list(mgr._chat_single(_MSGS, model="gpt-4o"))
+    assert mgr.last_request_usage["cache_read_tokens"] == 8400
+    list(mgr._chat_single(_MSGS, model="gpt-4o"))
+    assert mgr.last_request_usage["cache_read_tokens"] == 0
+    assert mgr.last_request_usage["cache_measured"] is False
+
+
+def test_the_failover_mirror_leaves_a_complete_record():
+    """A link may report a narrower dict than this manager holds; merging over
+    the blank shape is what stops the previous call's remains from showing
+    through. MUTATION: assign the link's dict straight across and the missing
+    keys either vanish or go stale."""
+    mgr = _bare_manager(_FakeProvider())
+    mgr.last_request_usage.update({"cache_read_tokens": 999, "cache_measured": True})
+
+    class _Link:
+        last_request_usage = {"input_tokens": 3, "output_tokens": 5}
+
+    list(mgr._stream_link(_Link(), "first", iter(["rest"])))
+    assert mgr.last_request_usage["input_tokens"] == 3
+    assert mgr.last_request_usage["output_tokens"] == 5
+    assert mgr.last_request_usage["cache_read_tokens"] == 0
+    assert mgr.last_request_usage["cache_measured"] is False
+    assert set(_CACHE_KEYS) <= set(mgr.last_request_usage)
+
+
+def test_the_llm_end_event_carries_the_cache_numbers():
+    """The public facade promises `llm_end` with a usage snapshot, so the
+    framework half of this round arrives without a facade change. It copies the
+    dict wholesale, which is why it needs a test rather than an edit."""
+    import inspect
+
+    from vaf.core import api_backend
+    src = inspect.getsource(api_backend.APIBackendManager.chat_completion)
+    assert '"usage": dict(self.last_request_usage or {})' in src, (
+        "llm_end no longer copies the whole usage dict, so a new field would be "
+        "dropped on the way to Agent.on_event")

@@ -20,6 +20,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 _CI = _REPO / ".github" / "workflows" / "ci.yml"
+_RELEASE = _REPO / ".github" / "workflows" / "release.yml"
 _TSCONFIG = _REPO / "web" / "tsconfig.json"
 
 
@@ -73,3 +74,27 @@ def test_the_local_gate_refuses_a_stale_node_modules():
     assert re.search(r"npm run build", web_stage), "the local web build stage is gone"
     assert "git status --porcelain -- web/" in web_stage, \
         "the local gate no longer notices a build that dirties tracked files"
+
+
+def test_the_release_gate_builds_the_frontend_before_publishing():
+    """The push-time job above is not a required status check, so a red frontend can
+    reach main and from there a tag. The release gate was Python-only, which left a
+    hole the size of the original incident: a tag could be released, published to
+    PyPI and offered to `vaf update` without the frontend having been built
+    anywhere. A published PyPI version cannot be withdrawn and reused, so this is
+    the last point at which the mistake is still free.
+    """
+    release = _RELEASE.read_text(encoding="utf-8")
+    assert "release-web-build:" in release, "the release gate no longer builds the frontend"
+    job = release.split("release-web-build:", 1)[1].split("\n  gate-and-release:", 1)[0]
+    for os_name in ("ubuntu-latest", "macos-latest", "windows-latest"):
+        assert os_name in job, f"the release web build no longer runs on {os_name}"
+    assert "npm ci" in job, "the release web build stopped installing from the committed lock"
+    assert "npm run build" in job, "the release job installs but no longer builds"
+
+    # The build has to GATE the release, not merely run beside it.
+    gate = release.split("\n  gate-and-release:", 1)[1].split("\n  publish-pypi:", 1)[0]
+    assert re.search(r"needs:\s*release-web-build", gate), (
+        "gate-and-release does not depend on the frontend build, so a red build would "
+        "not stop the release"
+    )

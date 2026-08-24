@@ -16,7 +16,50 @@ permissions:
   contents: write
 
 jobs:
+  release-web-build:
+    # The last line of defence for the frontend. `web-build` in ci.yml covers every
+    # push, but it is NOT a required status check, so a red frontend can reach main
+    # and from there a tag. And the gate below never built the frontend at all: a
+    # tag could be released, published to PyPI and offered to `vaf update` without
+    # the web app having been built on any machine. That is v0.1.0a24 exactly, where
+    # the first computer to resolve the committed lock was a user's Mac and the app
+    # came up to a splash screen and stopped.
+    #
+    # Three operating systems for the reason ci.yml already gives: npm resolves
+    # optional and platform-gated packages differently on each, so a green Linux
+    # install proves nothing about a Mac. A published PyPI version can never be
+    # reused, so this is the last point at which the mistake is still free.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install from the committed lock
+        working-directory: web
+        run: npm ci
+      - name: Build the frontend
+        working-directory: web
+        run: npm run build
+      - name: The build must not dirty the working tree
+        shell: bash
+        run: |
+          DIRTY="$(git status --porcelain -- web/)"
+          if [ -n "$DIRTY" ]; then
+            echo "The web build modified tracked files:" >&2
+            echo "$DIRTY" >&2
+            echo "Commit them, or add them to _SELF_CHURN_PATHS in vaf/cli/cmd/update.py." >&2
+            exit 1
+          fi
+
   gate-and-release:
+    needs: release-web-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

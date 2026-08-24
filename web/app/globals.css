@@ -510,7 +510,16 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    cannot hold that cap, centring has nothing left to give and the rows take
    the left edge instead. Small screens keep the centred look they always
    had; the width caps there make both alignments identical anyway. */
-.vaf-chat-col { container-type: inline-size; }
+/* Scroll anchoring OFF for the chat column, and for what it contains.
+   The browser silently adjusts scrollTop to keep a chosen anchor element in
+   place when content around it changes size. In a chat that streams, that means
+   it drags the view back down while the person is reading further up: measured
+   here as 57 scroll events with ZERO scrollTop writes from our own code, which
+   is exactly what browser-side anchoring looks like. With it off, a person who
+   scrolls up stays there. Following the newest message is our job (the
+   auto-scroll sets the position explicitly) and must not also be the browser's. */
+.vaf-chat-col { container-type: inline-size; overflow-anchor: none; }
+.vaf-chat-col * { overflow-anchor: none; }
 .vaf-msg-row { justify-content: flex-start; }
 @container (min-width: 64rem) {
   .vaf-msg-row { justify-content: center; }

@@ -6699,12 +6699,149 @@ function VAFDashboardContent() {
                     isAtBottomRef.current = false;
                 }
             });
-        } else if (isAtBottomRef.current) {
-            scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+        } else if (isAtBottomRef.current && _chatGrew()) {
+            // Set the position directly instead of asking for a smooth scroll.
+            // Measured in the desktop window against this very container: an
+            // identical call with behavior:'smooth' moves it 0px, while the same
+            // target without smooth moves it the full 1163px. The call ran, the
+            // view simply never went anywhere, which is why the chat appeared to
+            // "stop following" while nothing in the code looked wrong.
+            // It would be the wrong tool here even where it works: the stream
+            // emits every 80ms (headless_runner.STREAM_EMIT_THROTTLE_SEC) while a
+            // smooth animation needs 300-500ms, so each one is retargeted long
+            // before it arrives and the view crawls behind the text forever.
+            // Write the real maximum, and only once the layout has settled.
+            // Two WebKit findings from the tray window, both measured:
+            // (1) `scrollTop = scrollHeight` is a value ABOVE the maximum and relies
+            //     on the browser clamping it. Chrome clamps to scrollHeight minus
+            //     clientHeight; WebKit landed at 969 for a write of 2610 whose
+            //     maximum was 1761, because the write hit a layout still being
+            //     recomputed. Writing the maximum ourselves removes the guesswork.
+            // (2) Doing it inside requestAnimationFrame means the height we measure
+            //     is the height the browser has finished with, not one mid-update.
+            requestAnimationFrame(() => {
+                const c = containerRef.current;
+                if (!c) return;
+                const target = Math.max(0, c.scrollHeight - c.clientHeight);
+                scrollIntentRef.current = target;   // this IS the intent now
+                c.scrollTop = target;
+            });
         }
     }, [messages, loading, roomView?.messages.length]);
 
     // Track whether the user is scrolled to the bottom
+    // Data URIs are text. A 1024px screenshot arrives as ~800 KB of base64 sitting
+    // in the DOM, and the engine re-reads it on every layout pass instead of
+    // holding a decoded resource. Measured in the tray window (WKWebView): such an
+    // image reports complete=false and the view jumped onto that very message on
+    // every keystroke - 1689 to 969, straight onto the image, with no layout change
+    // and no scroll call of our own. Chrome hides the cost because a data URI is
+    // complete immediately there; cheap it is not.
+    //
+    // A blob URL is a real resource: fetched once, kept decoded, referenced by a
+    // short string. The data URI itself is untouched because it is what gets SENT
+    // to the model; only the on-screen source changes. One path for every engine,
+    // deliberately: a WebKit-only branch would be code that no other platform ever
+    // executes, which is exactly how the hardcoded mmproj name and the grep -P in
+    // vaf.sh survived for so long.
+    const ChatImage = ({ src, alt }: { src: string; alt: string }) => {
+        const [shown, setShown] = useState(src);
+        useEffect(() => {
+            if (!src.startsWith('data:')) { setShown(src); return; }
+            let url = '';
+            let cancelled = false;
+            (async () => {
+                try {
+                    const blob = await (await fetch(src)).blob();
+                    if (cancelled) return;
+                    url = URL.createObjectURL(blob);
+                    setShown(url);
+                } catch { /* keep the data URI: showing the image matters more */ }
+            })();
+            return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+        }, [src]);
+        return (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+                src={shown}
+                alt={alt}
+                width={180}
+                height={96}
+                decoding="sync"
+                className="h-24 max-w-[180px] object-cover rounded-xl border border-gray-200 shadow-sm"
+                title={alt}
+            />
+        );
+    };
+
+    // Did the conversation actually change, or is this just another render?
+    // The effect below lists `messages` as a dependency, but a dependency is only
+    // a hint: React re-runs it whenever the identity changed, and the array is
+    // rebuilt on renders that have nothing to do with new content. Measured in the
+    // tray window: every single keystroke produced a scroll write, and WebKit
+    // answered each one by scrolling somewhere else entirely. A scroll that fires
+    // when nothing was said is wrong in every engine; it was only visible in this one.
+    const _chatSigRef = useRef('');
+    const _chatGrew = () => {
+        const last = messages[messages.length - 1];
+        const sig = `${messages.length}:${String(last?.content ?? '').length}:${roomView?.messages.length ?? 0}`;
+        if (sig === _chatSigRef.current) return false;
+        _chatSigRef.current = sig;
+        return true;
+    };
+
+    // The chat keeps the position it was put in.
+    //
+    // Measured in the tray window (WKWebView): with an image in the conversation,
+    // every keystroke moved the view from 1689 to 969, straight onto the image.
+    // Ruled out by measurement, each with its own run: content height (constant at
+    // 2610), visible height (constant at 921), the image reloading (no load events),
+    // scroll anchoring (WebKit has none), our own writes (only the correct value
+    // appeared), scrollTo and scrollIntoView (never called), and the input growing
+    // (52px throughout). The engine moves the view on its own, and no API we call
+    // asks it to.
+    //
+    // So this does not try to prevent the move; it undoes it. The position we
+    // intend is remembered, and anything that changes it without a person having
+    // touched the wheel, a key, or the surface is put back in the same frame -
+    // before the next paint, so nothing is visible. A real interaction updates the
+    // intent instead, which is what keeps this from fighting the user.
+    const scrollIntentRef = useRef<number | null>(null);
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        let raf = 0;
+        let lastHuman = 0;
+        const human = () => { lastHuman = performance.now(); scrollIntentRef.current = el.scrollTop; };
+        const evts: (keyof HTMLElementEventMap)[] = ['wheel', 'touchstart', 'touchmove', 'keydown', 'mousedown'];
+        evts.forEach(e => el.addEventListener(e, human, { passive: true }));
+        scrollIntentRef.current = el.scrollTop;
+        const tick = () => {
+            const want = scrollIntentRef.current;
+            const now = el.scrollTop;
+            const recentlyHuman = performance.now() - lastHuman < 300;
+            if (want !== null && !recentlyHuman && Math.abs(now - want) > 8) {
+                el.scrollTop = want;                 // put it back, same frame
+            } else if (recentlyHuman || want === null) {
+                scrollIntentRef.current = now;       // the person decides where we are
+            }
+            raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => { cancelAnimationFrame(raf); evts.forEach(e => el.removeEventListener(e, human)); };
+    }, [authChecking, authError, isAuthenticated]);
+
+
+    // The dependencies are the three gates that decide whether the chat column is
+    // rendered at all. Without them this listener was never attached: on the first
+    // commit `authChecking` is true, so the render above returns a spinner INSTEAD
+    // of the chat, `containerRef.current` is null, and the effect bails out. An
+    // empty dependency list then meant it never ran again for the life of the page.
+    // The consequence was silent and permanent: `isAtBottomRef` kept its initial
+    // `true`, so the auto-scroll below fired unconditionally on every streamed
+    // chunk and pulled the view back down even while the person was reading
+    // something further up. Anyone adding a fourth early return has to add its gate
+    // here too; the guard test pins that this list stays non-empty.
     useEffect(() => {
         const container = containerRef.current;
         if (!container) return;
@@ -6714,7 +6851,7 @@ function VAFDashboardContent() {
         };
         container.addEventListener('scroll', handleScroll, { passive: true });
         return () => container.removeEventListener('scroll', handleScroll);
-    }, []);
+    }, [authChecking, authError, isAuthenticated]);
 
     // Keep inputValueRef in sync so WebSocket handlers see latest input (e.g. STT append)
     useEffect(() => {
@@ -6884,6 +7021,15 @@ function VAFDashboardContent() {
             codeViewerFile: _cvChip,
             images: imagesToSend.length > 0 ? imagesToSend.map(({ url, name }) => ({ url, name })) : undefined,
         }]);
+        // Sending is an explicit "I want to see what happens next": the view
+        // follows the answer from here, wherever the person was reading before.
+        // Without this the auto-scroll only ever CONTINUES to stick to the
+        // bottom and never returns to it, so anyone who had scrolled up to look
+        // at an earlier message stayed there while their own message and the
+        // whole reply appeared out of sight below. Reading further up DURING a
+        // stream still stops the view from being dragged down; that is the
+        // scroll listener's job and it is not touched here.
+        isAtBottomRef.current = true;
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
         // The waiting room is NOT cleared here any more. It used to be, because
@@ -9001,14 +9147,7 @@ function VAFDashboardContent() {
                                                                     {!isBot && msg.images && msg.images.length > 0 && (
                                                                         <div className="flex gap-2 flex-wrap mt-1 justify-end">
                                                                             {msg.images.map((img, idx) => (
-                                                                                // eslint-disable-next-line @next/next/no-img-element
-                                                                                <img
-                                                                                    key={idx}
-                                                                                    src={img.url}
-                                                                                    alt={img.name}
-                                                                                    className="h-24 max-w-[180px] object-cover rounded-xl border border-gray-200 shadow-sm"
-                                                                                    title={img.name}
-                                                                                />
+                                                                                <ChatImage key={`${idx}:${img.url.length}`} src={img.url} alt={img.name} />
                                                                             ))}
                                                                         </div>
                                                                     )}

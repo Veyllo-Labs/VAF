@@ -19,7 +19,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it carries itself. The German wizard also drops the loftier step names:
   "Kernwahrheiten" is now "Grundsätze", and "Vibe" is now "Tonfall". Only the
   labels on screen change. The Soul file keeps its English section headings, so
-  an existing `soul.md` and everything that reads it are untouched.
+  an existing `soul.md` and everything that reads it are untouched. The footnote
+  about that file being English now gives the actual reason: language models
+  cover English most broadly, so the same instructions land the same way on
+  whichever model you run.
 
 ### Fixed
 - **The first-run setup no longer looks like a login, and its step bar fits on one

@@ -71,7 +71,7 @@
     "soulDesc3": "Beschreibe Persönlichkeit und Stil. Ist der Agent technisch, professionell oder kreativ?",
     "soulDesc4": "Wie soll der Agent mit langfristigen Zielen und Erinnerung umgehen? Lege fest, wie er sich über Sitzungen hinweg entwickelt.",
     "soulSuggestions": "Vorschläge",
-    "soulNote": "Die Soul-Datei wird auf Englisch gespeichert, damit der Agent sie konsistent liest.",
+    "soulNote": "Die Soul-Datei wird auf Englisch gespeichert: Sprachmodelle decken Englisch am breitesten ab, so kommen deine Vorgaben bei jedem Modell gleich an.",
     "soulCancel": "Abbrechen",
     "soulBack": "Zurück",
     "soulNext": "Weiter",

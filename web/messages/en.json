@@ -71,7 +71,7 @@
     "soulDesc3": "Describe the personality and style. Is the agent technical, professional, or creative?",
     "soulDesc4": "How should the agent handle long-term goals and memory? Define how it evolves over sessions.",
     "soulSuggestions": "Suggestions",
-    "soulNote": "The soul file is saved in English so the agent reads it consistently.",
+    "soulNote": "The Soul file is saved in English: language models cover English most broadly, so your instructions land the same way on every model.",
     "soulCancel": "Cancel",
     "soulBack": "Back",
     "soulNext": "Next Step",

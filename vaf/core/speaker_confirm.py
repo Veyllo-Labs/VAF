@@ -145,8 +145,7 @@ def is_enabled() -> bool:
     try:
         from vaf.core.config import Config
         from vaf.core import speaker_id
-        v = Config.get("speaker_id_confirmation_enabled", True)
-        v = v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
+        v = Config.get_bool("speaker_id_confirmation_enabled", True)
         return v and speaker_id.is_enabled()
     except Exception:
         return False

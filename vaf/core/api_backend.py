@@ -475,9 +475,7 @@ class AnthropicProvider(BaseAIProvider):
 
             # 3. System prompt + optional prompt caching (auto-caches the stable prefix).
             if system_msg:
-                use_cache = Config.get("anthropic_prompt_cache", True)
-                use_cache = use_cache if isinstance(use_cache, bool) else \
-                    str(use_cache).strip().lower() in ("1", "true", "yes", "on")
+                use_cache = Config.get_bool("anthropic_prompt_cache", True)
                 if use_cache:
                     kwargs["system"] = [{
                         "type": "text", "text": system_msg,
@@ -487,9 +485,7 @@ class AnthropicProvider(BaseAIProvider):
                     kwargs["system"] = system_msg
 
             # 4. Adaptive thinking (config-gated, supported models only).
-            thinking_on = Config.get("anthropic_thinking", True)
-            thinking_on = thinking_on if isinstance(thinking_on, bool) else \
-                str(thinking_on).strip().lower() in ("1", "true", "yes", "on")
+            thinking_on = Config.get_bool("anthropic_thinking", True)
             thinking_active = thinking_on and self._supports_thinking(model)
             if thinking_active:
                 kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
@@ -780,9 +776,7 @@ class GoogleProvider(BaseAIProvider):
                     function_calling_config=types.FunctionCallingConfig(mode=mode, allowed_function_names=allowed))
 
         # 5. Thinking (config-gated, supported models only) — surface thought summaries.
-        thinking_on = Config.get("google_thinking", True)
-        thinking_on = thinking_on if isinstance(thinking_on, bool) else \
-            str(thinking_on).strip().lower() in ("1", "true", "yes", "on")
+        thinking_on = Config.get_bool("google_thinking", True)
         thinking_config = None
         if thinking_on and self._supports_thinking(model):
             thinking_config = types.ThinkingConfig(include_thoughts=True)

@@ -1289,6 +1289,27 @@ class Config:
     def get(cls, key: str, default=None):
         return cls.load().get(key, default if default is not None else cls.DEFAULTS.get(key))
 
+    # A config value is not always the type its key implies: `config.json` is
+    # hand-editable, the HTTP save passes JSON through, and an installer can
+    # write "true" as a string. Four call sites had hand-rolled the same
+    # coercion, so one bad spelling of it would have silently turned a switch
+    # off for one lane and left it on for the others.
+    _TRUTHY = ("1", "true", "yes", "on")
+
+    @classmethod
+    def get_bool(cls, key: str, default: bool = False) -> bool:
+        """A config flag as a bool, whether it was stored as one or as text.
+
+        A real bool is returned as it is. Anything else is compared against
+        `_TRUTHY` after stripping and lowercasing, so `"true"`, `"On"` and `1`
+        all read as on and everything else, including `None`, reads as off.
+        Environment variables are a different source and are not read here.
+        """
+        value = cls.get(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in cls._TRUTHY
+
     @classmethod
     def set(cls, key: str, value):
         # Locked read-modify-write: without it, two processes saving at once

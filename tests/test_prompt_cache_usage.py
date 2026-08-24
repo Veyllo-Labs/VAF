@@ -15,6 +15,8 @@ So `cache_measured` is a positive statement rather than an absence, and an
 explicitly reported 0 counts as measured, because a genuine cache miss is a
 measurement.
 """
+import pathlib
+
 import pytest
 
 from vaf.core.cost import blank_request_usage, cache_usage, cache_usage_from_openai
@@ -449,3 +451,90 @@ def test_the_multiplier_table_is_all_or_nothing_and_in_range(provider):
     if read is not None:
         assert 0 < read <= 1.0, f"{provider} read multiplier is not a discount"
         assert 1.0 <= write <= 2.0, f"{provider} write multiplier is out of range"
+
+
+def test_the_coder_lane_books_its_cache_read(monkeypatch):
+    """The coder posts its own HTTP from a subprocess and never passes the
+    manager, so it needs the reader pointed at it directly. It is described in
+    its own file as typically the largest lane: leaving it out would not make
+    the instance-wide rate incomplete, it would make it wrong."""
+    from vaf.core import cost as cost_mod
+    from vaf.tools import coder as coder_mod
+
+    booked = {}
+    monkeypatch.setattr(cost_mod, "record_call",
+                        lambda *a, **k: booked.update(args=a, kwargs=k))
+    coder_mod._record_coder_usage({
+        "model": "deepseek-v4-pro",
+        "usage": {"prompt_tokens": 900, "completion_tokens": 20,
+                  "prompt_cache_hit_tokens": 500, "prompt_cache_miss_tokens": 400},
+    })
+    assert booked, "the coder lane recorded nothing at all"
+    assert booked["kwargs"]["lane"] == "coder"
+    assert booked["kwargs"]["cache"]["cache_read_tokens"] == 500
+    assert booked["kwargs"]["cache"]["cache_measured"] is True
+
+
+def test_the_local_lane_reports_no_cache_rather_than_a_zero_one(monkeypatch):
+    """llama-server reports prefix reuse under `timings`, not in `usage`. Left
+    unmeasured on purpose: a free lane claiming a 0% hit rate would drag the
+    instance-wide figure down for work that costs nothing."""
+    assert cache_usage_from_openai({"prompt_tokens": 500, "completion_tokens": 20}) \
+        ["cache_measured"] is False
+
+
+def test_the_manager_lane_books_its_cache_read(monkeypatch):
+    """THE test this round was missing, and the reason it was missing is worth
+    stating: the propagation guard above drives `_chat_single` and stops where
+    the record is complete. Every lane that reaches a model through the manager
+    - chat, sub-agents, vision, voice, compaction, mail - books its spend one
+    hop further on, in `_record_call_usage`, and a capture that dies at that hop
+    leaves the whole round looking finished while the ledger and the spend cap
+    see nothing.
+
+    MUTATION: drop `cache=` from any of the three record_call sites in
+    `_record_call_usage` and this goes red."""
+    from vaf.core import cost as cost_mod
+    from vaf.core.api_backend import APIBackendManager
+
+    booked = {}
+    monkeypatch.setattr(cost_mod, "record_call",
+                        lambda *a, **k: booked.update(args=a, kwargs=k))
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "anthropic"
+    mgr.config = {}
+    mgr.session_usage = {"input_tokens": 12, "output_tokens": 50}
+    mgr.last_request_usage = {**blank_request_usage(), "input_tokens": 12,
+                              "output_tokens": 50, "cache_read_tokens": 8400,
+                              "cache_write_tokens": 1200, "cache_measured": True,
+                              "cache_in_input": False}
+    mgr._record_call_usage({"input_tokens": 0, "output_tokens": 0}, "claude-sonnet-4-6")
+
+    assert booked, "the manager lane recorded nothing at all"
+    cache = booked["kwargs"].get("cache")
+    assert cache, "the manager lane books spend without the cache figures it just captured"
+    assert cache["cache_read_tokens"] == 8400
+    assert cache["cache_in_input"] is False
+
+
+def test_a_call_the_provider_never_reported_is_not_booked_as_a_cache_miss(monkeypatch):
+    """An aborted or failed stream books zero tokens. It must stay OUT of the
+    hit-rate denominator rather than entering it as a 0% hit, which is what an
+    unconditional cache dict would do."""
+    from vaf.core import cost as cost_mod
+    from vaf.core.api_backend import APIBackendManager
+
+    booked = {}
+    monkeypatch.setattr(cost_mod, "record_call",
+                        lambda *a, **k: booked.update(kwargs=k))
+
+    mgr = APIBackendManager.__new__(APIBackendManager)
+    mgr.provider_name = "anthropic"
+    mgr.config = {}
+    mgr.session_usage = {"input_tokens": 0, "output_tokens": 0}
+    mgr.last_request_usage = blank_request_usage()
+    mgr._record_call_usage({"input_tokens": 0, "output_tokens": 0}, "claude-sonnet-4-6")
+
+    assert booked, "an unreported call was not booked at all"
+    assert (booked["kwargs"].get("cache") or {}).get("cache_measured") is not True

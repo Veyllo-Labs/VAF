@@ -17,8 +17,8 @@ import pytest
 sys.modules.setdefault("llama_cpp", MagicMock())
 
 from vaf.core import cost as cost_mod
-from vaf.core.cost import (CostEstimate, estimate_cost, price_catalog, record_spend,
-                           usage_totals)
+from vaf.core.cost import (CostEstimate, cache_usage, estimate_cost, price_catalog,
+                           record_spend, usage_totals)
 
 
 @pytest.fixture
@@ -899,3 +899,110 @@ def test_the_cli_prints_one_amount_or_a_dash():
     assert _fmt({"EUR": 1.0, "USD": 2.0}, 3.0) == "-"
     assert _fmt({"?": 4.0}, 4.0) == "-"
     assert _fmt({"EUR": 0.0001}, 0.0) == "~$0.00", "a sub-cent residue is not a currency"
+
+
+# ── The prompt cache in the ledger ────────────────────────────────────────────
+# The ledger is the record and the log is a copy, so every figure a report shows
+# has to survive the log being rotated, swept or deleted. The denominator is the
+# part that is easy to get wrong: a hit rate over `input_tokens` would divide by
+# a total that mixes two reporting conventions AND includes every call from a
+# provider that reports nothing about its cache.
+
+
+def test_the_ledger_records_what_was_served_from_a_cache(spend_dir):
+    record_spend(None, estimate_cost("anthropic", "claude-sonnet-4-6", 12, 50,
+                                     cache=cache_usage(8400, 1200, in_input=False)),
+                 provider="anthropic")
+    totals = usage_totals(days=30)["totals"]
+    assert totals["cache_read_tokens"] == 8400
+    assert totals["cache_write_tokens"] == 1200
+    assert totals["cache_measured_calls"] == 1
+    assert totals["cache_measured_input_tokens"] == 9612      # 12 + 8400 + 1200
+
+
+def test_a_provider_that_reports_nothing_stays_out_of_the_denominator(spend_dir):
+    """MUTATION: count every call in cache_measured_calls and a lane that cannot
+    report drags the displayed hit rate towards zero, which is exactly the
+    direction that hides a broken cache."""
+    record_spend(None, estimate_cost("openai", "gpt-5.6-terra", 9000, 50,
+                                     cache=cache_usage(8400, 0, in_input=True)),
+                 provider="openai")
+    record_spend(None, estimate_cost("local", "some-gguf", 5000, 100), provider="local")
+    totals = usage_totals(days=30)["totals"]
+    assert totals["calls"] == 2
+    assert totals["cache_measured_calls"] == 1
+    assert totals["cache_measured_input_tokens"] == 9000
+    assert totals["cache_read_tokens"] / totals["cache_measured_input_tokens"] > 0.9
+
+
+def test_the_provider_rows_carry_their_own_cache_counts(spend_dir):
+    """A cache is a property of the provider a call ran on, so the breakdown has
+    to be able to say WHICH provider is hitting and which is not."""
+    record_spend(None, estimate_cost("anthropic", "claude-sonnet-4-6", 12, 50,
+                                     cache=cache_usage(8400, 0, in_input=False)),
+                 provider="anthropic")
+    record_spend(None, estimate_cost("veyllo", "veyllo-chat", 1000, 100), provider="veyllo")
+    rows = usage_totals(days=30)["totals"]["providers"]
+    assert rows["anthropic/claude-sonnet-4-6"]["cache_read_tokens"] == 8400
+    assert rows["veyllo/veyllo-chat"]["cache_measured_calls"] == 0
+
+
+def test_a_ledger_written_before_the_cache_counters_still_reports(spend_dir):
+    """The change is purely additive and every read defaults to zero, which is
+    why the format tag did not have to move."""
+    spend_dir.mkdir(parents=True, exist_ok=True)
+    (spend_dir / "default.json").write_text(json.dumps({
+        "format": cost_mod.SPEND_FORMAT,
+        "days": {"2026-01-01": {"usd": 1.0, "calls": 2, "input_tokens": 10,
+                                "output_tokens": 5, "unknown_model_calls": 0}},
+    }), encoding="utf-8")
+    totals = usage_totals(days=100000)["totals"]
+    assert totals["calls"] == 2
+    assert totals["cache_read_tokens"] == 0
+    assert totals["cache_measured_calls"] == 0
+
+
+def test_what_the_discount_was_worth_is_carried_per_currency(spend_dir):
+    record_spend(None, estimate_cost("anthropic", "claude-sonnet-4-6", 12, 50,
+                                     cache=cache_usage(8400, 0, in_input=False)),
+                 provider="anthropic")
+    saved = usage_totals(days=30)["totals"]["cache_saved"]
+    assert saved == {"USD": round(8400 * 3.00 * 0.90 / 1_000_000, 6)}
+
+
+def test_the_cache_totals_survive_the_log_being_deleted(spend_dir):
+    """THE test that enforces `record_call`'s own rule: the ledger is the record
+    and the usage log is a copy for a human reading over the machine's shoulder.
+    Logs are rotated, swept by the age GC and deleted by anyone tidying a disk,
+    so a figure that had to be re-derived from them would lose history the
+    moment that happened.
+
+    The first version of this test globbed the spend directory's parent and
+    counted what it removed without ever asserting on the count. The session
+    conftest redirects VAF_LOG_DIR to a different tree entirely, so it deleted
+    nothing and passed either way. The log directory is therefore ASKED FOR
+    here, and the test refuses to draw a conclusion from a deletion that did not
+    happen - the same reason `test_the_doc_actually_makes_admin_only_claims`
+    exists next to the claims it checks.
+
+    MUTATION: report the cache numbers from the log line only and this goes red.
+    """
+    from vaf.core.cost import record_call
+    from vaf.core.log_helper import get_app_log_dir
+
+    record_call("anthropic", "claude-sonnet-4-6", 12, 50, lane="main",
+                cache=cache_usage(8400, 1200, in_input=False))
+    before = usage_totals(days=30)["totals"]
+    assert before["cache_read_tokens"] == 8400
+
+    logs = [p for p in get_app_log_dir().glob("usage_*.log")]
+    assert logs, "record_call wrote no usage log, so this test would prove nothing"
+    written = "".join(p.read_text(encoding="utf-8", errors="replace") for p in logs)
+    assert "cache_read=8400" in written, "the copy under test was never written"
+    for p in logs:
+        p.unlink()
+
+    after = usage_totals(days=30)["totals"]
+    assert after["cache_read_tokens"] == 8400
+    assert after["cache_measured_calls"] == before["cache_measured_calls"]
+    assert after["cache_measured_input_tokens"] == before["cache_measured_input_tokens"]

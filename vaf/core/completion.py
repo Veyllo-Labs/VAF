@@ -137,8 +137,15 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
             _u = data.get("usage") or {}
             _in, _out = int(_u.get("prompt_tokens") or 0), int(_u.get("completion_tokens") or 0)
             if _in or _out:
-                from vaf.core.cost import record_call
-                record_call("local", str(data.get("model") or "local"), _in, _out)
+                from vaf.core.cost import cache_usage_from_openai, record_call
+                # llama-server reports prefix reuse under `timings`, not in
+                # `usage`, so this reads as unmeasured and the local lane stays
+                # out of the hit-rate denominator instead of dragging it down
+                # with a zero it never claimed. Reading `timings` needs a second
+                # path with its own failure mode and buys nothing here: the lane
+                # is free, so the number moves no money and trips no cap.
+                record_call("local", str(data.get("model") or "local"), _in, _out,
+                            cache=cache_usage_from_openai(_u))
         except Exception:
             pass
         choices = data.get("choices") or []

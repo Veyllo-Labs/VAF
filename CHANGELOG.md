@@ -25,6 +25,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **The cost figure now counts what a cached prompt actually costs, and the daily
+  spend limit counts with it.** Every provider serves the repeated part of a long
+  conversation from a cache and bills it at a fraction of the normal price, and none
+  of that reached the estimate. On Anthropic the cached part was not counted at all,
+  so the figure was far too low and a daily limit did not stop where you set it. On
+  OpenAI and the providers shaped like it the whole prompt was charged at full price,
+  so the figure was too high. Both are corrected, per provider, at the cached rate
+  each one publishes. Where a provider publishes no cached rate the full price is
+  still assumed, which keeps the figure an upper bound rather than a guess. The Usage
+  view can also show how much of what you send is being served from a cache, and a
+  provider that does not report it is shown as not reporting rather than as zero.
 - **Four provider settings can no longer be changed by everyone on the network.**
   Whether Anthropic caches the prompt, whether Anthropic and Google show their
   reasoning, and which endpoint the browser agent, local vision and the failover

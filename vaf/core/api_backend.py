@@ -1173,6 +1173,15 @@ class APIBackendManager:
                 _in, _out = int(_lr.get("input_tokens") or 0), int(_lr.get("output_tokens") or 0)
             from vaf.core.cost import record_call
 
+            # The per-call record, carried to the LAST hop. The capture sites and
+            # the sync above are worth nothing if the figures are dropped here:
+            # this is where every lane that reaches a model through the manager
+            # (chat, sub-agents, vision, voice, compaction, mail) turns into a
+            # ledger entry and into what the spend cap reads. An unreported call
+            # carries the blank shape, so `cache_measured` is False and it stays
+            # out of the hit-rate denominator instead of entering it as a 0% hit.
+            _cache = dict(self.last_request_usage or {})
+
             _model = str(model or self.config.get(f"api_model_{self.provider_name}", "") or "")
             if not (_in or _out):
                 # The call happened - we know the lane, the provider and the
@@ -1197,11 +1206,11 @@ class APIBackendManager:
                         continue
                 if _in_est or out_units:
                     record_call(self.provider_name, _model, _in_est, int(out_units),
-                                reported=False, estimated=True)
+                                reported=False, estimated=True, cache=_cache)
                 else:
-                    record_call(self.provider_name, _model, 0, 0, reported=False)
+                    record_call(self.provider_name, _model, 0, 0, reported=False, cache=_cache)
                 return
-            record_call(self.provider_name, _model, _in, _out)
+            record_call(self.provider_name, _model, _in, _out, cache=_cache)
         except Exception:
             pass  # accounting must never break a call
 

@@ -141,3 +141,18 @@ def test_empty_file_starts_a_chain_at_the_versioned_seed(tmp_path):
     empty = tmp_path / "timeline_2026-01-01.jsonl"
     empty.write_text("", encoding="utf-8")
     assert _timeline_prev_hash(empty) == TIMELINE_CHAIN_SEED
+
+
+def test_the_spend_ledger_format_is_pinned():
+    """The cache counters were added to the day entry as a purely ADDITIVE
+    change and the tag deliberately did not move: every read is `.get(key) or 0`,
+    so a new reader sees zeros on an old ledger and an old reader ignores keys it
+    does not know. Nothing in the tree reads `data["format"]` back, so bumping it
+    would imply a compatibility break that does not exist.
+
+    Pinned as a LITERAL. The existing references to this constant in
+    tests/test_usage_totals.py name it, so they follow a mutation and stay green.
+    """
+    from vaf.core.cost import SPEND_FORMAT
+
+    assert SPEND_FORMAT == "spend-1-9c14f7"

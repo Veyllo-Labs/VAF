@@ -10388,11 +10388,16 @@ def _record_coder_usage(payload) -> None:
         if not (_in or _out):
             return
         from vaf.core.config import Config
-        from vaf.core.cost import record_call
+        from vaf.core.cost import cache_usage_from_openai, record_call
 
         provider = str(Config.get("provider", "local") or "local")
         model = str((payload or {}).get("model")
                     or Config.get(f"api_model_{provider}", "") or "")
-        record_call(provider, model, _in, _out, lane="coder")
+        # This lane posts its own HTTP and reads a raw JSON dict, so the same
+        # reader the manager uses is pointed at it rather than a second copy of
+        # the field precedence. A coder run that is not in the cache figure
+        # makes the instance-wide rate a lie, because it is the largest lane.
+        record_call(provider, model, _in, _out, lane="coder",
+                    cache=cache_usage_from_openai(usage))
     except Exception:
         pass  # accounting must never break a coder run

@@ -482,7 +482,7 @@ def estimate_tokens_roughly(text: str) -> int:
 def record_call(provider: str, model: str, input_tokens: int, output_tokens: int,
                 *, lane: Optional[str] = None, user_scope_id: Any = _UNSET,
                 session_id: Optional[str] = None, reported: bool = True,
-                estimated: bool = False) -> CostEstimate:
+                estimated: bool = False, cache: Optional[dict] = None) -> CostEstimate:
     """Record ONE model call: the ledger entry, the lane total, and a log line.
 
     THE entry point for accounting. Everything that reaches a model goes through
@@ -500,7 +500,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     needs per-call detail as data, it belongs in the ledger, not in a parser
     pointed at these lines.
     """
-    est = estimate_cost(provider, model, input_tokens, output_tokens)
+    est = estimate_cost(provider, model, input_tokens, output_tokens, cache=cache)
     lane_name = str(lane or _LANE.get() or "main")
     scope = _SCOPE.get() if user_scope_id is _UNSET else user_scope_id
     try:
@@ -513,7 +513,11 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
 
         append_usage_log((
             f"lane={lane_name} provider={provider or '?'} model={model or '?'} "
-            f"in={est.input_tokens} out={est.output_tokens} usd={est.usd:.6f}"
+            f"in={est.input_tokens} out={est.output_tokens}"
+            + (f" cache_read={est.cache_read_tokens} cache_write={est.cache_write_tokens}"
+               if est.cache_measured else "")
+            + (f" saved={est.cache_saved:.6f}" if est.cache_saved else "")
+            + f" usd={est.usd:.6f}"
             f"{'' if reported else (' usage=estimated' if estimated else ' usage=none')}"
             f"{'' if est.cost_known else ' price=unknown'}"
             f" scope={_scope_key(scope)}"
@@ -570,6 +574,19 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
         # token keys, and the reader treats a missing key as zero.
         entry["input_tokens"] = int(entry.get("input_tokens") or 0) + max(0, int(estimate.input_tokens))
         entry["output_tokens"] = int(entry.get("output_tokens") or 0) + max(0, int(estimate.output_tokens))
+        # Cache counters, and a SEPARATE denominator beside them. A hit rate over
+        # `input_tokens` would divide by a total that mixes two conventions and
+        # includes every provider that reports nothing, so the only calls that
+        # can honestly appear in a ratio are counted here on their own.
+        if estimate.cache_measured:
+            entry["cache_read_tokens"] = int(entry.get("cache_read_tokens") or 0) + max(0, int(estimate.cache_read_tokens))
+            entry["cache_write_tokens"] = int(entry.get("cache_write_tokens") or 0) + max(0, int(estimate.cache_write_tokens))
+            entry["cache_measured_calls"] = int(entry.get("cache_measured_calls") or 0) + 1
+            entry["cache_measured_input_tokens"] = int(entry.get("cache_measured_input_tokens") or 0) + max(0, int(estimate.cache_prompt_tokens))
+            if estimate.cache_saved:
+                _sv = entry.get("cache_saved") or {}
+                _sv[_cur] = round(float(_sv.get(_cur) or 0.0) + estimate.cache_saved, 6)
+                entry["cache_saved"] = _sv
         if not estimate.cost_known:
             entry["unknown_model_calls"] = int(entry.get("unknown_model_calls") or 0) + 1
         # Per-lane totals, so the report can say what the coder cost versus the
@@ -600,6 +617,11 @@ def record_spend(user_scope_id: Optional[str], estimate: CostEstimate,
         _pc = _pslot.get("currencies") or {}
         _pc[_cur] = round(float(_pc.get(_cur) or 0.0) + estimate.usd, 6)
         _pslot["currencies"] = _pc
+        if estimate.cache_measured:
+            _pslot["cache_read_tokens"] = int(_pslot.get("cache_read_tokens") or 0) + max(0, int(estimate.cache_read_tokens))
+            _pslot["cache_write_tokens"] = int(_pslot.get("cache_write_tokens") or 0) + max(0, int(estimate.cache_write_tokens))
+            _pslot["cache_measured_calls"] = int(_pslot.get("cache_measured_calls") or 0) + 1
+            _pslot["cache_measured_input_tokens"] = int(_pslot.get("cache_measured_input_tokens") or 0) + max(0, int(estimate.cache_prompt_tokens))
         _provs[_pkey] = _pslot
         entry["providers"] = _provs
         days[day] = entry
@@ -671,7 +693,8 @@ def usage_totals(days: int = 30) -> dict:
     out = {"days": max(1, int(days or 1)), "users": [], "daily": [], "totals": {
         "input_tokens": 0, "output_tokens": 0, "tokens": 0,
         "usd": 0.0, "currencies": {}, "calls": 0, "providers": {},
-        "no_usage_calls": 0, "estimated_tokens": 0, "estimated_usd_incomplete": False}}
+        "no_usage_calls": 0, "estimated_tokens": 0, "estimated_usd_incomplete": False,
+        "cache_read_tokens": 0, "cache_write_tokens": 0, "cache_measured_calls": 0, "cache_measured_input_tokens": 0, "cache_saved": {}}}
     try:
         base = Platform.data_dir() / "spend"
         if not base.is_dir():
@@ -692,7 +715,8 @@ def usage_totals(days: int = 30) -> dict:
             scope = path.stem
             agg = {"input_tokens": 0, "output_tokens": 0, "usd": 0.0, "currencies": {},
                    "calls": 0, "unknown_model_calls": 0, "no_usage_calls": 0,
-                   "estimated_tokens": 0, "last_active": ""}
+                   "estimated_tokens": 0, "last_active": "",
+                   "cache_read_tokens": 0, "cache_write_tokens": 0, "cache_measured_calls": 0, "cache_measured_input_tokens": 0, "cache_saved": {}}
             for day, entry in (data.get("days") or {}).items():
                 if str(day) < cutoff:
                     continue
@@ -709,6 +733,12 @@ def usage_totals(days: int = 30) -> dict:
                     agg["unknown_model_calls"] += int(entry.get("unknown_model_calls") or 0)
                     agg["no_usage_calls"] += int(entry.get("no_usage_calls") or 0)
                     agg["estimated_tokens"] += int(entry.get("estimated_tokens") or 0)
+                    for _ck in ("cache_read_tokens", "cache_write_tokens",
+                                "cache_measured_calls", "cache_measured_input_tokens"):
+                        agg[_ck] += int(entry.get(_ck) or 0)
+                    for _cc, _cv in (entry.get("cache_saved") or {}).items():
+                        agg["cache_saved"][_cc] = round(
+                            float(agg["cache_saved"].get(_cc) or 0.0) + float(_cv or 0.0), 6)
                 except Exception:
                     continue
                 if str(day) in by_day:
@@ -721,11 +751,15 @@ def usage_totals(days: int = 30) -> dict:
                     # "how much", and the only useful follow-up is "on what".
                     for _pk, _ps in (entry.get("providers") or {}).items():
                         _pa = slot["providers"].setdefault(
-                            str(_pk), {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
+                            str(_pk), {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {},
+                                       "cache_read_tokens": 0, "cache_write_tokens": 0, "cache_measured_calls": 0, "cache_measured_input_tokens": 0})
                         try:
                             _pa["tokens"] += int(_ps.get("tokens") or 0)
                             _pa["calls"] += int(_ps.get("calls") or 0)
                             _pa["usd"] = round(_pa["usd"] + float(_ps.get("usd") or 0.0), 6)
+                            for _ck in ("cache_read_tokens", "cache_write_tokens",
+                                        "cache_measured_calls", "cache_measured_input_tokens"):
+                                _pa[_ck] = int(_pa.get(_ck) or 0) + int(_ps.get(_ck) or 0)
                             _merge_currencies(_pa["currencies"], _ps)
                         except Exception:
                             continue
@@ -761,6 +795,12 @@ def usage_totals(days: int = 30) -> dict:
             out["totals"]["calls"] += r["calls"]
             out["totals"]["no_usage_calls"] += int(r.get("no_usage_calls") or 0)
             out["totals"]["estimated_tokens"] += int(r.get("estimated_tokens") or 0)
+            for _ck in ("cache_read_tokens", "cache_write_tokens",
+                        "cache_measured_calls", "cache_measured_input_tokens"):
+                out["totals"][_ck] += int(r.get(_ck) or 0)
+            for _cc, _cv in (r.get("cache_saved") or {}).items():
+                out["totals"]["cache_saved"][_cc] = round(
+                    float(out["totals"]["cache_saved"].get(_cc) or 0.0) + float(_cv or 0.0), 6)
             if r["unknown_model_calls"]:
                 out["totals"]["estimated_usd_incomplete"] = True
         out["totals"]["tokens"] = out["totals"]["input_tokens"] + out["totals"]["output_tokens"]
@@ -769,10 +809,15 @@ def usage_totals(days: int = 30) -> dict:
         for _d in out["daily"]:
             for _pk, _ps in (_d.get("providers") or {}).items():
                 _t = out["totals"]["providers"].setdefault(
-                    _pk, {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {}})
+                    _pk, {"tokens": 0, "calls": 0, "usd": 0.0, "currencies": {},
+                          "cache_read_tokens": 0, "cache_write_tokens": 0,
+                          "cache_measured_calls": 0, "cache_measured_input_tokens": 0})
                 _t["tokens"] += int(_ps.get("tokens") or 0)
                 _t["calls"] += int(_ps.get("calls") or 0)
                 _t["usd"] = round(_t["usd"] + float(_ps.get("usd") or 0.0), 6)
+                for _ck in ("cache_read_tokens", "cache_write_tokens",
+                            "cache_measured_calls", "cache_measured_input_tokens"):
+                    _t[_ck] = int(_t.get(_ck) or 0) + int(_ps.get(_ck) or 0)
                 _merge_currencies(_t["currencies"], _ps)
         # Share of the instance's tokens per account, so "who used the most" is
         # a number rather than a comparison the reader has to do by eye. Falls
@@ -806,6 +851,12 @@ def price_catalog() -> list:
             "currency": spec["currency"],
             "models": [{"model": m, "input_per_1m": pin, "output_per_1m": pout}
                        for m, pin, pout in spec["models"]],
+            # Present only where the provider publishes a cached rate, so a
+            # panel can say which discount it applied and stay silent rather
+            # than imply one where there is none.
+            **({"cache_read_multiplier": spec["cache_read_multiplier"],
+                "cache_write_multiplier": spec["cache_write_multiplier"]}
+               if "cache_read_multiplier" in spec else {}),
         })
     return catalog
 

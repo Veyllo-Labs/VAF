@@ -34,6 +34,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   have fixed it either, because updating never rebuilds these. They are rebuilt on
   start now, which costs seconds when nothing changed. A build that fails also
   reports what the builder said instead of blaming the clock.
+- **The chat follows the answer again, and stays put while you read.** Sending a
+  message did not bring the view back down to the newest content, so your own
+  message and the whole reply could appear out of sight below. Reading something
+  further up while an answer was still arriving pulled you back down. In the
+  desktop window it was worse: with an image in the conversation, every single
+  keystroke jumped the view onto that image. Four separate causes, from a
+  detection that was never switched on to a scroll instruction that this window
+  ignores entirely. Sending now returns the view to the newest message, and
+  scrolling up holds where you left it.
+- **Local image recognition works.** Asking about an attached image answered that
+  vision was unavailable, even with everything configured. The second file a local
+  model needs to see pictures was being fetched under a name only one model family
+  uses, so for the other the download failed, and the failure went to the screen
+  for a moment instead of into the log. The name is now read from where the file
+  actually lives, and a failure is written down.
+- **Stopping VAF stops VAF.** The stop command reported success while everything
+  kept running, or claimed nothing was running while it was. Afterwards an update
+  could install fine and you would still be served the old version, with nothing
+  to indicate it. On macOS the same command also left the web interface holding its
+  port, because two of the commands it used exist only on Linux.
 - **You get the browser back when the agent is done with it.** If you had opened
   the interactive browser yourself, the agent only borrows it and is supposed to
   hand it back at the end, on the page it left behind. Instead the window stayed

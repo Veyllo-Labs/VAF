@@ -159,13 +159,35 @@ def cache_usage_from_openai(usage) -> dict:
 # value, so nothing stops a price moving while the date stands still except
 # this sentence and the reviewer reading it.
 PRICES_AS_OF = "2026-08-17"
+
+# A cached input token is billed at a FRACTION of the input price, and a cache
+# write at a premium. Both enter as multipliers on the input price rather than as
+# a fourth number per model, because every provider publishes the cached rate as
+# a fraction that holds across its whole catalogue: a fraction survives a
+# repricing of the base rate, which is exactly what the stamp above is about,
+# while a per-model absolute rate would double this table and go stale twice as
+# fast. It also keeps the three-tuple unpack below untouched.
+#
+# Rounded UP where the published figure is not a round fraction, in this file's
+# existing polarity: DeepSeek's own pages put a cache hit at 0.014 against 0.44
+# and 0.044 against 1.32, i.e. 0.032 and 0.033, carried here as 0.04.
+#
+# Anthropic's write multiplier is the FIVE-MINUTE rate, which is the only one
+# this product can produce: the adapter sends an ephemeral cache_control with no
+# ttl. An hour-long write is 2.0 and needs its own entry the day a ttl is sent.
+#
+# A provider with no entry is priced at the full input rate for cached tokens.
 PROVIDER_PRICING = {
     # Veyllo first: it is this product's own API, and the panel keeps that order.
+    # No cache_*_multiplier: Veyllo publishes no cached-input rate, so a cached
+    # token is priced at the full input rate here. That is an upper bound, which
+    # is the safe direction for a figure a spend cap reads.
     "veyllo": {"label": "Veyllo", "currency": "EUR", "models": [
         ("veyllo-chat", 0.90, 1.90),
         ("veyllo-vision", 3.45, 20.70),
     ]},
-    "anthropic": {"label": "Anthropic", "currency": "USD", "models": [
+    "anthropic": {"label": "Anthropic", "currency": "USD",
+                  "cache_read_multiplier": 0.10, "cache_write_multiplier": 1.25, "models": [
         ("claude-haiku-4-5", 1.00, 5.00),
         ("claude-sonnet-5", 2.00, 10.00),
         ("claude-sonnet-4-6", 3.00, 15.00),
@@ -174,18 +196,21 @@ PROVIDER_PRICING = {
         ("claude-fable-5", 10.00, 50.00),
         ("claude-mythos-5", 10.00, 50.00),
     ]},
-    "openai": {"label": "OpenAI", "currency": "USD", "models": [
+    "openai": {"label": "OpenAI", "currency": "USD",
+               "cache_read_multiplier": 0.10, "cache_write_multiplier": 1.25, "models": [
         ("gpt-5.6-luna", 0.20, 1.20),
         ("gpt-5.6-terra", 2.00, 12.00),
         ("gpt-5.6-sol", 5.00, 30.00),
     ]},
-    "google": {"label": "Google", "currency": "USD", "models": [
+    "google": {"label": "Google", "currency": "USD",
+               "cache_read_multiplier": 0.25, "cache_write_multiplier": 1.00, "models": [
         ("gemini-3.5-flash-lite", 0.10, 0.40),
         ("gemini-3.7-flash", 1.50, 7.50),
         ("gemini-3.5-flash", 1.50, 9.00),
         ("gemini-3.1-pro", 2.00, 12.00),
     ]},
-    "deepseek": {"label": "DeepSeek", "currency": "USD", "models": [
+    "deepseek": {"label": "DeepSeek", "currency": "USD",
+                 "cache_read_multiplier": 0.04, "cache_write_multiplier": 1.00, "models": [
         ("deepseek-v4-flash", 0.44, 1.32),
         ("deepseek-v4-pro", 1.32, 3.96),
     ]},
@@ -231,6 +256,20 @@ class CostEstimate:
     # and two providers' amounts could be added into a figure that means
     # nothing. The field name `usd` stays for ledgers written before this.
     currency: str = "USD"
+    # What the provider served from its cache, and what it charged a premium to
+    # put there. `cache_measured` False means the provider reported nothing, NOT
+    # that nothing was cached, and the two must never be averaged together.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_measured: bool = False
+    # The complete prompt for this call, and the only honest denominator for a
+    # hit rate: Anthropic's input_tokens excludes the cached span while everyone
+    # else's includes it, so totalling raw input_tokens across providers adds two
+    # different quantities together. Populated only when measured.
+    cache_prompt_tokens: int = 0
+    # What the discount was worth, in `currency`. Zero when the call was not
+    # measured, or the provider publishes no cached rate.
+    cache_saved: float = 0.0
 
     def as_text(self) -> str:
         sym = "€" if self.currency == "EUR" else "$"
@@ -270,18 +309,47 @@ def _currency_for(provider: str) -> str:
     return str((spec or {}).get("currency") or "USD")
 
 
+def _cache_split(cache, input_tokens: int) -> Tuple[int, int, int, int]:
+    """Split a prompt into (full-price, cache-read, cache-write, whole-prompt).
+
+    `cache_in_input` decides the arithmetic, and it is a property of the response
+    rather than of the model: for OpenAI, DeepSeek and Google the cached span is
+    already inside the provider's prompt total and has to be SUBTRACTED before
+    the rest is charged at full price, while Anthropic reports it alongside and
+    it has to be ADDED to get the whole prompt. Backwards in either direction is
+    a wrong bill, so it is done once, here.
+    """
+    _in = max(0, int(input_tokens))
+    if not cache or not cache.get("cache_measured"):
+        return _in, 0, 0, _in
+    read = max(0, int(cache.get("cache_read_tokens") or 0))
+    write = max(0, int(cache.get("cache_write_tokens") or 0))
+    if cache.get("cache_in_input", True):
+        return max(0, _in - read - write), read, write, _in
+    return _in, read, write, _in + read + write
+
+
 def estimate_cost(provider: str, model: str, input_tokens: int,
-                  output_tokens: int) -> CostEstimate:
-    """What this call probably cost. Never raises."""
+                  output_tokens: int, *, cache: Optional[dict] = None) -> CostEstimate:
+    """What this call probably cost. Never raises.
+
+    Without `cache` the arithmetic is exactly what it was before cached input was
+    priced at all, so every existing caller keeps its number.
+    """
     try:
         prov = str(provider or "").strip().lower()
+        _full, _read, _write, _prompt = _cache_split(cache, input_tokens)
+        measured = bool(cache and cache.get("cache_measured"))
         if prov in FREE_PROVIDERS:
             # No money, but the tokens are real and still belong in the ledger:
             # dropping them here made the estimate lie about the call it
             # describes, and a usage view would show 0 for work that happened.
             return CostEstimate(0.0, True, str(model or ""),
                                 max(0, int(input_tokens)), max(0, int(output_tokens)),
-                                currency=_currency_for(prov))
+                                currency=_currency_for(prov),
+                                cache_read_tokens=_read, cache_write_tokens=_write,
+                                cache_measured=measured,
+                                cache_prompt_tokens=_prompt if measured else 0)
         name = str(model or "").strip()
         price = PRICES.get(name)
         if price is None:
@@ -289,10 +357,23 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
             price = PRICES.get(name.rsplit("/", 1)[-1])
         known = price is not None
         pin, pout = price or UNKNOWN_PRICE
-        _in, _out = max(0, int(input_tokens)), max(0, int(output_tokens))
-        usd = (_in * pin + _out * pout) / 1_000_000
-        return CostEstimate(round(usd, 6), known, name, _in, _out,
-                            currency=_currency_for(prov))
+        _out = max(0, int(output_tokens))
+        # A model this table cannot price gets no discount either. Same reasoning
+        # as UNKNOWN_PRICE above: an unrecognised model must not be able to run
+        # cheap under a cap, and a discount is a way of running cheap.
+        spec = PROVIDER_PRICING.get(prov) or {}
+        mread = float(spec.get("cache_read_multiplier", 1.0)) if known else 1.0
+        mwrite = float(spec.get("cache_write_multiplier", 1.0)) if known else 1.0
+        usd = (_full * pin + _read * pin * mread + _write * pin * mwrite
+               + _out * pout) / 1_000_000
+        saved = (_read * pin * (1.0 - mread)) / 1_000_000
+        return CostEstimate(round(usd, 6), known, name,
+                            max(0, int(input_tokens)), _out,
+                            currency=_currency_for(prov),
+                            cache_read_tokens=_read, cache_write_tokens=_write,
+                            cache_measured=measured,
+                            cache_prompt_tokens=_prompt if measured else 0,
+                            cache_saved=round(max(0.0, saved), 6))
     except Exception:
         return CostEstimate(0.0, False, str(model or ""))
 

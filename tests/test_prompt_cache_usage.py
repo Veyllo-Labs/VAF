@@ -356,3 +356,96 @@ def test_a_google_call_without_a_cache_count_stays_unmeasured():
     provider._record_usage(_SdkUsage(usage_metadata=_SdkUsage(
         prompt_token_count=5, candidates_token_count=7)))
     assert provider.last_request_usage["cache_measured"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRICING: what the cached span actually costs
+# ─────────────────────────────────────────────────────────────────────────────
+# The estimate was wrong in BOTH directions before this, and which direction
+# depended on the provider. For an OpenAI-shaped provider the whole prompt was
+# charged at the full input rate, so the figure was several times too high. For
+# Anthropic the cached span was never counted at all, because its input_tokens
+# excludes it, so the figure was roughly ten times too LOW. The second one is the
+# dangerous direction: `spend_budget_usd_per_day` reads this number, so a cap was
+# letting through far more money than it believed.
+
+from vaf.core.cost import PROVIDER_PRICING, estimate_cost
+
+
+def test_an_estimate_without_cache_data_is_the_number_it_always_was():
+    """The regression guard on every existing caller and every stored ledger."""
+    assert estimate_cost("anthropic", "claude-sonnet-4-6", 12000, 500).usd == \
+        round((12000 * 3.00 + 500 * 15.00) / 1_000_000, 6)
+
+
+def test_an_unmeasured_call_is_priced_exactly_like_no_cache_data_at_all():
+    got = estimate_cost("anthropic", "claude-sonnet-4-6", 12000, 500, cache=cache_usage())
+    assert got.usd == estimate_cost("anthropic", "claude-sonnet-4-6", 12000, 500).usd
+    assert got.cache_measured is False
+
+
+def test_anthropic_cache_tokens_are_added_to_the_prompt_not_subtracted_from_it():
+    """THE pricing test. Anthropic's input_tokens excludes the cached span, so
+    the span has to be ADDED. Treating it the OpenAI way subtracts it from a
+    total that never contained it and the call comes out nearly free.
+
+    MUTATION: pass in_input=True at the Anthropic capture site, or drop the
+    branch in _cache_split, and this goes red."""
+    got = estimate_cost("anthropic", "claude-sonnet-4-6", 12, 50,
+                        cache=cache_usage(8400, 1200, in_input=False))
+    assert got.usd == round((12 * 3.00 + 8400 * 3.00 * 0.10 + 1200 * 3.00 * 1.25
+                             + 50 * 15.00) / 1_000_000, 6)
+    assert got.cache_prompt_tokens == 12 + 8400 + 1200
+
+
+def test_an_openai_shaped_prompt_total_already_contains_its_cached_span():
+    """The other convention: subtract, or the cached tokens are billed twice."""
+    got = estimate_cost("openai", "gpt-5.6-terra", 9000, 50,
+                        cache=cache_usage(8400, 0, in_input=True))
+    assert got.usd == round((600 * 2.00 + 8400 * 2.00 * 0.10 + 50 * 12.00) / 1_000_000, 6)
+    assert got.cache_prompt_tokens == 9000
+
+
+def test_the_same_call_is_cheaper_when_it_was_served_from_a_cache():
+    fresh = estimate_cost("openai", "gpt-5.6-terra", 9000, 50)
+    cached = estimate_cost("openai", "gpt-5.6-terra", 9000, 50,
+                           cache=cache_usage(8400, 0, in_input=True))
+    assert cached.usd < fresh.usd
+    assert cached.cache_saved == round(8400 * 2.00 * 0.90 / 1_000_000, 6)
+
+
+def test_a_model_this_table_cannot_price_gets_no_discount():
+    """Same reasoning as UNKNOWN_PRICE: an unrecognised model must not be able
+    to run cheap under a cap, and a discount is a way of running cheap."""
+    got = estimate_cost("anthropic", "a-model-nobody-priced", 1000, 0,
+                        cache=cache_usage(1000, 0, in_input=False))
+    assert got.cost_known is False
+    assert got.usd == round(2000 * 15.00 / 1_000_000, 6)
+    assert got.cache_saved == 0.0
+
+
+def test_a_provider_with_no_published_cached_rate_pays_the_full_input_rate():
+    """The degradation case, and it errs high, which is the safe direction for
+    a figure a spend cap reads."""
+    got = estimate_cost("veyllo", "veyllo-chat", 1000, 0, cache=cache_usage(1000, 0))
+    assert got.usd == round(1000 * 0.90 / 1_000_000, 6)
+    assert got.cache_saved == 0.0
+
+
+def test_a_free_provider_still_carries_the_cache_counts():
+    got = estimate_cost("local", "some.gguf", 1000, 10, cache=cache_usage(400, 0))
+    assert got.usd == 0.0
+    assert got.cache_read_tokens == 400
+    assert got.cache_measured is True
+
+
+@pytest.mark.parametrize("provider", sorted(PROVIDER_PRICING))
+def test_the_multiplier_table_is_all_or_nothing_and_in_range(provider):
+    """Half a pair would price reads at a discount and writes at nothing, or the
+    reverse, and neither shows up as an error anywhere."""
+    spec = PROVIDER_PRICING[provider]
+    read, write = spec.get("cache_read_multiplier"), spec.get("cache_write_multiplier")
+    assert (read is None) == (write is None), f"{provider} carries half a pair"
+    if read is not None:
+        assert 0 < read <= 1.0, f"{provider} read multiplier is not a discount"
+        assert 1.0 <= write <= 2.0, f"{provider} write multiplier is out of range"

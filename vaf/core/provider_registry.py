@@ -63,6 +63,21 @@ class ProviderSpec:
     # costing money. Anthropic needs no flag for a different reason: a
     # tool_choice change there invalidates only the messages tier, never tools
     # or system.
+    # PROBED 2026-08-24 against live endpoints, so nobody has to probe again:
+    #   openai      accepts it, and swapping the allowed subset costs nothing.
+    #   openrouter  answers 400 on every model tried. Stays off.
+    #   veyllo      accepts the field and SILENTLY IGNORES IT. Probed with a
+    #               single allowed tool and mode=required, then asked for the
+    #               other one: it called the other one. That is worse than a 400,
+    #               because a caller that believes the restriction holds gets no
+    #               signal at all. It also forwards no cache figures, so there
+    #               would be nothing to gain either. Stays off, and the reason is
+    #               correctness rather than caching.
+    #   deepseek    unreachable at probe time (no balance on the account). Its
+    #               own API documents no such parameter and caches automatically
+    #               without one, so there is nothing to arm.
+    # anthropic needs no flag because a tool_choice change there invalidates only
+    # the messages tier, and google uses a different SDK entirely.
     supports_allowed_tools: bool = False
     # Vision
     vision_capable: bool = False

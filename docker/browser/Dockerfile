@@ -61,14 +61,32 @@ RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-insta
 #
 # GPL-2.0, running as a separate process in this
 # container (an aggregate alongside the other Debian packages, no code linkage).
-ARG TARGETARCH=amd64
+# TARGETARCH carries NO default on purpose. BuildKit fills the predefined
+# platform ARGs only when they declare no value of their own; a default wins
+# over the injected value and makes "the builder did not set it" indistinguish-
+# able from "the target really is amd64". Measured on Apple Silicon with
+# BuildKit active: TARGETPLATFORM=linux/arm64 and dpkg=arm64 arrived correctly,
+# while TARGETARCH stayed amd64 and pulled the amd64 .deb, which then failed
+# against the arm64 base with "Depends: libxext6:amd64 but it is not
+# installable" (exit 100). An empty value now stops the build LOUDLY instead of
+# guessing amd64 and producing an image that cannot run on this host.
+ARG TARGETARCH
 ARG KASMVNC_VERSION=1.5.0
 ARG KASMVNC_SHA256_AMD64=770fd3df51510beecc89666879d82faf411276e68c6e11df612f736b891b5f71
 ARG KASMVNC_SHA256_ARM64=aa83a1a6c9069d1a02239988b07a3a2a082a433042b4d4ee2b9e9f6b2df9643c
 RUN set -e; \
     case "$TARGETARCH" in \
+      amd64) KASM_SHA="$KASMVNC_SHA256_AMD64" ;; \
       arm64) KASM_SHA="$KASMVNC_SHA256_ARM64" ;; \
-      *)     KASM_SHA="$KASMVNC_SHA256_AMD64"; TARGETARCH=amd64 ;; \
+      "")    echo "FATAL: TARGETARCH is empty, so the target architecture is unknown." >&2; \
+             echo "       BuildKit is the only builder that fills it. Build through compose:" >&2; \
+             echo "         docker compose -f docker-compose.memory.yml build vaf-browser" >&2; \
+             echo "       With the legacy builder (DOCKER_BUILDKIT=0), pass it explicitly:" >&2; \
+             echo "         docker build --build-arg TARGETARCH=arm64 docker/browser" >&2; \
+             exit 1 ;; \
+      *)     echo "FATAL: TARGETARCH='$TARGETARCH' is not supported." >&2; \
+             echo "       KasmVNC ${KASMVNC_VERSION} ships bookworm packages for amd64 and arm64 only." >&2; \
+             exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/kasmvncserver.deb \
       "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_bookworm_${KASMVNC_VERSION}_${TARGETARCH}.deb"; \

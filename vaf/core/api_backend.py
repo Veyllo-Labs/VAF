@@ -13,7 +13,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
 from vaf.core.config import Config
-from vaf.core.cost import blank_request_usage
+from vaf.core.cost import blank_request_usage, cache_usage, cache_usage_from_openai
 from vaf.cli.ui import UI
 
 # Configure logging
@@ -280,6 +280,7 @@ class OpenAIProvider(BaseAIProvider):
                         self.usage["output_tokens"] += chunk.usage.completion_tokens
                         self.last_request_usage["input_tokens"] = chunk.usage.prompt_tokens
                         self.last_request_usage["output_tokens"] = chunk.usage.completion_tokens
+                        self.last_request_usage.update(cache_usage_from_openai(chunk.usage))
                 
                 if is_reasoning:
                     yield "</think>"
@@ -305,6 +306,7 @@ class OpenAIProvider(BaseAIProvider):
                     self.usage["output_tokens"] += response.usage.completion_tokens
                     self.last_request_usage["input_tokens"] = response.usage.prompt_tokens
                     self.last_request_usage["output_tokens"] = response.usage.completion_tokens
+                    self.last_request_usage.update(cache_usage_from_openai(response.usage))
                     
         except Exception as e:
             err_str = str(e)
@@ -570,6 +572,17 @@ class AnthropicProvider(BaseAIProvider):
             self.usage["output_tokens"] += final_msg.usage.output_tokens
             self.last_request_usage["input_tokens"] = final_msg.usage.input_tokens
             self.last_request_usage["output_tokens"] = final_msg.usage.output_tokens
+            # in_input=False: Anthropic's `input_tokens` EXCLUDES both cache
+            # figures, while every OpenAI-shaped provider includes them. Getting
+            # that backwards does not misdraw a chart, it produces a wrong bill.
+            # The per-TTL split under `usage.cache_creation` is deliberately not
+            # read: this adapter sends `{"type": "ephemeral"}` with no `ttl`, so
+            # every write it can produce is a five-minute one and a single price
+            # multiplier is exact. Read it the day a `ttl` is sent.
+            self.last_request_usage.update(cache_usage(
+                getattr(final_msg.usage, "cache_read_input_tokens", None),
+                getattr(final_msg.usage, "cache_creation_input_tokens", None),
+                in_input=False))
         except Exception:
             pass
 
@@ -713,6 +726,11 @@ class GoogleProvider(BaseAIProvider):
         self.usage["output_tokens"] += out
         self.last_request_usage["input_tokens"] = inp
         self.last_request_usage["output_tokens"] = out
+        # `prompt_token_count` already includes the cached part, and Gemini
+        # charges no cache-write premium, so a zero write here is the truth
+        # rather than a gap.
+        self.last_request_usage.update(cache_usage(
+            getattr(um, "cached_content_token_count", None), None, in_input=True))
 
     def _tool_call_payload(self, fc):
         return json.dumps({"tool_calls": [{

@@ -224,3 +224,135 @@ def test_the_llm_end_event_carries_the_cache_numbers():
     assert '"usage": dict(self.last_request_usage or {})' in src, (
         "llm_end no longer copies the whole usage dict, so a new field would be "
         "dropped on the way to Agent.on_event")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CAPTURE: one test per provider code path, with realistic payloads
+# ─────────────────────────────────────────────────────────────────────────────
+# Realistic rather than convenient, because the shapes differ in exactly the ways
+# that break a reader: DeepSeek sends its own spelling and no details object,
+# Anthropic reports outside the prompt total, Google reports a read and no write.
+# Every provider also gets a payload with NO cache fields, which is the case an
+# old server or a stripping proxy produces and the one that turns a metric
+# silently to zero.
+
+
+class _Msg:
+    content = "hi"
+    tool_calls = None
+
+
+class _Choice:
+    message = _Msg()
+
+
+class _Response:
+    """A non-streaming OpenAI-compatible response."""
+
+    def __init__(self, usage):
+        self.choices = [_Choice()]
+        self.usage = usage
+
+
+class _Chunk:
+    """The trailing usage-only chunk real providers send with include_usage."""
+
+    def __init__(self, usage):
+        self.choices = []
+        self.usage = usage
+
+
+def _openai_provider(client_returns):
+    from vaf.core.api_backend import OpenAIProvider
+    provider = OpenAIProvider("openai", "dummy-key")
+    provider._create_with_retry = lambda kwargs: client_returns
+    return provider
+
+
+def _drive_openai(provider, stream):
+    list(provider.chat_completion(_MSGS, 0.7, 128, stream, "gpt-4o", None))
+    return provider.last_request_usage
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_an_openai_shaped_provider_reports_its_cache_read(stream):
+    """One class serves openai, deepseek, openrouter, veyllo and local, but the
+    streaming and non-streaming branches are separate code, so both are driven."""
+    usage = _SdkUsage(prompt_tokens=9000, completion_tokens=50,
+                      prompt_tokens_details=_SdkUsage(cached_tokens=8400))
+    provider = _openai_provider(iter([_Chunk(usage)]) if stream else _Response(usage))
+    got = _drive_openai(provider, stream)
+    assert got["cache_read_tokens"] == 8400
+    assert got["cache_measured"] is True
+    assert got["input_tokens"] == 9000
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_deepseeks_own_spelling_survives_the_provider_path(stream):
+    """DeepSeek rides the same class and sends no details object at all."""
+    usage = _SdkUsage(prompt_tokens=900, completion_tokens=20,
+                      prompt_cache_hit_tokens=500, prompt_cache_miss_tokens=400)
+    provider = _openai_provider(iter([_Chunk(usage)]) if stream else _Response(usage))
+    got = _drive_openai(provider, stream)
+    assert got["cache_read_tokens"] == 500
+    assert got["input_tokens"] == 900          # the total still counts hit + miss
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_an_openai_shaped_provider_that_reports_no_cache_stays_unmeasured(stream):
+    usage = _SdkUsage(prompt_tokens=100, completion_tokens=20)
+    provider = _openai_provider(iter([_Chunk(usage)]) if stream else _Response(usage))
+    got = _drive_openai(provider, stream)
+    assert got["cache_measured"] is False
+    assert got["input_tokens"] == 100
+
+
+def test_anthropic_reports_a_read_and_a_write_outside_the_prompt_total():
+    """MUTATION: pass in_input=True here and the ledger double-counts the cached
+    span, because Anthropic's input_tokens already excludes it."""
+    from vaf.core.api_backend import AnthropicProvider
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.usage = {"input_tokens": 0, "output_tokens": 0}
+    provider.last_request_usage = blank_request_usage()
+    final = _SdkUsage(usage=_SdkUsage(input_tokens=12, output_tokens=50,
+                                      cache_read_input_tokens=8400,
+                                      cache_creation_input_tokens=1200))
+    list(provider._emit_final(final, False))
+    got = provider.last_request_usage
+    assert got["input_tokens"] == 12           # the provider's own number, untouched
+    assert (got["cache_read_tokens"], got["cache_write_tokens"]) == (8400, 1200)
+    assert got["cache_in_input"] is False
+
+
+def test_an_anthropic_call_without_cache_fields_stays_unmeasured():
+    from vaf.core.api_backend import AnthropicProvider
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.usage = {"input_tokens": 0, "output_tokens": 0}
+    provider.last_request_usage = blank_request_usage()
+    list(provider._emit_final(_SdkUsage(usage=_SdkUsage(input_tokens=12, output_tokens=50)), False))
+    assert provider.last_request_usage["cache_measured"] is False
+
+
+def test_google_reports_its_cached_content_inside_the_prompt_total():
+    from vaf.core.api_backend import GoogleProvider
+    provider = GoogleProvider.__new__(GoogleProvider)
+    provider.usage = {"input_tokens": 0, "output_tokens": 0}
+    provider.last_request_usage = blank_request_usage()
+    provider._record_usage(_SdkUsage(usage_metadata=_SdkUsage(
+        prompt_token_count=5, candidates_token_count=7, thoughts_token_count=3,
+        cached_content_token_count=300)))
+    got = provider.last_request_usage
+    assert (got["input_tokens"], got["output_tokens"]) == (5, 10)
+    assert got["cache_read_tokens"] == 300
+    assert got["cache_write_tokens"] == 0      # Gemini charges no write premium
+    assert got["cache_in_input"] is True
+
+
+def test_a_google_call_without_a_cache_count_stays_unmeasured():
+    from vaf.core.api_backend import GoogleProvider
+    provider = GoogleProvider.__new__(GoogleProvider)
+    provider.usage = {"input_tokens": 0, "output_tokens": 0}
+    provider.last_request_usage = blank_request_usage()
+    provider._record_usage(_SdkUsage(usage_metadata=_SdkUsage(
+        prompt_token_count=5, candidates_token_count=7)))
+    assert provider.last_request_usage["cache_measured"] is False

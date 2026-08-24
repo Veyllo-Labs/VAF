@@ -25,6 +25,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **What the agent did during a turn is no longer rewritten the moment the turn ends.**
+  Every finished turn used to have its intermediate steps replaced by a short summary.
+  That kept the conversation small, but it changed the middle of what gets sent, and a
+  provider only charges the reduced rate for the part at the beginning that is unchanged
+  since last time. So the first message of every new turn was paid for in full. The
+  steps now stay as they are and are only condensed once the conversation genuinely
+  approaches its limit, using the same threshold that already governed that. Measured
+  against a live account, the first request of a new turn went from nothing reused to
+  more than eighty per cent. This helps on every provider, including a local model,
+  where it shows up as a faster first word rather than a smaller bill.
 - **The agent keeps a steady set of tools instead of a new one every message.** It used
   to be handed only the handful of tools it seemed to need right then, which sounds
   frugal but meant every message looked new to the provider and nothing at all could be

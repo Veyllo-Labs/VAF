@@ -11666,11 +11666,42 @@ class Agent:
                 start_idx = history_snapshot_len + 1
                 end_idx = len(self.history) - 1
                 
-                if end_idx > start_idx:
+                # Only under CONTEXT PRESSURE, and that is the whole change.
+                #
+                # This ran at the end of every turn, and every run rewrote the
+                # MIDDLE of the history: the intermediate steps were deleted and a
+                # summary put in their place. A provider caches on the leading
+                # tokens, so the next turn diverged where the rewrite happened
+                # rather than at its end, and everything from there on was billed
+                # fresh. Measured on a live account after the prompt and the tools
+                # array had been stabilised: the second and third round trip
+                # WITHIN a turn read 83 to 90 per cent, while the first round trip
+                # of each new turn read nought, every time. That gap was this
+                # block. Published traces agree from the other side - tool-result
+                # continuations are the highest-hitting step type there is, at
+                # 97.9 per cent, precisely because they are appended untouched.
+                #
+                # The saving it buys is real but small next to what it costs: a
+                # cached token is billed at about a tenth, so trimming a few
+                # thousand tokens of context in order to re-process twenty
+                # thousand at full price is a bad trade at any conversation
+                # length. Under real pressure it flips back, which is when this
+                # now runs.
+                #
+                # `should_compress` is the EXISTING threshold, not a new one, so
+                # there is one place that decides what "too much context" means
+                # and this cannot drift away from the compression that follows it.
+                _under_pressure = False
+                try:
+                    _cm = getattr(self, "context_manager", None)
+                    _under_pressure = bool(_cm and _cm.should_compress(self.history))
+                except Exception:
+                    _under_pressure = True     # cannot measure: behave as before
+
+                if end_idx > start_idx and _under_pressure:
                     # We have intermediate steps (Tools, Thoughts, etc.)
                     msgs_to_squash = self.history[start_idx:end_idx]
 
-                    # ALWAYS squash intermediate steps (not just when tools used)
                     if msgs_to_squash:
                         # Build a compact summary that preserves each tool's OUTCOME
                         # (OK/FAILED + a short result/error snippet) — not just names —

@@ -1107,3 +1107,60 @@ def test_a_new_window_of_the_same_person_also_waits(mgr, monkeypatch):
     assert mgr._payload("active")["viewerConnected"] is True
     r2 = mgr.start("scope-a", "sess-2")          # same person, different chat
     assert r2["viewerConnected"] is False
+
+
+def _second_manager(monkeypatch, container_name):
+    """A second manager, registered under a pool container name.
+
+    The pool resolves a scope to an instance TWICE and at different moments: once
+    when the person opens the browser (web_server -> get_manager_for_scope) and
+    again when a run starts (browser_agent -> get_browser_pool().resolve). Between
+    those two the answer can change - the instance was idle-stopped or reaped, the
+    capacity gate sent the run elsewhere - and then the run pins a different
+    manager than the one holding the person's lease. This builds that second
+    manager so the divergence can be reproduced without docker.
+    """
+    other = bi.InteractiveBrowserManager()
+    other._emit = lambda payload, session_id: other._test_emitted.append((dict(payload), session_id))
+    other._test_emitted = []
+    other._ensure_janitor = lambda: None
+    monkeypatch.setitem(bi._pool_managers, container_name, other)
+    return other
+
+
+def test_a_lease_on_another_manager_still_gets_its_give_back(mgr, monkeypatch):
+    """The person opened the browser, so SOMEBODY holds a lease. When the run then
+    pins a different manager than the lease sits on, the give-back must still reach
+    the person.
+
+    Before the fix nothing reached them at all, and silently: the run's manager has
+    no lease, so `_pre_agent_holder` is None (browser_interactive.py:835), and the
+    fallback branch needs `_last_session_id`, which is "" on a manager that never
+    served an interactive start. Both branches fall through, no event is emitted,
+    and the person's window waits forever in the agent view - the reported symptom,
+    on macOS and Linux alike.
+
+    "One person drives at a time" is a statement about the browser as a whole, not
+    about one manager instance, so the lease has to be found wherever it lives.
+    """
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "get_interactive_manager", lambda: mgr)
+
+    # The person opens the browser: the lease lands on the shared manager.
+    mgr.start("scope-a", "sess-1")
+    assert mgr._lease is not None
+
+    # The run resolves the pool differently and pins a POOL instance instead.
+    other = _second_manager(monkeypatch, "vaf-browser-u-deadbeef")
+    bi.stop_for_agent_run(container_name="vaf-browser-u-deadbeef")
+    bi.agent_run_ended(container_name="vaf-browser-u-deadbeef")
+
+    # Wherever it was recorded, the person must be told they can resume.
+    resumable = [(p, sid)
+                 for p, sid in (mgr._test_emitted + other._test_emitted)
+                 if p.get("reason") == "agent_done" and p.get("resumable")]
+    assert resumable, (
+        "no give-back reached the lease holder: the run pinned a manager without "
+        "the lease, so neither the holder branch nor the last-session fallback fired"
+    )
+    assert resumable[0][1] == "sess-1", f"give-back went to the wrong session: {resumable}"

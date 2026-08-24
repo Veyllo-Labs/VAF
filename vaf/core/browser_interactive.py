@@ -1608,9 +1608,33 @@ def get_manager_for_stop(user_scope_id: Optional[str],
 
 def stop_for_agent_run(container_name: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run(): evict the interactive lease on the
-    run's own browser. No jar work - see hand_jar_to_run. Never raises."""
+    run's own browser. No jar work - see hand_jar_to_run. Never raises.
+
+    The lease can sit on a DIFFERENT manager than the one this run pinned. The
+    pool resolves a scope to an instance twice, at different moments: once when
+    the person opens the browser (`get_manager_for_scope`) and again when a run
+    starts (`get_browser_pool().resolve`). If the answer changed in between (the
+    instance was idle-stopped or reaped, or the capacity gate sent the run to the
+    shared browser), the run pins one manager while the person's lease lives on
+    another. Evicting only the run's manager left that lease in place and, worse,
+    unremembered: no `_pre_agent_holder` anywhere, so the give-back at the end of
+    the run had nobody to hand back to. The person's window then waited for an
+    event that was never sent and stayed in the agent view for good.
+
+    "One person drives at a time" is a property of the browser, not of a single
+    manager instance, so the lease is followed wherever it lives. Only managers
+    that actually hold one are touched.
+    """
     try:
-        _manager_for_run(container_name).stop_for_agent_run()
+        run_mgr = _manager_for_run(container_name)
+        run_mgr.stop_for_agent_run()
+        for mgr in _all_managers():
+            if mgr is run_mgr:
+                continue
+            with mgr._lock:
+                has_lease = mgr._lease is not None
+            if has_lease:
+                mgr.stop_for_agent_run()
     except Exception:
         pass
 
@@ -1672,8 +1696,24 @@ def agent_stream_started(session_id: Optional[str],
 
 def agent_run_ended(notify: bool = True,
                     container_name: Optional[str] = None) -> None:
-    """Hook for BrowserAgentTool.run()'s finally. Never raises."""
+    """Hook for BrowserAgentTool.run()'s finally. Never raises.
+
+    Mirrors stop_for_agent_run: whichever manager was made to give up its lease
+    also has to be released and told to hand back. Only managers that actually
+    remember a holder are touched, so a manager that never evicted anybody keeps
+    its own `_agent_active` untouched - the asymmetry `_manager_for_run` exists to
+    prevent (clearing the flag on a manager that never set it) is not reintroduced
+    here.
+    """
     try:
-        _manager_for_run(container_name).agent_run_ended(notify=notify)
+        run_mgr = _manager_for_run(container_name)
+        run_mgr.agent_run_ended(notify=notify)
+        for mgr in _all_managers():
+            if mgr is run_mgr:
+                continue
+            with mgr._lock:
+                remembered = mgr._pre_agent_holder is not None
+            if remembered:
+                mgr.agent_run_ended(notify=notify)
     except Exception:
         pass

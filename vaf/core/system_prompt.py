@@ -562,7 +562,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         # message, now at the end, which is where the user-identity block already
         # sits for the same reason (a late instruction is followed at least as
         # well as an early one).
-        mission_status = ""
+        self._turn_mission_status = ""
         if "orchestrator" in self.active_modules:
             plan_exists = False
             if self.mpm:
@@ -583,7 +583,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             else:
                 status_part.append("💡 Plan is active. Execute one step at a time. Use `checkpoint_context` after completing a major task.")
             
-            mission_status = "\n".join(status_part) + "\n"
+            self._turn_mission_status = "\n".join(status_part) + "\n"
 
         # 1. CORE IDENTITY & PERSONA (Soul)
         
@@ -1026,14 +1026,18 @@ Then use the results to answer. Do NOT guess from your training data!
         #
         # 4. ACTIVE MODULES
         # 
-        # Sort for stable prompt order, wrap each module in <guidelines module="...">
-        for module_name in sorted(self.active_modules.keys()):
-            if module_name in self.modules:
-                parts.append(
-                    f'<guidelines module="{module_name}">\n'
-                    + self.modules[module_name].strip()
-                    + "\n</guidelines>"
-                )
+        # Sorted for a stable order WITHIN the block, wrapped as before. Rendered
+        # into the turn block rather than the head: the router activates and
+        # decays these per turn, so a module appearing or disappearing moved the
+        # first differing byte to roughly token 1500 and cost every token behind
+        # it. Measured, that held the chat lane at 1920 cached tokens out of
+        # sixteen thousand. Behind the conversation the same text costs only
+        # itself, and it still adapts per turn - which is why it is MOVED rather
+        # than frozen: freezing would have kept the cache and lost the adaptation.
+        self._turn_module_blocks = [
+            f'<guidelines module="{name}">\n' + self.modules[name].strip() + "\n</guidelines>"
+            for name in sorted(self.active_modules.keys()) if name in self.modules
+        ]
         
         #
         # 4. PERSISTENT CONTEXT INJECTION (Brain)
@@ -1127,10 +1131,10 @@ Then use the results to answer. Do NOT guess from your training data!
         #
         # 5. TOOL DOCUMENTATION
         #
-        if self.tools:
-            tool_docs = self._build_tool_documentation()
-            if tool_docs:
-                parts.append(tool_docs)
+        # Also the turn block: this names the tools the router picked for THIS
+        # turn, so it changes whenever the selection does. The tool schemas
+        # themselves travel in the request's own tools array and are unaffected.
+        self._turn_tool_docs = self._build_tool_documentation() if self.tools else ""
         
         # 
         # 6. USER IDENTITY & INSTRUCTIONS (High Priority - End of Prompt)
@@ -1234,10 +1238,6 @@ Then use the results to answer. Do NOT guess from your training data!
             identity_block += "\n</user_context>"
             parts.append(identity_block)
 
-        # Last, for the reason given where it is built.
-        if mission_status:
-            parts.append(mission_status)
-
         full_prompt = "\n".join(parts)
         try:
             # OFF by default, and the gate fails CLOSED. This lane writes the whole
@@ -1263,10 +1263,17 @@ Then use the results to answer. Do NOT guess from your training data!
         an empty string when there is nothing to say, so no framing is emitted for
         an empty block.
         """
-        lines = [ln for ln in (getattr(self, "_turn_time_line", "") or "",) if ln]
-        if not lines:
+        parts = []
+        if getattr(self, "_turn_mission_status", ""):
+            parts.append(self._turn_mission_status.rstrip())
+        if getattr(self, "_turn_time_line", ""):
+            parts.append(self._turn_time_line)
+        parts.extend(getattr(self, "_turn_module_blocks", []) or [])
+        if getattr(self, "_turn_tool_docs", ""):
+            parts.append(self._turn_tool_docs)
+        if not parts:
             return ""
-        return "<turn>\n" + "\n".join(lines) + "\n</turn>"
+        return "<turn>\n" + "\n".join(parts) + "\n</turn>"
 
     def _build_tool_documentation(self) -> str:
         """Build tool documentation section. When agent has _active_tools set, only document those tools."""

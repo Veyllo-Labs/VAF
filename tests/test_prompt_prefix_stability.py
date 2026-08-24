@@ -48,27 +48,49 @@ def _first_difference(a: str, b: str):
 
 
 @pytest.mark.parametrize("module", ["orchestrator", "coding", "research", "workflow"])
-def test_switching_a_module_leaves_the_head_of_the_prompt_alone(module):
-    """MUTATION: append the MISSION STATUS block first again, as it was, and the
-    orchestrator case reports a first difference at character 0."""
+def test_switching_a_module_does_not_touch_the_system_prompt_at_all(module):
+    """The bar rose twice, each time because a measurement said the previous one
+    was not enough. First: nothing volatile at character 0. Then: nothing volatile
+    in the first thousand tokens. Now: nothing volatile in the system message AT
+    ALL, because a block at its END still measured only sixty-one per cent while
+    the same text one message later measured ninety-eight.
+
+    MUTATION: append any module's guidelines to the prompt parts again and this
+    goes red."""
     without = _prompt({})
     with_it = _prompt({module: 3})
-    assert without != with_it, f"module {module} contributed nothing, so this proves nothing"
-
     at = _first_difference(without, with_it)
-    assert at is not None and at >= MIN_STABLE_CHARS, (
-        f"switching `{module}` changes the prompt at character {at}, inside the first "
-        f"{MIN_STABLE_CHARS} characters. A provider caches on the leading tokens, so a "
-        f"block that flips this early costs the whole request rather than its own size.")
+    assert at is None, (
+        f"switching `{module}` changes the system prompt at character {at}. Every token "
+        f"behind that point is billed at full price on the turn the module flips, and "
+        f"again on the turn it decays.")
+
+
+@pytest.mark.parametrize("module", ["orchestrator", "coding", "research", "workflow"])
+def test_the_module_guidance_is_still_delivered(module):
+    """Moved, not dropped, and still per-turn: freezing the set would have kept
+    the cache and lost the adaptation the router exists for."""
+    builder = SystemPromptManager(tools={}, model_name="gpt-4o-mini",
+                                  agent_instance=None, username="admin")
+    builder.active_modules = {module: 3}
+    builder.build_prompt(username="admin", session_id="green123456")
+    block = builder.build_turn_block()
+    marker = "MISSION STATUS" if module == "orchestrator" else f'module="{module}"'
+    assert marker in block, f"{module} reaches neither the prompt nor the turn block"
 
 
 def test_the_orchestrator_block_is_still_delivered():
-    """Moved, not dropped. It is still in the system message, where its authority
-    comes from, and its text is unchanged."""
-    with_it = _prompt({"orchestrator": 3})
-    assert "MISSION STATUS" in with_it
-    assert "PLAN LOADED" in with_it
-    assert "MISSION STATUS" in with_it[-1500:], "the block is no longer at the end"
+    """Moved twice, dropped never. It started at character 0, went to the end of
+    the system message when that was measured to cost the whole request, and left
+    the message entirely when the end was measured at only sixty-one per cent.
+    The text is unchanged throughout."""
+    builder = SystemPromptManager(tools={}, model_name="gpt-4o-mini",
+                                  agent_instance=None, username="admin")
+    builder.active_modules = {"orchestrator": 3}
+    head = builder.build_prompt(username="admin", session_id="green123456")
+    block = builder.build_turn_block()
+    assert "MISSION STATUS" in block and "PLAN LOADED" in block
+    assert "MISSION STATUS" not in head, "the volatile block is back in the system prompt"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

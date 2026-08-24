@@ -25,6 +25,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **The agent's instructions stopped being rewritten on every message.** Alongside the
+  clock, two more parts of the instructions changed from turn to turn: the guidance the
+  agent loads for the current kind of task, and the list naming which tools it may reach
+  for. Both sat near the front, so both threw away the discount on everything behind
+  them. They now travel at the end of the conversation, and the instructions themselves
+  are byte-for-byte identical from one message to the next. Nothing was dropped and
+  nothing was frozen: the guidance still adapts to what you asked for, it just no longer
+  costs the whole request to do so.
 - **A conversation with the agent got dramatically cheaper after the first message.**
   Providers charge about a tenth for the part of a request they have already seen, but
   only for the stretch at the very beginning that has not changed since. The current

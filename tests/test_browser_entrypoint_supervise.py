@@ -124,3 +124,28 @@ def test_dns_filtering_is_the_security_variant_never_the_family_one():
                         if not ln.lstrip().startswith("#"))
     assert "1.1.1.2" in compose and "1.0.0.2" in compose
     assert "1.1.1.3" not in compose and "1.0.0.3" not in compose
+
+
+def test_the_health_check_covers_the_stream_not_only_cdp():
+    """Both halves have to answer before the container counts as healthy: CDP on
+    9222, which the agent drives, and the KasmVNC stream on 6901, which is what a
+    person actually sees.
+
+    They fail apart. An image built before the stream existed serves CDP perfectly
+    while nothing listens on 6901, and a CDP-only check called exactly that
+    container healthy - so the pool handed it out and the ticket route answered
+    502 on the first human click. Both places are pinned, because either one left
+    alone keeps reporting the same lie.
+    """
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    probe = docker.split("HEALTHCHECK", 1)[1].split("\n\n", 1)[0]
+    assert "9222" in probe and "6901" in probe, f"Dockerfile health-check misses a half: {probe!r}"
+
+    # ignore comment lines: the two ports are named in comments on purpose
+    compose = "\n".join(ln for ln in COMPOSE.read_text(encoding="utf-8").splitlines()
+                        if not ln.lstrip().startswith("#"))
+    browser_probes = [ln for ln in compose.splitlines() if "CMD-SHELL" in ln and "9222" in ln]
+    assert browser_probes, "no browser health-check found in compose"
+    assert all("6901" in ln for ln in browser_probes), (
+        f"compose health-check misses the stream half: {browser_probes}"
+    )

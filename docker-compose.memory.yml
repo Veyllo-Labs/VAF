@@ -269,7 +269,9 @@ services:
     networks:
       - vaf-browser-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version || exit 1"]
+      # Both halves: CDP on 9222 and the KasmVNC stream on 6901. A CDP-only check
+      # calls a container without a stream server healthy (see docker/browser/Dockerfile).
+      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version >/dev/null && curl -sf -o /dev/null http://localhost:6901/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

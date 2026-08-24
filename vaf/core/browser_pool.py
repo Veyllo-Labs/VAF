@@ -128,6 +128,27 @@ def _docker(args: List[str], timeout: float = 60) -> subprocess.CompletedProcess
                           capture_output=True, text=True, timeout=timeout)
 
 
+def _http_ok(url: str, timeout: float = 3.0) -> bool:
+    """One HTTP readiness probe. The single seam the tests stub."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return 200 <= int(getattr(r, "status", 200)) < 400
+    except Exception:
+        return False
+
+
+def _vnc_wait_s() -> float:
+    """Budget for the stream half of the health probe. Deliberately short: the
+    container brings KasmVNC up within seconds, and resolve() sits on the
+    blocking path of opening a browser, so a long second wait would show up as
+    a hang instead of as a fall back to the shared container."""
+    try:
+        return max(0.0, float(os.environ.get("VAF_BROWSER_VNC_WAIT_S", "8")))
+    except Exception:
+        return 8.0
+
+
 def _mem_available_mb() -> Optional[int]:
     """Free-ish memory in MB, or None where /proc/meminfo does not exist
     (macOS/Windows hosts run the containers inside a VM with its own budget,
@@ -344,12 +365,32 @@ class BrowserPool:
         )
 
     def _wait_healthy(self, inst: BrowserInstance) -> bool:
+        """Both halves have to answer. CDP is what the agent drives, the KasmVNC
+        stream on the other port is what the person actually sees, and they can
+        fail apart: an image built before the stream existed serves CDP happily
+        while nothing listens on the stream port. A CDP-only probe called that
+        container healthy, so the pool handed it out and the ticket route then
+        answered 502 - the stream was never asked about until a human clicked.
+
+        The probe uses the same path the ticket route fetches (index.html), so
+        what is checked here is what is served later.
+        """
         from vaf.core.browser_interactive import resolve_cdp_ws_url
         try:
             resolve_cdp_ws_url(inst.cdp_base)
-            return True
         except Exception:
+            append_domain_log("webui", f"[browser_pool] {inst.container_name}: CDP did not answer")
             return False
+        deadline = time.monotonic() + _vnc_wait_s()
+        while True:
+            if _http_ok(inst.vnc_base.rstrip("/") + "/index.html"):
+                return True
+            if time.monotonic() >= deadline:
+                append_domain_log("webui", f"[browser_pool] {inst.container_name}: CDP is up but the "
+                                           f"KasmVNC stream did not answer; rebuild the browser image "
+                                           f"(docker compose -f docker-compose.memory.yml build vaf-browser)")
+                return False
+            time.sleep(0.5)
 
     def peek(self, user_scope_id: str) -> Optional[BrowserInstance]:
         """Cached-only lookup, no docker calls. The run hooks use this: a run

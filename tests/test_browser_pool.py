@@ -443,3 +443,69 @@ def test_reaper_asks_the_registry_about_activity(registry):
     mgr._agent_active = True
     assert mgr.has_activity() is True
     assert bi.peek_manager_for_container("vaf-browser") is bi.get_interactive_manager()
+
+
+@pytest.fixture
+def live_health_pool(monkeypatch):
+    """Same wiring as `pool`, minus the `_wait_healthy` stub.
+
+    The probe itself is what the tests below measure, and the `pool` fixture
+    replaces it wholesale - measuring that would measure the stub.
+    """
+    monkeypatch.delenv("VAF_BROWSER_POOL_MAX", raising=False)
+    monkeypatch.setattr(bp, "_config_get", lambda key: None)
+    fake = _FakeDocker()
+    monkeypatch.setattr(bp, "_docker", fake)
+    monkeypatch.setattr(bp, "_mem_available_mb", lambda: 16000)
+    p = bp.BrowserPool()
+    p._ensure_reaper = lambda: None            # no threads in unit tests
+    p._test_docker = fake
+    return p
+
+
+def test_a_browser_without_its_stream_is_refused(live_health_pool, monkeypatch):
+    """An image built before the KasmVNC stream existed answers CDP perfectly and
+    serves nothing on the stream port. That container used to pass the health
+    probe, get handed to a user, and produce a 502 from the ticket route the
+    moment a human clicked - the stream was never asked about.
+
+    The refusal side is the point: resolve() returns None, which is the polite
+    fall back to the shared container, never an error.
+    """
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub")   # CDP half is healthy
+    monkeypatch.setattr(bp, "_vnc_wait_s", lambda: 0.0)                       # no waiting in a unit test
+    probed = []
+
+    def _dead_stream(url, timeout=3.0):
+        probed.append(url)
+        return False
+
+    monkeypatch.setattr(bp, "_http_ok", _dead_stream)
+    assert live_health_pool.resolve("scope-a") is None
+    assert probed, "the stream half was never probed"
+    assert probed[0].endswith("/index.html"), (
+        f"probed {probed[0]}: the probe must fetch the same path the ticket route serves, "
+        f"otherwise it checks something other than what a user gets"
+    )
+
+
+def test_both_halves_up_is_healthy(live_health_pool, monkeypatch):
+    """Counterpart: with a live stream the same path hands out the instance."""
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub")
+    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0: True)
+    inst = live_health_pool.resolve("scope-a")
+    assert inst is not None
+    assert inst.vnc_base.startswith("http://127.0.0.1:")
+
+
+def test_a_dead_cdp_is_refused_before_the_stream_is_probed(live_health_pool, monkeypatch):
+    """Order matters: CDP is the cheap half and gates the wait on the stream, so a
+    container with no CDP must not spend the stream budget before refusing."""
+    def _no_cdp(base):
+        raise RuntimeError("no CDP")
+
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", _no_cdp)
+    probed = []
+    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0: (probed.append(url), True)[1])
+    assert live_health_pool.resolve("scope-a") is None
+    assert probed == [], "the stream was probed even though CDP was already dead"

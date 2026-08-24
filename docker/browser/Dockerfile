@@ -189,9 +189,13 @@ RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 USER browser
 WORKDIR /home/browser
 
-# Health-check: socat proxy must be up and forwarding to Chromium
+# Health-check: BOTH halves must answer. The socat proxy has to forward to a live
+# Chromium (9222) and KasmVNC has to serve its client (6901). Checking only CDP
+# reported an image built before the stream existed as healthy, so the pool handed
+# that container out and the ticket route answered 502 on the first human click.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
-    CMD curl -sf http://localhost:9222/json/version || exit 1
+    CMD curl -sf http://localhost:9222/json/version >/dev/null \
+        && curl -sf -o /dev/null http://localhost:6901/ || exit 1
 
 EXPOSE 9222 6901
 

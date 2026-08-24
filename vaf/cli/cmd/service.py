@@ -35,11 +35,52 @@ def _running_pid() -> int | None:
         return None
     try:
         pid = int(pf.read_text().strip())
-        os.kill(pid, 0)  # raises if dead
+        os.kill(pid, 0)  # raises if the pid is gone entirely
+        if _is_zombie(pid):
+            # A zombie has exited; only its table entry survives until the parent
+            # reaps it, and kill(pid, 0) succeeds for it. Treating that as "running"
+            # made stop send signals into the void and then report success, while
+            # the real VAF kept going - and with it a frontend serving a stale build.
+            pf.unlink(missing_ok=True)
+            return None
         return pid
     except (ValueError, ProcessLookupError, PermissionError):
         pf.unlink(missing_ok=True)
         return None
+
+
+def _is_zombie(pid: int) -> bool:
+    """True when the pid exists only as an unreaped exit status. Never raises."""
+    try:
+        import psutil
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except Exception:
+        return False
+
+
+def _find_vaf_processes() -> list:
+    """Running VAF processes, found by command line rather than by pid file.
+
+    The pid file is only written by `vaf server start`. Every other way of
+    starting - the tray, run_vaf.sh, the app bundle - leaves none, so a pid-file
+    lookup alone answers "not running" while VAF is plainly running. Never raises.
+    """
+    found = []
+    try:
+        import psutil
+        me = os.getpid()
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                if proc.info["pid"] == me:
+                    continue
+                cmd = " ".join(proc.info["cmdline"] or [])
+                if "vaf.main" in cmd and (" tray" in cmd or " run" in cmd):
+                    found.append(proc)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return found
 
 def _is_server_mode() -> bool:
     try:
@@ -94,7 +135,27 @@ def cmd_stop():
 
     pid = _running_pid()
     if not pid:
-        UI.warning("VAF is not running")
+        # No pid file does NOT mean nothing is running: only `vaf server start`
+        # writes one. Look for the processes themselves before giving up, so the
+        # command tells the truth for a tray-started VAF too.
+        procs = _find_vaf_processes()
+        if not procs:
+            UI.warning("VAF is not running")
+            return
+        UI.info(f"Stopping VAF ({len(procs)} process(es), no pid file)...")
+        for proc in procs:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        import psutil
+        gone, alive = psutil.wait_procs(procs, timeout=10)
+        for proc in alive:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        UI.success("VAF stopped")
         return
 
     UI.info(f"Stopping VAF (PID {pid})...")

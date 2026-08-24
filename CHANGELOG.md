@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **The Soul questionnaire's first step asks a plainer question.** "What are the
+  undeniable truths it lives by?" read like a mission statement and gave you
+  little to actually write down. The step now asks for the principles your agent
+  follows when it decides something: what it is there for, how it works, and how
+  it carries itself. The German wizard also drops the loftier step names:
+  "Kernwahrheiten" is now "Grundsätze", and "Vibe" is now "Tonfall". Only the
+  labels on screen change. The Soul file keeps its English section headings, so
+  an existing `soul.md` and everything that reads it are untouched.
+
 ### Fixed
 - **The first-run setup no longer looks like a login, and its step bar fits on one
   line.** The header above every setup step announced "User Login" on a page where

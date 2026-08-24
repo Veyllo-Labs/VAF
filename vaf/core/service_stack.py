@@ -540,9 +540,25 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                 if result.returncode == 0:
                     _say(log, "Core service stack (DB/Redis/Sandbox/STT/Gotenberg) started")
                     try:  # optional build services: best-effort, never block the core
-                        opt = subprocess.run(base + list(OPTIONAL_SERVICES), timeout=600, **kwargs)
+                        # --build, deliberately. These two are BUILT from this repo rather
+                        # than pulled, and plain `up -d` reuses whatever image already
+                        # exists - so a checkout that moves ahead of its images keeps
+                        # running the old ones with nothing to show that it does. That is
+                        # how an image predating the browser's KasmVNC stream kept serving
+                        # CDP while every stream request answered 502, sixteen days after
+                        # the code had moved on. An unchanged context is a cache hit and
+                        # costs seconds; a changed one is exactly the rebuild that was
+                        # missing.
+                        opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
+                                             timeout=600, **kwargs)
                         if opt.returncode != 0:
-                            _say(log, "Optional TTS/browser did not build (often a VM clock skew) - core stack is up")
+                            # Name the real reason. The old wording guessed "VM clock skew"
+                            # at every failure, which sent a genuine build error looking for
+                            # a clock problem that was not there.
+                            _detail = ((opt.stderr or "") or (opt.stdout or "")).strip().splitlines()
+                            _tail = _detail[-1].strip()[:200] if _detail else "no output"
+                            _say(log, f"Optional TTS/browser did not build - core stack is up. "
+                                      f"Last line: {_tail}")
                     except Exception:
                         pass
                     return True

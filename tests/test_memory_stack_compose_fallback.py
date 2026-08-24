@@ -124,3 +124,35 @@ def test_the_tray_delegates_to_the_engine(monkeypatch):
     tray.stop_memory_stack()
     assert started == [True] and stopped == [True], (
         "the tray grew its own stack lifecycle back instead of delegating")
+
+
+def test_optional_services_are_rebuilt_while_core_services_are_not(monkeypatch):
+    """The browser and TTS images are BUILT from this repo rather than pulled, and a
+    plain `up -d` reuses whatever image already exists. A checkout that moves ahead
+    of its images therefore keeps running the old ones with nothing to show for it:
+    an image predating the browser's KasmVNC stream answered CDP perfectly and
+    every stream request with a 502, sixteen days after the code had moved on.
+
+    The other half matters just as much: the core services are pulled, not built,
+    so they must not pay for a build on every single start.
+    """
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _Result(0)
+
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is True
+
+    optional = [c for c in calls if any(s in c for s in stack.OPTIONAL_SERVICES)]
+    assert optional, "the optional services were never started"
+    for cmd in optional:
+        assert "--build" in cmd, f"optional services started without --build: {cmd}"
+
+    core_only = [c for c in calls
+                 if any(s in c for s in stack.CORE_SERVICES)
+                 and not any(s in c for s in stack.OPTIONAL_SERVICES)]
+    assert core_only, "the core services were never started"
+    for cmd in core_only:
+        assert "--build" not in cmd, f"core services must not rebuild on every start: {cmd}"

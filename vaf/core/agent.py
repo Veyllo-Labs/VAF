@@ -13193,27 +13193,15 @@ class Agent:
                 if len(description) > budget:
                     description = description[:budget - 3] + "..."
 
-            # Whare Wananga delivery: append the tool's LEARNED pitfalls (tuatea) to its description
-            # so the model sees them inline before forming the call. Only when the router has scoped
-            # the tool set (_active_tools is not None) -- the all-tools fallback (100+) would blow the
-            # token budget. Hard-guarded: this is the critical path of every LLM call, so a failure
-            # here must never break tool-calling.
-            if self._active_tools is not None:
-                try:
-                    from vaf.whare_wananga.delivery import tool_pitfalls
-                    _pf = tool_pitfalls(
-                        name,
-                        max_pitfalls=(1 if is_small_context else 3),
-                        max_chars=(80 if is_small_context else 320),
-                    )
-                    if _pf:
-                        description = (description or "") + "\n" + _pf
-                        try:
-                            append_domain_log("backend", f"[WW-INJECT] {name}: +{len(_pf)} chars pitfalls")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+            # Learned pitfalls are NOT appended to the description here any more.
+            # They are delivered in the turn block instead, and the reason is what
+            # this whole round is about: a pitfall is learned the moment a tool
+            # goes wrong, so putting it in the schema makes the tools array change
+            # on a schedule nobody controls, and the array is inside the request's
+            # cached prefix. One learned pitfall would have cost the cache for the
+            # whole request. In the turn block the same text costs only itself,
+            # and it sits closer to the answer, which is where a warning belongs.
+            # See `SystemPromptManager.build_turn_block`.
 
             schema.append({
                 "type": "function",

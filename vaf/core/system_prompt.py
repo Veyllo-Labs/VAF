@@ -1251,6 +1251,35 @@ Then use the results to answer. Do NOT guess from your training data!
             logging.warning("System prompt full log write failed: %s", e)
         return full_prompt
     
+    def _turn_pitfalls(self) -> str:
+        """Learned pitfalls (tuatea) for the tools this turn may actually use.
+
+        They used to hang off each tool's description inside the schema. That put
+        them in the request's cached prefix, and a pitfall is learned exactly when
+        a tool fails - so the array changed on a schedule nobody controls and took
+        the cache with it every time. Scoped to the routed set for the same reason
+        the old site was: the all-tools fallback would otherwise render a hundred
+        of these. Fail-safe, like the delivery it wraps: this runs on the critical
+        path of every call.
+        """
+        try:
+            from vaf.whare_wananga.delivery import tool_pitfalls
+            names = getattr(self.agent, "_active_tools", None) if self.agent else None
+            if not names:
+                return ""
+            small = self.max_tokens < 32000
+            out = []
+            for name in sorted(set(names)):
+                pf = tool_pitfalls(name, max_pitfalls=(1 if small else 3),
+                                   max_chars=(80 if small else 320))
+                if pf:
+                    out.append(f"- {name}: {pf}")
+            if not out:
+                return ""
+            return "Learned pitfalls for the tools available this step:\n" + "\n".join(out)
+        except Exception:
+            return ""
+
     def build_turn_block(self) -> str:
         """The volatile half of the prompt, rendered for ONE step, appended last.
 
@@ -1271,6 +1300,9 @@ Then use the results to answer. Do NOT guess from your training data!
         parts.extend(getattr(self, "_turn_module_blocks", []) or [])
         if getattr(self, "_turn_tool_docs", ""):
             parts.append(self._turn_tool_docs)
+        pitfalls = self._turn_pitfalls()
+        if pitfalls:
+            parts.append(pitfalls)
         if not parts:
             return ""
         return "<turn>\n" + "\n".join(parts) + "\n</turn>"

@@ -70,6 +70,13 @@ Contract (all verified against `vaf/core/agent.py`):
 | `llm_start` | `provider`, `model` | one per chat-completion call on API providers (`model` may be None before default resolution). Note: INTERNAL engine calls (context compression, routers, title generation) also emit llm pairs - do not assume one pair per visible turn |
 | `llm_end` | `provider`, `model`, `duration_ms`, `ok`, `usage` | closes every `llm_start`; `ok` False = errored OR abandoned before completion (e.g. user stop); `usage` is a best-effort snapshot of the serving provider's last request (may lag one call behind when failover served the response). Local-server and in-process lanes do not emit llm events yet |
 
+The per-call usage log line (`logs/usage_*.log`) carries the same figures plus a
+derived `cache_hit=NN.N%`. It is ABSENT, not zero, when the provider reported
+nothing about its cache: a lane that cannot report must not read like a lane whose
+cache is not working. The percentage divides by the whole prompt rather than by
+`input_tokens`, because Anthropic excludes the cached span from that figure while
+every OpenAI-shaped provider includes it.
+
 Two shapes to handle defensively:
 
 - `multi_tool_use.parallel` emits its own `tool_start`/`tool_end` pair, and

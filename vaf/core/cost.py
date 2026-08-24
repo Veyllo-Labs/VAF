@@ -275,6 +275,24 @@ class CostEstimate:
     # measured, or the provider publishes no cached rate.
     cache_saved: float = 0.0
 
+    def cache_hit_percent(self) -> Optional[float]:
+        """Share of THIS call's prompt that the provider served from its cache.
+
+        `None` when the provider reported nothing, which is not the same as nought
+        and must never be averaged with it: a lane that cannot report would
+        otherwise drag an instance-wide figure down and hide the very thing the
+        number exists to show.
+
+        The denominator is `cache_prompt_tokens`, the whole prompt, and not
+        `input_tokens`. Anthropic's input_tokens EXCLUDES the cached span while
+        every OpenAI-shaped provider includes it, so dividing by input_tokens
+        would compare two different quantities and, on Anthropic, report far more
+        than a hundred per cent.
+        """
+        if not self.cache_measured or not self.cache_prompt_tokens:
+            return None
+        return round(self.cache_read_tokens * 100.0 / self.cache_prompt_tokens, 1)
+
     def as_text(self) -> str:
         sym = "€" if self.currency == "EUR" else "$"
         return f"~{sym}{self.usd:.4f}" + ("" if self.cost_known else " (estimate: unknown model)")
@@ -519,6 +537,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
             f"lane={lane_name} provider={provider or '?'} model={model or '?'} "
             f"in={est.input_tokens} out={est.output_tokens}"
             + (f" cache_read={est.cache_read_tokens} cache_write={est.cache_write_tokens}"
+               f" cache_hit={est.cache_hit_percent():.1f}%"
                if est.cache_measured else "")
             + (f" saved={est.cache_saved:.6f}" if est.cache_saved else "")
             + f" usd={est.usd:.6f}"

@@ -652,3 +652,45 @@ def test_the_pricing_change_is_in_the_changelog():
         "the [Unreleased] section does not mention that the spend limit's arithmetic changed")
     assert "cached rate" in unreleased, (
         "the [Unreleased] section does not say a cached prompt is priced differently now")
+
+
+def test_the_hit_percentage_divides_by_the_whole_prompt():
+    """MUTATION: divide by input_tokens instead and the Anthropic case reports
+    seventy thousand per cent, because its input_tokens excludes the cached span
+    that the numerator counts."""
+    outside = estimate_cost("anthropic", "claude-sonnet-4-6", 12, 50,
+                            cache=cache_usage(8400, 1200, in_input=False))
+    assert outside.cache_hit_percent() == round(8400 * 100.0 / (12 + 8400 + 1200), 1)
+    assert 0 < outside.cache_hit_percent() <= 100
+
+    inside = estimate_cost("openai", "gpt-4o-mini", 9000, 50,
+                           cache=cache_usage(8400, 0, in_input=True))
+    assert inside.cache_hit_percent() == round(8400 * 100.0 / 9000, 1)
+
+
+def test_an_unmeasured_call_has_no_percentage_rather_than_a_zero_one():
+    """THE distinction the whole shape exists for, at the last step where it can
+    still be lost. A lane that cannot report must not average in as a nought."""
+    assert estimate_cost("local", "some.gguf", 500, 20).cache_hit_percent() is None
+    assert estimate_cost("openai", "gpt-4o-mini", 9000, 50,
+                         cache=cache_usage(0, 0, in_input=True)).cache_hit_percent() == 0.0
+
+
+def test_the_log_line_carries_the_percentage(tmp_path, monkeypatch):
+    """It is in the log because that is where it was asked for, and the log is a
+    copy: every figure on this line is also in the ledger."""
+    from vaf.core import cost as cost_mod
+
+    written = []
+    monkeypatch.setattr(cost_mod, "record_spend", lambda *a, **k: 0.0)
+    monkeypatch.setattr("vaf.core.log_helper.append_usage_log", lambda m: written.append(m))
+    cost_mod.record_call("openai", "gpt-4o-mini", 9000, 50, lane="main",
+                         cache=cache_usage(8400, 0, in_input=True))
+    assert written, "nothing was logged at all"
+    assert "cache_hit=93.3%" in written[0], written[0]
+    assert "cache_read=8400" in written[0]
+
+    written.clear()
+    cost_mod.record_call("local", "some.gguf", 500, 20, lane="main")
+    assert "cache_hit" not in written[0], (
+        "an unmeasured call printed a hit rate; the reader cannot tell it from a real nought")

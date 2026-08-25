@@ -192,3 +192,64 @@ def test_the_end_of_turn_squash_only_runs_under_pressure():
     assert "should_compress" in src, (
         "the squash no longer shares the compression threshold, so 'too much "
         "context' is defined in two places that can drift apart")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHERE THE TURN BLOCK SITS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _agent_with_block(block="<turn>\nnow: today\n</turn>"):
+    """A bare Agent whose prompt manager yields one fixed turn block."""
+    from vaf.core.agent import Agent
+
+    agent = Agent.__new__(Agent)
+    agent.prompt_manager = type("PM", (), {"build_turn_block": staticmethod(lambda: block)})()
+    agent._injected_context_chars = 0
+    return agent
+
+
+def test_the_turn_block_goes_before_the_user_s_own_message():
+    """The last thing the model reads must be the REQUEST, not the metadata.
+
+    Appending the block last was a measured regression: with the clock, module
+    guidance, working memory and learned pitfalls sitting after the user's own
+    words, a live run spent its entire output budget reasoning about the
+    situation and was cut off by finish_reason=length before acting on a
+    one-line instruction one message further up.
+
+    It costs the cache nothing. The cached prefix ends before BOTH moving
+    messages, so their order relative to each other cannot touch it.
+
+    MUTATION: append the block unconditionally again and this goes red."""
+    agent = _agent_with_block()
+    out = agent._append_turn_block([
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "mark the placeholders yellow"},
+    ])
+    assert "<turn>" in out[-2]["content"], "the turn block is not before the user's message"
+    assert out[-1]["content"] == "mark the placeholders yellow", (
+        "the user's request is no longer the last thing the model reads")
+
+
+def test_mid_tool_loop_the_block_still_goes_last():
+    """Rule 4 invariant 1: nothing may sit between an assistant's tool_calls and
+    the tool results answering them. Mid-loop the block therefore stays at the
+    end, where it is also harmless: the model is continuing its own work rather
+    than reading a fresh instruction."""
+    agent = _agent_with_block()
+    out = agent._append_turn_block([
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "do it"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ])
+    assert "<turn>" in out[-1]["content"]
+    assert out[-2]["role"] == "tool", "a message was wedged between tool_calls and its result"
+    assert out[-3]["role"] == "assistant"
+
+
+def test_no_block_leaves_the_messages_untouched():
+    agent = _agent_with_block(block="")
+    msgs = [{"role": "system", "content": "rules"}, {"role": "user", "content": "hi"}]
+    assert agent._append_turn_block(msgs) == msgs

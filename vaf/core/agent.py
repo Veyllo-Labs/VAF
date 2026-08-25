@@ -8458,7 +8458,29 @@ class Agent:
         if not block:
             return prepared_messages
         self._injected_context_chars = getattr(self, "_injected_context_chars", 0) + len(block)
-        return [*prepared_messages, {"role": "user", "content": block}]
+        turn_msg = {"role": "user", "content": block}
+
+        # BEFORE the user's own last message, not after it. Appending it last was
+        # a measurable regression: the final thing the model read stopped being
+        # the request and became a wall of machine-assembled data - clock, module
+        # guidance, working memory, learned pitfalls. Observed on a live run, the
+        # model spent its whole output budget reasoning about the situation and
+        # was cut off by finish_reason=length before it acted on a one-line
+        # instruction that sat one message further up.
+        #
+        # It costs the cache nothing. Everything ahead of the block is unchanged
+        # either way, and whether the two moving messages at the end arrive in
+        # one order or the other does not touch a prefix that stops before both.
+        #
+        # Only when the last message IS the user's. Mid-tool-loop the last
+        # message is a tool result answering an assistant's tool_calls, and
+        # nothing may be inserted between those two (Rule 4 invariant 1), so
+        # there the block still goes at the end - and there it is also harmless,
+        # because the model is continuing its own work rather than reading a
+        # fresh instruction.
+        if prepared_messages[-1].get("role") == "user":
+            return [*prepared_messages[:-1], turn_msg, prepared_messages[-1]]
+        return [*prepared_messages, turn_msg]
 
     def chat_step(
         self,

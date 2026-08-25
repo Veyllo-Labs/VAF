@@ -12,25 +12,40 @@ This module provides:
 - Redis caching for embeddings and queries
 """
 
-from vaf.memory.models import Memory, Chunk, Connection
-from vaf.memory.crypto import MemoryCrypto
-from vaf.memory.database import get_db, init_db
-from vaf.memory.embeddings import EmbeddingService
-from vaf.memory.rag import RagPipeline
-from vaf.memory.graph import GraphManager
-from vaf.memory.cache import get_cache, MemoryCache, close_cache
+# Deliberate: these names are re-exported lazily (PEP 562), never at import time.
+# Importing them eagerly made the package initialiser pull in rag -> database, while
+# database itself is a submodule of this very package. Single-threaded, Python absorbs
+# that cycle; with two threads importing concurrently (the tray probing the database
+# while the web server mounts the routes) each holds the lock the other waits for, and
+# the interpreter aborts the import with a deadlock. The routes then never mount.
+_LAZY = {
+    "Memory": "vaf.memory.models",
+    "Chunk": "vaf.memory.models",
+    "Connection": "vaf.memory.models",
+    "MemoryCrypto": "vaf.memory.crypto",
+    "get_db": "vaf.memory.database",
+    "init_db": "vaf.memory.database",
+    "EmbeddingService": "vaf.memory.embeddings",
+    "RagPipeline": "vaf.memory.rag",
+    "GraphManager": "vaf.memory.graph",
+    "get_cache": "vaf.memory.cache",
+    "MemoryCache": "vaf.memory.cache",
+    "close_cache": "vaf.memory.cache",
+}
 
-__all__ = [
-    "Memory",
-    "Chunk", 
-    "Connection",
-    "MemoryCrypto",
-    "get_db",
-    "init_db",
-    "EmbeddingService",
-    "RagPipeline",
-    "GraphManager",
-    "get_cache",
-    "MemoryCache",
-    "close_cache",
-]
+__all__ = list(_LAZY)
+
+
+def __getattr__(name: str):
+    """Resolve a re-exported name on first access, not at package import."""
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+    value = getattr(import_module(module), name)
+    globals()[name] = value  # cache, so this runs once per name
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))

@@ -9,6 +9,7 @@ initialiser turns that into a module-lock deadlock: the routes never mount, ever
 /api/memory call answers 404, and the Memory page reports a failed graph fetch with
 nothing in the UI naming the cause.
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,11 +46,34 @@ print("ERRORS:" + "|".join(errors))
 
 
 def _fresh_interpreter(code, tmp_path):
-    """Run code in a new interpreter, so sys.modules starts empty and HOME is scratch."""
+    """Run code in a new interpreter, so sys.modules starts empty and HOME is scratch.
+
+    The environment is BUILT, never replaced wholesale by a POSIX-shaped literal.
+    Such a literal is a valid environment on Linux and one Windows cannot start a
+    Python in. Without SystemRoot the CryptoAPI is unreachable, so hash
+    randomization dies before the first line runs, and Winsock cannot resolve its
+    provider DLL, so every import chain reaching asyncio raises WinError 10106.
+    That is the chain these tests walk: models.py imports sqlalchemy, sqlalchemy
+    imports asyncio, and the process is gone.
+
+    HOME alone is not the scratch home either. ntpath.expanduser reads USERPROFILE
+    and ignores HOME, so with only HOME set "~" stays literal and resolves against
+    cwd, which is this checkout. Both spellings are named.
+
+    tests/test_windows_path_hygiene.py guards the class.
+    """
+    env = {
+        "PYTHONPATH": str(REPO),
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),          # POSIX
+        "USERPROFILE": str(tmp_path),   # Windows
+    }
+    for keep in ("SYSTEMROOT", "SystemRoot", "SYSTEMDRIVE", "SystemDrive"):
+        if keep in os.environ:
+            env[keep] = os.environ[keep]
     return subprocess.run(
         [sys.executable, "-c", code],
-        cwd=REPO, capture_output=True, text=True, timeout=180,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PYTHONPATH": str(REPO)},
+        cwd=REPO, capture_output=True, text=True, timeout=180, env=env,
     )
 
 

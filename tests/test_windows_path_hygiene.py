@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Windows-only defects the local suite cannot execute, caught here instead.
 
-Both guards below share one shape: a spelling that is byte-identical on Linux
+Every guard below shares one shape: a spelling that is byte-identical on Linux
 and macOS and wrong on Windows, so no local run can ever fail on it and the
 27-minute Windows leg is the only thing that says so. Each is made to fail
 HERE, on any OS.
@@ -45,11 +45,46 @@ The rule: read source you are INSPECTING with `read_text()`. The house rule
 that bans `read_text()`/`write_text()` is about bulk REWRITES, where universal
 newlines silently rewrites a CRLF file on save; reading for a static assertion
 is the opposite case, and there the translation is the thing you want.
+
+## 3. No subprocess environment that Windows cannot start a Python in.
+
+Passing `env=` to a subprocess REPLACES the environment; it does not extend it.
+A dict holding only POSIX keys is a perfectly good environment on Linux and a
+broken one on Windows, and it breaks twice over.
+
+`SystemRoot` is load-bearing there. Without it the CryptoAPI is unreachable, so
+`_Py_HashRandomization_Init` kills the interpreter before the first line runs,
+and Winsock cannot resolve its provider DLL, so any import chain that reaches
+`asyncio` raises `WinError 10106`. The Windows leg found exactly this in the
+memory-package import test: `models.py` imports sqlalchemy, sqlalchemy imports
+asyncio, `asyncio.windows_events` imports `_overlapped`, and the process died.
+The threaded sibling then reported `NameError: name 'base_events' is not
+defined`, which is the same failure wearing a second face: the aborted import
+left a half-built module behind for the other thread to trip over.
+
+`HOME` is not the home directory there either. `ntpath.expanduser` reads
+`USERPROFILE` and ignores `HOME`, so a scratch home named only as `HOME` leaves
+`~` literal, to be resolved against the working directory, which is usually this
+checkout. The isolation does not fail loudly; it simply is not there.
+
+This class had already been diagnosed once, in `_narrow_env` in
+`test_windows_console_encoding.py`, and was never written down as a rule. It
+came back in a new file within days, which is precisely what a guard is for.
+
+The rule: an `env=` dict either carries the whole environment (a `**os.environ`
+spread, `dict(os.environ)`, a comprehension over it) or it names `SystemRoot`
+itself. Reading a single key out of `os.environ` does not count, because one key
+does not make an environment startable. And a dict that sets `HOME` names
+`USERPROFILE` beside it.
 """
 import ast
+import ntpath
+import os
+import posixpath
 import re
 import subprocess
 from pathlib import Path, PureWindowsPath
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -206,4 +241,189 @@ def test_no_newline_needle_against_unnormalized_bytes():
         "universal-newline translation. On a Windows checkout the file holds "
         "\\r\\n and the assertion fails for a reason unrelated to its subject. "
         "Read the source with read_text(encoding=...) instead:\n" + "\n".join(hits)
+    )
+
+
+# -- 3. subprocess environments Windows cannot start a Python in ---------------
+
+# Functions that hand an env= straight to the OS. A helper that merely stores the
+# dict (a fake terminal opener in a fixture, an MCP manifest) is not one of these
+# and is deliberately not scanned: it may well merge onto os.environ downstream.
+_SPAWNERS = {"run", "Popen", "call", "check_call", "check_output",
+             "execve", "execvpe", "spawnve", "posix_spawn"}
+
+# The one key a Python subprocess cannot start without on Windows. SystemDrive
+# belongs beside it in real code, but requiring it too would reject the correct
+# helper this rule is modelled on, so the guard asks for the load-bearing one.
+_WINDOWS_CRITICAL = "SYSTEMROOT"
+
+
+def _is_spawn(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr in _SPAWNERS
+    return isinstance(func, ast.Name) and func.id in _SPAWNERS
+
+
+def _mentions_environ(node) -> bool:
+    return any(isinstance(n, ast.Attribute) and n.attr == "environ"
+               for n in ast.walk(node))
+
+
+def _inherits_environ(region) -> bool:
+    """True only when the WHOLE environment is carried over, not merely read.
+
+    Reading one key out of os.environ does not make an environment startable, so
+    a stray os.environ.get("PATH") must not silence the guard. Only a spread
+    counts: {**os.environ}, dict(os.environ), os.environ.copy(), or a
+    comprehension over it.
+    """
+    for n in ast.walk(region):
+        if isinstance(n, ast.DictComp):
+            if any(_mentions_environ(g.iter) for g in n.generators):
+                return True
+        if isinstance(n, ast.Dict):
+            for key, value in zip(n.keys, n.values):
+                if key is None and _mentions_environ(value):
+                    return True
+        if isinstance(n, ast.Call):
+            if isinstance(n.func, ast.Name) and n.func.id == "dict" \
+                    and any(_mentions_environ(a) for a in n.args):
+                return True
+            if isinstance(n.func, ast.Attribute) and n.func.attr == "copy" \
+                    and _mentions_environ(n.func.value):
+                return True
+    return False
+
+
+def _assigned_in(func, name: str) -> bool:
+    """True if the function body rebinds `name`, rather than only receiving it."""
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return True
+        if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return True
+    return False
+
+
+def _not_this_guards_business(env_node, owner) -> bool:
+    """Spellings this guard deliberately does not judge.
+
+    `env=None` is the subprocess default and inherits the whole environment. A
+    bare `os.environ`, or a copy of it, IS the environment. And a name that
+    arrives as a parameter is the caller's decision, which cannot be read from
+    the spawn site - judging it here would be a guess dressed as a rule.
+    """
+    if isinstance(env_node, ast.Constant):
+        return True
+    if _mentions_environ(env_node) and not isinstance(env_node, (ast.Dict, ast.DictComp)):
+        return True
+    if isinstance(env_node, ast.Name):
+        func = owner.get(env_node)
+        if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spec = func.args
+            params = {a.arg for a in
+                      [*spec.posonlyargs, *spec.args, *spec.kwonlyargs]}
+            if spec.vararg:
+                params.add(spec.vararg.arg)
+            if spec.kwarg:
+                params.add(spec.kwarg.arg)
+            if env_node.id in params and not _assigned_in(func, env_node.id):
+                return True
+    return False
+
+
+def _innermost_function(tree):
+    """node -> the innermost FunctionDef containing it, or None at module level."""
+    owner = {}
+
+    def walk(node, current):
+        for child in ast.iter_child_nodes(node):
+            owner[child] = current
+            deeper = child if isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef)) else current
+            walk(child, deeper)
+
+    walk(tree, None)
+    return owner
+
+
+def _env_region(env_node, tree, owner):
+    """The region whose contents decide the verdict for one env= expression.
+
+    A dict literal answers for itself. Anything else (a local name, a helper
+    call) is answered by the function that builds it, so a loop that adds the
+    Windows keys afterwards is seen rather than missed. That is exactly how the
+    correct helper in test_windows_console_encoding.py is written.
+    """
+    if isinstance(env_node, ast.Dict):
+        return env_node
+    if isinstance(env_node, ast.Call) and isinstance(env_node.func, ast.Name):
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and node.name == env_node.func.id:
+                return node
+    return owner.get(env_node) or tree
+
+
+def _posix_only_envs(source: str):
+    """(line, reason) for every spawn whose env= cannot start a Python on Windows."""
+    tree = ast.parse(source)
+    owner = _innermost_function(tree)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _is_spawn(node)):
+            continue
+        env_kw = next((k for k in node.keywords if k.arg == "env"), None)
+        if env_kw is None:
+            continue
+        if _not_this_guards_business(env_kw.value, owner):
+            continue
+        region = _env_region(env_kw.value, tree, owner)
+        if _inherits_environ(region):
+            continue
+        names = {n.value.upper() for n in ast.walk(region)
+                 if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        if _WINDOWS_CRITICAL not in names:
+            yield node.lineno, "no SystemRoot: Windows cannot start the interpreter"
+        elif "HOME" in names and "USERPROFILE" not in names:
+            yield node.lineno, "HOME without USERPROFILE: the scratch home is ignored on Windows"
+
+
+def test_the_env_class_is_real():
+    """Why this guard exists, demonstrated: one environment, two meanings.
+
+    The two path modules read different keys, so an env that redirects the home
+    directory on POSIX leaves it untouched on Windows. Worse than untouched: the
+    tilde stays literal, so it resolves against the working directory, which for
+    a test subprocess is normally the checkout itself.
+    """
+    only_home = {"HOME": "/scratch"}
+    with mock.patch.dict(os.environ, only_home, clear=True):
+        assert posixpath.expanduser("~") == "/scratch"
+        assert ntpath.expanduser("~") == "~"
+    with mock.patch.dict(os.environ, {**only_home, "USERPROFILE": "/scratch"},
+                         clear=True):
+        assert ntpath.expanduser("~") == "/scratch"
+
+
+def test_no_posix_only_subprocess_env():
+    hits = []
+    for rel, path in _tracked_python_files(("vaf/", "scripts/", "tests/")):
+        try:
+            found = list(_posix_only_envs(
+                path.read_text(encoding="utf-8", errors="ignore")))
+        except SyntaxError:
+            continue
+        for lineno, reason in found:
+            hits.append(f"{rel}:{lineno}: {reason}")
+    assert not hits, (
+        "env= REPLACES the environment rather than extending it, and this one "
+        "holds only POSIX keys. Carry the whole environment ({**os.environ, ...}) "
+        "or name the Windows keys beside the POSIX ones:\n"
+        "    for keep in (\"SYSTEMROOT\", \"SystemRoot\", \"SYSTEMDRIVE\", \"SystemDrive\"):\n"
+        "        if keep in os.environ:\n"
+        "            env[keep] = os.environ[keep]\n"
+        + "\n".join(hits)
     )

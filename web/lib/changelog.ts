@@ -31,6 +31,29 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a26',
+    date: '2026-08-25',
+    sections: [
+      {
+        kind: 'improved',
+        items: [
+          'Long conversations got substantially cheaper. Providers charge about a tenth for the part of a request they have already seen, but only for the stretch at the beginning that has not changed. Several things in the agent\'s instructions changed on every single message, so nothing could ever be reused. They now travel at the end of the conversation instead, and the agent keeps a steady set of tools rather than a new one each time. Measured against a live account, seven in ten tokens of a request are now reused where none were before.',
+          'What the agent did during a turn is no longer rewritten the moment the turn ends, which is what makes the first message of each new turn cheap as well. This one helps on a local model too, where it shows up as a faster first word rather than a smaller bill.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The cost figure and the daily spend limit now count what a cached request actually costs. On some providers the figure was far too low, so a limit did not stop where you set it; on others it was too high.',
+          'Every call was counted against the wrong call. Providers report what a request cost in a final piece of the response, and VAF read it one step too early, so each call was booked with the previous call\'s numbers.',
+          'Two things happening at once can no longer make a call vanish from the spend record.',
+          'An account without admin rights no longer receives cost amounts in the usage view, and four provider settings that change what every request sends can no longer be altered by everyone on the network.',
+          'Provider errors reach the log again. The line meant to write them named something that does not exist, so they were silently dropped.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a23',
     date: '2026-08-16',
     sections: [

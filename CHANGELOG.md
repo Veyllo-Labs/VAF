@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a26] - 2026-08-25
+
+### Added
+- **The usage log says how much of each request was served from cache.** Every line in
+  `logs/usage_*.log` now carries `cache_hit` as a percentage beside the raw token counts,
+  so a session's behaviour can be read without adding anything up by hand. A provider
+  that reports nothing about its cache leaves the field out entirely rather than printing
+  a zero, so a lane that cannot measure does not look like a lane that is not working.
+
 ### Changed
 - **The Soul questionnaire's first step asks a plainer question.** "What are the
   undeniable truths it lives by?" read like a mission statement and gave you
@@ -298,11 +307,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   clears all of that.
 
 ### Added
-- **The usage log says how much of each request was served from cache.** Every line in
-  `logs/usage_*.log` now carries `cache_hit` as a percentage beside the raw token counts,
-  so a session's behaviour can be read without adding anything up by hand. A provider
-  that reports nothing about its cache leaves the field out entirely rather than printing
-  a zero, so a lane that cannot measure does not look like a lane that is not working.
 - **A specialist's window shows the specialist.** The generic glyph in the top
   left of every sub-agent window is now the agent itself, wearing its trade's
   colour, so a window is recognisable as that specialist's workplace at a

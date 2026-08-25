@@ -643,15 +643,18 @@ def test_the_product_no_longer_claims_it_ignores_cache_discounts():
 def test_the_pricing_change_is_in_the_changelog():
     """A displayed cost figure and an enforced spend cap both change, which is
     the definition of user-facing in this repo."""
-    text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
-    unreleased = text.split("## [Unreleased]", 1)[1].split("\n## ", 1)[0].lower()
+    # The WHOLE file, not the [Unreleased] section. The first version of this
+    # test read only [Unreleased] and went red the moment a release was cut,
+    # because cutting one is precisely the act of emptying that section. A guard
+    # that fails on every release is a guard nobody keeps.
+    text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").lower()
     # Specific on purpose. A bare search for "cache" passed on an unrelated entry
     # that merely mentioned a caching SETTING, which is the vacuous shape this
-    # round was just caught on twice.
-    assert "spend limit" in unreleased or "daily limit" in unreleased, (
-        "the [Unreleased] section does not mention that the spend limit's arithmetic changed")
-    assert "cached rate" in unreleased, (
-        "the [Unreleased] section does not say a cached prompt is priced differently now")
+    # round was caught on twice.
+    assert "spend limit" in text or "daily limit" in text, (
+        "the changelog does not mention that the spend limit's arithmetic changed")
+    assert "cached rate" in text, (
+        "the changelog does not say a cached prompt is priced differently now")
 
 
 def test_the_hit_percentage_divides_by_the_whole_prompt():

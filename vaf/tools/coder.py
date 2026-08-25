@@ -10397,7 +10397,11 @@ def _record_coder_usage(payload) -> None:
         # reader the manager uses is pointed at it rather than a second copy of
         # the field precedence. A coder run that is not in the cache figure
         # makes the instance-wide rate a lie, because it is the largest lane.
+        # Why it stopped rides along for the same reason: this is the largest
+        # lane, so a coder run truncated at the output limit is the one most
+        # likely to look like a model that simply gave a short answer.
+        _fin = (((payload or {}).get("choices") or [{}])[0] or {}).get("finish_reason")
         record_call(provider, model, _in, _out, lane="coder",
-                    cache=cache_usage_from_openai(usage))
+                    cache=cache_usage_from_openai(usage), finish_reason=_fin)
     except Exception:
         pass  # accounting must never break a coder run

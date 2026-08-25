@@ -8460,17 +8460,30 @@ class Agent:
         self._injected_context_chars = getattr(self, "_injected_context_chars", 0) + len(block)
         turn_msg = {"role": "user", "content": block}
 
-        # BEFORE the user's own last message, not after it. Appending it last was
-        # a measurable regression: the final thing the model read stopped being
-        # the request and became a wall of machine-assembled data - clock, module
-        # guidance, working memory, learned pitfalls. Observed on a live run, the
-        # model spent its whole output budget reasoning about the situation and
-        # was cut off by finish_reason=length before it acted on a one-line
-        # instruction that sat one message further up.
+        # BEFORE the user's own last message, not after it. Appending it last
+        # made the final thing a model reads a wall of machine-assembled data -
+        # clock, module guidance, working memory, learned pitfalls - instead of
+        # the request. The argument is from ordering alone: the instruction is
+        # the last word, and what the engine adds for its own purposes comes
+        # before it.
         #
-        # It costs the cache nothing. Everything ahead of the block is unchanged
-        # either way, and whether the two moving messages at the end arrive in
-        # one order or the other does not touch a prefix that stops before both.
+        # It is NOT a measured behavioural effect, and the distinction matters,
+        # because this began as an explanation for a report that the agent had
+        # stopped following a plain instruction. An A/B on that task, four runs
+        # per arm, supported nothing - and could not have. The model under test
+        # emits no thinking and spent at most 150 of its 8192 output tokens, so
+        # the truncation the report described never occurred in either arm.
+        # Reproducing it needs a think-heavy model. That truncation is a defect
+        # of its own in its own place, not a consequence of this ordering: when
+        # the output limit ends a response the turn simply stops there. How
+        # often that happens is recorded as `cut=` in logs/usage_*.log and is
+        # acted on nowhere yet.
+        #
+        # It costs the cache nothing, measured at 78.5 per cent over a
+        # twelve-request run against 75 before. Everything ahead of the block is
+        # unchanged either way, and whether the two moving messages at the end
+        # arrive in one order or the other does not touch a prefix that stops
+        # before both.
         #
         # Only when the last message IS the user's. Mid-tool-loop the last
         # message is a tool result answering an assistant's tool_calls, and
@@ -9261,7 +9274,6 @@ class Agent:
             # Anthropic only: raw assistant content blocks (thinking + tool_use, with
             # signatures) for verbatim replay so a thinking-enabled tool loop doesn't 400.
             anthropic_blocks_raw = None
-            auto_continue = False  # Track if response was cut off
 
             # When we're about to stream the next assistant turn after tool execution,
             # clear the Web UI stream buffer so only the final reply is shown (not the
@@ -9377,7 +9389,17 @@ class Agent:
                                     # Handle Finish Reason
                                     elif "finish_reason" in data:
                                         if data["finish_reason"] == "length":
-                                            UI.event("System", "Response cut off - Auto-continuing...", style="dim")
+                                            # Nothing continues after this. The reply
+                                            # simply stops where the output limit fell,
+                                            # and the turn ends. The old wording promised
+                                            # an auto-continue beside a variable no code
+                                            # ever read; both are gone rather than left
+                                            # to be believed. How often this fires is now
+                                            # recorded as `cut=` in logs/usage_*.log,
+                                            # because a terminal line reaches nobody
+                                            # running the web UI.
+                                            UI.event("System", "Response hit the output limit and stopped here.",
+                                                     style="warning")
                                     
                                     # Handle Tool Calls (Streaming Aggregation)
                                     elif "tool_calls" in data:

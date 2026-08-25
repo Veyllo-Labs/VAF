@@ -115,7 +115,7 @@ grep the symbol names to find them.
 | 6b | Recover tool calls leaked as TEXT | `vaf/core/tool_call_recovery.py` - see below |
 | 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text based on chat_step's reasoning-stripped return value |
 | 8 | Tool dispatch | `execute_tool`, `_anti_spin_step` |
-| 9 | Empty-response recovery + final-answer validation | `_final_answer_probe` decides what counts as an answer - closed AND unclosed `<think>` blocks are thinking, not answer (an unclosed one once passed as the reply and suppressed the retry) - then `_validate_final_answer` |
+| 9 | Empty-response recovery + final-answer validation (an EMPTY reply only; a reply the provider cut off at the output limit has content, so this phase passes it through and the turn ends there. The provider's `finish_reason` is recorded as `cut=` in `logs/usage_*.log` and acted on nowhere) | `_final_answer_probe` decides what counts as an answer - closed AND unclosed `<think>` blocks are thinking, not answer (an unclosed one once passed as the reply and suppressed the retry) - then `_validate_final_answer` |
 | 10 | Pending-task auto-continue | `_reply_needs_user`, `_task_stuck_step` |
 | 11 | Finalize (compress / append / TTS / clean) | `summarize_tool_turn`, `_clean_reasoning` |
 

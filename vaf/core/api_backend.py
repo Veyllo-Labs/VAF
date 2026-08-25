@@ -272,6 +272,7 @@ class OpenAIProvider(BaseAIProvider):
                         
                         # Handle finish reason
                         if chunk.choices[0].finish_reason:
+                            self.last_request_usage["finish_reason"] = chunk.choices[0].finish_reason
                             yield json.dumps({"finish_reason": chunk.choices[0].finish_reason})
                     
                     # Handle usage metadata (sent in last chunk)
@@ -301,6 +302,13 @@ class OpenAIProvider(BaseAIProvider):
                 if tc:
                     yield json.dumps({"tool_calls": [t.model_dump() for t in tc]})
                 
+                # Captured, deliberately NOT yielded. The stream lane sends this
+                # down the channel, but agent.py's stream=False fallback joins
+                # every chunk into the visible reply, so a JSON blob here would
+                # be shown to the user as text.
+                self.last_request_usage["finish_reason"] = getattr(
+                    response.choices[0], "finish_reason", None)
+
                 if response.usage:
                     self.usage["input_tokens"] += response.usage.prompt_tokens
                     self.usage["output_tokens"] += response.usage.completion_tokens
@@ -601,6 +609,7 @@ class AnthropicProvider(BaseAIProvider):
             pass
 
         stop_reason = getattr(final_msg, "stop_reason", None)
+        self.last_request_usage["finish_reason"] = stop_reason
         if stop_reason == "refusal":
             details = getattr(final_msg, "stop_details", None)
             category = getattr(details, "category", None) if details else None
@@ -731,6 +740,12 @@ class GoogleProvider(BaseAIProvider):
         return getattr(content, "parts", None) or []
 
     def _record_usage(self, resp):
+        try:
+            cand = (getattr(resp, "candidates", None) or [None])[0]
+            self.last_request_usage["finish_reason"] = getattr(
+                cand, "finish_reason", None)
+        except Exception:
+            pass
         um = getattr(resp, "usage_metadata", None)
         if not um:
             return
@@ -1195,6 +1210,10 @@ class APIBackendManager:
             # carries the blank shape, so `cache_measured` is False and it stays
             # out of the hit-rate denominator instead of entering it as a 0% hit.
             _cache = dict(self.last_request_usage or {})
+            # Pulled out by name rather than read back out of `cache` inside the
+            # recorder: `cache` answers what the prompt cost, this answers why the
+            # response stopped, and reading one out of the other hides both.
+            _finish = _cache.get("finish_reason")
 
             _model = str(model or self.config.get(f"api_model_{self.provider_name}", "") or "")
             if not (_in or _out):
@@ -1220,11 +1239,14 @@ class APIBackendManager:
                         continue
                 if _in_est or out_units:
                     record_call(self.provider_name, _model, _in_est, int(out_units),
-                                reported=False, estimated=True, cache=_cache)
+                                reported=False, estimated=True, cache=_cache,
+                                finish_reason=_finish)
                 else:
-                    record_call(self.provider_name, _model, 0, 0, reported=False, cache=_cache)
+                    record_call(self.provider_name, _model, 0, 0, reported=False,
+                                cache=_cache, finish_reason=_finish)
                 return
-            record_call(self.provider_name, _model, _in, _out, cache=_cache)
+            record_call(self.provider_name, _model, _in, _out, cache=_cache,
+                        finish_reason=_finish)
         except Exception:
             pass  # accounting must never break a call
 

@@ -35,7 +35,8 @@ def test_the_blank_shape_carries_every_key():
     """MUTATION: drop a key and the readers below inherit the previous call's
     numbers, because these dicts are overwritten key by key and never reset."""
     blank = blank_request_usage()
-    assert set(blank) == {"input_tokens", "output_tokens", *_CACHE_KEYS}
+    assert set(blank) == {"input_tokens", "output_tokens", "finish_reason",
+                          *_CACHE_KEYS}
     assert blank["cache_measured"] is False
     assert blank["cache_read_tokens"] == 0
 

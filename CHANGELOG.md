@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **The usage log now says when a reply was cut short.** A model that runs out of output
+  budget stops mid-thought, and until now nothing anywhere recorded that it had: the one
+  place that saw it printed a line to the terminal, which nobody using the web interface
+  ever sees. Every line in `logs/usage_*.log` now carries `cut=` with the provider's own
+  reason whenever the output limit ended the response, and is left exactly as it was
+  otherwise, so a line only changes when something really was cut off. Nothing acts on
+  this yet, deliberately: it is recorded first so that how often it happens is a number
+  rather than a guess.
+
+### Fixed
+- **A reply that hit the output limit no longer claims it is continuing.** The message
+  shown in that case announced that it was carrying on automatically, next to a switch
+  no code ever read. Nothing carried on. The message now says what actually happened,
+  and the reply still ends there.
+
 ## [0.1.0a26] - 2026-08-25
 
 ### Added

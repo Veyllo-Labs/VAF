@@ -144,8 +144,14 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
                 # with a zero it never claimed. Reading `timings` needs a second
                 # path with its own failure mode and buys nothing here: the lane
                 # is free, so the number moves no money and trips no cap.
+                # Why it stopped is read HERE rather than below, where it
+                # already feeds a domain log: that log only fires when the
+                # content came back empty, so a reply cut off mid-sentence left
+                # no trace at all. This lane is free, but a free answer that
+                # stops half way is still a broken one.
+                _fin = ((data.get("choices") or [{}])[0] or {}).get("finish_reason")
                 record_call("local", str(data.get("model") or "local"), _in, _out,
-                            cache=cache_usage_from_openai(_u))
+                            cache=cache_usage_from_openai(_u), finish_reason=_fin)
         except Exception:
             pass
         choices = data.get("choices") or []

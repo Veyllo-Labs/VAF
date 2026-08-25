@@ -77,6 +77,14 @@ cache is not working. The percentage divides by the whole prompt rather than by
 `input_tokens`, because Anthropic excludes the cached span from that figure while
 every OpenAI-shaped provider includes it.
 
+The same snapshot carries `finish_reason`, the provider's own word for why the
+response stopped, and the log line adds ` cut=<reason>` when that word means the
+output limit ended it (`length` on OpenAI-shaped lanes, `max_tokens` on Anthropic,
+`MAX_TOKENS` on Google). Like the cache fields it is ABSENT rather than present
+on a normal ending, so the line stays byte-identical unless something really was
+cut short. Nothing acts on it yet: it is recorded so the question "how often does
+a reply stop mid-thought" has an answer before anything is built on it.
+
 Two shapes to handle defensively:
 
 - `multi_tool_use.parallel` emits its own `tool_start`/`tool_end` pair, and

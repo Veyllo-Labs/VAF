@@ -103,9 +103,41 @@ def cache_usage(read=None, write=None, *, in_input: bool = True) -> dict:
     }
 
 
+# Provider spellings for "the output limit ended this, not the model". OpenAI and
+# every OpenAI-shaped gateway say "length", Anthropic says "max_tokens", Google
+# says "MAX_TOKENS". One set rather than a per-provider table, because the value
+# is only ever read back: an unknown spelling degrades to "not truncated", which
+# is the safe direction for a signal whose whole job is to be believed when it
+# fires.
+_TRUNCATED_REASONS = frozenset({"LENGTH", "MAX_TOKENS"})
+
+
+def was_truncated(finish_reason) -> bool:
+    """True when the provider says its output limit cut the response short.
+
+    Takes the raw value, including an SDK enum, because str() is what every one
+    of them renders to. Never raises: this decides a log field, not a bill.
+    """
+    try:
+        raw = str(getattr(finish_reason, "name", None) or finish_reason or "")
+        # An SDK enum renders as "FinishReason.MAX_TOKENS"; a plain string does
+        # not. Taking the last dot-segment reads both without asking which one
+        # this provider hands back.
+        return raw.strip().upper().rsplit(".", 1)[-1] in _TRUNCATED_REASONS
+    except Exception:
+        return False
+
+
 def blank_request_usage() -> dict:
-    """The per-call usage shape, every key present and zeroed. Never raises."""
-    return {"input_tokens": 0, "output_tokens": 0, **cache_usage()}
+    """The per-call usage shape, every key present and zeroed. Never raises.
+
+    `finish_reason` is None until a provider reports one, and it is here rather
+    than on an attribute of its own for the same reason the cache keys are: this
+    dict is reset before every request, so a call the provider says nothing about
+    cannot inherit the previous call's answer.
+    """
+    return {"input_tokens": 0, "output_tokens": 0, "finish_reason": None,
+            **cache_usage()}
 
 
 def cache_usage_from_openai(usage) -> dict:
@@ -504,7 +536,8 @@ def estimate_tokens_roughly(text: str) -> int:
 def record_call(provider: str, model: str, input_tokens: int, output_tokens: int,
                 *, lane: Optional[str] = None, user_scope_id: Any = _UNSET,
                 session_id: Optional[str] = None, reported: bool = True,
-                estimated: bool = False, cache: Optional[dict] = None) -> CostEstimate:
+                estimated: bool = False, cache: Optional[dict] = None,
+                finish_reason: Optional[str] = None) -> CostEstimate:
     """Record ONE model call: the ledger entry, the lane total, and a log line.
 
     THE entry point for accounting. Everything that reaches a model goes through
@@ -521,6 +554,11 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
     from them would lose history the moment that happened. If a future reader
     needs per-call detail as data, it belongs in the ledger, not in a parser
     pointed at these lines.
+
+    `finish_reason` is the provider's own word for why the response stopped. It
+    is recorded rather than acted on: until it is measured, nothing here knows
+    how often a reply is cut short by the output limit, because the one branch
+    that sees it writes to a terminal and to no file at all.
     """
     est = estimate_cost(provider, model, input_tokens, output_tokens, cache=cache)
     lane_name = str(lane or _LANE.get() or "main")
@@ -536,6 +574,7 @@ def record_call(provider: str, model: str, input_tokens: int, output_tokens: int
         append_usage_log((
             f"lane={lane_name} provider={provider or '?'} model={model or '?'} "
             f"in={est.input_tokens} out={est.output_tokens}"
+            + (f" cut={finish_reason}" if was_truncated(finish_reason) else "")
             + (f" cache_read={est.cache_read_tokens} cache_write={est.cache_write_tokens}"
                f" cache_hit={est.cache_hit_percent():.1f}%"
                if est.cache_measured else "")

@@ -34,6 +34,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whichever model you run.
 
 ### Fixed
+- **The Memory page could come up empty, saying only "Failed to fetch graph".**
+  Starting VAF straight into the tray, which is what the macOS app icon does, ran two
+  imports of the memory package at the same moment: the tray checking whether the
+  database is up, and the web server mounting the memory routes. The package pulled all
+  of its public names in at import time, and one of them leads back into the package
+  itself. In a single thread Python absorbs that; with two, each waits for a lock the
+  other holds, and the interpreter gives up on the import. The routes were then never
+  mounted, so every memory request answered with a plain 404 and nothing on screen said
+  why. Storing anything failed just as quietly. Those names are now resolved on first
+  use instead of at import, so the two starts no longer collide. Nothing about how you
+  use memory changes, and the same names remain importable from the package as before.
 - **Two things happening at once can no longer make a call vanish from the spend
   record.** The daily record is read, updated and written back as a whole, and several
   parts of VAF write into the same one: the web workers, the tray, background runs and

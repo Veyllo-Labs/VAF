@@ -370,10 +370,15 @@ and are not:
   for `clone`/`clone3`/`unshare`/`setns`, so the namespace sandbox works with **no
   added capability** (measured 2026-08-26: renderers run in their own user and PID
   namespaces). The entrypoint probes for user namespaces at startup (`unshare -U`);
-  a runtime that does not apply the profile gets a loud warning and a
-  `--no-sandbox --test-type` fallback, because an unsandboxed browser still beats a
-  crash-looping one. In the normal deployment neither flag is passed and no warning
-  bar exists to suppress.
+  a runtime that does not apply the profile gets a loud warning and a `--no-sandbox`
+  fallback, because an unsandboxed browser still beats a crash-looping one.
+- **`--test-type` stays, sandbox or not.** Chromium's yellow "unsupported
+  command-line flag ... Stability and security will suffer" infobar fires for ANY
+  non-standard flag, not only `--no-sandbox`: dropping the suppressor together with
+  `--no-sandbox` brought the bar straight back, now naming the load-bearing anti-bot
+  flag `--disable-blink-features=AutomationControlled` (measured live). The wording is
+  Chromium boilerplate about non-standard flags, not a statement about this setup.
+  `--test-type` is not visible to pages: `navigator.webdriver` stays false.
 - **A window manager** (matchbox, ~300 KB) keeps the window at the size of the display,
   which changes whenever a viewer asks for its own geometry.
 - **No session restore.** The supervisor kills Chromium with SIGKILL, which marks the

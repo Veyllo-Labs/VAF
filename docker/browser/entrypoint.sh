@@ -121,10 +121,7 @@ SANDBOX_ARGS=""
 if unshare -U true 2>/dev/null; then
     echo "User namespaces available: Chromium sandbox ENABLED"
 else
-    # --test-type suppresses exactly one thing here: the yellow "unsupported
-    # command-line flag: --no-sandbox" infobar (56px of display, measured).
-    # It is not visible to pages: navigator.webdriver stays false.
-    SANDBOX_ARGS="--no-sandbox --test-type"
+    SANDBOX_ARGS="--no-sandbox"
     echo "WARNING: user namespaces unavailable; running WITHOUT Chromium's sandbox"
 fi
 
@@ -154,9 +151,16 @@ echo "UA: $USER_AGENT"
 #
 # $SANDBOX_ARGS is empty in the normal deployment: the sandbox probe above
 # found user namespaces (granted by VAF's seccomp profile), so Chromium runs
-# WITH its own sandbox and no warning bar exists to suppress. Only when the
-# probe fails does the variable carry --no-sandbox --test-type; the history
-# of that pair, and the measurement that freed us from it, live at the probe.
+# WITH its own sandbox; only a failed probe adds --no-sandbox.
+#
+# --test-type stays a STANDING flag, sandbox or not: it suppresses the yellow
+# "unsupported command-line flag ... Stability and security will suffer"
+# infobar (56px of display, measured), which fires for ANY non-standard flag,
+# not only --no-sandbox - dropping it alongside --no-sandbox brought the bar
+# straight back naming --disable-blink-features=AutomationControlled (live,
+# first open after the sandbox round). That anti-bot flag is load-bearing and
+# stays, so the suppressor stays with it. Not visible to pages:
+# navigator.webdriver stays false, verified in this container.
 #
 # NOT --kiosk. It hides the browser UI and ALSO disables the right-click context
 # menu - and that menu is a feature here, not decoration: it is where "save as",
@@ -246,6 +250,7 @@ start_chromium() {
         --disable-session-crashed-bubble \
         --hide-crash-restore-bubble \
         $SANDBOX_ARGS \
+        --test-type \
         --disable-dev-shm-usage \
         --remote-debugging-port=9223 \
         --disable-blink-features=AutomationControlled \

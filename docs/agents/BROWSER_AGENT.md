@@ -625,7 +625,7 @@ Both container lanes - the compose service and the per-user pool's `docker run` 
 
 A renderer exploit therefore lands inside Chromium's namespace sandbox first, and only then inside a capability-stripped container. The profile is read by the docker CLIENT (compose resolves it relative to the repo root; the pool passes an absolute path), so it ships in the checkout, not in the image.
 
-Deliberate: Chromium's password manager is pinned ON by managed policy, together with address autofill. It is what lets an AGENT run carry a session on: VAF's own per-scope cookie store restores the SESSION, but when a cookie has expired and a login form appears, only a saved credential gets past it. As a profile preference this was fragile twice over - a stray toggle in the browser's settings silenced it (measured: the shared container's profile carried `credentials_enable_service:false` while the image default is on), and every cross-user handover wipes the profile and its preferences with it. A managed policy survives both. Two prices, both named: without a keyring in the container Chromium falls back to its `basic` password store, which is weak at rest, so saved passwords belong on a DEDICATED per-user instance whose profile volume is that one person's, never on the shared fallback (where the handover wipe deletes them at every change of hands anyway). And `AutofillCreditCardEnabled` is deliberately left OFF: a browser an agent can drive should not be able to auto-fill payment data into whatever form it opens.
+Deliberate: Chromium's password manager is pinned ON by managed policy (`PasswordManagerEnabled` in `/etc/chromium/policies/managed/vaf-security.json`, written by the Dockerfile), together with address autofill (`AutofillAddressEnabled`). It is what lets an AGENT run carry a session on: VAF's own per-scope cookie store restores the SESSION, but when a cookie has expired and a login form appears, only a saved credential gets past it. As a profile preference this was fragile twice over - a stray toggle in the browser's settings silenced it (measured: the shared container's profile carried `credentials_enable_service:false` while the image default is on), and every cross-user handover wipes the profile and its preferences with it. A managed policy survives both. Two prices, both named: without a keyring in the container Chromium falls back to its `basic` password store, which is weak at rest, so saved passwords belong on a DEDICATED per-user instance whose profile volume is that one person's, never on the shared fallback (where the handover wipe deletes them at every change of hands anyway). And `AutofillCreditCardEnabled` is deliberately left OFF: a browser an agent can drive should not be able to auto-fill payment data into whatever form it opens.
 
 ### Content blocking and DNS filtering
 
@@ -701,6 +701,15 @@ govern it, all admin-only:
 | `browser_pool_min_free_mb` | `2500` | Free-memory floor; below it no NEW instance is started. |
 | `browser_pool_idle_seconds` | `900` | When an unused instance is stopped to give its RAM back (data kept). |
 | `browser_pool_strict` | `False` | Strict mode: no dedicated instance means BUSY, never the shared fallback. |
+
+**A personal browser follows the image.** A container is pinned for life to the image ID
+it was created from, so without this the per-user browsers - the ones people actually work
+in - would be the LAST to receive a Chromium security fix, while the shared browser is
+rebuilt by the stack start and by the age gate above. Before an instance is adopted, its
+image ID is compared against the one the shared container runs; on a mismatch the
+container is removed and recreated on the current image. The profile volume is named and
+remounted, so history, logins and bookmarks come back with it - only the stale binary is
+thrown away.
 
 **Fallbacks are visible, and strict mode refuses them.** With the pool active, every
 resolution that ends on the shared container (capacity, memory floor, docker trouble)
@@ -1044,6 +1053,22 @@ before that fix, rebuild:
 ```bash
 docker compose -f docker-compose.memory.yml up -d --build vaf-browser
 ```
+
+### Container is `(unhealthy)`, logs repeat `The profile appears to be in use by another Chromium process ... on another computer`
+
+A per-user browser keeps its profile in a named volume so logins survive, but the
+container around it is disposable. Chromium's `SingletonLock` inside that profile
+records `hostname-pid`, so after a hard stop (a force-removed container, a host reboot)
+the next container meets a lock naming a machine that no longer exists, reads it as "in
+use on another computer" and refuses to start - forever, one supervisor relaunch per
+second, while every browser open first waits out the full health deadline before falling
+back to the shared browser.
+
+`start_chromium` now deletes the singleton artifacts before each launch, which is safe by
+construction: the supervisor's loop-top `pkill -9` already guarantees only one Chromium
+per container, and that is the only thing the lock could protect. If you meet this on an
+image built before that fix, `docker rm -f <container>` is enough - the profile volume
+and its logins are not touched.
 
 ### Agent keeps failing steps / `VAFLLMBridge: cannot parse`
 

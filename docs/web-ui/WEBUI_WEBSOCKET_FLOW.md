@@ -89,7 +89,8 @@ non-localhost client must come from an RFC1918 IP, present a valid `access` JWT,
 | Network disabled + localhost, missing/invalid token | reject - close `4001` |
 | Network enabled + non-RFC1918 IP | reject - close `4003` |
 | Network enabled + no token | reject - close `4001` |
-| Token expired / invalid | reject - close `4001` |
+| Token EXPIRED, from **localhost** | accept - fall through to the local-admin floor below (see the note) |
+| Token expired (non-localhost) / token invalid (any origin) | reject - close `4001` |
 | 2FA required and not verified (and not admin+localhost) | reject - close `4003` |
 | Auth-phase error (secret/import/other) for a **non-localhost** client | reject - close `4003` (fail-closed) |
 | Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
@@ -98,6 +99,19 @@ Every rejected NETWORK handshake (`_emit_sec_ws` in `vaf/core/web_server.py`) al
 `ws_rejected` security event into the security event log (admin-only `GET /api/security/events`,
 mirrored human-readably into `security_<date>.log`); the trusted-localhost rejection paths in
 network-disabled mode do not emit.
+
+**Why an expired token from localhost is not a rejection.** A login is valid for
+`local_network_jwt_expiry_hours` (24 by default), and the desktop window keeps the token it
+was given. Rejecting it here while the HTTP routes floor the same caller to the local admin
+(`get_current_user_or_local_admin`) put the two lanes in disagreement, and the disagreement
+was a deadlock: the socket was refused, the client's `/api/auth/me` re-check answered `200`,
+so it never routed to `/login` and retried forever - and with no client ever connected, the
+tray's idle check shut the whole Docker stack down (live incident 2026-08-26, twice within
+twenty minutes). An expired token from the machine itself is that machine's own former
+login, so it now falls through with no user context and the localhost local-admin floor
+further down decides, exactly as a tokenless localhost socket already did. A malformed or
+forged token (`InvalidTokenError`) stays a hard reject from every origin, and non-localhost
+clients keep the strict behaviour: expiry means log in again.
 
 **Client reconnect (`web/app/page.tsx`).** The browser only opens `/ws` once `GET /api/auth/me` reports an
 authenticated session, and reconnects with **exponential backoff + jitter (capped 30s)** rather than a fixed

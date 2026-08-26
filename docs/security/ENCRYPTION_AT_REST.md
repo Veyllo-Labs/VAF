@@ -197,7 +197,16 @@ so the next round starts from a number rather than a memory:
 | Channel messages | `<data_dir>/channel_messages.db` | Full WhatsApp/Telegram/Discord message bodies, sender ids | Column-level AEAD plus moving one `LIKE` search into Python (`channel_message_store.py:330`) |
 | Email sync (legacy lane) | `<data_dir>/email_sync.db` | Subject, sender, body snippet | Same, plus one legacy `LIKE` fallback (`email_sync_store.py:396`) |
 | Speaker profiles | `~/.vaf/speaker_profiles/<scope>/` | Voice biometrics (`.npy` centroids) and enrolled names | Twelve numpy/JSON I/O sites; the arrays need a binary wrapper, not the text helper |
+| The BROWSER's own profile, inside the container | docker volume `vaf-browser-profile-<hash>`, mounted at `/home/browser` | The live cookie database and any password Chromium itself saved, for the sites that per-user browser is logged into | Chromium encrypts these with `os_crypt`, and with no keyring in the container it falls back to the `basic` backend, whose key is a hardcoded constant - so it is plaintext to anyone who can read the volume. Closing it means giving the container a keyring (gnome-keyring plus libsecret, unlocked at start with a per-scope passphrase), not a change on VAF's side. NOT the same thing as `~/.vaf/browser_sessions/` in the table above: that is VAF's own store and it IS encrypted |
 | Legacy gzipped chats | `~/.vaf/sessions/*.json.gz` | Whole chat transcripts written by an older release | Gzip is its own container: the sweep skips `.gz` and the reader keys on the extension. Nothing writes new ones; a pre-existing file only keeps its extension when it is rewritten |
+
+Read the browser rows together, because they are easy to confuse: VAF's own
+per-scope cookie store left this list in the banking round, while the browser's
+own profile inside the container did not. The first is what a login saved by
+hand or by an agent is written to; the second is what the running Chromium
+works with. On the shared container the profile is wiped at every change of
+hands anyway; on a dedicated per-user instance it persists, which is exactly
+where the weakness lives.
 
 Browser sessions left this list in the banking round: the store is encrypted,
 the migration sweeps pre-existing plaintext files, and the agent lane uses the

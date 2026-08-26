@@ -615,6 +615,30 @@ The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to 
 
 The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname - a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
 
+### The stream port is the weaker twin of the CDP port
+
+Named because it is measured, not because it is comfortable. KasmVNC on `6901` runs with
+`-disableBasicAuth -SecurityTypes None` (see `docker/browser/entrypoint.sh`) and is published on
+`127.0.0.1` exactly like CDP - but the two are NOT equally defended, and the difference runs the
+wrong way:
+
+- **CDP refuses a browser page.** Measured: its WebSocket endpoint answers `403` to any request
+  carrying an `Origin` header at all, `/json/*` sends no CORS header, and arbitrary DNS names are
+  rejected in the `Host` header. A page in the user's ordinary browser cannot drive it.
+- **The stream accepts one.** KasmVNC requires an `Origin` header to be PRESENT and then accepts
+  any value. A page's WebSocket API always sends `Origin` and cannot suppress it, so a page open
+  in the user's normal browser can complete the handshake against `ws://127.0.0.1:6901` and get a
+  bidirectional RFB channel: framebuffer out, `KeyEvent`/`PointerEvent` in. That is read AND
+  control of whatever session is logged in.
+- **Both are open to any local process** under the host trust boundary described above. For the
+  stream that is the same class as CDP; the page vector is the part CDP does not have.
+
+The loopback publish is what keeps the LAN out, and the ticketed proxy
+(`/api/browser-vnc/t/<ticket>/`) is what gates the intended path - neither is an access control on
+the port itself. Until this is closed, treat a machine that browses the ordinary web in another
+browser while a sensitive session is open in the sandbox browser as a machine where those two can
+meet.
+
 ### Container hardening
 
 Both container lanes - the compose service and the per-user pool's `docker run` - start the browser with the same hardening, pinned against each other by `tests/test_browser_entrypoint_supervise.py` and `tests/test_browser_pool.py`:

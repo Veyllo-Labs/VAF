@@ -76,6 +76,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **The desktop window can no longer lock itself out with an old login.** A login is
+  valid for 24 hours, and a window that stayed connected past that point kept working
+  until the next restart, then hammered the server with its expired token forever: the
+  live connection was refused while ordinary requests from the same machine were still
+  answered as the local admin, so the window never showed the login page, and after a
+  few minutes with "no clients connected" the tray shut the whole stack down as idle.
+  An expired token from the OWN machine is now treated like no token at all - the
+  desktop window reconnects under the same local-admin policy every other request from
+  the machine already got. Remote devices still log in freshly, and a forged token is
+  still refused everywhere.
+- **The browser cleanup works inside the hardened container.** The new hardening drops
+  every container capability, which took down the very tools the user-change cleanup
+  and the workspace mirror relied on: a root exec could no longer create the wipe
+  marker in the browser user's home, and the mirror's copy-then-chown left files under
+  the wrong owner. Both now work AS the browser user - the marker is the user's own
+  file, and the mirror arrives as a tar stream unpacked inside the container - so no
+  capability had to be given back. Found live: the very first browser open after the
+  hardening was refused by the new fail-closed handover, exactly as designed.
 - **The terminal no longer fills with a memory warning that could never resolve.** The
   headless runner warned and ran a cleanup every thirty seconds once the process passed
   2 GB, but with the embedding model deliberately kept loaded the process idles above

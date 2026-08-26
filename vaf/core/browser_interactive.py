@@ -497,6 +497,24 @@ def _eligible_workspace_files(root) -> List[tuple]:
     return out
 
 
+def _tar_stream_to_container(container_name: str, tar_path: str) -> int:
+    """Extract a host tar INSIDE the container as its own user; returncode.
+    The seam the mirror tests stub. Replaces `docker cp` + root chown: under
+    cap_drop ALL even a root exec has no CAP_CHOWN, and cp would strand the
+    files under the host uid - extraction as the browser user owns them."""
+    try:
+        import subprocess
+        from vaf.core.service_stack import resolve_docker_exe
+        with open(tar_path, "rb") as tar_in:
+            r = subprocess.run(
+                [resolve_docker_exe(), "exec", "-i", container_name,
+                 "tar", "-xf", "-", "-C", _WS_CONTAINER_DIR],
+                stdin=tar_in, capture_output=True, timeout=300)
+        return int(r.returncode)
+    except Exception:
+        return 1
+
+
 def _sync_workspace_to_container(container_name: str, user_scope_id: str,
                                  prev_sig) -> tuple:
     """Mirror the owner's files into the browser. Returns (signature, paths).
@@ -505,8 +523,11 @@ def _sync_workspace_to_container(container_name: str, user_scope_id: str,
     agent's upload_file action) can only see the CONTAINER filesystem, so
     uploading "my PDF" is impossible unless the file exists in there. The
     mirror is one-way (host wins, container copy is disposable), bulk (one
-    docker cp of a staged tree, not one exec per file), and signature-gated:
-    an unchanged workspace costs a directory walk and nothing else. `paths`
+    tar stream of a staged tree, not one exec per file), and signature-gated:
+    an unchanged workspace costs a directory walk and nothing else. The tar
+    is EXTRACTED INSIDE the container as the browser user, deliberately not
+    `docker cp` + root chown: under cap_drop ALL even a root exec has no
+    CAP_CHOWN, and cp would strand the files under the host uid. `paths`
     always lists every mirrored file's container path - the agent's upload
     whitelist - whether or not a copy happened this round. BLOCKING: call off
     the event loop. Never raises."""
@@ -526,6 +547,7 @@ def _sync_workspace_to_container(container_name: str, user_scope_id: str,
             return sig, paths
 
         import shutil
+        import tarfile
         import tempfile
         staging = tempfile.mkdtemp(prefix="vaf-browser-ws-")
         try:
@@ -533,17 +555,19 @@ def _sync_workspace_to_container(container_name: str, user_scope_id: str,
                 dest = os.path.join(staging, rel)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.copy2(os.path.join(os.fspath(root), rel), dest)
-            _docker(["exec", "-u", "root", container_name, "sh", "-c",
-                     f"mkdir -p {_WS_CONTAINER_DIR} && chown -R browser:browser {_WS_CONTAINER_DIR}"],
-                    timeout=20)
-            r = _docker(["cp", f"{staging}/.", f"{container_name}:{_WS_CONTAINER_DIR}/"],
-                        timeout=300)
-            if r.returncode != 0:
+            tar_path = staging + ".tar"
+            with tarfile.open(tar_path, "w") as tf:
+                for rel, _s, _m in files:
+                    tf.add(os.path.join(staging, rel), arcname=rel)
+            _docker(["exec", container_name, "mkdir", "-p", _WS_CONTAINER_DIR], timeout=20)
+            if _tar_stream_to_container(container_name, tar_path) != 0:
                 return prev_sig, paths
-            _docker(["exec", "-u", "root", container_name, "sh", "-c",
-                     f"chown -R browser:browser {_WS_CONTAINER_DIR}"], timeout=20)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+            try:
+                os.unlink(staging + ".tar")
+            except Exception:
+                pass
         append_domain_log("webui",
                           f"[browser_interactive] workspace mirrored into browser: "
                           f"{len(files)} file(s)")
@@ -696,10 +720,14 @@ def request_profile_wipe(container_name: str = "vaf-browser") -> None:
         import subprocess
         from vaf.core.service_stack import resolve_docker_exe
         docker = resolve_docker_exe()
+        # As the container's own user, deliberately NOT -u root: with the
+        # hardened container (cap_drop ALL) even root lacks CAP_DAC_OVERRIDE
+        # and CAP_CHOWN, so a root exec cannot write into browser's home at
+        # all (measured live: the marker could not be set). The browser user
+        # owns the home, needs no chown, and may signal its own Chromium.
         subprocess.run(
-            [docker, "exec", "-u", "root", container_name, "sh", "-c",
+            [docker, "exec", container_name, "sh", "-c",
              "touch /home/browser/.scrub-profile"
-             " && chown browser:browser /home/browser/.scrub-profile"
              " && pkill chromium"],
             timeout=20, capture_output=True,
         )
@@ -708,17 +736,18 @@ def request_profile_wipe(container_name: str = "vaf-browser") -> None:
         append_domain_log("webui", f"[browser_interactive] full scrub failed (quick scrub still ran): {e}")
 
 
-def _wipe_exec(container_name: str, shell_cmd: str, *, as_root: bool = False,
-               timeout: float = 20) -> int:
+def _wipe_exec(container_name: str, shell_cmd: str, *, timeout: float = 20) -> int:
     """One `docker exec` for the verified wipe, answering the returncode.
     Non-zero on any failure including a missing docker. The single seam the
-    verified-wipe unit tests stub."""
+    verified-wipe unit tests stub. Runs as the container's OWN user on
+    purpose: under cap_drop ALL a root exec has no CAP_DAC_OVERRIDE/CAP_CHOWN
+    and cannot even touch a file in browser's home (measured live), while the
+    browser user owns everything the wipe protocol needs."""
     try:
         import subprocess
         from vaf.core.service_stack import resolve_docker_exe
         docker = resolve_docker_exe()
-        user = ["-u", "root"] if as_root else []
-        r = subprocess.run([docker, "exec", *user, container_name, "sh", "-c", shell_cmd],
+        r = subprocess.run([docker, "exec", container_name, "sh", "-c", shell_cmd],
                            timeout=timeout, capture_output=True)
         return int(r.returncode)
     except Exception:
@@ -742,7 +771,10 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
        `touch && chown && pkill` chain reported pkill's rc, and pkill answers 1
        when Chromium happened to be down (a crash window) although the marker
        WAS dropped - a false refusal with a live marker left behind, which
-       would wipe the profile at some unrelated future relaunch.
+       would wipe the profile at some unrelated future relaunch. As the
+       browser user, never root: under cap_drop ALL a root exec cannot write
+       into browser's home (no CAP_DAC_OVERRIDE), and browser owns the home,
+       so no chown is needed either.
     2. Kill Chromium, best-effort (`|| true`).
     3. Poll for the marker's ABSENCE (the wipe confirmation; relaunch is
        measured at 3-5s, the deadline is generous).
@@ -751,9 +783,7 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
     Module-level like request_profile_wipe so tests can stub it as bi.<name>.
     """
     marker = "/home/browser/.scrub-profile"
-    if _wipe_exec(container_name,
-                  f"touch {marker} && chown browser:browser {marker}",
-                  as_root=True) != 0:
+    if _wipe_exec(container_name, f"touch {marker}") != 0:
         append_domain_log("webui", "[browser_interactive] verified wipe: marker could not be set")
         return False
     _wipe_exec(container_name, "pkill chromium || true")
@@ -765,7 +795,7 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
             break
         time.sleep(0.5)
     if not confirmed:
-        _wipe_exec(container_name, f"rm -f {marker}", as_root=True)
+        _wipe_exec(container_name, f"rm -f {marker}")
         append_domain_log("webui", "[browser_interactive] verified wipe: marker not consumed in time")
         return False
     if cdp_base:

@@ -4038,10 +4038,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     log("API", f"WebSocket authenticated: {user_context.get('username')}")
                     
                 except jwt.ExpiredSignatureError:
-                    log("API", f"WebSocket rejected: Expired token from {client_ip}")
-                    _emit_sec_ws("expired token", ip=client_ip)
-                    await websocket.close(code=4001, reason="Token expired")
-                    return
+                    if is_localhost_client:
+                        # The desktop window keeps its last token past the 24h
+                        # expiry, and a hard reject here locks the desktop out
+                        # of its own machine in an endless retry loop: the WS
+                        # lane refuses while the HTTP routes floor localhost to
+                        # the local admin (get_current_user_or_local_admin), so
+                        # the frontend's /api/auth/me re-check answers 200 and
+                        # never routes to /login (live incident: minutes of
+                        # rejected reconnects until the tray idle-stopped the
+                        # stack). An EXPIRED token is this machine's own former
+                        # login; fall through with no user context and let the
+                        # localhost local-admin floor below decide - the exact
+                        # policy the HTTP lane already applies. A garbage token
+                        # (InvalidTokenError) stays a hard reject, and network
+                        # clients keep the strict behaviour either way.
+                        log("API", "WebSocket: expired token from localhost -> desktop local-admin floor")
+                        user_context = None
+                    else:
+                        log("API", f"WebSocket rejected: Expired token from {client_ip}")
+                        _emit_sec_ws("expired token", ip=client_ip)
+                        await websocket.close(code=4001, reason="Token expired")
+                        return
                 except jwt.InvalidTokenError:
                     log("API", f"WebSocket rejected: Invalid token from {client_ip}")
                     _emit_sec_ws("invalid token", ip=client_ip)

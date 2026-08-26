@@ -634,22 +634,27 @@ def test_workspace_mirror_walk_caps_and_signature(monkeypatch, tmp_path):
         return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(bp, "_docker", fake_docker)
+    # The copy lane is a tar extracted INSIDE the container as the browser
+    # user (docker cp + root chown died with cap_drop ALL); the seam records.
+    tars = []
+    monkeypatch.setattr(bi, "_tar_stream_to_container",
+                        lambda name, tar_path: (tars.append((name, tar_path)) or 0))
     monkeypatch.setattr(session_mod, "get_user_projects_root", lambda scope: root)
 
     sig, paths = bi._sync_workspace_to_container("vaf-browser", "scope-a", None)
     assert sorted(paths) == ["/home/browser/Workspace/report.pdf",
                              "/home/browser/Workspace/sub/notes.txt"]
-    assert any(c[0] == "cp" for c in calls)
+    assert len(tars) == 1
     # Unchanged tree: the signature short-circuits, no second copy.
-    calls.clear()
+    tars.clear()
     sig2, paths2 = bi._sync_workspace_to_container("vaf-browser", "scope-a", sig)
     assert sig2 == sig and sorted(paths2) == sorted(paths)
-    assert not any(c[0] == "cp" for c in calls)
+    assert tars == []
     # A new file changes the signature and triggers a copy again.
     (root / "new.md").write_bytes(b"n" * 10)
     sig3, paths3 = bi._sync_workspace_to_container("vaf-browser", "scope-a", sig)
     assert sig3 != sig and "/home/browser/Workspace/new.md" in paths3
-    assert any(c[0] == "cp" for c in calls)
+    assert len(tars) == 1
 
 
 def test_mirror_relatives_are_posix_even_on_a_windows_host(monkeypatch, tmp_path):

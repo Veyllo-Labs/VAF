@@ -541,7 +541,8 @@ partition:
   the run's scope), or an unknown jar after a server restart - the whole Chromium
   profile is wiped before the new scope's stored logins are optionally loaded:
   cookies, every site's stored state, history, Chromium-saved passwords, autofill,
-  bookmarks, downloads and the HTTP cache die together. The wipe is VERIFIED (the
+  bookmarks, downloads, the HTTP disk cache and the NSS certificate/key database
+  (client certificates AND their private keys) die together. The wipe is VERIFIED (the
   supervisor's consumption of the wipe marker is confirmed), and a handover whose
   wipe cannot be confirmed is REFUSED - no lease, no run, a
   `browser_handover_failed` security event - instead of proceeding over the previous

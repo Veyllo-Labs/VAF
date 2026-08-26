@@ -95,7 +95,15 @@ def test_profile_scrub_marker_is_honoured_between_launches():
     filesystem survives restarts), so the wipe lives here or nowhere."""
     src = _script()
     assert ".scrub-profile" in src
-    assert "rm -rf /home/browser/.config/chromium /home/browser/Downloads /home/browser/Workspace" in src
+    # All THREE trees Chromium writes credentials into, not just the profile:
+    # the HTTP disk cache kept the previous holder's cached response bodies
+    # (measured live, 2.8 MB), and the NSS database holds client certificates
+    # WITH their private keys - both survived the wipe while the docs claimed
+    # otherwise.
+    for path in ("/home/browser/.config/chromium", "/home/browser/.cache/chromium",
+                 "/home/browser/.local/share/pki", "/home/browser/Downloads",
+                 "/home/browser/Workspace"):
+        assert path in src, f"the cross-user wipe no longer covers {path}"
     # The file picker is anchored to the transfer folders: XDG dirs plus a GTK
     # bookmark plus the seeded start directory - without them "upload from my
     # workspace" begins in the container's empty home.

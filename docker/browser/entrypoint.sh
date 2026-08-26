@@ -200,10 +200,18 @@ start_chromium() {
     # what a container restart cannot do (the container filesystem survives
     # restarts), and it removes what the CDP scrub cannot reach: history,
     # passwords saved in Chromium's own password manager, autofill, bookmarks
-    # and downloaded files. The content blocker comes back by itself: the
+    # and downloaded files. THREE trees, not one: the profile under .config,
+    # the HTTP disk cache under .cache (measured: 2.8 MB of cached response
+    # bodies with the previous holder's hostnames survived a handover while
+    # the docs claimed the cache was wiped), and the NSS database under
+    # .local/share/pki, which is where a client certificate AND ITS PRIVATE
+    # KEY live - the one credential a banking or enterprise-SSO login leaves
+    # behind that is worse than a cookie. The content blocker comes back by itself: the
     # external-extensions provider reinstalls it into the fresh profile.
     if [ -f /home/browser/.scrub-profile ]; then
-        rm -rf /home/browser/.config/chromium /home/browser/Downloads /home/browser/Workspace
+        rm -rf /home/browser/.config/chromium /home/browser/.cache/chromium \
+               /home/browser/.local/share/pki \
+               /home/browser/Downloads /home/browser/Workspace
         rm -f /home/browser/.scrub-profile
         echo "Profile scrubbed for user handover"
     fi

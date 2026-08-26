@@ -851,7 +851,8 @@ too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
 **A change of hands is not configurable.** When the shared browser passes to a DIFFERENT
 user scope (a foreign interactive lease or agent run, or an unknown jar after a server
 restart), the whole Chromium profile is wiped - history, Chromium-saved passwords,
-autofill, bookmarks, downloads, HTTP cache, and every site's stored state - via a marker
+autofill, bookmarks, downloads, the HTTP disk cache, the NSS certificate and key
+database, and every site's stored state - via a marker
 the container's supervisor consumes between Chromium launches, and VAF VERIFIES that
 consumption before granting the browser (cost: one Chromium relaunch, ~3-5 s). The
 handover is fail-closed: a wipe that cannot be confirmed refuses the lease or the run,

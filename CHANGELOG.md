@@ -81,6 +81,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **A browser user change now also erases the cache and the certificate store.** The
+  cleanup between two people wiped the browser profile but left two neighbouring
+  folders untouched: the page cache, which still held the previous person's browsed
+  pages (measured: 2.8 MB naming real sites), and the certificate database, which is
+  where a client certificate and its private key live - the one leftover worse than a
+  cookie. Both are wiped with the profile now, and the documentation that already
+  claimed the cache was erased is true for the first time.
 - **The desktop window can no longer lock itself out with an old login.** A login is
   valid for 24 hours, and a window that stayed connected past that point kept working
   until the next restart, then hammered the server with its expired token forever: the

@@ -86,6 +86,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   desktop window reconnects under the same local-admin policy every other request from
   the machine already got. Remote devices still log in freshly, and a forged token is
   still refused everywhere.
+- **A hard stop can no longer brick a personal browser.** Chromium writes a lock file
+  into its profile naming the machine and process that own it. A personal browser's
+  profile lives on so its logins survive, and after a hard stop (a force-removed
+  container, a host reboot) the stale lock met the next container's new hostname,
+  which Chromium reads as "in use on another computer" and refuses forever - the
+  instance relaunched in an endless loop, and every browser open first waited out its
+  full health deadline before falling back to the shared browser, minutes instead of
+  seconds. The launcher now clears the stale lock before each start; nothing is lost,
+  because the supervisor already guarantees only one Chromium ever runs per container.
 - **The browser cleanup works inside the hardened container.** The new hardening drops
   every container capability, which took down the very tools the user-change cleanup
   and the workspace mirror relied on: a root exec could no longer create the wipe

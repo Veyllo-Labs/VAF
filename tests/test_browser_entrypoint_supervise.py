@@ -106,6 +106,10 @@ def test_profile_scrub_marker_is_honoured_between_launches():
     # supervisor relaunch pass through it), before Chromium comes up.
     body = src.split("start_chromium() {", 1)[1].split("\n}", 1)[0]
     assert ".scrub-profile" in body
+    # Stale SingletonLock after a hard stop: a pooled profile VOLUME meeting a
+    # new container hostname reads as "in use on another computer" and Chromium
+    # never starts again - the launcher must clear the singleton artifacts.
+    assert "Singleton" in body
 
 
 def test_dns_filtering_is_the_security_variant_never_the_family_one():

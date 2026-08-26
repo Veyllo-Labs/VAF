@@ -204,6 +204,18 @@ start_chromium() {
         echo "Profile scrubbed for user handover"
     fi
 
+    # Stale profile-singleton artifacts. Chromium's SingletonLock records
+    # "hostname-pid"; after a hard stop (docker rm -f, a host reboot) the
+    # lock survives in the profile, and a pooled instance's profile VOLUME
+    # then meets a NEW container hostname - Chromium reads that as "in use
+    # on another computer" and refuses to start, forever, one relaunch per
+    # supervisor round (live incident: an unhealthy pool instance taxed
+    # every browser open with its full health deadline). Deleting them here
+    # is safe by construction: the supervisor's loop-top pkill -9 guarantees
+    # no second Chromium runs in this container, which is the only thing the
+    # lock could ever be protecting.
+    rm -f /home/browser/.config/chromium/Singleton* 2>/dev/null || true
+
     # The two transfer folders, and the file picker anchored to them. VAF
     # mirrors the holder's files into Workspace (uploads) and drains Downloads
     # the other way; the XDG dirs plus the GTK bookmark put both one click away

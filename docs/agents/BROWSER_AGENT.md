@@ -565,6 +565,46 @@ See [Window Tiling](../web-ui/WINDOW_TILING_DESIGN.md) and [Workflow UI Componen
 
 ## Security
 
+### The security model, in layers
+
+A malicious page has to cross four independent layers before it reaches anything
+that matters; each layer exists on its own evidence and is pinned by its own tests:
+
+| Layer | What stands there | Where it is enforced |
+|---|---|---|
+| 1. Chromium's own sandbox | The page's renderer runs in its own user and PID namespace with Chromium's per-process seccomp-bpf filter (the layer-1/layer-2 design of [Chromium's sandbox documentation](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/linux/sandboxing.md)). Verified by namespace comparison of live renderer processes. | `docker/browser/chromium-seccomp.json` makes it possible; entrypoint probe |
+| 2. Hardened container | `cap_drop ALL` + `SYS_CHROOT` only, `no-new-privileges`, custom seccomp (Docker's default plus the user-namespace syscalls), non-root user, docker-init. A renderer escape lands here with no capabilities to use. | compose service + pool `docker run`, pinned by `tests/test_browser_entrypoint_supervise.py` and `tests/test_browser_pool.py` |
+| 3. Network partition | Loopback-only published ports, per-lease stream tickets through the VAF server, an isolated bridge network with no route to the database, one PRIVATE network per pooled instance, filtering DNS (1.1.1.2 + DoH) and uBlock Origin Lite. | compose + `browser_pool.py` |
+| 4. Per-user regime | A dedicated instance per user (pool, on by default) with its own profile volume; on the shared fallback a VERIFIED profile wipe on every change of hands, fail-closed, serialized; saved logins encrypted at rest (`VAFENC1`). | `browser_interactive.py`, `data_files.py` |
+
+Cross-cutting: every degradation is VISIBLE. A pool fallback, a refused handover and
+an overdue browser engine each raise a security event
+(`browser_pool_fallback`, `browser_handover_failed`, `browser_image_stale`) that the
+security dashboard shows, and the launch line carries a guard-test denylist of
+security-disabling flags because `--test-type` suppresses Chromium's own warning bar
+for every flag alike.
+
+### Fitness for sensitive accounts (banking, mail, bookkeeping)
+
+The layers above are what makes interactive logins to sensitive services a supported
+use. Three conditions frame it, and they are boundaries of the design, not bugs:
+
+1. **The HOST is the trust boundary.** CDP on `127.0.0.1:9222` carries no
+   authentication (see Network isolation below): anyone who can run a process on the
+   machine can drive the logged-in browser. Sensitive accounts belong on machines
+   whose local users are all trusted.
+2. **Multi-user deployments should set `browser_pool_strict`** (and size
+   `browser_pool_max` to the user count), so no two users' sessions can ever meet on
+   the shared fallback - the refusal is then a visible busy, never silent sharing.
+3. **Interactive use stays local; agent runs do not.** A `browser_agent` run over a
+   logged-in session sends page text (and, with vision, screenshots) to the
+   configured LLM provider - that is how the agent works. Type sensitive sessions by
+   hand in the interactive browser, or accept that exposure deliberately.
+
+Safe Browsing's list refresh is disabled with the rest of Chromium's background
+networking; the malware/phishing screen comes from the filtering DNS resolver and
+the content blocker instead (see Content blocking and DNS filtering below).
+
 ### Permission level: `write`
 
 `browser_agent` is classified as a `write` tool - it can navigate, click, and submit forms, but does not require a separate destructive-action confirmation gate. Actions visible in the live view give the user real-time oversight of what the agent is doing.

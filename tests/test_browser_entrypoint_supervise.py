@@ -149,3 +149,70 @@ def test_the_health_check_covers_the_stream_not_only_cdp():
     assert all("6901" in ln for ln in browser_probes), (
         f"compose health-check misses the stream half: {browser_probes}"
     )
+
+
+# ── container hardening: Chromium's own sandbox ───────────────────────────
+
+SECCOMP_PROFILE = ENTRYPOINT.parent / "chromium-seccomp.json"
+
+
+def test_no_sandbox_exists_only_as_the_probed_fallback():
+    """Chromium runs WITH its own sandbox: Docker's default seccomp profile was
+    the only blocker (clone(CLONE_NEWUSER) EPERM, measured 2026-08-26), and the
+    shipped profile lifts exactly that. --no-sandbox may only survive inside the
+    probe's fallback assignment for runtimes that do not apply the profile; a
+    bare --no-sandbox launch line is the regression this test pins out."""
+    src = _script()
+    code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    # the user-namespace probe decides, in if-form (a bare probe would abort under set -e)
+    assert "if unshare -U true" in code
+    # every non-comment line that says --no-sandbox is the fallback assignment
+    for ln in code.splitlines():
+        if "--no-sandbox" in ln:
+            assert "SANDBOX_ARGS=" in ln, f"--no-sandbox outside the fallback assignment: {ln!r}"
+    # the launch consumes the variable and never hardcodes the flag
+    body = src.split("start_chromium() {", 1)[1].split("\n}", 1)[0]
+    body_code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    assert "$SANDBOX_ARGS" in body_code
+    assert "--no-sandbox" not in body_code
+    # unshare comes from util-linux; pin the dependency instead of inheriting it
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    assert "util-linux" in docker
+
+
+def test_both_container_lanes_carry_the_hardening():
+    """The compose service and the pool's docker run are two copies of the same
+    start arguments (Rule 2); each must carry cap_drop ALL + SYS_CHROOT +
+    no-new-privileges + the seccomp profile, or one lane silently runs the
+    browser without Chromium's sandbox."""
+    compose = "\n".join(ln for ln in COMPOSE.read_text(encoding="utf-8").splitlines()
+                        if not ln.lstrip().startswith("#"))
+    browser_block = compose.split("vaf-browser:", 1)[1].split("\nvolumes:", 1)[0]
+    assert "cap_drop:" in browser_block and "- ALL" in browser_block
+    assert "- SYS_CHROOT" in browser_block
+    assert "no-new-privileges:true" in browser_block
+    assert "seccomp=./docker/browser/chromium-seccomp.json" in browser_block
+
+    pool_src = (ENTRYPOINT.parent.parent.parent / "vaf" / "core" / "browser_pool.py").read_text(
+        encoding="utf-8")
+    assert '"--cap-drop", "ALL"' in pool_src
+    assert '"--cap-add", "SYS_CHROOT"' in pool_src
+    assert '"no-new-privileges:true"' in pool_src
+    assert "chromium-seccomp.json" in pool_src
+
+
+def test_the_seccomp_profile_is_default_deny_plus_userns():
+    """The profile is Docker's default (deny by default) plus one allow rule for
+    the user-namespace syscalls Chromium's sandbox needs. A profile that lost
+    the deny default, or the rule, would either weaken the container or bring
+    back --no-sandbox via the entrypoint fallback."""
+    import json
+    profile = json.loads(SECCOMP_PROFILE.read_text(encoding="utf-8"))
+    assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
+    userns_rules = [
+        r for r in profile["syscalls"]
+        if r.get("action") == "SCMP_ACT_ALLOW"
+        and {"clone", "clone3", "unshare", "setns"} <= set(r.get("names", []))
+        and "includes" not in r and "excludes" not in r and "args" not in r
+    ]
+    assert userns_rules, "unconditional userns allow rule missing from the profile"

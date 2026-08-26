@@ -2935,8 +2935,12 @@ export default function SubAgentWindow({
                                         {interactive && !interactive.active && (interactive.status === 'busy' || interactive.status === 'error') && (
                                             <span className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
                                                 {interactive.status === 'busy'
-                                                    ? 'Another user is driving the browser right now.'
-                                                    : 'The browser container is not reachable. Start the Docker stack and try again.'}
+                                                    ? (interactive.reason === 'pool_exhausted'
+                                                        ? 'No dedicated browser is free right now (strict pool). Try again in a moment.'
+                                                        : 'Another user is driving the browser right now.')
+                                                    : interactive.reason === 'handover_failed'
+                                                        ? 'The browser could not be cleaned for a user change, so it was not handed over. Try again in a moment.'
+                                                        : 'The browser container is not reachable. Start the Docker stack and try again.'}
                                             </span>
                                         )}
                                     </div>}

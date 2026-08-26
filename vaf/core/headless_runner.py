@@ -30,10 +30,14 @@ from vaf.core.log_helper import append_domain_log, append_domain_log_always, get
 from vaf.core.config import Config, subagent_provider_override
 from pathlib import Path
 
-# Memory management constants - AGGRESSIVE to prevent 25GB situations
+# Memory management constants - AGGRESSIVE to prevent 25GB situations.
+# The warning threshold must sit ABOVE the process baseline: with the embedding
+# model deliberately kept loaded the runner idles around 2.4GB, and the standard
+# cleanup (cache clear + gc.collect) cannot hand freed heap pages back to the OS,
+# so a threshold below baseline warns every 30s forever without ever clearing.
 MEMORY_CHECK_INTERVAL = 30  # Check memory every 30 seconds
-MEMORY_THRESHOLD_MB = 2048  # Trigger cleanup above 2GB
-MEMORY_CRITICAL_MB = 4096  # Force aggressive cleanup above 4GB
+MEMORY_THRESHOLD_MB = 4096  # Trigger standard cleanup above 4GB
+MEMORY_CRITICAL_MB = 6144  # Force aggressive cleanup (unload models) above 6GB
 
 # Throttle stream updates to WebUI so the UI does not lag behind (max ~12 updates/sec)
 STREAM_EMIT_THROTTLE_SEC = 0.08

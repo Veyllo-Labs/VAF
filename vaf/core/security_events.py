@@ -83,6 +83,17 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "cli_password_gate_failed": "Three wrong admin passwords at the interactive terminal",
     "default_db_password": "The memory database is still using the shipped default password; "
                            "fix: `vaf secure rotate-db` (ask your agent, or type it in a terminal)",
+    # browser
+    "browser_handover_failed": "A cross-user browser handover could not verify its profile "
+                               "wipe and was refused (no lease granted); `username` carries "
+                               "the requesting scope, `detail` the failing step",
+    "browser_pool_fallback": "A user with the per-user browser pool ACTIVE was served the "
+                             "shared fallback browser (or refused, under strict mode); "
+                             "`detail` carries why no dedicated instance was available",
+    "browser_image_stale": "The browser image exceeded its age budget and the fresh "
+                           "rebuild FAILED, so the stack keeps serving a browser engine "
+                           "without current security fixes; `detail` carries the age and "
+                           "the build error",
 }
 
 _THROTTLE_S = 5.0

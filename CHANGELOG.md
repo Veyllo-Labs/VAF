@@ -11,7 +11,61 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+- **Saved browser logins are now encrypted on disk.** The per-user cookie store held
+  live login tokens for every site a session was saved for, online banking included, in
+  readable files. Those files now use the same encryption as chats and memories; stores
+  written before the change are encrypted automatically at the next start, and a run
+  that needs the file in the clear works on a short-lived, owner-only staging copy that
+  is folded back encrypted when the run ends.
+- **A browser user change now wipes the whole profile, provably, or refuses.** On the
+  shared browser a change of hands used to run a quick cookie sweep whose deeper half
+  silently fails on current Chromium, and any failure was only logged - the next person
+  could inherit the previous person's live logins, history, saved passwords and autofill.
+  Now every change of hands wipes the whole Chromium profile, VAF confirms the wipe
+  actually happened before anyone gets the browser, and a wipe that cannot be confirmed
+  refuses the handover outright and records a security event instead of proceeding. Two
+  people asking for the browser at the same moment can no longer interleave their
+  handovers either; the second one simply waits its turn.
+- **The sandbox browser now runs Chromium with its own sandbox switched on.** It never
+  was: the container could not create the namespaces Chromium's sandbox needs, so the
+  browser ran with `--no-sandbox` and a malicious page that broke out of a renderer had
+  the whole container. The blocker turned out to be Docker's default seccomp profile,
+  nothing else, so the browser now starts with a profile that is Docker's default plus
+  exactly the namespace calls the sandbox needs, and with all container capabilities
+  dropped except the one Chromium's process broker requires. This applies to the shared
+  browser and to every per-user browser alike, and needs one image rebuild plus a
+  container recreate to take effect. On a runtime that does not apply the profile the
+  browser falls back to the old behaviour and says so loudly in its log instead of
+  refusing to start.
+
+### Changed
+- **A reply may now be twice as long, and the limit is a setting.** How many tokens one
+  answer could use was fixed at 8192, written into the code in three places, and no
+  setting could reach it. That figure was sized for an answer, but a model that reasons
+  spends it on thinking before it writes a word, so a long train of thought could eat the
+  whole budget and the visible reply simply stopped mid sentence. The limit is now
+  `api_max_response_tokens`, set to 16384. It can be raised further without risk: a
+  provider whose own ceiling is lower refuses the figure once, the request is repeated
+  immediately at a value known to work everywhere, and the lower figure is kept for the
+  rest of the session, so no model can be broken by the setting.
+
 ### Added
+- **The browser now keeps itself up to date.** The browser engine comes from Debian and
+  was only ever as new as the day its image was first built; nothing afterwards would
+  refresh it, so it silently aged, security fixes included. The stack start now rebuilds
+  the browser image from a fresh base once it is older than a set number of days
+  (Settings, Advanced, Browser pool: "Refresh the browser after", default 14), and the
+  security dashboard's firewall card shows the engine version and the image age, turning
+  amber when the refresh is overdue. A failed refresh never blocks the start; it lands in
+  the security event log and the old browser keeps serving.
+- **The browser pool can now be strict, and its fallbacks are visible.** When everyone's
+  own browser is taken, the next person used to be handed the shared one without a word,
+  and nothing anywhere recorded that two people had just started sharing a browser. Every
+  such fallback now lands in the security event log, and a new admin setting (Settings,
+  Advanced, Browser pool: "Never share a browser") turns the fallback into an honest
+  "try again later" on every lane - for setups where sessions must never meet, such as
+  company logins.
 - **The usage log now says when a reply was cut short.** A model that runs out of output
   budget stops mid-thought, and until now nothing anywhere recorded that it had: the one
   place that saw it printed a line to the terminal, which nobody using the web interface
@@ -22,10 +76,99 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **The terminal no longer fills with a memory warning that could never resolve.** The
+  headless runner warned and ran a cleanup every thirty seconds once the process passed
+  2 GB, but with the embedding model deliberately kept loaded the process idles above
+  that line, and the cleanup cannot hand freed memory back to the operating system, so
+  the same warning repeated forever at a constant figure. The warning threshold now sits
+  at 4 GB, above the normal footprint, and the aggressive cleanup that unloads models
+  moved from 4 GB to 6 GB accordingly. A process that actually grows still gets both.
+- **An answer is no longer displaced by the rounds that come after it.** When the agent
+  finished answering while its task list still held open steps, it quietly continued
+  working, and each continuation replaced the reply, on screen and in the returned text.
+  So a long deliverable, a list built with the browser, a summary of mails, could end up
+  overwritten by a short closing remark like a confirmation that the steps were done.
+  Every answer that passed validation now stays part of the reply: later rounds add to
+  it instead of replacing it, and the chat bubble keeps showing it while the agent works
+  on. Turns with a single answer are byte-for-byte unchanged.
+- **OpenAI's newest models can use tools again.** On `gpt-5.6` (luna, terra and sol) every
+  turn in which the agent wanted to use a tool came back as an error and nothing happened.
+  Those models only accept tools when the request says the model should not reason first,
+  and VAF never said it. It does now, for that family and only on turns that actually carry
+  tools, so a plain question, an image description or a summary still gets the model's full
+  reasoning. The value is deliberately not sent to every model: the older `o1`/`o3`/`o4`
+  models refuse it and would have broken in exactly the same way. A future model that
+  refuses for the same reason is recognised from its own error message and the turn is
+  repeated immediately instead of being lost. The trade-off is stated rather than hidden:
+  on `gpt-5.6`, a turn that uses tools now runs without the model's internal reasoning
+  step, which is what this endpoint allows.
+- **The coding agent offered itself 130 tools and was refused for it.** It collected its
+  tools by scanning the whole product and leaving out three by name, so everything VAF
+  ever gained landed in front of it: 11 mail tools, 20 messenger tools, 9 for calendars
+  and contacts. OpenAI accepts at most 128 tools in one request, so every OpenAI coder run
+  was rejected on its first step, before writing a line. It now works from a list of the
+  tools a coding agent actually builds with - files, code, git, shell, tests and looking
+  things up - which brings the same request to 42. That includes driving a real browser through a page it just built (clicking, filling forms), so a page is tested for working, not merely for rendering. Two settings tune the list for anyone
+  who needs something else, and the tools a run cannot work without can never be removed
+  by mistake. The same change closed a quieter gap beside it: a tool an account was not
+  allowed to use was still being shown to the model, and only refused at the moment it was
+  called.
+- **Hitting the provider's rate limit no longer loses the turn.** OpenAI allows this
+  account 200,000 tokens per minute per model, and with the chat and the coding agent
+  sharing that window it runs full. The refusal names its own remedy - down to "please
+  try again in 186ms" - but VAF only understood one of the three places providers put
+  that number, waited a flat second or two instead, gave up after two tries and showed
+  the error. Now the named wait is read wherever it appears, respected with a little
+  extra margin, and retried for up to a minute of provider-suggested waiting (the
+  budget is a setting) before an error is ever shown. The coding agent honors the same
+  budget: it used to abort the entire run on the first rate-limit response, however
+  short the requested wait.
+- **A rejected request no longer loops.** When the provider refused, the coding agent read
+  the refusal as "too much history", threw the conversation away in three steps and asked
+  again with the same request - one live run repeated an identical, hopeless request 64
+  times, each one paid for, and ended without ever reporting why. It now stops after the
+  three compression steps and reports what the provider actually said. Which it can do
+  because the provider's answer is finally written down: the log recorded only that
+  something failed, never the reason.
+- **The coding agent could not start at all on any `gpt-5` model.** It builds its own
+  request instead of going through the shared one, and asked for a reply length in a way
+  that whole generation of models rejects, so an OpenAI coder run ended on an error before
+  it wrote a line. Both now read the same rules from one place, which is also what gave the
+  coder the fix above for free.
+- **A provider that has gone down is no longer waited for on every single message.** When
+  failover is switched on and the main provider stops answering, VAF moves the request to
+  the next provider in the chain. Until now it went back and knocked on the dead one first
+  every time, so each message sat through the full switch-over wait before anything
+  happened; and with "return to primary" turned off the opposite went wrong: it stayed on
+  the stand-in for good and never looked at the main provider again, long after it had
+  recovered. A provider that fails is now set aside for five minutes (adjustable, or off,
+  under Settings, Advanced, Failover) and skipped in the meantime; when the time is up the
+  next message you send tries it once, and it is back in use the moment it answers. Nothing
+  is polled in the background, so this costs no extra requests and no tokens. A rejected
+  request, as opposed to an outage, never sets a provider aside, and nothing is skipped in
+  the middle of a tool call, where changing provider would break the exchange.
+- **The prompt list on the right edge of the chat jumps again.** Clicking one of your
+  earlier messages there did nothing at all. The chat column had just been taught to
+  hold the position it was put in, because the window engine moves the view on its own
+  while you read; that guard could not tell the list's own jump from one of those stray
+  moves and put the view straight back, in the same frame, before anything was visible.
+  The jump now announces where it is going, so it is kept instead of undone. Two more
+  places quietly had the same problem and are fixed with it: returning to a chat now
+  restores the position you left it at, and the sub-agent panel no longer shifts the
+  conversation as it opens and closes. Reaching a message from further back than the
+  chat currently shows also loads exactly the part of the history it needs, rather than
+  all of it, and waits for it to be on screen instead of guessing at a delay.
 - **A reply that hit the output limit no longer claims it is continuing.** The message
   shown in that case announced that it was carrying on automatically, next to a switch
   no code ever read. Nothing carried on. The message now says what actually happened,
   and the reply still ends there.
+- **The archive no longer shows a strip of the chat above its own toolbar.** Opening
+  an archived conversation and scrolling left a narrow band directly under the
+  window's title in which the conversation slid past, above the row holding *All
+  archived chats* and *Delete from archive*. That row was pinned inside the scrolling
+  area, and the way browsers pin such a row put it 24 pixels lower than intended,
+  leaving the band above it uncovered. It is now an ordinary header row above the
+  list, so only the conversation scrolls and nothing passes over it.
 
 ## [0.1.0a26] - 2026-08-25
 

@@ -209,12 +209,63 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **Hidden:** `write_file`, `task_done`.
     *   **Goal:** Force the agent to plan.
 *   **IF `task_mgr.has_plan() == True`:**
-    *   **Allowed:** `write_file`, `edit_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `render_check`, `git_log`, `project_history`, `project_rollback`, `task_done`, plus plug-and-play runtime tools. `edit_file` (surgical search/replace) is preferred over `write_file` for changing an existing file; `git_log`/`project_history`/`project_rollback` run against the real project repo (not the `run_tests` sandbox), so a task step can find a known-good version and restore it.
+    *   **Allowed:** `write_file`, `edit_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `render_check`, `browser_agent`, `git_log`, `project_history`, `project_rollback`, `task_done`, plus plug-and-play runtime tools. `render_check` and `browser_agent` are the two halves of the visual verify loop: one look (errors, console, rendered text) versus driving the page (click, fill forms, walk a flow) - `render_check`'s own description defers anything interactive to `browser_agent`, which is why the task branch carries its own `browser_agent` schema entry instead of relying on the main-context plug-and-play copy. `edit_file` (surgical search/replace) is preferred over `write_file` for changing an existing file; `git_log`/`project_history`/`project_rollback` run against the real project repo (not the `run_tests` sandbox), so a task step can find a known-good version and restore it.
     *   **Planning/main context only:** `bash` (kernel-jailed workspace shell; see 5.x), `git_init`, `git_add_commit`, `git_status`, `web_fetch`.
     *   **Hidden:** `set_todos` (to prevent re-planning loops).
 
+#### The coder tool allow-list (whitelist)
+
+Above the per-phase rules sits one question the phases do not answer: **which tools does
+a coding agent work with at all?** That is a whitelist,
+[`CODER_ALLOWED_TOOLS`](../../vaf/core/coder_tools.py) - files, code, git, shell, tests
+and lookups - and it is what the plug-and-play discovery is filtered against.
+
+It replaced a blacklist, and the reason is measurable rather than aesthetic. Discovery
+walks `vaf/tools/`, instantiates every `BaseTool` subclass it finds and excluded exactly
+three by name, so every tool the product gained anywhere landed in the coder's request.
+A captured live request carried **130 tools**: 11 for mail, 20 for messengers, 9 for
+calendars and contacts. OpenAI refuses more than **128** functions per request, so that
+request was answered with `Invalid 'tools': array too long. Expected an array with
+maximum length 128, but got an array with length 130 instead.` on the FIRST loop of every
+OpenAI run. Veyllo, DeepSeek and the local server enforce no such limit, which is why it
+stayed invisible until the provider changed. The same request after the whitelist carries
+42 tools.
+
+**Where it is applied is load-bearing.** `_apply_tool_allowlists()` runs at the ONE
+chokepoint where the finished list exists: after the ~24 tools the loop appends by hand
+and after `tools_schema.extend(plug_and_play_tools)`. Filtering the context schema alone
+leaves both allow-lists out of everything appended afterwards - the first attempt at this
+change did exactly that and the captured request was still 130 tools. The same chokepoint
+is what now also applies the **account** allow-list (`caller_allowed`) to the appended
+tools; before, an account-forbidden tool still reached the model's schema and was only
+stopped by the dispatch-side refusal, which reads as a hallucinated call rather than as a
+tool that should never have been offered.
+
+Configurable and admin-only: `coder_tool_allowlist` replaces the set,
+`coder_tool_allowlist_extra` adds to it (see
+[CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). `CODER_REQUIRED_TOOLS` is unioned back in
+regardless, so a typo in an override costs optional tools instead of producing a coder
+that cannot call `set_todos` or write a file. Pinned by
+`tests/test_coder_tool_allowlist.py`, including the ordering above and a guard that every
+tool the coder advertises is one the list actually permits.
+
 ### E. LLM Interaction & Safety Nets
 *   **Call:** `self.llm.chat_completion(...)`.
+*   **429 (rate limit):** the provider names its own wait (`Retry-After` header or "try
+    again in 186ms" in the body); the coder parses it with the shared
+    `api_backend.rate_limit_wait_seconds()`, sleeps, and re-enters the loop, bounded by the
+    same wall-clock budget as the SDK lane (`api_rate_limit_wait_max`). Past the budget the
+    run ends with the provider's own message (`rate_limit_exhausted` in `events.jsonl`); a
+    successful request resets the budget. Before this branch existed, one 429 killed the
+    whole run via the generic non-200 return.
+*   **400 (context):** a 400 whose text mentions context/length/tokens triggers the
+    compression ladder (3 levels, down to system prompt plus one sentence), capped by
+    `_MAX_COMPRESSION_LEVELS`: a 400 that survives the last level was never a context error,
+    so the run stops and reports the provider's message instead of re-sending it forever (a
+    live run re-sent an identical 75-character request 64 times). The word test over-matches
+    deliberately survivable-ly: e.g. OpenAI's tools-array-too-long 400 contains "length" and
+    "maximum". The response body is logged as `llm_request_failed` in `events.jsonl` - the
+    status alone answers nothing.
 *   **Zombie Detection:**
     *   Tracks `idle_loop_count` (loops with text but no tool calls).
     *   **IF count > 3:** Injects `🛑 SYSTEM OVERRIDE: STOP THINKING. CALL A TOOL.` logic.

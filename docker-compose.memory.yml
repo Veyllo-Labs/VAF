@@ -237,6 +237,21 @@ services:
     # Headed Chromium needs more shared memory than headless to avoid
     # renderer crashes on heavy pages.
     shm_size: "1gb"
+    cap_drop:
+      - ALL
+    cap_add:
+      # Deliberate: Chromium's zygote chroots its sandboxed children
+      # (sys_chroot on /proc/self/fdinfo); measured to fail without it.
+      - SYS_CHROOT
+    security_opt:
+      - no-new-privileges:true
+      # Docker's default seccomp profile denies unprivileged user namespaces,
+      # which was the ONLY reason this browser ever ran --no-sandbox. This
+      # profile is Docker's default plus an allow rule for clone/clone3/
+      # unshare/setns, so Chromium's own sandbox works with no added
+      # capability. The entrypoint probes for user namespaces and falls back
+      # loudly if a runtime does not apply this profile.
+      - seccomp=./docker/browser/chromium-seccomp.json
     # Cloudflare's SECURITY resolvers (malware/phishing blocking) as the
     # container's upstream DNS - the fallback lane behind Chromium's
     # DNS-over-HTTPS policy to the same provider (see docker/browser/Dockerfile),

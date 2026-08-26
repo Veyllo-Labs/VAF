@@ -10,6 +10,8 @@ Uses official SDKs (openai, anthropic, google-genai) for robust interaction.
 import os
 import json
 import logging
+import re
+import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
 from vaf.core.config import Config
@@ -65,17 +67,256 @@ def consolidate_system_messages(messages: List[Dict]) -> List[Dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# OPENAI CHAT/COMPLETIONS REQUEST SHAPE (per model)
+# ═══════════════════════════════════════════════════════════════════════════════
+# THE shared answer to "which parameters does this model accept", for every lane
+# that builds an OpenAI-compatible /v1/chat/completions body. Two lanes do:
+# OpenAIProvider below (via the SDK) and the coder's raw HTTP request. Only the
+# first one knew any of the rules, so the coder sent a fixed `max_tokens` plus a
+# `temperature` to every provider, which is a 400 on the WHOLE gpt-5 family
+# ("Unsupported parameter: 'max_tokens' ... Use 'max_completion_tokens'"); an
+# OpenAI coder run on any gpt-5 model could not start. A model property has one
+# home, not one per caller, so both lanes read it from here.
+#
+# NOT on the public facade, and the boundary is deliberate rather than an
+# oversight. Both measured callers live inside vaf/ (this module and the coder);
+# no harness lane and no embedder builds a chat/completions body at all, because
+# an embedder reaches a model through Agent, which sits on top of this. That is
+# the same reason consolidate_system_messages above is unexported: it is the
+# older primitive of exactly this class, shared by exactly these two lanes. The
+# day someone writes their own provider call against the framework, that is the
+# first measured caller outside vaf/ and earns the export.
+
+# Families that refuse FUNCTION TOOLS on /v1/chat/completions unless
+# `reasoning_effort` is sent explicitly as "none". The API's own error names
+# /v1/responses as the alternative; that is a different wire format, while
+# "none" is the documented escape hatch on this endpoint. The cost is the
+# model's server-side reasoning, and only on turns that carry tools - a
+# tool-free call (vision description, summary, compaction) keeps it, which is
+# why the value is attached to `has_tools` and not to the model alone.
+#
+# Measured against the live API, one variable at a time, tools + no effort:
+#   gpt-5.1 / 5.2 / 5.4 / 5.4-mini / 5.4-nano / 5.5   200
+#   gpt-5.6-luna / gpt-5.6-terra / gpt-5.6-sol        400, and 200 with "none"
+#   o1 / o3-mini / o4-mini                            200, and 400 with "none"
+#                                                     ("does not support 'none'")
+#   gpt-4o                                            200, and 400 with "none"
+#                                                     ("Unrecognized request argument")
+# So the value can be neither omitted for everyone nor sent to every reasoning
+# model: it belongs to the family that demands it, and to no other.
+_TOOLS_NEED_EFFORT_NONE_SEED = ("gpt-5.6",)
+
+# A family released after this table was written would refuse the same way and
+# is recorded here for the rest of the process, at the price of one round trip
+# once. Same shape as the `allowed_tools` refusal further down: no registry can
+# know a per-MODEL property in advance, so the first refusal teaches it.
+_tools_need_effort_none_learned: set = set()
+
+
+def openai_is_reasoning_model(model: str) -> bool:
+    """True for OpenAI reasoning models (o1/o3/o4 series, gpt-5 family), which reject
+    `max_tokens` and a non-default `temperature` and want `max_completion_tokens`.
+
+    Matches the o-series only at the start of the bare model name (after any
+    `provider/` prefix) so `gpt-4o` / `gpt-4o-mini` are NOT misdetected.
+    """
+    m = (model or "").lower()
+    if "gpt-5" in m:
+        return True
+    name = m.rsplit("/", 1)[-1]  # strip openrouter-style "openai/" prefix
+    return name.startswith(("o1", "o3", "o4"))
+
+
+def openai_tools_need_effort_none(model: str) -> bool:
+    """True when this model only accepts function tools with `reasoning_effort="none"`."""
+    m = (model or "").lower()
+    return any(fam in m for fam in _TOOLS_NEED_EFFORT_NONE_SEED) or m in _tools_need_effort_none_learned
+
+
+def note_openai_tools_effort_refusal(model: str, error_text: str) -> bool:
+    """Record a "function tools need reasoning_effort=none" refusal for this model.
+
+    Returns True only when the model did NOT already carry the rule, which is what
+    makes a caller's retry provably terminate: the second refusal for the same model
+    is a different problem and must be reported, not retried.
+
+    Matches the refusal narrowly on BOTH halves of the message. The o-series answers
+    "Unsupported value: 'reasoning_effort' does not support 'none'" - the same
+    parameter, the opposite meaning - and carries no "function tools", so it can
+    never be mistaken for this one.
+    """
+    err = (error_text or "").lower()
+    if "reasoning_effort" not in err or "function tools" not in err:
+        return False
+    m = (model or "").lower()
+    if not m or openai_tools_need_effort_none(m):
+        return False
+    _tools_need_effort_none_learned.add(m)
+    return True
+
+
+def openai_request_params(provider_name: str, model: str, *, temperature: float,
+                          max_tokens: int, has_tools: bool) -> Dict[str, Any]:
+    """The per-model parameters an OpenAI-compatible chat/completions body needs.
+
+    Returns the token-limit key, the sampling params where they are accepted, and
+    the tool-related switches. The caller adds model/messages/stream itself.
+
+    Reasoning-param gating applies only to the DIRECT OpenAI API. OpenRouter (same
+    wire format, different base_url) normalizes around `max_tokens` for every model,
+    so sending `max_completion_tokens` there can lose the token limit; DeepSeek,
+    Veyllo and local never match the OpenAI ids anyway.
+    """
+    direct_openai = (provider_name or "").lower() == "openai"
+    # A model that demands reasoning_effort IS a reasoning model, so a refusal
+    # learned at runtime also settles the token-limit key. Without that coupling a
+    # learned family would be sent `reasoning_effort` and `max_tokens` in the same
+    # body, and every reasoning model measured so far rejects the second one - the
+    # run would die on the parameter it was just taught to avoid dying on.
+    reasoning = direct_openai and (openai_is_reasoning_model(model)
+                                   or openai_tools_need_effort_none(model))
+    params: Dict[str, Any] = {}
+    if reasoning:
+        # o-series / gpt-5: `max_tokens` and a non-default `temperature` are both a 400.
+        params["max_completion_tokens"] = max_tokens
+    else:
+        params["max_tokens"] = max_tokens
+        params["temperature"] = temperature
+    if has_tools:
+        if direct_openai and openai_tools_need_effort_none(model):
+            params["reasoning_effort"] = "none"
+        if not reasoning:
+            # parallel_tool_calls isn't accepted by all reasoning models; the
+            # server-side default already allows parallel calls, so just omit it.
+            params["parallel_tool_calls"] = True
+    return params
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RATE-LIMIT WAIT PARSING (shared by the SDK lane and the coder's raw HTTP lane)
+# ═══════════════════════════════════════════════════════════════════════════════
+# OpenAI's limits are per organization and per model, measured per minute (RPM
+# and TPM; this account: 500 requests, 200k tokens for the gpt-5.6 family). A
+# 429 names its own remedy, but in THREE different places and formats, and the
+# old header-only integer parse missed two of them on the live incident:
+#
+#   Retry-After header        "30" - and the docs allow it to be absent
+#   x-ratelimit-reset-*       duration strings: "120ms", "0s", "6m0s" (measured)
+#   the error message itself  "... Please try again in 186ms."
+#
+# The incident this exists for: a TPM 429 whose message said "try again in
+# 186ms" surfaced to the user as a lost turn, because there was no header, the
+# backoff waited 1s+2s and the attempt budget (2) ran out while the window was
+# still saturated. 186ms of patience would have saved the turn.
+
+_DURATION_RE = re.compile(r"(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?!s))?\s*(?:(\d+(?:\.\d+)?)\s*s)?\s*(?:(\d+(?:\.\d+)?)\s*ms)?\s*$")
+_TRY_AGAIN_RE = re.compile(r"try again in\s+([0-9hms\. ]+?)[\.\s]*(?:$|Visit)", re.IGNORECASE)
+
+
+def _parse_duration_seconds(raw: str) -> Optional[float]:
+    """'186ms' / '6.13s' / '6m0s' / '1h2m' / bare '30' -> seconds, else None."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:  # bare number = seconds (the Retry-After header form, fractions included)
+        return float(s)
+    except ValueError:
+        pass
+    m = _DURATION_RE.fullmatch(s)
+    if not m or not any(m.groups()):
+        return None
+    h, mins, secs, ms = m.groups()
+    return (float(h or 0) * 3600 + float(mins or 0) * 60
+            + float(secs or 0) + float(ms or 0) / 1000.0)
+
+
+def rate_limit_wait_seconds(headers, message_text: str = "") -> Optional[float]:
+    """The wait a 429 asked for, from whichever source carried it, UNCAPPED.
+
+    Sources in order of authority: the Retry-After header, then the "try again
+    in <duration>" phrase in the error body. Callers apply their own cap
+    (api_retry_after_max) - the cap is policy, the parse is fact, and mixing
+    them made the old parser return None for a capped-out value instead of the
+    cap. Returns None when neither source yields a number, so the caller falls
+    back to exponential backoff.
+    """
+    try:
+        raw = None
+        if headers:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+        if raw is not None:
+            got = _parse_duration_seconds(raw)
+            if got is not None:
+                return max(0.0, got)
+        m = _TRY_AGAIN_RE.search(str(message_text or ""))
+        if m:
+            got = _parse_duration_seconds(m.group(1).strip())
+            if got is not None:
+                return max(0.0, got)
+    except Exception:
+        pass
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ABSTRACT BASE PROVIDER
 # ════───────────────────────────────────────────────────────────────────────────
 
 class BaseAIProvider(ABC):
     """Abstract base class for all AI providers."""
-    
+
+    # What one reply may cost when the configured figure was refused. This is the
+    # value the product shipped with for a long time, so it is known to be
+    # accepted everywhere rather than merely guessed to be small enough.
+    SAFE_RESPONSE_TOKENS = 8192
+
+    # Parameter names and complaints, kept as two small sets rather than one
+    # regex per provider. Every provider spells the cap differently and phrases
+    # the refusal differently, but a refusal names the parameter AND says the
+    # figure was too big; requiring both is what keeps an unrelated 400 out. The
+    # one exception is a window complaint, handled separately below.
+    _CAP_PARAMS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+    _CAP_COMPLAINTS = ("too large", "maximum", "at most", "exceed", "context length")
+
     def __init__(self, provider_name: str, api_key: str):
         self.provider_name = provider_name
         self.api_key = api_key
         self.usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = blank_request_usage()
+        # Set once a provider has refused the configured cap, so the lost round
+        # trip is paid once per process instead of on every later call.
+        self.output_cap_refused = False
+
+    def _capped_output(self, max_tokens: int) -> int:
+        """The figure to actually send, after any earlier refusal."""
+        try:
+            if self.output_cap_refused and int(max_tokens) > self.SAFE_RESPONSE_TOKENS:
+                return self.SAFE_RESPONSE_TOKENS
+            return int(max_tokens)
+        except Exception:
+            return self.SAFE_RESPONSE_TOKENS
+
+    def _refused_output_cap(self, err_str: str, max_tokens) -> bool:
+        """True when this error says the requested output cap was too big.
+
+        Guarded on the figure being above the safe one, so the retry below cannot
+        recurse: the second attempt sends a value this test can never match.
+        """
+        try:
+            if int(max_tokens) <= self.SAFE_RESPONSE_TOKENS:
+                return False
+        except Exception:
+            return False
+        low = (err_str or "").lower()
+        # A window complaint names the WINDOW, not the parameter ("maximum context
+        # length is 128000 ... however you requested more"), and a smaller cap is
+        # the right remedy there too: it gives the prompt back the room the reply
+        # had reserved. If the prompt alone does not fit, the retry fails again
+        # and the guard above stops it, so the cost is one round trip, not a loop.
+        if any(k in low for k in ("context length", "context window")):
+            return True
+        return (any(p in low for p in self._CAP_PARAMS)
+                and any(c in low for c in self._CAP_COMPLAINTS))
 
     @abstractmethod
     def chat_completion(
@@ -120,34 +361,71 @@ class BaseAIProvider(ABC):
         return False
 
     @staticmethod
+    def _is_rate_limit(e: Exception) -> bool:
+        """True for a 429 specifically - the retryable error with its own time budget."""
+        code = getattr(e, "status_code", None) or getattr(e, "status", None) or getattr(e, "code", None)
+        if code == 429:
+            return True
+        try:
+            import openai as _oa
+            if isinstance(e, getattr(_oa, "RateLimitError", ())):
+                return True
+        except Exception:
+            pass
+        return "rate_limit_exceeded" in str(e) or "rate limit" in str(e).lower()
+
+    @staticmethod
     def _retry_after_seconds(e: Exception) -> Optional[float]:
-        """Parse a Retry-After header (integer seconds) off the error's HTTP response, capped by
-        api_retry_after_max. Returns None when absent/unparseable so the caller uses exponential backoff."""
+        """The wait this error asked for - Retry-After header or the "try again in
+        <duration>" phrase in its message - capped by api_retry_after_max. None when
+        neither source yields a number, so the caller uses exponential backoff."""
         try:
             headers = getattr(getattr(e, "response", None), "headers", None)
-            if not headers:
+            secs = rate_limit_wait_seconds(headers, str(e))
+            if secs is None:
                 return None
-            raw = headers.get("retry-after") or headers.get("Retry-After")
-            if raw is None:
-                return None
-            secs = float(int(str(raw).strip()))  # seconds form only; HTTP-date form -> ValueError -> None
             cap = float(Config.get("api_retry_after_max", 30) or 30)
-            return max(0.0, min(secs, cap))
+            return min(secs, cap)
         except Exception:
             return None
 
     def _with_retry(self, make_request):
-        """Run make_request() with a bounded retry on transient errors (429/5xx/timeout). Honors a capped
-        Retry-After when present, else exponential backoff. Wraps ONLY request initiation (before any token),
-        so it can never duplicate streamed output. Sits on top of each SDK's own retries."""
+        """Run make_request() with a bounded retry on transient errors (429/5xx/timeout). Wraps ONLY
+        request initiation (before any token), so it can never duplicate streamed output. Sits on top
+        of each SDK's own retries.
+
+        Two budgets, because the two failure kinds recover differently. 5xx/timeouts get
+        `api_retry_attempts` COUNTED retries with backoff - a broken server is not made whole by
+        patience. A 429 gets a WALL-CLOCK budget (`api_rate_limit_wait_max`, default 60s): the
+        provider names the wait itself ("Please try again in 186ms", a Retry-After header), the
+        window drains on its own schedule, and counting attempts against it is how a live turn died
+        after 3s of patience against a request that asked for 186ms. Per the provider's own
+        guidance the named wait is a minimum, so a small random jitter is added on top - concurrent
+        lanes (chat plus coder on one org) must not all retry in the same instant."""
+        import random as _random
         import time as _time
         max_retries = max(0, int(Config.get("api_retry_attempts", 2) or 0))
+        rate_budget = max(0.0, float(Config.get("api_rate_limit_wait_max", 60) or 0))
         attempt = 0
+        rate_waited = 0.0
         while True:
             try:
                 return make_request()
             except Exception as e:
-                if attempt >= max_retries or not self._is_retryable_error(e):
+                if not self._is_retryable_error(e):
+                    raise
+                if self._is_rate_limit(e):
+                    wait = self._retry_after_seconds(e)
+                    if wait is None:
+                        wait = min(2 ** max(0, min(attempt, 4)), 8)  # 1,2,4,8,8...
+                    wait += _random.uniform(0, min(1.0, 0.25 * wait or 0.05))
+                    if rate_waited + wait > rate_budget:
+                        raise
+                    rate_waited += wait
+                    attempt += 1  # counted for the backoff curve, not against the budget
+                    _time.sleep(wait)
+                    continue
+                if attempt >= max_retries:
                     raise
                 attempt += 1
                 wait = self._retry_after_seconds(e)
@@ -184,20 +462,10 @@ class OpenAIProvider(BaseAIProvider):
             self.client = None
             logger.error("OpenAI SDK not installed. Please run: pip install openai")
 
-    @staticmethod
-    def _is_reasoning_model(model: str) -> bool:
-        """OpenAI reasoning models (o1/o3/o4 series, gpt-5 family) reject `max_tokens`
-        and a non-default `temperature` (only the default 1 is allowed). They require
-        `max_completion_tokens` instead. Detect them so we can gate those params.
-
-        Matches the o-series only at the start of the bare model name (after any
-        `provider/` prefix) so `gpt-4o` / `gpt-4o-mini` are NOT misdetected.
-        """
-        m = (model or "").lower()
-        if "gpt-5" in m:
-            return True
-        name = m.rsplit("/", 1)[-1]  # strip openrouter-style "openai/" prefix
-        return name.startswith(("o1", "o3", "o4"))
+    # Thin alias for the module-level predicate, which is the shared one (the coder's
+    # raw-HTTP lane reads the same rules). Kept as a name on the class because that is
+    # what the compatibility tests pin.
+    _is_reasoning_model = staticmethod(openai_is_reasoning_model)
 
     def _create_with_retry(self, kwargs: Dict):
         """chat.completions.create with a bounded retry on transient errors (429/5xx/timeout). Initiation-only
@@ -210,31 +478,21 @@ class OpenAIProvider(BaseAIProvider):
             return
 
         try:
-            # Reasoning-param gating applies only to the DIRECT OpenAI API. OpenRouter
-            # (same provider class, different base_url) normalizes around max_tokens for
-            # every model — sending max_completion_tokens there can lose the token limit,
-            # so let OpenRouter normalize. DeepSeek/local: ids never match o-series anyway.
-            reasoning_model = self.provider_name == "openai" and self._is_reasoning_model(model)
-            # Prepare arguments
+            # Per-model parameter shape (token-limit key, sampling params,
+            # reasoning_effort, parallel_tool_calls). One implementation, shared with
+            # the coder's raw-HTTP lane, which builds its own body.
+            max_tokens = self._capped_output(max_tokens)
             kwargs = {
                 "model": model,
                 "messages": messages,
                 "stream": stream,
             }
-            if reasoning_model:
-                # o-series / gpt-5: use max_completion_tokens; omit temperature (only the
-                # default is accepted). Sending max_tokens or temperature here -> HTTP 400.
-                kwargs["max_completion_tokens"] = max_tokens
-            else:
-                kwargs["max_tokens"] = max_tokens
-                kwargs["temperature"] = temperature
+            kwargs.update(openai_request_params(
+                self.provider_name, model, temperature=temperature,
+                max_tokens=max_tokens, has_tools=bool(tools),
+            ))
             if tools:
                 kwargs["tools"] = tools
-                if not reasoning_model:
-                    # parallel_tool_calls isn't accepted by all reasoning models; the
-                    # server-side default already allows parallel calls, so just omit it.
-                    kwargs["parallel_tool_calls"] = True
-
                 # tool_choice: 'auto' (default), 'none', 'required', or specific function
                 if tool_choice:
                     kwargs["tool_choice"] = tool_choice
@@ -331,6 +589,27 @@ class OpenAIProvider(BaseAIProvider):
                          style="warning")
                 yield from self.chat_completion(messages, temperature, max_tokens, stream,
                                                 model, tools, "auto")
+                return
+            # Same shape, one level down: a MODEL that refuses function tools unless
+            # reasoning_effort is "none". The seed table knows the families measured
+            # when it was written; a later one teaches itself here, once per process.
+            # The record is module-level rather than on the instance (unlike the cap
+            # above) because this is a property of the MODEL, not of the connection,
+            # and it has to reach every provider instance in the process.
+            if tools and self.provider_name == "openai" \
+                    and note_openai_tools_effort_refusal(model, err_str):
+                UI.event("Backend", f"{model} refuses tools with reasoning; "
+                                    "retrying with reasoning_effort=none", style="warning")
+                yield from self.chat_completion(messages, temperature, max_tokens, stream,
+                                                model, tools, tool_choice)
+                return
+            if self._refused_output_cap(err_str, max_tokens):
+                self.output_cap_refused = True
+                UI.event("Backend", f"{self.provider_name} refused the reply-length cap; "
+                                    f"retrying at {self.SAFE_RESPONSE_TOKENS}", style="warning")
+                yield from self.chat_completion(messages, temperature,
+                                                self.SAFE_RESPONSE_TOKENS, stream,
+                                                model, tools, tool_choice)
                 return
             UI.error(f"{self.provider_name.upper()} Provider Error: {err_str}")
             try:
@@ -476,6 +755,8 @@ class AnthropicProvider(BaseAIProvider):
             yield "[Error] Anthropic SDK missing."
             return
 
+        max_tokens = self._capped_output(max_tokens)
+
         # 1. Consolidate system messages: leading system turns -> one top-level system;
         #    mid-run system nudges -> in-place user turns (reuses the shared helper).
         consolidated = consolidate_system_messages(messages)
@@ -577,6 +858,14 @@ class AnthropicProvider(BaseAIProvider):
 
         except Exception as e:
             err_str = str(e)
+            if self._refused_output_cap(err_str, max_tokens):
+                self.output_cap_refused = True
+                UI.event("Backend", f"anthropic refused the reply-length cap; "
+                                    f"retrying at {self.SAFE_RESPONSE_TOKENS}", style="warning")
+                yield from self.chat_completion(messages, temperature,
+                                                self.SAFE_RESPONSE_TOKENS, stream,
+                                                model, tools, tool_choice)
+                return
             UI.error(f"Anthropic Provider Error: {err_str}")
             try:
                 from vaf.core.log_helper import append_domain_log
@@ -774,6 +1063,8 @@ class GoogleProvider(BaseAIProvider):
             yield "[Error] google-genai SDK missing."
             return
 
+        max_tokens = self._capped_output(max_tokens)
+
         from google.genai import types
         import base64 as _b64
 
@@ -880,6 +1171,14 @@ class GoogleProvider(BaseAIProvider):
 
         except Exception as e:
             err_str = str(e)
+            if self._refused_output_cap(err_str, max_tokens):
+                self.output_cap_refused = True
+                UI.event("Backend", f"google refused the reply-length cap; "
+                                    f"retrying at {self.SAFE_RESPONSE_TOKENS}", style="warning")
+                yield from self.chat_completion(messages, temperature,
+                                                self.SAFE_RESPONSE_TOKENS, stream,
+                                                model, tools, tool_choice)
+                return
             UI.error(f"Google Provider Error: {err_str}")
             try:
                 from vaf.core.log_helper import append_domain_log
@@ -916,6 +1215,9 @@ class APIBackendManager:
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = blank_request_usage()
         self._failover_pinned_idx = 0  # sticky link when failover_return_to_primary is off
+        # provider name -> monotonic deadline until which that link is treated as dead
+        # and skipped. Empty means every link is a candidate. See _skip_dead_links.
+        self._failover_open_until = {}
         # Optional structured-event callback (set via Agent.set_event_sink):
         # emits llm_start/llm_end around every chat completion. None = off.
         self.event_sink = None
@@ -1077,6 +1379,109 @@ class APIBackendManager:
         if not triggers:
             return True
         return bucket in triggers
+
+    # ── The dead-link breaker ────────────────────────────────────────────────
+    #
+    # Failing over answers "the primary is down"; on its own it never answers
+    # "is it back yet", and the two failure modes it left behind were measured:
+    #
+    #   * With failover_return_to_primary ON (the default) the chain restarts at
+    #     the primary on EVERY request, so recovery is automatic but each request
+    #     pays the primary's failure again first. Measured against a primary that
+    #     hangs: three requests, three attempts, one full failover_timeout_s of
+    #     pure waiting each (30s by default).
+    #   * With it OFF the pin is permanent. Measured: five requests after the
+    #     primary had recovered, zero attempts on it. Nothing ever probed it.
+    #
+    # One piece of state fixes both: when a link fails for an outage reason it is
+    # remembered as dead until a deadline, and while that deadline stands the link
+    # is skipped rather than paid for. When it expires the link is simply a
+    # candidate again, so the next ORDINARY request is the probe (half-open) - no
+    # timer, no background traffic, no tokens spent, and it works in every process
+    # that holds a manager rather than only in the one that runs a scheduler.
+    #
+    # Deliberate: no separate liveness ping. `test_connection()` spends a real
+    # completion (tokens, and it would recurse through this very chain) and
+    # `list_models()` answers [] both for "provider down" and for "provider has no
+    # discovery URL", so neither is a liveness signal a switch may rest on.
+
+    # Injectable so the cooldown is testable without sleeping through it.
+    _clock = staticmethod(time.monotonic)
+
+    def _recheck_after_s(self) -> float:
+        """Seconds a failed link stays skipped. 0 disables skipping entirely, which
+        restores the pre-breaker behaviour exactly."""
+        try:
+            return max(0.0, float(self._failover_cfg("failover_recheck_after_s", 300) or 0))
+        except Exception:
+            return 0.0
+
+    def _mark_link_dead(self, provider_name: str) -> None:
+        cooldown = self._recheck_after_s()
+        if cooldown <= 0:
+            return
+        if not isinstance(getattr(self, "_failover_open_until", None), dict):
+            self._failover_open_until = {}
+        self._failover_open_until[provider_name] = self._clock() + cooldown
+        logger.info(f"[failover] {provider_name} is down; skipping it for {cooldown:.0f}s")
+
+    def _mark_link_alive(self, provider_name: str) -> None:
+        store = getattr(self, "_failover_open_until", None)
+        if isinstance(store, dict) and store.pop(provider_name, None) is not None:
+            logger.info(f"[failover] {provider_name} answered again; back in the chain")
+
+    def _walk_pin_back(self, pinned, chain):
+        """Move the sticky pin back over every earlier link whose recheck window has
+        passed.
+
+        Only relevant with failover_return_to_primary OFF, where the pin is what keeps
+        the chain on the link that last worked. Measured before this existed: five
+        requests after the primary had recovered, zero attempts on it - the pin made
+        "stay on the working link until it also fails" mean forever, because the
+        working link never fails. Expiring the breaker alone does not help there: the
+        primary becomes a candidate again but sits BEHIND the healthy backup in the
+        order, so it is never reached.
+
+        With failover_recheck_after_s at 0 the pin stays permanent, which is the
+        behaviour this setting had before.
+        """
+        if pinned <= 0 or self._recheck_after_s() <= 0:
+            return pinned
+        store = getattr(self, "_failover_open_until", None) or {}
+        now = self._clock()
+        while pinned > 0 and now >= store.get(chain[pinned - 1][0].provider_name, 0.0):
+            pinned -= 1
+        return pinned
+
+    def _skip_dead_links(self, order, chain, messages):
+        """Drop the positions in `order` whose link is still cooling down.
+
+        Two things it must never do, both load-bearing:
+
+        * Never skip EVERYTHING. If the whole chain is cooling down the request
+          still has to be attempted somewhere, so the full order is returned and
+          the call fails the way it did before rather than vanishing.
+        * Never skip while the outbound history carries provider-bound tool_call
+          ids. Skipping is a silent hand-over to the next provider, and that is
+          precisely the cascade `_messages_have_provider_bound_tool_calls` exists
+          to prevent: a stateful gateway 400s on ids it never issued. Mid-tool
+          sequence the chain is walked in full, breaker or not.
+        """
+        if self._recheck_after_s() <= 0:
+            return order
+        store = getattr(self, "_failover_open_until", None)
+        if not store:
+            return order
+        if self._messages_have_provider_bound_tool_calls(messages):
+            return order
+        now = self._clock()
+        live = [i for i in order if now >= store.get(chain[i][0].provider_name, 0.0)]
+        if not live:
+            return order
+        if len(live) < len(order):
+            skipped = ", ".join(chain[i][0].provider_name for i in order if i not in live)
+            logger.info(f"[failover] skipping {skipped}: still cooling down after a failure")
+        return live
 
     def _first_chunk(self, gen, deadline):
         """Pull the first chunk of a provider generator. Returns (chunk, None) on success,
@@ -1258,7 +1663,9 @@ class APIBackendManager:
 
         return_primary = bool(self._failover_cfg("failover_return_to_primary", True))
         pinned = 0 if return_primary else max(0, min(getattr(self, "_failover_pinned_idx", 0), len(chain) - 1))
+        pinned = self._walk_pin_back(pinned, chain)
         order = list(range(pinned, len(chain))) + list(range(0, pinned))
+        order = self._skip_dead_links(order, chain, messages)
         try:
             timeout_s = float(self._failover_cfg("failover_timeout_s", 0) or 0)
         except Exception:
@@ -1273,7 +1680,13 @@ class APIBackendManager:
             first, failure = self._first_chunk(gen, deadline)
             if failure is not None:
                 last_failure = failure
-                _can_failover = not is_last and self._should_failover_on(failure)
+                # An outage arms the breaker whether or not we actually move on:
+                # the next request must not pay for this link again either way.
+                # A 4xx does not - that is the request, not the provider.
+                _outage = self._should_failover_on(failure)
+                if _outage:
+                    self._mark_link_dead(link_mgr.provider_name)
+                _can_failover = not is_last and _outage
                 if _can_failover and self._messages_have_provider_bound_tool_calls(messages):
                     # Mid-tool-sequence: the history carries this provider's tool_call ids, which the next
                     # provider cannot honor. Don't cascade — surface the primary's error.
@@ -1285,6 +1698,7 @@ class APIBackendManager:
                 yield failure if isinstance(failure, str) else f"[API Error from {link_mgr.provider_name}: {failure}]"
                 return
             self._failover_pinned_idx = 0 if return_primary else idx
+            self._mark_link_alive(link_mgr.provider_name)
             if link_mgr is not self:
                 logger.info(f"[failover] serving response from {link_mgr.provider_name}")
             yield from self._stream_link(link_mgr, first, gen)

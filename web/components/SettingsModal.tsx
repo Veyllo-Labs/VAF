@@ -4902,6 +4902,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             { key: 'server_error', label: tAdvanced('failoverTriggerServerError') },
                                         ];
                                         const timeoutVal = (localConfig.failover_timeout_s ?? 30) as number;
+                                        // Stored in seconds, shown in minutes: this is a "how long until
+                                        // we look again" number and people think about it in minutes.
+                                        const recheckVal = (localConfig.failover_recheck_after_s ?? 300) as number;
+                                        const recheckMin = Math.round(recheckVal / 60);
 
                                         return (
                                             <div>
@@ -4998,6 +5002,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 className="w-full accent-gray-900 dark:accent-[#d9d9d9]"
                                                             />
                                                             <span className="text-xs font-semibold text-gray-800 w-10 text-right">{timeoutVal}s</span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="h-px bg-gray-100 my-4" />
+                                                    <div className="flex items-start justify-between gap-4">
+                                                        <div>
+                                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('failoverRecheck')}</span>
+                                                            <p className="text-xs text-gray-400 mt-0.5 max-w-xs">{tAdvanced('failoverRecheckDesc')}</p>
+                                                        </div>
+                                                        <div className="flex items-center gap-3 shrink-0 w-48">
+                                                            <input
+                                                                type="range" min={0} max={30} step={1}
+                                                                value={recheckMin}
+                                                                onChange={(e) => handleChange('failover_recheck_after_s', parseInt(e.target.value, 10) * 60)}
+                                                                className="w-full accent-gray-900 dark:accent-[#d9d9d9]"
+                                                            />
+                                                            <span className="text-xs font-semibold text-gray-800 w-14 text-right">
+                                                                {recheckMin === 0 ? tAdvanced('failoverRecheckOff') : `${recheckMin} min`}
+                                                            </span>
                                                         </div>
                                                     </div>
 
@@ -5213,6 +5236,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         type="number"
                                     />
                                     <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolIdleDesc')}</p>
+                                    <div className="h-4" />
+                                    <Switch
+                                        label={tAdvanced('browserPoolStrict')}
+                                        description={tAdvanced('browserPoolStrictDesc')}
+                                        checked={localConfig.browser_pool_strict ?? false}
+                                        onChange={(v: boolean) => handleChange('browser_pool_strict', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <Input
+                                        label={tAdvanced('browserImageMaxAge')}
+                                        value={localConfig.browser_image_max_age_days ?? 14}
+                                        onChange={(v: string) => handleChange('browser_image_max_age_days', Math.max(0, parseInt(v) || 0))}
+                                        type="number"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserImageMaxAgeDesc')}</p>
                                 </Section>
                             </div>
                         )}
@@ -6779,9 +6817,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             {/* LEFT: the archived chats, or the opened one. RIGHT: the
                                 search and its hits - the reader searches, then reads, and
                                 the reading surface is the wider one. */}
-                            <div className="flex-1 overflow-y-auto p-6 min-h-0">
-                                {!archiveOpenId ? (
-                                    archiveChats.length === 0 ? (
+                            {!archiveOpenId ? (
+                                <div className="flex-1 overflow-y-auto p-6 min-h-0">
+                                    {archiveChats.length === 0 ? (
                                         <p className="text-sm text-gray-400">{tPersona('archiveEmpty')}</p>
                                     ) : (
                                         // A grid of archive boxes rather than a list of rows: the
@@ -6820,29 +6858,34 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </button>
                                             ))}
                                         </div>
-                                    )
-                                ) : (
-                                    <>
-                                        {/* The way back out, and the way to end it for good.
-                                            Both need to be readable: the back link was grey on
-                                            near-black, which is a control you have to hunt for. */}
-                                        {/* Pinned while the conversation scrolls: the way out and the
-                                            way to end it are needed most in a LONG chat, and that is
-                                            exactly where they used to scroll off the top. The negative
-                                            margins let it span the container's padding, so text passes
-                                            underneath it rather than beside it. */}
-                                        <div className="sticky top-0 z-10 -mx-6 -mt-6 px-6 pt-6 pb-4 mb-1 bg-white dark:bg-[#181818] flex items-center justify-between gap-4">
-                                            <button type="button" onClick={() => { setArchiveOpenId(null); setArchiveJump(null); }}
-                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#e6e6e6] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
-                                                <ArrowLeft className="w-4 h-4" /> {tPersona('archiveBack')}
-                                            </button>
-                                            <button type="button"
-                                                    onClick={() => setArchiveToDelete(
-                                                        archiveChats.find(c => c.id === archiveOpenId) || null)}
-                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors">
-                                                <Trash2 className="w-4 h-4" /> {tPersona('archiveDelete')}
-                                            </button>
-                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="flex-1 flex flex-col min-h-0">
+                                    {/* The way back out, and the way to end it for good.
+                                        Both need to be readable: the back link was grey on
+                                        near-black, which is a control you have to hunt for. */}
+                                    {/* A real header row ABOVE the scroller, not a sticky bar
+                                        inside it. A sticky box is pinned by its MARGIN box, so
+                                        the negative top margin that used to let the bar span
+                                        the container's padding pushed the pinned row DOWN by
+                                        that same amount instead, and the conversation scrolled
+                                        through the uncovered strip it left above itself.
+                                        Outside the scroller there is no strip to cover, and no
+                                        offset that has to stay in sync with the padding. */}
+                                    <div className="shrink-0 px-6 pt-6 pb-4 flex items-center justify-between gap-4">
+                                        <button type="button" onClick={() => { setArchiveOpenId(null); setArchiveJump(null); }}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-[#e6e6e6] hover:bg-gray-50 dark:hover:bg-[#242424] transition-colors">
+                                            <ArrowLeft className="w-4 h-4" /> {tPersona('archiveBack')}
+                                        </button>
+                                        <button type="button"
+                                                onClick={() => setArchiveToDelete(
+                                                    archiveChats.find(c => c.id === archiveOpenId) || null)}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors">
+                                            <Trash2 className="w-4 h-4" /> {tPersona('archiveDelete')}
+                                        </button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto px-6 pb-6 min-h-0">
                                         <div className="space-y-3 max-w-3xl">
                                             {archiveMsgs.map((m, i) => (
                                                 <div key={i} id={`arch-msg-${i}`}
@@ -6870,9 +6913,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                             ))}
                                         </div>
-                                    </>
-                                )}
-                            </div>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* RIGHT: search + hits */}
                             <div className="w-80 shrink-0 border-l border-gray-200 dark:border-[#2a2a2a] flex flex-col min-h-0 max-md:w-full max-md:border-l-0 max-md:border-t">

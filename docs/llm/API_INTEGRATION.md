@@ -217,7 +217,7 @@ Providers that support multimodal (image) input:
 
 ### Request Timeouts & Retries (API providers)
 
-The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation - **HTTP 429 (rate limit)**, 5xx, timeout, or connection drop - VAF retries the call a few times with backoff. This covers **all** providers (OpenAI/DeepSeek/OpenRouter/local, Anthropic, Google), not just the OpenAI-compatible path. A 429's `Retry-After` header is honored, capped by `api_retry_after_max` (default 30 s) so a large value cannot stall a worker; otherwise the backoff is exponential. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of each SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts`, `api_retry_after_max` and `api_timeout_*`.
+The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation - **HTTP 429 (rate limit)**, 5xx, timeout, or connection drop - VAF retries the call. This covers **all** providers (OpenAI/DeepSeek/OpenRouter/local, Anthropic, Google), not just the OpenAI-compatible path. The two failure kinds carry different budgets, because they recover differently. 5xx/timeouts get `api_retry_attempts` (default 2) counted retries with exponential backoff - a broken server is not made whole by patience. A **429** gets a wall-clock budget instead, `api_rate_limit_wait_max` (default 60 s, `0` disables): rate limits are per-organization, per-model windows measured in requests and tokens per minute, they drain on their own schedule, and the provider names the wait itself. That named wait is parsed from every source the provider actually uses - the `Retry-After` header (integer, fractional, or duration form) and the "Please try again in 186ms" phrase in the error body - honored as a minimum with a small random jitter on top (per the provider's own guidance, so concurrent lanes on one org do not all retry in the same instant), each individual wait capped by `api_retry_after_max` (default 30 s) so a large value cannot stall a worker. The parser is shared with the coder's raw-HTTP lane (`rate_limit_wait_seconds` in `api_backend.py`), which honors the same budget: it waits and re-enters its loop instead of ending the run, and a successful request resets its budget. The live incident this replaced: a TPM 429 asking for **186 ms** of patience surfaced as a lost turn, because only an integer `Retry-After` header was parsed (none was sent), the fallback backoff waited 1+2 s, and the attempt count ran out while the window was still saturated. Proactive pacing off the `x-ratelimit-remaining-*`/`x-ratelimit-reset-*` response headers is deliberately NOT built: the SDK's streaming path does not expose response headers without per-call raw-response surgery, and no measured incident needs it - the reactive budget covers the class. That boundary moves the day a saturated window shows up that budgeted retries cannot ride out. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of each SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts`, `api_retry_after_max` and `api_timeout_*`.
 
 ### Multi-Tool Wrapper Compatibility
 
@@ -304,6 +304,26 @@ adjusts the request automatically: it sends `max_completion_tokens` instead of `
 and omits `temperature` (these models accept only the default), since the direct OpenAI API
 rejects the standard parameters otherwise. This applies to the direct OpenAI provider only;
 OpenRouter normalizes parameters itself, so its routes are not adjusted.
+
+The `gpt-5.6` family (`luna`, `terra`, `sol`) additionally refuses **function tools** on
+`/v1/chat/completions` unless `reasoning_effort` is sent as `"none"`, and answers `400`
+otherwise, so every tool-carrying turn on those models would fail. VAF sends the value for
+that family, and only on turns that actually carry tools: a tool-free call (vision
+description, summary, compaction) keeps the model's server-side reasoning. The value cannot
+be sent to every reasoning model, which is why it is family-scoped: `o1`/`o3`/`o4` reject
+`"none"` outright ("does not support 'none'") and the `gpt-4o` family does not know the
+parameter at all. A family released later that refuses the same way is recognised by its
+error, recorded for the rest of the process and retried immediately, so it costs one round
+trip once instead of a dead turn.
+
+The alternative OpenAI names in that error, `/v1/responses`, is a different wire format and
+is deliberately not implemented: `reasoning_effort="none"` is the documented escape hatch on
+this endpoint. The trade-off is explicit, and it is real: on `gpt-5.6`, tool turns run
+without server-side reasoning. A Responses-API lane is what would buy it back.
+
+Both request shapes come from one implementation, `api_backend.openai_request_params()`,
+because two lanes build an OpenAI-compatible body: the provider class (via the SDK) and the
+coder, which talks raw HTTP.
 
 **Get API Key:** https://platform.openai.com/api-keys
 

@@ -82,13 +82,21 @@ def pool(monkeypatch):
     # these tests measure: with the config seam answering None every knob falls
     # to the module default, which is the state a test then varies on purpose.
     monkeypatch.setattr(bp, "_config_get", lambda key: None)
+    monkeypatch.delenv("VAF_BROWSER_POOL_STRICT", raising=False)
     fake = _FakeDocker()
     monkeypatch.setattr(bp, "_docker", fake)
     monkeypatch.setattr(bp, "_mem_available_mb", lambda: 16000)
+    # Fallbacks emit security events (lazy import in resolve): record them
+    # here instead of letting a unit test write the machine's real event log.
+    events = []
+    import vaf.core.security_events as sev
+    monkeypatch.setattr(sev, "log_security_event",
+                        lambda kind, **kw: events.append((kind, kw)))
     p = bp.BrowserPool()
     p._ensure_reaper = lambda: None            # no threads in unit tests
     monkeypatch.setattr(p, "_wait_healthy", lambda inst: True)
     p._test_docker = fake
+    p._test_events = events
     return p
 
 
@@ -155,14 +163,17 @@ def test_module_defaults_and_config_defaults_cannot_drift():
     assert Config.DEFAULTS["browser_pool_max"] == bp.DEFAULT_POOL_MAX
     assert Config.DEFAULTS["browser_pool_min_free_mb"] == bp.DEFAULT_MIN_FREE_MB
     assert float(Config.DEFAULTS["browser_pool_idle_seconds"]) == bp.DEFAULT_IDLE_S
+    assert Config.DEFAULTS["browser_pool_strict"] == bp.DEFAULT_POOL_STRICT
 
 
 def test_the_pool_knobs_are_admin_only():
     """Every instance carries a 2 GB memory cap, so the count and the floor are
     the machine's RAM budget: a non-admin LAN account must not be able to raise
-    them, and browser_ is not one of the admin-only PREFIXES."""
+    them, and browser_ is not one of the admin-only PREFIXES. Strict decides
+    whether users may ever share the fallback browser - the same class."""
     from vaf.core.config import Config
-    for key in ("browser_pool_max", "browser_pool_min_free_mb", "browser_pool_idle_seconds"):
+    for key in ("browser_pool_max", "browser_pool_min_free_mb",
+                "browser_pool_idle_seconds", "browser_pool_strict"):
         assert Config.is_global_config_key(key), key
 
 
@@ -182,6 +193,42 @@ def test_instance_is_created_with_hashed_name_and_loopback_ports(pool, monkeypat
     assert "1.1.1.2" in run_call and "1.0.0.2" in run_call
     # and the host-gateway name render_check aims localhost targets at
     assert "host.docker.internal:host-gateway" in run_call
+
+
+def test_instance_carries_the_same_hardening_as_the_compose_browser(pool, monkeypatch):
+    """The pool's docker run is the second copy of the compose service's start
+    arguments: cap_drop ALL + SYS_CHROOT + no-new-privileges + the seccomp
+    profile that lets Chromium run WITH its own sandbox. A lane that loses them
+    silently runs an unsandboxed browser."""
+    import vaf.core.browser_pool as bp
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    monkeypatch.setattr(bp, "_seccomp_profile_path", lambda: "/repo/docker/browser/chromium-seccomp.json")
+    assert pool.resolve("scope-a") is not None
+    run_call = next(c for c in pool._test_docker.calls if c[0] == "run")
+    joined = " ".join(run_call)
+    assert "--cap-drop ALL" in joined
+    assert "--cap-add SYS_CHROOT" in joined
+    assert "--security-opt no-new-privileges:true" in joined
+    assert "--security-opt seccomp=/repo/docker/browser/chromium-seccomp.json" in joined
+    # options belong to docker run, so they must precede the image argument
+    assert run_call.index("no-new-privileges:true") < len(run_call) - 1
+    seccomp_idx = next(i for i, a in enumerate(run_call) if a.startswith("seccomp="))
+    assert seccomp_idx < len(run_call) - 1, "seccomp option must come before the image"
+
+
+def test_a_missing_seccomp_profile_omits_the_option_but_still_hardens(pool, monkeypatch):
+    """A wheel install ships no docker/ directory: the option is omitted (the
+    entrypoint probe falls back loudly inside the container), while the
+    capability and privilege hardening still applies."""
+    import vaf.core.browser_pool as bp
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    monkeypatch.setattr(bp, "_seccomp_profile_path", lambda: None)
+    assert pool.resolve("scope-a") is not None
+    run_call = next(c for c in pool._test_docker.calls if c[0] == "run")
+    joined = " ".join(run_call)
+    assert "seccomp=" not in joined
+    assert "--cap-drop ALL" in joined
+    assert "--security-opt no-new-privileges:true" in joined
 
 
 def test_each_instance_gets_a_network_of_its_own(pool, monkeypatch):
@@ -509,3 +556,65 @@ def test_a_dead_cdp_is_refused_before_the_stream_is_probed(live_health_pool, mon
     monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0: (probed.append(url), True)[1])
     assert live_health_pool.resolve("scope-a") is None
     assert probed == [], "the stream was probed even though CDP was already dead"
+
+
+# ── strict mode and the visible fallback (the banking round) ──────────────
+
+def test_a_fallback_with_the_pool_active_emits_a_security_event(pool, monkeypatch):
+    """Silent degradation was the defect: a user who believes they have a
+    browser of their own must not land on the shared one without a trace."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
+    assert pool.resolve("scope-a") is not None
+    assert pool.resolve("scope-b") is None            # capacity: shared fallback
+    kinds = [k for k, _ in pool._test_events]
+    assert kinds == ["browser_pool_fallback"]
+    assert "capacity" in pool._test_events[0][1]["detail"]
+
+
+def test_strict_mode_refuses_instead_of_sharing(pool, monkeypatch):
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
+    monkeypatch.setenv("VAF_BROWSER_POOL_STRICT", "1")
+    assert pool.resolve("scope-a") is not None         # first user: own instance
+    with pytest.raises(bp.PoolExhausted):
+        pool.resolve("scope-b")
+    # The refusal is still a recorded fallback event.
+    assert [k for k, _ in pool._test_events] == ["browser_pool_fallback"]
+
+
+def test_a_disabled_pool_answers_none_silently(pool, monkeypatch):
+    """pool off (or no scope) is the configuration, not a failure: no event,
+    no strict refusal - the shared browser IS the product then."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "0")
+    monkeypatch.setenv("VAF_BROWSER_POOL_STRICT", "1")
+    assert pool.resolve("scope-a") is None
+    assert pool._test_events == []
+
+
+def test_get_manager_for_scope_propagates_the_strict_refusal(monkeypatch):
+    """The single conversion point from 'pool answered None' to 'use the shared
+    manager' must not swallow PoolExhausted, or strict mode would quietly hand
+    out the very browser it forbids."""
+    import vaf.core.browser_interactive as bi
+
+    class _StrictPool:
+        def resolve(self, scope):
+            raise bp.PoolExhausted("at capacity (1/1)")
+
+    import vaf.core.browser_pool as bpm
+    monkeypatch.setattr(bpm, "get_browser_pool", lambda: _StrictPool())
+    with pytest.raises(bp.PoolExhausted):
+        bi.get_manager_for_scope("scope-a")
+
+
+def test_every_resolve_caller_names_the_strict_refusal():
+    """Three lanes resolve the pool (interactive, agent run, render); each must
+    handle PoolExhausted explicitly - the render lane's old blanket `except
+    Exception` was a silent route back onto the shared browser."""
+    from pathlib import Path
+    root = Path(bp.__file__).resolve().parents[2]
+    for rel in ("vaf/core/browser_interactive.py",
+                "vaf/tools/browser_agent.py",
+                "vaf/core/browser_render.py",
+                "vaf/core/web_server.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "PoolExhausted" in src, f"{rel} lost its strict-pool handling"

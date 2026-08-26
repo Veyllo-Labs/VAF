@@ -105,7 +105,11 @@ def test_the_auto_scroll_sets_the_position_instead_of_animating():
         "the auto-scroll asks for a smooth scroll again; measured to move the view "
         "0px in the desktop window while a direct assignment moves it fully"
     )
-    assert "scrollTop = " in code, "the auto-scroll no longer sets a position at all"
+    assert "setChatScroll(" in code, (
+        "the auto-scroll no longer sets a position through the shared setter, so it "
+        "either does not scroll at all or scrolls without declaring the intent - and "
+        "an undeclared position is put back by the guard within a frame"
+    )
 
 
 def test_scroll_anchoring_stays_off_for_the_chat_column():
@@ -127,3 +131,128 @@ def test_scroll_anchoring_stays_off_for_the_chat_column():
     # both the container and its contents: an inner element can anchor just as well
     assert ".vaf-chat-col * { overflow-anchor: none; }" in code, \
         "only the container is exempt; a child element can still act as the anchor"
+
+
+# ---------------------------------------------------------------------------
+# The position guard, and what it does to every OTHER scroll in the file
+# ---------------------------------------------------------------------------
+
+
+def _chat_container_scroll_writes(src: str):
+    """Every `<name>.scrollTop = ...` whose `<name>` was bound from containerRef.
+
+    The chat column is not the only scroller on the page (the suggestion list, the
+    thinking panel and the report list have their own), so the receiver is resolved
+    back to its nearest preceding binding rather than matched by name.
+    """
+    out = []
+    for m in re.finditer(r"(\w+)\.scrollTop\s*=[^=]", src):
+        name = m.group(1)
+        binds = list(re.finditer(
+            r"(?:const|let)\s+" + re.escape(name) + r"\s*=\s*([^;\n]+)", src[:m.start()]
+        ))
+        if not binds:
+            continue
+        if "containerRef" in binds[-1].group(1):
+            out.append(m)
+    return out
+
+
+def test_every_chat_scroll_declares_the_position_as_the_intent():
+    """A write that does not declare the intent is undone before the next paint.
+
+    The chat column holds the position it was put in: a per-frame loop remembers the
+    intended scrollTop and restores it whenever the view moved without a person
+    touching the wheel, a key or the surface, because the engine moves it on its own
+    (measured in the tray window). The loop cannot tell our writes from the engine's.
+
+    So a programmatic scroll that only assigns scrollTop scrolls and is reverted in
+    the same frame, which on screen is a control that does nothing. That is what
+    happened to the prompt navigator, to the session-switch scroll restore and to the
+    sub-agent panel's height preservation: three of the four scroll sites in this file
+    wrote the position and never the intent, while only the auto-scroll did both.
+
+    Pinned as a property of every site rather than of the three that were fixed, so a
+    fifth one cannot be added by hand with the same omission.
+    """
+    src = _source()
+    writes = _chat_container_scroll_writes(src)
+    assert writes, "no scroll write on the chat container found at all - did it move?"
+    for m in writes:
+        window = src[max(0, m.start() - 300):m.start()]
+        assert "scrollIntentRef.current" in window, (
+            "a scrollTop write on the chat container does not declare the new position "
+            "as the scroll intent, so the position guard undoes it within a frame:\n"
+            + src[max(0, m.start() - 200):m.end() + 60]
+        )
+
+
+def test_the_position_guard_still_runs_and_still_yields_to_a_person():
+    src = _source()
+    assert "const recentlyHuman = performance.now() - lastHuman < 300;" in src, \
+        "the position guard no longer distinguishes an engine move from a person's"
+    assert re.search(r"evts\.forEach\(e => el\.addEventListener\(e, human", src), \
+        "the guard no longer listens for real interaction, so it would fight the user"
+
+
+def test_the_prompt_navigator_jumps_through_the_shared_helper():
+    """The right-edge rail's click, which is what made the guard's reach visible.
+
+    It used to call scrollIntoView({behavior:'smooth'}) directly. Two things were
+    wrong with that at once: smooth scrolling on this very container was measured to
+    move it 0px in the desktop window, and the guard reverted whatever it did move,
+    because a click on the rail is not an interaction with the scroller and therefore
+    never counts as human. The rail sits OUTSIDE the column it scrolls.
+    """
+    src = _source()
+    block = src.split("Prompt navigator:", 1)
+    assert len(block) == 2, "the prompt navigator is gone or was renamed"
+    body = block[1].split("})()}", 1)[0]
+    assert "scrollIntoView" not in body, (
+        "the prompt navigator asks for scrollIntoView again: measured to move this "
+        "container 0px, and undone by the position guard where it does move"
+    )
+    assert "scrollChatToMessage(" in body, \
+        "the prompt navigator no longer jumps through the shared helper"
+
+
+def test_the_prompt_navigator_widens_the_window_by_turns():
+    """The window is cut by user TURNS, and the rail has to speak the same unit.
+
+    visibleMessages keeps the last MSG_TURNS + msgOffset user prompts. The rail's old
+    arithmetic subtracted that same constant from a MESSAGE count, so on a normal
+    conversation - several messages per turn - it decided that visible prompts were
+    hidden and revealed the entire history to reach one of them.
+    """
+    src = _source()
+    body = src.split("Prompt navigator:", 1)[1].split("})()}", 1)[0]
+    assert "turnIdxs.length - MSG_TURNS - turnPos" in body, (
+        "the prompt navigator no longer computes the needed offset in turns; a "
+        "message-count subtraction here reveals the whole history on most clicks"
+    )
+    assert "filteredMessages.length - MSG_PAGE_SIZE" not in body, \
+        "the message-count arithmetic is back"
+
+
+def test_the_navigator_jump_waits_for_the_render_instead_of_a_timer():
+    """Widening the window is a state change; the bubble exists one commit later.
+
+    The previous version waited a fixed 80ms and then queried the DOM. A commit that
+    took longer than that - a long conversation being re-rendered is exactly that
+    case - left the query empty and the click did nothing at all.
+    """
+    src = _source()
+    assert "pendingJumpRef" in src, "the parked jump is gone"
+    marker = "pendingJumpRef.current = null;"
+    assert marker in src, "the parked jump is never consumed"
+    effect = src.split("Run the prompt navigator's parked jump", 1)
+    assert len(effect) == 2, "the effect that runs the parked jump is gone"
+    body = effect[1].split("}, [", 1)
+    assert len(body) == 2, "could not find the dependency list of the parked-jump effect"
+    deps = [d.strip() for d in body[1].split("]", 1)[0].split(",") if d.strip()]
+    assert "visibleMessages" in deps and "msgOffset" in deps, (
+        "the parked jump no longer waits on the window that has to widen first; "
+        f"dependencies found: {deps}"
+    )
+    assert "setTimeout" not in effect[1].split("}, [", 1)[0], \
+        "the jump is back on a timer instead of on the render it is waiting for"

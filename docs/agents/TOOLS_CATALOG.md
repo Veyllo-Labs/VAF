@@ -8,6 +8,14 @@ additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
 integration is connected (GitHub, email, calendar, WhatsApp, …).
 
+The coder does **not** get this whole catalogue. It is offered the whitelist in
+[vaf/core/coder_tools.py](../../vaf/core/coder_tools.py) (`CODER_ALLOWED_TOOLS`): files,
+code, git, shell, tests and lookups, with mail, messengers, calendars and contacts
+deliberately absent. Adding a tool here therefore does not put it in front of the coder;
+that takes an entry in the whitelist, or the `coder_tool_allowlist_extra` config key. See
+[CODER_ARCHITECTURE.md](CODER_ARCHITECTURE.md) for why it is a whitelist and not the
+exclusion list it used to be.
+
 `Perm` is the tool's `permission_level`: **read** (safe), **write** (changes state, no
 prompt by default), **dangerous** (always confirmed), **system** (internal plumbing). See
 the contract in [vaf/tools/base.py](../../vaf/tools/base.py) and

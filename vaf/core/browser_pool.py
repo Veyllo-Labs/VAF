@@ -50,12 +50,19 @@ _VOLUME_PREFIX = "vaf-browser-profile-"
 _NETWORK_PREFIX = "vaf-browser-net-"
 
 
-# The three defaults live here as well as in Config.DEFAULTS: an embedder that
+# The defaults live here as well as in Config.DEFAULTS: an embedder that
 # builds on vaf.core without a config file still gets a working pool. A guard
 # test pins the two copies together so they cannot drift.
 DEFAULT_POOL_MAX = 2
 DEFAULT_MIN_FREE_MB = 2500
 DEFAULT_IDLE_S = 900.0
+DEFAULT_POOL_STRICT = False
+
+
+class PoolExhausted(RuntimeError):
+    """Strict mode's refusal: no dedicated instance, and falling back to the
+    shared container is exactly what strict mode forbids. Carries the reason
+    a dedicated instance could not be served."""
 
 
 def _config_get(key: str):
@@ -108,6 +115,19 @@ def _idle_stop_s() -> float:
         return DEFAULT_IDLE_S
 
 
+def pool_strict() -> bool:
+    """Strict mode: a user who cannot get a DEDICATED instance is refused
+    (PoolExhausted) instead of silently sharing the fallback container.
+    Off by default - a solo install would rather time-share than see busy."""
+    try:
+        raw = _setting("VAF_BROWSER_POOL_STRICT", "browser_pool_strict")
+        if raw is None:
+            return DEFAULT_POOL_STRICT
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return DEFAULT_POOL_STRICT
+
+
 def _scope_hash(scope: str) -> str:
     return hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
 
@@ -126,6 +146,22 @@ def _docker(args: List[str], timeout: float = 60) -> subprocess.CompletedProcess
     from vaf.core.service_stack import resolve_docker_exe
     return subprocess.run([resolve_docker_exe(), *args],
                           capture_output=True, text=True, timeout=timeout)
+
+
+def _seccomp_profile_path() -> Optional[str]:
+    """Absolute path of the browser seccomp profile, or None outside a checkout.
+
+    The docker CLI reads the profile from the HOST filesystem and this lane
+    passes no cwd, so the path must be absolute. A wheel install ships no
+    docker/ directory; returning None simply omits the option, and the
+    entrypoint's user-namespace probe handles the consequence.
+    """
+    try:
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[2] / "docker" / "browser" / "chromium-seccomp.json"
+        return str(p) if p.is_file() else None
+    except Exception:
+        return None
 
 
 def _http_ok(url: str, timeout: float = 3.0) -> bool:
@@ -169,6 +205,10 @@ class BrowserPool:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._instances: Dict[str, BrowserInstance] = {}   # scope -> instance
+        # Why the last resolve fell back to the shared container - feeds the
+        # security event and strict mode's refusal. Best-effort under races:
+        # a stale reason mislabels a log line, never a decision.
+        self._fallback_reason = ""
         self._template: Optional[tuple] = None             # (image, network)
         self._reaper_alive = False
 
@@ -201,15 +241,36 @@ class BrowserPool:
     def resolve(self, user_scope_id: str) -> Optional[BrowserInstance]:
         """The caller's own browser instance, or None meaning: use the shared one.
 
-        BLOCKING (docker calls, health wait): run off the event loop. Never
-        raises - every failure is a logged fallback to the shared container."""
+        BLOCKING (docker calls, health wait): run off the event loop. With the
+        pool ACTIVE, every fallback to the shared container is recorded as a
+        `browser_pool_fallback` security event, and under `pool_strict()` it
+        raises PoolExhausted instead of answering None - sharing is exactly
+        what strict mode forbids. A disabled pool (or a scope-less caller)
+        answers None silently: that is the configuration, not a failure."""
         if pool_max() <= 0 or not user_scope_id:
             return None
+        self._fallback_reason = "no dedicated instance"
         try:
-            return self._resolve_inner(str(user_scope_id))
+            inst = self._resolve_inner(str(user_scope_id))
+        except PoolExhausted:
+            raise
         except Exception as e:
             append_domain_log("webui", f"[browser_pool] resolve failed, using shared browser: {e}")
-            return None
+            self._fallback_reason = f"resolve failed: {e}"
+            inst = None
+        if inst is not None:
+            return inst
+        reason = str(getattr(self, "_fallback_reason", "") or "no dedicated instance")
+        try:
+            from vaf.core.security_events import log_security_event
+            log_security_event("browser_pool_fallback",
+                               username=str(user_scope_id)[:32],
+                               detail=reason[:200], channel="browser")
+        except Exception:
+            pass
+        if pool_strict():
+            raise PoolExhausted(reason)
+        return None
 
     def _resolve_inner(self, scope: str) -> Optional[BrowserInstance]:
         with self._lock:
@@ -231,6 +292,9 @@ class BrowserPool:
                     return None
                 r = _docker(["start", name])
                 if r.returncode != 0:
+                    append_domain_log("webui", f"[browser_pool] docker start failed: "
+                                               f"{(r.stderr or '').strip()[:200]}; using shared browser")
+                    self._fallback_reason = "docker start failed"
                     return None
             inst = self._read_endpoints(scope, name)
         elif state is None:
@@ -238,13 +302,19 @@ class BrowserPool:
                 return None
             inst = self._create(scope, name)
         else:
+            append_domain_log("webui", f"[browser_pool] instance in state {state!r}; "
+                                       "using shared browser")
+            self._fallback_reason = f"instance in state {state!r}"
             return None
 
         if inst is None:
+            if not self._fallback_reason or self._fallback_reason == "no dedicated instance":
+                self._fallback_reason = "instance could not be created"
             return None
         if not self._wait_healthy(inst):
             append_domain_log("webui", f"[browser_pool] instance for scope hash "
                                        f"{_scope_hash(scope)} did not become healthy; using shared browser")
+            self._fallback_reason = "instance did not become healthy"
             return None
         with self._lock:
             self._instances[scope] = inst
@@ -263,11 +333,13 @@ class BrowserPool:
         running = len([ln for ln in (r.stdout or "").splitlines() if ln.strip()]) if r.returncode == 0 else 0
         if running >= limit:
             append_domain_log("webui", f"[browser_pool] at capacity ({running}/{limit}); using shared browser")
+            self._fallback_reason = f"at capacity ({running}/{limit})"
             return False
         free = _mem_available_mb()
         if free is not None and free < _min_free_mb():
             append_domain_log("webui", f"[browser_pool] low memory ({free} MB free, floor "
                                        f"{_min_free_mb()} MB); using shared browser")
+            self._fallback_reason = f"low memory ({free} MB free)"
             return False
         return True
 
@@ -310,7 +382,23 @@ class BrowserPool:
             "-p", "127.0.0.1::9222", "-p", "127.0.0.1::6901",
             "-e", f"TZ={os.environ.get('VAF_BROWSER_TZ', 'Europe/Berlin')}",
             "-v", f"{volume}:/home/browser",
+            # Same hardening the compose browser gets. SYS_CHROOT because
+            # Chromium's zygote chroots its sandboxed children (measured to
+            # fail without it); the seccomp profile below is Docker's default
+            # plus the user-namespace syscalls, which is what lets Chromium
+            # run WITH its own sandbox instead of --no-sandbox.
+            "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT",
+            "--security-opt", "no-new-privileges:true",
         ]
+        seccomp = _seccomp_profile_path()
+        if seccomp:
+            args += ["--security-opt", f"seccomp={seccomp}"]
+        else:
+            # Without the profile Chromium's sandbox cannot start under
+            # Docker's default seccomp; the entrypoint probes and falls back
+            # to --no-sandbox loudly, so the browser still works.
+            append_domain_log("webui", "[browser_pool] seccomp profile not found; "
+                                       "instance runs without Chromium's own sandbox")
         proxy = os.environ.get("VAF_BROWSER_PROXY", "").strip()
         if proxy:
             args += ["-e", f"VAF_BROWSER_PROXY={proxy}"]

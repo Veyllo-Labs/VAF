@@ -120,6 +120,13 @@ type DockerIsolation = {
   }[];
 };
 
+type BrowserEngine = {
+  age_days: number;
+  budget_days: number;
+  stale: boolean;
+  browser_version: string;
+};
+
 type FirewallStatus = {
   state: 'ok';
   reason: 'lan_enabled' | 'lan_disabled';
@@ -128,6 +135,7 @@ type FirewallStatus = {
   blocked_today: number;
   failed_logins_today: number;
   docker?: DockerIsolation | null;
+  browser_engine?: BrowserEngine | null;
 };
 
 type SecurityEvent = {
@@ -1434,6 +1442,9 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'room_account_admitted': return t('ovEvRoomAccountAdmitted');
       case 'cli_password_gate_failed': return t('ovEvCliGateFailed');
       case 'default_db_password': return t('ovEvDefaultDbPassword');
+      case 'browser_handover_failed': return t('ovEvBrowserHandover');
+      case 'browser_pool_fallback': return t('ovEvBrowserPoolFallback');
+      case 'browser_image_stale': return t('ovEvBrowserImageStale');
       default: return kind;
     }
   };
@@ -1762,12 +1773,16 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
             {
               key: 'firewall',
               name: t('ovCardFirewall'),
-              dot: !firewall ? C.textFaint : firewall.docker?.state === 'warn' ? '#f59e0b' : '#22c55e',
+              dot: !firewall ? C.textFaint
+                : firewall.docker?.state === 'warn' ? '#f59e0b'
+                  : firewall.browser_engine?.stale ? '#f59e0b' : '#22c55e',
               status: !firewall ? noData
                 : firewall.docker?.state === 'warn' ? t('ovFwDockerExposed')
-                  : firewall.reason === 'lan_disabled' ? t('ovFwLanOff')
-                    : t('ovFwActive', { n: fwDeflected }),
-              statusColor: !firewall ? C.textDim : firewall.docker?.state === 'warn' ? amber : green,
+                  : firewall.browser_engine?.stale ? t('ovFwBrowserStale', { n: Math.round(firewall.browser_engine.age_days) })
+                    : firewall.reason === 'lan_disabled' ? t('ovFwLanOff')
+                      : t('ovFwActive', { n: fwDeflected }),
+              statusColor: !firewall ? C.textDim
+                : (firewall.docker?.state === 'warn' || firewall.browser_engine?.stale) ? amber : green,
             },
             {
               key: 'isolation',
@@ -2482,6 +2497,15 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                       {factRow(t('ovFwOsRules'), firewall.os_rules_enabled ? t('ovOn') : t('ovOff'), firewall.os_rules_enabled)}
                       {factRow(t('ovFwBlockedCount'), String(firewall.blocked_today))}
                       {factRow(t('ovFwFailedLogins'), String(firewall.failed_logins_today))}
+                      {firewall.browser_engine && (
+                        <>
+                          {firewall.browser_engine.browser_version &&
+                            factRow(t('ovFwBrowserVersion'), firewall.browser_engine.browser_version)}
+                          {factRow(t('ovFwBrowserAge', { n: Math.round(firewall.browser_engine.age_days) }),
+                            firewall.browser_engine.stale ? t('ovFwBrowserAgeStale') : t('ovFwBrowserAgeFresh'),
+                            !firewall.browser_engine.stale)}
+                        </>
+                      )}
                       {firewall.docker && (
                         <>
                           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovFwDocker')}</div>

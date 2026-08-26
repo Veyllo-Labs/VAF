@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (325 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (332 keys).
 
 ## How configuration is set
 
@@ -105,6 +105,7 @@ print(agent.run("In one sentence, what is Python?"))
 | `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
 | `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation - **HTTP 429 (rate limit)**, 5xx, timeout or connection drop - for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |
 | `api_retry_after_max` | `30` | Cap (s) on a honored `Retry-After` header from a 429, so a large/hostile value cannot stall a worker. Admin-only. |
+| `api_rate_limit_wait_max` | `60` | Admin-only. Total wall-clock (s) a rate-limited call (429) may spend waiting and retrying before the error surfaces; `0` disables 429 retries. Deliberately a TIME budget, distinct from `api_retry_attempts` (which counts 5xx/timeout retries): a per-org token window drains on its own schedule, and the provider names the wait itself (`Retry-After` header, or "Please try again in 186ms" in the body) - counting attempts against that is how a live turn died after 3s of patience against a request that asked for 186ms. Both the SDK lane and the coder's raw-HTTP lane honor it. |
 | `api_timeout_connect` | `20.0` | OpenAI-compatible client connect timeout (s). |
 | `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) - bounds large image uploads. |
 | `api_timeout_read` | `600.0` | Read timeout (s); kept generous so long reasoning streams are not cut off. |
@@ -122,6 +123,8 @@ print(agent.run("In one sentence, what is Python?"))
 
 Automatic provider failover: if the primary provider is unreachable or errors out **before the first token**, the request is retried down a chain of fallback providers. Once a real token has streamed, no switch happens (it would duplicate output). Off by default - behaviour is unchanged unless `failover_level` is set. Configured in the UI under Settings → Advanced → Failover. All keys are admin-only.
 
+A link that fails for an outage reason is then remembered as dead for `failover_recheck_after_s` and **skipped** rather than waited for again on every request; when that window passes it is simply a candidate again, so the next ordinary request is the probe. Nothing pings the provider in the background: a liveness ping would cost a real completion (`test_connection`) or could not tell "down" from "no discovery endpoint" (`list_models`), and it would have to run in every process rather than only where a scheduler happens to live. The state is per `APIBackendManager`, so it is shared by everything one agent does and is not carried across a restart.
+
 | Key | Default | Description |
 |-----|---------|-------------|
 | `failover_level` | `"off"` | Resilience level: `off` (primary only), `basic` (→ local model), `balanced` (→ backup API → local), `maximum` (full chain, more aggressive triggers). |
@@ -130,7 +133,8 @@ Automatic provider failover: if the primary provider is unreachable or errors ou
 | `failover_local_model` | `""` | GGUF filename for the local link; empty = auto. |
 | `failover_timeout_s` | `30` | First-token deadline (s) before failing over to the next link; `0` = no extra deadline (rely on the provider's own timeout). |
 | `failover_triggers` | `[]` | Subset of `["timeout","rate_limit","server_error"]` that may trigger a switch; empty = any error. Connection/unknown errors always switch. |
-| `failover_return_to_primary` | `True` | After a fallback, prefer the primary again on the next request; when off, stay on the working link until it also fails. |
+| `failover_return_to_primary` | `True` | After a fallback, prefer the primary again on the next request; when off, stay on the working link until it also fails **or until an earlier link's `failover_recheck_after_s` window has passed**. With the re-check disabled (`0`) the off position pins the working link permanently, as it did before that key existed. |
+| `failover_recheck_after_s` | `300` | Seconds a link that just failed is skipped for, instead of being waited for again on every request; the first request after the window is the re-check, and a failed re-check re-arms it. `0` = never skip (every request pays the failed link again, the behaviour before this key). A 4xx never arms it (that is the request, not the provider), and nothing is skipped while the outbound history carries provider-bound `tool_call` ids or when every link in the chain is cooling down. |
 
 ## Local generation (llama-server)
 
@@ -145,6 +149,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `top_p` | `0.95` | Nucleus sampling. |
 | `top_k` | `40` | Top-k sampling. |
 | `max_generation_tokens` | `10000` | Per-call output cap on local generation. |
+| `api_max_response_tokens` | `16384` | Per-call output cap on the API lanes, and the in-process local lane reads `max_generation_tokens` beside it. Admin-only: how long one reply may be is measured in tokens the instance pays for. A reasoning model spends this budget on thinking before it writes a word, so a figure sized for an answer cuts the answer off. A provider that refuses the value is retried once at 8192 and the lower figure is remembered for the process, so raising this cannot break a model whose own ceiling is lower. |
 | `model_unload_idle_minutes` | `30` | Unload the local model after this idle time. |
 | `parallel_main_workers` | `1` | Concurrent main-agent workers (admin-only). `1` = serialized (default). When > 1, the effective count is clamped per provider (see the two keys below) and turns from different SESSIONS run concurrently while turns within one session stay serialized. The queue keys on the session id, not the user, so one person's web and messaging sessions can run at the same time. Pair with `queue_policy: weighted_fair` for lane fairness. |
 | `max_parallel_api_workers` | `5` | Effective worker cap for API providers (admin-only). |
@@ -203,6 +208,8 @@ These are sent only on the local path; cloud APIs ignore them.
 | `workflow_agent_step_timeout_seconds` | `1800` | Worst-case cap for a heavy agent step (coder/research/document) INSIDE a workflow - a floor over the generic cap, which killed a healthy coder mid-run at minute five. Dead children are caught much earlier by heartbeat liveness. |
 | `subagent_liveness_timeout_seconds` | `60` | Kill a sub-agent after this long with no heartbeat (primary guard). |
 | `tool_timeout_seconds` | `120` | Hard cap for a generic in-process tool call. |
+| `coder_tool_allowlist` | `""` | Admin-only. WHICH tools the coding agent is offered, as a comma-separated list of tool names. Empty = the built-in whitelist in [vaf/core/coder_tools.py](../../vaf/core/coder_tools.py) (`CODER_ALLOWED_TOOLS`): files, code, git, shell, tests and lookups, deliberately without mail, messengers, calendars or contacts. A non-empty value REPLACES that set. The names a run cannot work without (`set_todos`, `write_file`, `read_file`, `edit_file`, `list_files`, `task_done`, `ask_user`, `request_clarification`) are added back regardless, so a typo costs optional tools rather than the coder. Admin-only because it decides what a build step may reach for, and `coder_` is not a global prefix. |
+| `coder_tool_allowlist_extra` | `""` | Admin-only. Tool names ADDED to whichever allow-list is in force, same format. This is the key to reach for when the coder should gain one specific tool; it survives changes to the built-in list. |
 | `librarian_timeout_seconds` | `60` | Hard cap for the filesystem/document agent. |
 | `browser_timeout_seconds` | `1800` | Worst-case browser cap (liveness is the real guard). |
 | `tool_stop_poll_seconds` | `0.5` | How often the bounded wait checks stop/deadline. |
@@ -356,6 +363,8 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `browser_pool_max` | `2` | Admin-only. How many people may have a browser CONTAINER of their own at the same time, each with its own profile and its own container network. `0` switches the pool off and sends everyone back to the one shared browser, where a lease and a handover scrub stand in for the partition. Every instance costs roughly 1-2 GB of RAM, so raising this is a memory decision: budget about 2 GB per concurrently active user and keep `browser_pool_min_free_mb` beneath what stays free. Overridden by `VAF_BROWSER_POOL_MAX`. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#per-user-browser-pool-parallel-use). |
 | `browser_pool_min_free_mb` | `2500` | Admin-only. Free-memory floor: below it no NEW instance is started and the caller falls back to the shared browser. Raising `browser_pool_max` without headroom above this floor changes nothing, which is the usual reason a raised pool appears to do nothing. Overridden by `VAF_BROWSER_POOL_MIN_FREE_MB`. |
 | `browser_pool_idle_seconds` | `900` | Admin-only. How long an unused instance stays up before it is stopped to give the RAM back. The container and its profile volume survive, so the person's history and logins come back with them. Minimum 60. Overridden by `VAF_BROWSER_POOL_IDLE_S`. |
+| `browser_pool_strict` | `False` | Admin-only. Strict pool: a user who cannot get a DEDICATED browser instance (pool at capacity, low memory, docker trouble) is answered busy instead of silently sharing the fallback browser. Every fallback, strict or not, is recorded as a `browser_pool_fallback` security event. Off by default: a solo install would rather time-share than see busy. Overridden by `VAF_BROWSER_POOL_STRICT`. |
+| `browser_image_max_age_days` | `14` | Admin-only. Freshness budget for the browser image: older than this, the next stack start rebuilds it with `--pull --no-cache` so the unpinned Debian Chromium inside actually receives security updates (the ordinary cached `--build` never re-runs that layer). A failed fresh build never blocks the start; it is recorded as a `browser_image_stale` security event instead. `0` disables the gate. Overridden by `VAF_BROWSER_IMAGE_MAX_AGE_DAYS`. |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
 | `theme` | `vaf` | Terminal colour theme for both terminal lanes; catalog in `vaf/cli/themes.py`. The default is monochrome. Changed by `t` / `theme <name>` in the app, or the Theme row in `vaf settings`. |

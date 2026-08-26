@@ -90,6 +90,12 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
         "handoff_bundles": (vaf_dir / "handoff_bundles", ("*/*.json",)),
         "subagent_queue": (vaf_dir / "subagent_queue", ("*.json", "task_payloads/*.txt")),
         "main_context": (Path.cwd() / ".vaf" / "main", ("*.json", "*.md", "sessions/*/*")),
+        # Live site cookies and auth tokens, one dir per user scope. The
+        # [!.] excludes the agent lane's dot-prefixed .run-*.tmp.json staging
+        # files (measured: pathlib's * DOES match a leading dot) - they are
+        # short-lived plaintext by design and swept by their own lane, and
+        # encrypting one mid-run would crash the browser_use reader holding it.
+        "browser_sessions": (vaf_dir / "browser_sessions", ("*/[!.]*.json",)),
     }
 
     # Modes first: they apply whether or not encryption is on, and they are the

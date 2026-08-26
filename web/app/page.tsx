@@ -3245,7 +3245,6 @@ function VAFDashboardContent() {
         const start = userIdxs[cutTurnIdx];
         return filteredMessages.slice(start);
     }, [filteredMessages, msgOffset]);
-    const MSG_PAGE_SIZE = MSG_TURNS; // alias used by navigator click handler
     const hiddenCount = filteredMessages.length - visibleMessages.length;
 
     const contextBreakdown = useMemo(() => {
@@ -3941,6 +3940,65 @@ function VAFDashboardContent() {
     const sessionScrollPositions = useRef<Record<string, { scrollTop: number; wasAtBottom: boolean }>>({});
     const isAtBottomRef = useRef(true);
     const pendingScrollRestore = useRef<{ scrollTop: number; wasAtBottom: boolean } | 'bottom' | null>(null);
+    // The prompt navigator's jump, parked until the widened window is on screen.
+    const pendingJumpRef = useRef<number | null>(null);
+
+    // ── Every programmatic scroll of the chat column goes through setChatScroll ──
+    //
+    // The column holds the position it was put in: the per-frame loop further
+    // down remembers the INTENDED scrollTop and puts the view back whenever
+    // something moved it without a person having touched the wheel, a key or the
+    // surface (the engine does exactly that on its own; measured in the tray
+    // window). That guard cannot tell our own writes from the engine's, so a
+    // write that does not also declare the new position as the intent is undone
+    // within a frame: the scroll happens and is reverted before the next paint,
+    // which on screen is indistinguishable from a control that does nothing.
+    //
+    // Deliberate: one setter, rather than the convention "remember to update the
+    // intent as well". Four sites move this column - the answer follow, the
+    // session-switch restore, the sub-agent panel's height preservation and the
+    // prompt navigator's jump - and only the first of them remembered; the other
+    // three were reverted silently. tests/test_chat_autoscroll_guard.py pins that
+    // no site assigns scrollTop on this container by hand again.
+    const scrollIntentRef = useRef<number | null>(null);
+    const setChatScroll = useCallback((target: number) => {
+        const c = containerRef.current;
+        if (!c) return;
+        // Clamp here instead of relying on the browser to do it. Measured in the
+        // tray window (WKWebView): a write of 2610 whose maximum was 1761 landed
+        // at 969, because it hit a layout still being recomputed. Chrome clamps
+        // to scrollHeight minus clientHeight; writing the real maximum ourselves
+        // removes the guesswork. Callers may therefore pass scrollHeight for
+        // "the bottom".
+        const max = Math.max(0, c.scrollHeight - c.clientHeight);
+        const want = Math.min(max, Math.max(0, target));
+        scrollIntentRef.current = want;   // this IS the intent now
+        c.scrollTop = want;
+        // Same threshold as the scroll listener, so the two never disagree about
+        // whether the view is following the newest message.
+        isAtBottomRef.current = want >= max - 50;
+    }, []);
+
+    // Bring one message into view, addressed by its index in the FULL `messages`
+    // array - the number the bubbles carry as `data-msg-idx`. Returns false when
+    // that bubble is not rendered (its turn is outside the virtual window), which
+    // is the caller's cue to widen the window and ask again.
+    //
+    // Deliberate: no scrollIntoView. Measured in the desktop window against this
+    // very container, behavior:'smooth' moves it 0px; and a smooth animation
+    // would in any case be fought frame by frame by the position guard above,
+    // which only ever knows the one position it was told to hold.
+    const scrollChatToMessage = useCallback((trueIdx: number) => {
+        const c = containerRef.current;
+        if (!c) return false;
+        const el = c.querySelector<HTMLElement>(`[data-msg-idx="${trueIdx}"]`);
+        if (!el) return false;
+        // Rectangles, not offsetTop: the bubble's offsetParent is not the
+        // scroller, so its offsetTop is measured against something else entirely.
+        const delta = el.getBoundingClientRect().top - c.getBoundingClientRect().top;
+        setChatScroll(c.scrollTop + delta - Math.max(0, (c.clientHeight - el.offsetHeight) / 2));
+        return true;
+    }, [setChatScroll]);
 
     const artifactDirtyRef = useRef(false);
     const artifactLastEditRef = useRef(0);
@@ -3986,12 +4044,11 @@ function VAFDashboardContent() {
             const nextContainer = containerRef.current;
             if (!nextContainer) return;
             if (wasAtBottom) {
-                nextContainer.scrollTop = nextContainer.scrollHeight;
+                setChatScroll(nextContainer.scrollHeight);
                 return;
             }
-            const nextScrollHeight = nextContainer.scrollHeight;
-            const scrollDelta = nextScrollHeight - prevScrollHeight;
-            nextContainer.scrollTop = prevScrollTop + scrollDelta;
+            const scrollDelta = nextContainer.scrollHeight - prevScrollHeight;
+            setChatScroll(prevScrollTop + scrollDelta);
         });
     };
 
@@ -6691,13 +6748,9 @@ function VAFDashboardContent() {
             requestAnimationFrame(() => {
                 const container = containerRef.current;
                 if (!container) return;
-                if (restore === 'bottom' || restore.wasAtBottom) {
-                    container.scrollTop = container.scrollHeight;
-                    isAtBottomRef.current = true;
-                } else {
-                    container.scrollTop = restore.scrollTop;
-                    isAtBottomRef.current = false;
-                }
+                setChatScroll(restore === 'bottom' || restore.wasAtBottom
+                    ? container.scrollHeight
+                    : restore.scrollTop);
             });
         } else if (isAtBottomRef.current && _chatGrew()) {
             // Set the position directly instead of asking for a smooth scroll.
@@ -6710,24 +6763,27 @@ function VAFDashboardContent() {
             // emits every 80ms (headless_runner.STREAM_EMIT_THROTTLE_SEC) while a
             // smooth animation needs 300-500ms, so each one is retargeted long
             // before it arrives and the view crawls behind the text forever.
-            // Write the real maximum, and only once the layout has settled.
-            // Two WebKit findings from the tray window, both measured:
-            // (1) `scrollTop = scrollHeight` is a value ABOVE the maximum and relies
-            //     on the browser clamping it. Chrome clamps to scrollHeight minus
-            //     clientHeight; WebKit landed at 969 for a write of 2610 whose
-            //     maximum was 1761, because the write hit a layout still being
-            //     recomputed. Writing the maximum ourselves removes the guesswork.
-            // (2) Doing it inside requestAnimationFrame means the height we measure
-            //     is the height the browser has finished with, not one mid-update.
-            requestAnimationFrame(() => {
-                const c = containerRef.current;
-                if (!c) return;
-                const target = Math.max(0, c.scrollHeight - c.clientHeight);
-                scrollIntentRef.current = target;   // this IS the intent now
-                c.scrollTop = target;
-            });
+            // Inside requestAnimationFrame, so the height being measured is the
+            // one the browser has finished with rather than one mid-update.
+            // setChatScroll writes the real maximum and declares it as the
+            // intent; see its comment for why both halves are needed.
+            requestAnimationFrame(() => setChatScroll(containerRef.current?.scrollHeight ?? 0));
         }
     }, [messages, loading, roomView?.messages.length]);
+
+    // Run the prompt navigator's parked jump once the widened window has been
+    // committed and laid out. Parked rather than timed: the previous version
+    // waited a fixed 80ms for a render it could not observe, so a slower commit
+    // meant the bubble did not exist yet and the click did nothing at all.
+    useEffect(() => {
+        const idx = pendingJumpRef.current;
+        if (idx === null) return;
+        const raf = requestAnimationFrame(() => {
+            pendingJumpRef.current = null;
+            scrollChatToMessage(idx);
+        });
+        return () => cancelAnimationFrame(raf);
+    }, [visibleMessages, msgOffset, scrollChatToMessage]);
 
     // Track whether the user is scrolled to the bottom
     // Data URIs are text. A 1024px screenshot arrives as ~800 KB of base64 sitting
@@ -6805,8 +6861,9 @@ function VAFDashboardContent() {
     // intend is remembered, and anything that changes it without a person having
     // touched the wheel, a key, or the surface is put back in the same frame -
     // before the next paint, so nothing is visible. A real interaction updates the
-    // intent instead, which is what keeps this from fighting the user.
-    const scrollIntentRef = useRef<number | null>(null);
+    // intent instead, which is what keeps this from fighting the user. Our own
+    // writes declare the intent through setChatScroll (declared with the ref, up
+    // where containerRef is), which is what keeps this from undoing them.
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
@@ -8558,63 +8615,70 @@ function VAFDashboardContent() {
                                 </button>
                             </div>
                         </div>
-                        {/* ── Prompt Navigator (right rail, DeepSeek-style) ── */}
+                        {/* Prompt navigator: one dash per recent prompt on the right edge,
+                            hover opens the list, a click jumps to that message. Desktop only
+                            (max-md:hidden) - on a touch screen a rail under the thumb eats the
+                            scroll gesture, see MOBILE_UI.md. */}
                         {(() => {
-                            const userPrompts = messages.filter(m => m.role === 'user' && String(m.content ?? '').trim());
-                            if (userPrompts.length === 0) return null;
+                            // Addressed through filteredMessages, never through `messages`: a
+                            // prompt the chat filters out (a __CMD__ line, a thinking-mode
+                            // preamble) has no bubble, so a row for it would be a dead target.
+                            const trueIdxOf = new Map(messages.map((m, i) => [m, i] as const));
+                            // Every user message, empty ones included: this is the same turn
+                            // count visibleMessages cuts by, and the two must agree.
+                            const turnIdxs = filteredMessages
+                                .map((m, i) => (m.role === 'user' ? i : -1))
+                                .filter(i => i >= 0);
+                            const prompts = turnIdxs
+                                .map((filtIdx, turnPos) => ({ m: filteredMessages[filtIdx], turnPos, trueIdx: trueIdxOf.get(filteredMessages[filtIdx]) ?? -1 }))
+                                .filter(p => p.trueIdx >= 0 && String(p.m.content ?? '').trim());
+                            if (prompts.length === 0) return null;
                             const MAX_DASHES = 9;
-                            const displayed = userPrompts.slice(-MAX_DASHES);
+                            const displayed = prompts.slice(-MAX_DASHES);
+                            const jump = (turnPos: number, trueIdx: number) => {
+                                // Widen the virtual window first when this turn is not rendered.
+                                // The window is cut by TURNS, not by messages: visibleMessages
+                                // keeps the last MSG_TURNS + msgOffset user prompts, so what is
+                                // needed here is a turn count. The arithmetic this replaces
+                                // treated MSG_TURNS as a message count and revealed the entire
+                                // history on most clicks.
+                                const needed = turnIdxs.length - MSG_TURNS - turnPos;
+                                if (needed > msgOffset) {
+                                    // The bubble exists only after React has committed the wider
+                                    // window, so the jump is parked for the effect that watches it.
+                                    pendingJumpRef.current = trueIdx;
+                                    setMsgOffset(needed);
+                                    return;
+                                }
+                                scrollChatToMessage(trueIdx);
+                            };
                             return (
-                                // Outer wrapper is the hover target — wide enough to bridge dashes + popup gap
+                                // Outer wrapper is the hover target, wide enough to bridge the
+                                // dashes and the gap to the popup.
                                 <div className="group/promptnav absolute right-0 top-1/2 -translate-y-1/2 z-20 flex flex-row-reverse items-center max-md:hidden">
-                                    {/* Dots — always visible, right edge */}
+                                    {/* Dashes, always visible, on the right edge */}
                                     <div className="flex flex-col gap-3 items-end px-2 py-3">
-                                        {displayed.map((_, i) => (
+                                        {displayed.map((p) => (
                                             <div
-                                                key={i}
+                                                key={p.trueIdx}
                                                 className="w-[5px] h-[5px] rounded-full bg-gray-300 group-hover/promptnav:bg-gray-500 transition-colors duration-150"
                                             />
                                         ))}
                                     </div>
-                                    {/* Popup — appears on hover; flex-col-reverse keeps scroll anchored to bottom (newest last) */}
+                                    {/* Popup, on hover; flex-col-reverse keeps the scroll at the bottom (newest last) */}
                                     <div className="opacity-0 pointer-events-none group-hover/promptnav:opacity-100 group-hover/promptnav:pointer-events-auto transition-opacity duration-150 mr-2">
                                         <div className="w-64 max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl flex flex-col-reverse">
-                                            {[...userPrompts].reverse().map((m, i) => {
-                                                const realIdx = userPrompts.length - 1 - i;
-                                                // Find the index of this message in filteredMessages
-                                                const msgFiltIdx = filteredMessages.indexOf(m);
-                                                return (
-                                                    <button
-                                                        key={realIdx}
-                                                        type="button"
-                                                        onClick={() => {
-                                                            // Ensure the target message is in the visible window.
-                                                            // visibleMessages = filteredMessages.slice(start) where
-                                                            // start = max(0, filteredMessages.length - MSG_PAGE_SIZE - msgOffset)
-                                                            const start = Math.max(0, filteredMessages.length - MSG_PAGE_SIZE - msgOffset);
-                                                            if (msgFiltIdx >= 0 && msgFiltIdx < start) {
-                                                                // Message is outside the visible window — expand offset so it becomes visible.
-                                                                const neededOffset = filteredMessages.length - MSG_PAGE_SIZE - msgFiltIdx;
-                                                                setMsgOffset(Math.max(0, neededOffset));
-                                                                // Scroll after React re-renders with the new offset.
-                                                                setTimeout(() => {
-                                                                    const trueIdx = messages.indexOf(m);
-                                                                    const el = containerRef.current?.querySelector(`[data-msg-idx="${trueIdx}"]`);
-                                                                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                                                }, 80);
-                                                            } else {
-                                                                const trueIdx = messages.indexOf(m);
-                                                                const el = containerRef.current?.querySelector(`[data-msg-idx="${trueIdx}"]`);
-                                                                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                                            }
-                                                        }}
-                                                        className="text-left px-4 py-3 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 truncate shrink-0 border-t border-gray-100 first:border-0 transition-colors duration-100"
-                                                        title={String(m.content ?? '')}
-                                                    >
-                                                        {String(m.content ?? '')}
-                                                    </button>
-                                                );
-                                            })}
+                                            {[...prompts].reverse().map((p) => (
+                                                <button
+                                                    key={p.trueIdx}
+                                                    type="button"
+                                                    onClick={() => jump(p.turnPos, p.trueIdx)}
+                                                    className="text-left px-4 py-3 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 truncate shrink-0 border-t border-gray-100 first:border-0 transition-colors duration-100"
+                                                    title={String(p.m.content ?? '')}
+                                                >
+                                                    {String(p.m.content ?? '')}
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
                                 </div>

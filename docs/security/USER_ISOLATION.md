@@ -517,7 +517,7 @@ This prevents users from reading each other's temporary files within the shared 
 
 ### Browser agent session store (`vaf/tools/browser_agent.py`)
 
-The persistent cookie/login store for the browser agent is keyed by user scope at `~/.vaf/browser_sessions/<scope_seg>/<session>.json` (not the old flat shared path), so one user's saved logins are never readable by another even on the same OS account. The agent injects the caller's `user_scope_id` for `browser_agent` calls and propagates it to the killable child process via the `VAF_USER_SCOPE_ID` environment variable, so the child writes and reads under the correct per-user store. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
+The persistent cookie/login store for the browser agent is keyed by user scope at `~/.vaf/browser_sessions/<scope_seg>/<session>.json` (not the old flat shared path), so one user's saved logins are never readable by another even on the same OS account. The files are encrypted at rest (`vaf/core/data_files`, see [ENCRYPTION_AT_REST.md](ENCRYPTION_AT_REST.md)); the agent lane stages a decrypted owner-only temp beside the store for the duration of a run, because browser_use reads and auto-saves the handed path itself, and folds it back encrypted afterwards. The agent injects the caller's `user_scope_id` for `browser_agent` calls and propagates it to the killable child process via the `VAF_USER_SCOPE_ID` environment variable, so the child writes and reads under the correct per-user store. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
 
 ### Interactive browser (`vaf/core/browser_interactive.py`)
 
@@ -536,33 +536,44 @@ partition:
   deliberately without learning whose lease it is; only an admin may evict. With the
   pool serving, a second user does not reach this arbitration at all: they get their
   own browser instead of `busy`.
-- **Handover scrub:** when the browser changes hands to a DIFFERENT scope - an
-  interactive lease, an agent run (`stop_for_agent_run` carries the run's scope), or an
-  unknown jar after a server restart - the shared state is scrubbed before the new
-  scope's stored logins are optionally loaded: cookies plus every site's stored state
-  (localStorage, IndexedDB, CacheStorage, service workers) in one CDP sweep. A
-  non-persistent agent run is scrubbed even for the same scope (its documented promise
-  is a clean start). `VAF_BROWSER_SCRUB=full` deepens the handover to a whole-profile
-  wipe (history, Chromium-saved passwords, autofill, bookmarks, downloads) via a short
-  Chromium relaunch. Saved logins live in the same per-scope storage-state files as
-  the agent's persistent sessions, above.
+- **Handover wipe, verified and fail-closed:** when the browser changes hands to a
+  DIFFERENT scope - an interactive lease, an agent run (`stop_for_agent_run` carries
+  the run's scope), or an unknown jar after a server restart - the whole Chromium
+  profile is wiped before the new scope's stored logins are optionally loaded:
+  cookies, every site's stored state, history, Chromium-saved passwords, autofill,
+  bookmarks, downloads and the HTTP cache die together. The wipe is VERIFIED (the
+  supervisor's consumption of the wipe marker is confirmed), and a handover whose
+  wipe cannot be confirmed is REFUSED - no lease, no run, a
+  `browser_handover_failed` security event - instead of proceeding over the previous
+  holder's state. This is not configurable. A non-persistent agent run of the SAME
+  scope still gets a quick scrub (its documented promise is a clean start;
+  `VAF_BROWSER_SCRUB=full` deepens that to a best-effort profile wipe). Saved logins
+  live in the same per-scope storage-state files as the agent's persistent sessions,
+  above. Concurrent handovers are serialized by a dedicated mutex, so two starts can
+  never interleave their wipe-and-restore sequences on the shared jar.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
   lane is: the credential is in the request itself.
-- **Named residual, on the shared container only:** in the default `quick` mode the
-  handover scrub does not reach the
-  profile FILES of the container's single Chromium: browsing HISTORY (chrome://history
-  shows the previous holder's pages), passwords saved via Chromium's own password
-  manager (Login Data, offered back to the next holder by autofill), autofill entries,
-  bookmarks, and the HTTP disk cache. Those survive until a `full`-mode handover wipes
-  the profile or the container is recreated. Downloads are no longer part of this
-  residual: finished ones are swept to their owner's `VAF_Projects/<uid8>/Downloads`
+- **The old profile residual is closed; what remains is named.** History, Chromium-saved
+  passwords, autofill, bookmarks and the HTTP disk cache used to survive a quick-mode
+  handover on the shared container; the mandatory verified wipe above deletes them with
+  the profile on every change of hands, so the next holder inherits nothing. The
+  password manager itself STAYS ENABLED - deliberate: login automation and interactive
+  re-login depend on it, and cross-user isolation is carried by the mandatory
+  scope-change wipe (shared container) and per-user profile volumes (pool), not by
+  disabling the feature. Its saved passwords therefore live only until the next
+  cross-user handover on the shared container, and indefinitely on a dedicated pool
+  instance. What remains on the shared container is the cross-process boundary named
+  in `hand_jar_to_run`: the concurrency gate is per-process, so two VAF processes can
+  still reach the same shared container at once - the pool is the answer to that.
+  Downloads are not a residual: finished ones are swept to their owner's
+  `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), and a scope change purges the
   container folder unread instead of delivering a previous holder's files onward. The
   workspace MIRROR (`/home/browser/Workspace`, the upload lane) is treated the same
   way: it is the holder's own files by construction, it is purged unread on a scope
-  change so the next person can neither read nor upload it, and the full scrub wipes
+  change so the next person can neither read nor upload it, and the profile wipe wipes
   it with the profile.
 - **The genuine partition is the per-user pool** (`browser_pool_max`, default 2,
   admin-only, overridable by `VAF_BROWSER_POOL_MAX`; see the pool
@@ -572,11 +583,24 @@ partition:
   guards the shared fallback container, and a dedicated
   instance is never scrubbed or profile-wiped. Raising `browser_pool_max` raises the
   number of people who are partitioned rather than scrubbed, which is why the residual
-  above is a property of the fallback and not of the product. The per-instance network is load-bearing
+  above is a property of the fallback and not of the product. With the pool active,
+  every fallback onto the shared container is recorded as a `browser_pool_fallback`
+  security event, and `browser_pool_strict` (admin-only) turns the fallback into a
+  refusal: no dedicated instance means busy, on every lane - the setup for
+  deployments where two users' sessions must never meet. The per-instance network is load-bearing
   rather than tidiness: inside the container CDP and the KasmVNC socket listen on
   0.0.0.0 without authentication (safe only because the host publishes them on loopback),
   so on one shared bridge a page in user A's browser could dial user B's container
   directly. Container, volume and network names carry a scope hash, never the scope.
+- **Container hardening, both lanes:** the compose service and every pool instance
+  start with `cap_drop ALL` + `cap_add SYS_CHROOT`, `no-new-privileges:true`, and the
+  seccomp profile `docker/browser/chromium-seccomp.json` (Docker's default plus the
+  user-namespace syscalls), which is what lets Chromium run WITH its own sandbox
+  inside the container instead of `--no-sandbox`. A renderer exploit from a malicious
+  page therefore meets Chromium's namespace sandbox first and a capability-stripped
+  container second. Pinned by `tests/test_browser_entrypoint_supervise.py` and
+  `tests/test_browser_pool.py`; details in
+  [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
 
 ## 6. Connection-Level Isolation
 
@@ -646,7 +670,7 @@ The `/api/security/*` surface (overview, events, skill actions) is admin-only (`
 | Sandbox | Per-user working directory in Docker | Container |
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
-| Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id | OS |
+| Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id, encrypted at rest | OS |
 | Live browser (interactive + agent) | Per-scope container, profile volume and docker network for the first `browser_pool_max` scopes (default 2, admin-only); beyond that a shared container with one lease at a time and a handover scrub, whose quick mode leaves profile files behind | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |

@@ -44,11 +44,16 @@ _LOAD_TIMEOUT_S = 25.0
 
 def _endpoint_for(scope: str):
     """(cdp_base, manager) for this scope - the pool instance when one exists,
-    the shared browser otherwise. Mirrors the browser tool's resolution."""
+    the shared browser otherwise. Mirrors the browser tool's resolution.
+    Strict mode's PoolExhausted propagates: silently rendering on the SHARED
+    browser is exactly the fallback strict forbids, and the render lane must
+    refuse like every other lane rather than become the quiet exception."""
     from vaf.core import browser_interactive as bi
     try:
-        from vaf.core.browser_pool import get_browser_pool
+        from vaf.core.browser_pool import PoolExhausted, get_browser_pool
         inst = get_browser_pool().resolve(scope)
+    except PoolExhausted:
+        raise
     except Exception:
         inst = None
     if inst is not None:

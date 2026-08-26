@@ -186,6 +186,52 @@ def _final_answer_probe(full_content: str) -> str:
     return probe.strip()
 
 
+def _join_turn_answers(kept: list, tail: str) -> str:
+    """The turn's reply: every validated final answer, not the last round alone.
+
+    A turn is a loop, and the pending-task auto-continue re-enters it AFTER an
+    answer has passed the emptiness probe and the meta-response validation and
+    been committed to history. Each re-entry used to reset the response buffer,
+    so the continuation's closing remark ("already done") displaced the real
+    answer in the returned reply - Rule 4 invariant 2 broken by a line that
+    looked like initialisation. Measured live: a 2259-character deliverable
+    validated at one step, then two auto-continue rounds later a 227-character
+    confirmation was all the user received.
+
+    `kept` holds the validated answers in order; `tail` is what the return would
+    have been anyway (the cleaned last round). An answer already contained in
+    the tail is not repeated, and a turn with a single answer returns `tail`
+    BYTE-IDENTICAL, so nothing changes unless the displacement actually happened.
+    """
+    extras: list = []
+    for text in kept:
+        t = (text or "").strip()
+        if t and t not in (tail or "") and not any(t in e for e in extras):
+            extras.append(t)
+    if not extras:
+        return tail
+    return "\n\n".join([*extras, (tail or "").strip()])
+
+
+def _restream_kept_answers(stream_callback, kept: list) -> None:
+    """Put already-validated answers back into a just-cleared stream buffer.
+
+    The web bubble is the joined stream buffer, and the buffer is cleared after
+    every tool round so announcements ("I will check the page...") do not stack
+    up in the reply. That clear is right for announcements and fatal for an
+    answer the user has already been shown: an auto-continue round that calls a
+    tool wiped the validated answer off the screen. Re-emitting the kept answers
+    right after the clear keeps the bubble truthful without touching any
+    consumer - the CLI callback has no clear() and never sees this.
+    """
+    if not kept:
+        return
+    try:
+        stream_callback("\n\n".join(kept) + "\n\n")
+    except Exception:
+        pass
+
+
 # Pure lookups whose EXACT-argument repetition within one turn cannot yield new
 # information (unless a mutating tool succeeded in between - the windowed
 # redundant check verifies exactly that before blocking). Extends the
@@ -8399,6 +8445,21 @@ class Agent:
         except Exception:
             return False
 
+    def _response_token_cap(self) -> int:
+        """How many tokens ONE reply may use, on the API lanes.
+
+        It was 8192, written out three times and reachable by no setting. That
+        number was sized for an answer, and a reasoning model spends it on
+        thinking before it writes a word: the visible reply is then cut off mid
+        sentence, the turn ends, and nothing says why. The figure is a setting
+        now, and a provider that refuses it is retried once at a safe one, so
+        raising it cannot break a model whose own ceiling is lower.
+        """
+        try:
+            return max(256, int(Config.get("api_max_response_tokens", 16384) or 16384))
+        except Exception:
+            return 16384
+
     def _tools_and_choice(self, disable_tools: bool):
         """The tools array and the tool_choice for ONE request.
 
@@ -9213,6 +9274,11 @@ class Agent:
         full_content = ""
         full_reasoning = ""
         clean_content = ""
+        # Validated final answers of THIS turn, in order. The per-round reset
+        # below wipes the buffers on every loop re-entry, and the auto-continue
+        # re-enters after an answer was already validated and committed - this
+        # list is what keeps those answers part of the reply (_join_turn_answers).
+        kept_turn_answers: list = []
         streaming_tools = {}
         tool_calls_detected = []
         
@@ -9282,6 +9348,7 @@ class Agent:
                 if stream_callback and hasattr(stream_callback, "clear"):
                     try:
                         stream_callback.clear()
+                        _restream_kept_answers(stream_callback, kept_turn_answers)
                     except Exception:
                         pass
 
@@ -9341,7 +9408,7 @@ class Agent:
                     for chunk in self.api_backend.chat_completion(
                         messages=prepared_messages,
                         temperature=current_temp,
-                        max_tokens=8192,
+                        max_tokens=self._response_token_cap(),
                         stream=True,
                         tools=current_tools,
                         tool_choice=tool_choice  # Pass tool_choice if set
@@ -9464,7 +9531,7 @@ class Agent:
                             fallback_chunks = list(self.api_backend.chat_completion(
                                 messages=prepared_messages,
                                 temperature=current_temp,
-                                max_tokens=8192,
+                                max_tokens=self._response_token_cap(),
                                 stream=False,
                                 tools=current_tools,
                                 tool_choice=tool_choice
@@ -9994,12 +10061,15 @@ class Agent:
                 if _lib_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
                     _lib_tool_choice = self._force_tool_choice
                     self._force_tool_choice_used = True
+                # The local sibling lane already reads this key; sharing it is what
+                # stops a fourth output cap from drifting away from the other three.
+                _lib_max_tokens = int(Config.get("max_generation_tokens", 10000) or 10000)
                 try:
                     stream = self.llm.create_chat_completion(
                         messages=prepared_messages,
                         tools=_lib_tools,
                         tool_choice=_lib_tool_choice,
-                        max_tokens=8192,
+                        max_tokens=_lib_max_tokens,
                         temperature=current_temp,
                         stream=True
                     )
@@ -10150,6 +10220,7 @@ class Agent:
                         if stream_callback and hasattr(stream_callback, "clear"):
                             try:
                                 stream_callback.clear()
+                                _restream_kept_answers(stream_callback, kept_turn_answers)
                             except Exception:
                                 pass
                         # Add error to history to force correction
@@ -10224,6 +10295,7 @@ class Agent:
                             if stream_callback and hasattr(stream_callback, "clear"):
                                 try:
                                     stream_callback.clear()
+                                    _restream_kept_answers(stream_callback, kept_turn_answers)
                                 except Exception:
                                     pass
                             self.history.append({"role": "assistant", "content": full_content})
@@ -11415,6 +11487,7 @@ class Agent:
                 if stream_callback and hasattr(stream_callback, "clear"):
                     try:
                         stream_callback.clear()
+                        _restream_kept_answers(stream_callback, kept_turn_answers)
                     except Exception:
                         pass
 
@@ -11633,6 +11706,9 @@ class Agent:
                     continue
 
             self.history.append({"role": "assistant", "content": history_content})
+            # The same expression the return uses, captured NOW: the auto-continue
+            # below may loop again, and the next round's reset wipes full_response.
+            kept_turn_answers.append(self._clean_reasoning(full_response))
             try:
                 append_domain_log("backend", f"after_history_append content_len={len(history_content)}")
             except Exception:
@@ -11983,9 +12059,11 @@ class Agent:
         # The final LLM call of the turn - and for a turn without tools the
         # ONLY one - is billed here; the boundary block above never runs then.
 
-        # Return CLEANED response for the UI (Answer Box)
-        # The raw response is already stored in history, so we don't lose information.
-        return self._clean_reasoning(full_response)
+        # The reply is every validated final answer of this turn, not the last
+        # round alone. The comment that stood here claimed the history made loss
+        # impossible ("we don't lose information") - true for the history, false
+        # for the reply the user was given.
+        return _join_turn_answers(kept_turn_answers, self._clean_reasoning(full_response))
 
     def _dispatch_session_id(self):
         """Which session this dispatch belongs to. Contextvar FIRST, attribute second.

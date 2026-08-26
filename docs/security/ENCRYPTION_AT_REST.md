@@ -153,6 +153,7 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | Handoff bundles | `~/.vaf/handoff_bundles/<scope>/` | AES-256-GCM |
 | Sub-agent queue and task payloads | `~/.vaf/subagent_queue/` | AES-256-GCM |
 | Working memory, user intent, team state | `<cwd>/.vaf/main/` | AES-256-GCM |
+| Browser sessions (live site cookies, auth tokens) | `~/.vaf/browser_sessions/<scope>/` | AES-256-GCM; the agent lane stages a decrypted 0600 temp beside the store for the duration of a run (browser_use reads and auto-saves the path itself) and folds it back encrypted - the construction the audit named |
 | Memory rows and chunk text | Postgres | AES-256-GCM (unchanged) |
 | Mail bodies | `mail.db` | AES-256-GCM (unchanged) |
 | Credentials (mail, cloud, API keys) | `<data_dir>/*.enc` | Envelope (unchanged) |
@@ -196,8 +197,12 @@ so the next round starts from a number rather than a memory:
 | Channel messages | `<data_dir>/channel_messages.db` | Full WhatsApp/Telegram/Discord message bodies, sender ids | Column-level AEAD plus moving one `LIKE` search into Python (`channel_message_store.py:330`) |
 | Email sync (legacy lane) | `<data_dir>/email_sync.db` | Subject, sender, body snippet | Same, plus one legacy `LIKE` fallback (`email_sync_store.py:396`) |
 | Speaker profiles | `~/.vaf/speaker_profiles/<scope>/` | Voice biometrics (`.npy` centroids) and enrolled names | Twelve numpy/JSON I/O sites; the arrays need a binary wrapper, not the text helper |
-| Browser sessions | `~/.vaf/browser_sessions/<scope>/` | Live site cookies and auth tokens | Playwright is handed a PATH and reads the file itself, so it needs decrypt-to-temp and re-encrypt around the run |
 | Legacy gzipped chats | `~/.vaf/sessions/*.json.gz` | Whole chat transcripts written by an older release | Gzip is its own container: the sweep skips `.gz` and the reader keys on the extension. Nothing writes new ones; a pre-existing file only keeps its extension when it is rewritten |
+
+Browser sessions left this list in the banking round: the store is encrypted,
+the migration sweeps pre-existing plaintext files, and the agent lane uses the
+decrypt-to-temp construction this table used to prescribe (see the encrypted
+table above).
 
 Each is self-contained. Apart from the legacy `.gz` chats, which no current code
 path creates, none of them is on the chat path - which is why the chat path went

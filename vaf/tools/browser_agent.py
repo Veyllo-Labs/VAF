@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue as _queue
 import random
 import threading
@@ -289,6 +290,83 @@ def _run_async_in_new_loop(coro):
     if exception[0]:
         raise exception[0]
     return result[0]
+
+
+# ── 1b. Encrypted session store, decrypt-to-temp ─────────────────────────────
+# The per-scope cookie store is encrypted at rest (vaf/core/data_files), but
+# browser_use is handed a PATH it reads itself and AUTO-SAVES onto mid-run
+# (StorageStateWatchdog), so the run never touches the real file: it works on
+# a decrypted 0600 temp in the same directory, and the end of the run folds
+# the temp back in through the encrypting writer. The dot-prefixed temp name
+# keeps it out of the at-rest migration's *.json glob.
+
+_SESSION_TMP_PREFIX = ".run-"
+_SESSION_TMP_SUFFIX = ".tmp.json"
+_SESSION_TMP_MAX_AGE_S = 3600.0
+_session_log = logging.getLogger(__name__)
+
+
+def _decrypt_session_to_tmp(session_file: str) -> Optional[str]:
+    """A temp path beside the store; holds the decrypted state when one exists.
+
+    Always answers a path (the export lane needs one even on a first login,
+    when no store exists yet); the temp FILE exists only when the store did.
+    None only when the store exists but cannot be read - a run must not start
+    'fresh' over a real store it merely failed to decrypt."""
+    import secrets as _secrets
+    tmp = os.path.join(os.path.dirname(session_file),
+                       f"{_SESSION_TMP_PREFIX}{_secrets.token_hex(8)}{_SESSION_TMP_SUFFIX}")
+    if not os.path.exists(session_file):
+        return tmp
+    try:
+        from vaf.core import data_files
+        raw = data_files.read_bytes(session_file)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        return tmp
+    except Exception as e:
+        _session_log.warning(f"[browser_agent] session store could not be staged: {e}")
+        return None
+
+
+def _fold_session_tmp_back(session_tmp: str, session_file: str) -> None:
+    """Encrypt the run's exported state into the real store; the temp dies.
+
+    Best-effort on purpose (runs in the close path): a failure leaves the old
+    store standing, and the temp is removed in every outcome."""
+    try:
+        if os.path.exists(session_tmp):
+            from vaf.core import data_files
+            data_files.write_bytes_atomic(session_file, open(session_tmp, "rb").read())
+            try:
+                os.chmod(session_file, 0o600)
+            except Exception:
+                pass
+    except Exception as e:
+        _session_log.warning(f"[browser_agent] session store not saved: {e}")
+    finally:
+        try:
+            os.unlink(session_tmp)
+        except Exception:
+            pass
+
+
+def _sweep_stale_session_tmp(sessions_dir: str) -> None:
+    """Crash residue: a temp older than an hour holds plaintext cookies of a
+    run that never reached its fold-back. Deleted, never delivered."""
+    try:
+        now = time.time()
+        for name in os.listdir(sessions_dir):
+            if name.startswith(_SESSION_TMP_PREFIX) and name.endswith(_SESSION_TMP_SUFFIX):
+                p = os.path.join(sessions_dir, name)
+                try:
+                    if now - os.path.getmtime(p) > _SESSION_TMP_MAX_AGE_S:
+                        os.unlink(p)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 # ── 2. Global browser concurrency gate ───────────────────────────────────────
@@ -720,7 +798,8 @@ class BrowserAgentTool(BaseTool):
         "- Persistent (persistent=true, session='name'): cookies and login state are saved to disk "
         "and restored on the next call with the same session name. "
         "ONLY use this when the user explicitly wants to log in to a specific site and reuse that login later. "
-        "Login credentials passed to this mode are stored in ~/.vaf/browser_sessions/{name}.json — "
+        "Cookies saved by this mode land in the caller's own per-user store "
+        "(~/.vaf/browser_sessions/<scope>/{name}.json, encrypted at rest) - "
         "warn the user if they are about to store credentials for a sensitive site."
     )
 
@@ -795,13 +874,19 @@ class BrowserAgentTool(BaseTool):
         # Resolved BEFORE the eviction hook and before the spawn branch: the
         # parent creates or wakes the instance the child then adopts through
         # its own resolve, and the hooks below route to the resolved browser's
-        # manager (they peek the pool's cache, which this call fills). The
-        # pool never raises - every failure answers None, the shared browser.
+        # manager (they peek the pool's cache, which this call fills). A
+        # failure answers None, the shared browser - except strict mode, whose
+        # PoolExhausted is the refusal itself: sharing is what it forbids.
         import os as _os
-        from vaf.core.browser_pool import get_browser_pool
+        from vaf.core.browser_pool import PoolExhausted, get_browser_pool
         from vaf.core.browser_interactive import resolve_browser_scope
-        _endpoint = get_browser_pool().resolve(
-            resolve_browser_scope(kwargs.get("user_scope_id")))
+        try:
+            _endpoint = get_browser_pool().resolve(
+                resolve_browser_scope(kwargs.get("user_scope_id")))
+        except PoolExhausted as e:
+            return ("Error (browser_agent): no dedicated browser available "
+                    f"(strict pool: {e}). Try again when an instance is free, "
+                    "or ask an admin to raise browser_pool_max.")
         _cdp_base = (_endpoint.cdp_base if _endpoint
                      else _os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222"))
         _container = _endpoint.container_name if _endpoint else "vaf-browser"
@@ -918,6 +1003,14 @@ class BrowserAgentTool(BaseTool):
             # pressed during browser start would escape the tool as a crash.
             return "Browser task stopped by user."
         except Exception as e:
+            from vaf.core.browser_interactive import BrowserHandoverError
+            if isinstance(e, BrowserHandoverError):
+                # The cross-user handover could not be made safe, so the run
+                # was refused before it could browse over a stranger's logins.
+                return ("Error (browser_agent): the browser could not be cleaned "
+                        "for this user change, so the run was refused. Try again "
+                        "in a moment; if it persists, check the vaf-browser "
+                        "container.")
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
             _browser_semaphore(_container).release()
@@ -1047,16 +1140,25 @@ class BrowserAgentTool(BaseTool):
         # ── Persistent session: resolve cookie store path ─────────────────────
         # Shared with the interactive browser lane (vaf/core/browser_interactive):
         # one per-scope store, so a login saved by hand is a login this run has.
+        # The store is encrypted at rest, and browser_use both reads the path
+        # itself AND auto-saves onto it mid-run (StorageStateWatchdog, ~60s),
+        # so it is never handed the real file: the run works on a decrypted
+        # 0600 temp beside it (ENCRYPTION_AT_REST.md names this construction),
+        # and the export step below folds the temp back in, encrypted.
         session_file: Optional[str] = None
+        session_tmp: Optional[str] = None
         if persistent:
             from vaf.core.browser_interactive import browser_storage_state_path
             session_file = browser_storage_state_path(user_scope_id, session)
+            _sweep_stale_session_tmp(os.path.dirname(session_file))
 
         session_kwargs: dict = {"cdp_url": cdp_url}
         if allowed_domains:
             session_kwargs["allowed_domains"] = allowed_domains
-        if session_file and os.path.exists(session_file):
-            session_kwargs["storage_state"] = session_file
+        if session_file:
+            session_tmp = _decrypt_session_to_tmp(session_file)
+            if session_tmp and os.path.exists(session_tmp):
+                session_kwargs["storage_state"] = session_tmp
         # Humanize cadence: a slower, per-run-randomized pause between actions instead
         # of browser-use's default 0.1s (instant actions are a behavioural bot tell).
         session_kwargs["wait_between_actions"] = round(random.uniform(0.6, 1.2), 2)
@@ -1173,15 +1275,19 @@ class BrowserAgentTool(BaseTool):
             # Both closing awaits are bounded: a browser that died mid-run (or
             # was container-restarted by the stop watchdog) leaves CDP calls
             # that never answer, and an unbounded await here would turn the
-            # stop itself into the next hang.
-            if session_file:
+            # stop itself into the next hang. browser_use writes plaintext to
+            # the TEMP path; the fold-back encrypts it into the real store and
+            # removes the temp (finally: the temp dies even when export died).
+            if session_file and session_tmp:
                 try:
                     await asyncio.wait_for(
-                        browser.export_storage_state(output_path=session_file),
+                        browser.export_storage_state(output_path=session_tmp),
                         timeout=10.0,
                     )
                 except Exception:
                     pass
+                finally:
+                    _fold_session_tmp_back(session_tmp, session_file)
             try:
                 await asyncio.wait_for(browser.stop(), timeout=5.0)
             except Exception:

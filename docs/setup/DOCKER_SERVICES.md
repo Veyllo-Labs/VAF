@@ -296,6 +296,13 @@ When a runtime is present (or has just been set up), the installer manages the s
      checkout that moves ahead of its images keeps running the old ones and nothing says so.
      An unchanged build context is a cache hit and costs seconds. Note that `vaf update` never
      builds an image either, so an image cannot be repaired by updating.
+   - The cache hit has a second face for the browser: its apt layer installs an UNPINNED
+     Debian Chromium, and a cached `--build` never re-runs that layer, so the browser engine
+     would age forever while `--build` reports success. The age gate closes that class: once
+     the `vaf-browser` image is older than `browser_image_max_age_days` (default 14, admin-only,
+     `0` = off), the start runs one `build --pull --no-cache vaf-browser` first, so the base
+     image and Chromium are actually refreshed. A failed fresh build never blocks the start;
+     it is recorded as a `browser_image_stale` security event and the old image keeps serving.
 
 > **Note:** Data in named volumes (e.g., `vaf_memory_pgdata`) is never lost during `up -d`. Only container images and configuration are updated.
 

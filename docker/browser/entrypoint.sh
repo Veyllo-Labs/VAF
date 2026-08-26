@@ -105,6 +105,29 @@ if [ -n "$VAF_BROWSER_PROXY" ]; then
     echo "Browser proxy: enabled"
 fi
 
+# ── Chromium sandbox probe ──────────────────────────────────────────────────
+# Chromium's own sandbox needs unprivileged user namespaces. Docker's DEFAULT
+# seccomp profile denies them (clone(CLONE_NEWUSER) fails with EPERM), which
+# was the only reason this browser ever ran --no-sandbox. VAF starts this
+# container with docker/browser/chromium-seccomp.json (Docker's default plus
+# clone/clone3/unshare/setns), so the probe succeeds and the sandbox is ON,
+# with no added capability. The probe stays because the IMAGE can be run by
+# runtimes that do not apply that profile (a plain docker run, an embedder's
+# own compose): without user namespaces Chromium cannot start sandboxed at
+# all, and a crash-looping browser helps nobody - so the fallback keeps the
+# browser alive and says loudly what it gave up. The if-form matters: a bare
+# probe line would abort the script under set -e.
+SANDBOX_ARGS=""
+if unshare -U true 2>/dev/null; then
+    echo "User namespaces available: Chromium sandbox ENABLED"
+else
+    # --test-type suppresses exactly one thing here: the yellow "unsupported
+    # command-line flag: --no-sandbox" infobar (56px of display, measured).
+    # It is not visible to pages: navigator.webdriver stays false.
+    SANDBOX_ARGS="--no-sandbox --test-type"
+    echo "WARNING: user namespaces unavailable; running WITHOUT Chromium's sandbox"
+fi
+
 echo "Chromium $CHROME_VER (headed under Xvfb)"
 echo "UA: $USER_AGENT"
 
@@ -129,15 +152,11 @@ echo "UA: $USER_AGENT"
 # the app instead of replacing it; it themes the BROWSER, not page content, so sites
 # still render the way their authors meant.
 #
-# --test-type exists to suppress ONE thing: the yellow "You are using an unsupported
-# command-line flag: --no-sandbox" infobar. That bar is 56px of the display, measured,
-# and it was the band with no browser in it that survived every other fix. The flag
-# cannot simply be dropped: this container has no permission to create the namespaces
-# Chromium's sandbox needs (measured: "Failed to move to new namespace ... Operation
-# not permitted"), and the SUID helper is refused by modern Chromium as well, so the
-# choice is between the warning and a container capability that would weaken the
-# isolation this browser exists to provide. --test-type is not visible to pages:
-# navigator.webdriver stays false, verified in this container.
+# $SANDBOX_ARGS is empty in the normal deployment: the sandbox probe above
+# found user namespaces (granted by VAF's seccomp profile), so Chromium runs
+# WITH its own sandbox and no warning bar exists to suppress. Only when the
+# probe fails does the variable carry --no-sandbox --test-type; the history
+# of that pair, and the measurement that freed us from it, live at the probe.
 #
 # NOT --kiosk. It hides the browser UI and ALSO disables the right-click context
 # menu - and that menu is a feature here, not decoration: it is where "save as",
@@ -169,9 +188,11 @@ echo "UA: $USER_AGENT"
 # fingerprint surface (AudioContext rendering is computational and was never
 # muted), it only stops declaring "this browser wants no sound".
 start_chromium() {
-    # Full handover scrub: when VAF dropped the marker (a user-scope change
-    # with VAF_BROWSER_SCRUB=full), the whole profile is wiped BETWEEN Chromium
-    # launches - the only moment the files are not being rewritten. This is
+    # Profile wipe: when VAF dropped the marker (every cross-user handover,
+    # verified by VAF polling for this marker's consumption; also a same-scope
+    # clean start under VAF_BROWSER_SCRUB=full), the whole profile is wiped
+    # BETWEEN Chromium launches - the only moment the files are not being
+    # rewritten. This is
     # what a container restart cannot do (the container filesystem survives
     # restarts), and it removes what the CDP scrub cannot reach: history,
     # passwords saved in Chromium's own password manager, autofill, bookmarks
@@ -212,8 +233,7 @@ start_chromium() {
     "$CHROMIUM" \
         --disable-session-crashed-bubble \
         --hide-crash-restore-bubble \
-        --no-sandbox \
-        --test-type \
+        $SANDBOX_ARGS \
         --disable-dev-shm-usage \
         --remote-debugging-port=9223 \
         --disable-blink-features=AutomationControlled \

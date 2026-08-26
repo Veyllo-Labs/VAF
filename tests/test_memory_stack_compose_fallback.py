@@ -145,12 +145,17 @@ def test_optional_services_are_rebuilt_while_core_services_are_not(monkeypatch):
     _hermetic(monkeypatch, fake_run)
     assert stack.ensure_service_stack() is True
 
-    optional = [c for c in calls if any(s in c for s in stack.OPTIONAL_SERVICES)]
+    # Only the compose `up` invocations decide this pin: the browser age gate
+    # also names vaf-browser in bare `docker inspect` probes (and, when the
+    # image is stale, in its own `build --pull --no-cache`), and neither is an
+    # optional-service START.
+    ups = [c for c in calls if "up" in c]
+    optional = [c for c in ups if any(s in c for s in stack.OPTIONAL_SERVICES)]
     assert optional, "the optional services were never started"
     for cmd in optional:
         assert "--build" in cmd, f"optional services started without --build: {cmd}"
 
-    core_only = [c for c in calls
+    core_only = [c for c in ups
                  if any(s in c for s in stack.CORE_SERVICES)
                  and not any(s in c for s in stack.OPTIONAL_SERVICES)]
     assert core_only, "the core services were never started"

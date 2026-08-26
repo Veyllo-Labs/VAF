@@ -8639,24 +8639,34 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception:
                         _bi_admin = False
                     from vaf.core.browser_interactive import get_manager_for_scope
+                    from vaf.core.browser_pool import PoolExhausted
+
                     # Scope-resolved: with the per-user pool on this may START
                     # the caller's own browser instance, which is exactly why
                     # the whole call sits in the executor below.
                     # start() blocks (pool resolve + container probe + cookie
                     # handover): executor, so a slow browser start cannot
                     # starve every other websocket.
+                    def _bi_start():
+                        try:
+                            return get_manager_for_scope(_bi_scope).start(
+                                _bi_scope or "", str(session_id),
+                                # Always the persistent mode: the person's browser asks about
+                                # saving logins itself; a client-sent flag would be a second
+                                # switch for the same question and is deliberately not read.
+                                save=True,
+                                session_name=str(cmd.get("session") or "default").strip() or "default",
+                                is_admin=_bi_admin,
+                            )
+                        except PoolExhausted:
+                            # Strict pool: no dedicated instance, and the shared
+                            # browser is deliberately not offered. Busy is the
+                            # honest answer, with its own reason for the UI.
+                            return {"status": "busy", "reason": "pool_exhausted",
+                                    "saving": False, "streamPath": ""}
+
                     _bi_result = await asyncio.get_running_loop().run_in_executor(
-                        None,
-                        lambda: get_manager_for_scope(_bi_scope).start(
-                            _bi_scope or "", str(session_id),
-                            # Always the persistent mode: the person's browser asks about
-                            # saving logins itself; a client-sent flag would be a second
-                            # switch for the same question and is deliberately not read.
-                            save=True,
-                            session_name=str(cmd.get("session") or "default").strip() or "default",
-                            is_admin=_bi_admin,
-                        ),
-                    )
+                        None, _bi_start)
                     # Direct reply on top of the manager's broadcast: the opener needs
                     # the verdict even when it is a refusal that no session-scoped
                     # broadcast would reach (busy for a foreign user's lease).

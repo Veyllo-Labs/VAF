@@ -125,6 +125,11 @@ def browser_storage_state_path(user_scope_id: Optional[str] = None,
     scope_seg = "".join(c if c.isalnum() or c in "-_" else "_" for c in _scope) or "default"
     sessions_dir = os.path.join(os.path.expanduser("~"), ".vaf", "browser_sessions", scope_seg)
     os.makedirs(sessions_dir, exist_ok=True)
+    try:
+        from vaf.core.secure_store import harden_dir
+        harden_dir(sessions_dir)
+    except Exception:
+        pass
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_name) or "default"
     return os.path.join(sessions_dir, f"{safe_name}.json")
 
@@ -239,18 +244,38 @@ def _cookie_op(cdp_base: str, op: str, cookies: Optional[List[dict]] = None):
             if op == "clear":
                 await asyncio.wait_for(client.send.Storage.clearCookies(params={}), 10)
                 return None
-            if op == "scrub":
-                # The quick handover scrub: cookies plus every site's stored
-                # state in one sweep. storageTypes "all" covers local_storage,
-                # indexeddb, cache_storage, service_workers and cookies; the
-                # wildcard origin is honoured by this Chromium (measured: a
-                # localStorage entry set on a real origin was gone after this
-                # call). The HTTP disk cache is NOT in "all" - that residue is
-                # the full scrub's job, and the docs name it.
+            if op == "clear_cookies":
+                # The belt after a verified profile wipe on a scope change:
+                # the wipe already deleted every site's stored state with the
+                # profile, so cookies are all that could have appeared since.
                 await asyncio.wait_for(client.send.Storage.clearCookies(params={}), 10)
-                await asyncio.wait_for(
-                    client.send.Storage.clearDataForOrigin(
-                        params={"origin": "*", "storageTypes": "all"}), 15)
+                return None
+            if op == "scrub":
+                # The quick SAME-SCOPE scrub: cookies plus stored state of the
+                # origins the cookies name. The wildcard origin is gone on
+                # purpose: Chromium 151 answers clearDataForOrigin("*") with
+                # -32603 (measured live 2026-08-23), so the sweep enumerates
+                # origins from the jar instead. Known residual, same-user
+                # only: an origin that stored localStorage without ever
+                # setting a cookie is not in the list - acceptable here
+                # because this op never runs on a scope change (that path is
+                # the verified profile wipe), only on a user's own clean
+                # start. The HTTP disk cache is NOT reachable either way -
+                # that residue is the profile wipe's job, and the docs name it.
+                res = await asyncio.wait_for(client.send.Storage.getCookies(params={}), 10)
+                domains = {str(c.get("domain", "")).lstrip(".").strip()
+                           for c in (res.get("cookies") or [])}
+                await asyncio.wait_for(client.send.Storage.clearCookies(params={}), 10)
+                for domain in sorted(d for d in domains if d):
+                    try:
+                        await asyncio.wait_for(
+                            client.send.Storage.clearDataForOrigin(
+                                params={"origin": f"https://{domain}",
+                                        "storageTypes": "all"}), 15)
+                    except Exception:
+                        # One stubborn origin must not stop the sweep of the
+                        # rest; the same-user residual is documented above.
+                        pass
                 return None
             raise ValueError(f"unknown cookie op: {op}")
         finally:
@@ -267,10 +292,14 @@ def _load_storage_cookies(path: str) -> List[dict]:
 
     Mirrors browser_use's own restore normalisation: session cookies are stored
     with expires 0/-1, and CDP rejects those values, so the key is omitted.
+    Read through data_files: the store is encrypted at rest, and a plaintext
+    file from before the change still loads (the reader keys on the magic).
     """
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
+        from vaf.core import data_files
+        state = data_files.read_json(path)
+        if not isinstance(state, dict):
+            return []
     except Exception:
         return []
     out: List[dict] = []
@@ -300,6 +329,8 @@ def _export_storage_cookies(path: str, cookies: List[dict]) -> None:
     The exact 8-field mapping browser_use's export_storage_state uses, so the
     file stays readable by the agent's persistent-session lane and vice versa.
     origins stays empty: nothing on either lane round-trips localStorage.
+    Written through data_files: live site cookies are auth tokens, encrypted
+    at rest like the chat sessions (ENCRYPTION_AT_REST.md).
     """
     state = {
         "cookies": [
@@ -317,10 +348,8 @@ def _export_storage_cookies(path: str, cookies: List[dict]) -> None:
         ],
         "origins": [],
     }
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f)
-    os.replace(tmp, path)
+    from vaf.core import data_files
+    data_files.write_json_atomic(path, state)
     try:
         os.chmod(path, 0o600)
     except Exception:
@@ -629,11 +658,24 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
     return delivered
 
 
+class BrowserHandoverError(RuntimeError):
+    """A cross-scope handover could not be made safe, so it was refused.
+
+    Raised by the fail-closed handover paths when the verified profile wipe
+    (or the cookie clear behind it) did not succeed: proceeding would let the
+    next holder browse over the previous holder's state. RuntimeError on
+    purpose - the agent lane's generic `except Exception` must catch it (a
+    BaseException would ride past the run's error handling)."""
+
+
 def scrub_mode() -> str:
-    """The handover scrub depth: "quick" (CDP sweep, default) or "full" (adds a
-    profile wipe with a Chromium relaunch). An env knob like its siblings
-    VAF_BROWSER_MAX_PARALLEL and VAF_BROWSER_CDP_URL; anything unrecognized
-    means quick, so a typo degrades to the safe-and-fast default."""
+    """The quick-scrub depth for SAME-SCOPE clean starts: "quick" (CDP sweep,
+    default) or "full" (adds a profile wipe with a Chromium relaunch). An env
+    knob (VAF_BROWSER_SCRUB) like its siblings VAF_BROWSER_MAX_PARALLEL and
+    VAF_BROWSER_CDP_URL; anything unrecognized means quick, so a typo degrades
+    to the fast default. A scope CHANGE no longer consults this: the cross-user
+    handover is ALWAYS a verified profile wipe, not configurable - a switch
+    that turns isolation off would not be a setting but a defect."""
     return "full" if os.environ.get("VAF_BROWSER_SCRUB", "").strip().lower() == "full" else "quick"
 
 
@@ -664,6 +706,76 @@ def request_profile_wipe(container_name: str = "vaf-browser") -> None:
         append_domain_log("webui", "[browser_interactive] full scrub: profile wipe requested")
     except Exception as e:
         append_domain_log("webui", f"[browser_interactive] full scrub failed (quick scrub still ran): {e}")
+
+
+def _wipe_exec(container_name: str, shell_cmd: str, *, as_root: bool = False,
+               timeout: float = 20) -> int:
+    """One `docker exec` for the verified wipe, answering the returncode.
+    Non-zero on any failure including a missing docker. The single seam the
+    verified-wipe unit tests stub."""
+    try:
+        import subprocess
+        from vaf.core.service_stack import resolve_docker_exe
+        docker = resolve_docker_exe()
+        user = ["-u", "root"] if as_root else []
+        r = subprocess.run([docker, "exec", *user, container_name, "sh", "-c", shell_cmd],
+                           timeout=timeout, capture_output=True)
+        return int(r.returncode)
+    except Exception:
+        return 1
+
+
+def verified_profile_wipe(container_name: str = "vaf-browser",
+                          cdp_base: str = "", *,
+                          deadline_s: float = 40.0) -> bool:
+    """Wipe the container's Chromium profile and PROVE that it happened.
+
+    The cross-scope handover stands on this proof, so unlike the best-effort
+    request_profile_wipe above every step is checked, and the ORDER is the
+    security argument. pkill sends SIGTERM, so for a moment the OLD Chromium
+    still answers CDP - which is why CDP reachability proves nothing here. The
+    marker does: the supervisor consumes it strictly AFTER `rm -rf` of the
+    profile (entrypoint.sh start_chromium), and its loop-top `pkill -9` has
+    killed the old Chromium before that. Marker gone = profile gone.
+
+    1. Drop the marker, rc-checked, SEPARATE from the kill: the old single
+       `touch && chown && pkill` chain reported pkill's rc, and pkill answers 1
+       when Chromium happened to be down (a crash window) although the marker
+       WAS dropped - a false refusal with a live marker left behind, which
+       would wipe the profile at some unrelated future relaunch.
+    2. Kill Chromium, best-effort (`|| true`).
+    3. Poll for the marker's ABSENCE (the wipe confirmation; relaunch is
+       measured at 3-5s, the deadline is generous).
+    4. Only then wait for CDP as plain readiness.
+    On failure, remove the marker best-effort so no delayed wipe lies in wait.
+    Module-level like request_profile_wipe so tests can stub it as bi.<name>.
+    """
+    marker = "/home/browser/.scrub-profile"
+    if _wipe_exec(container_name,
+                  f"touch {marker} && chown browser:browser {marker}",
+                  as_root=True) != 0:
+        append_domain_log("webui", "[browser_interactive] verified wipe: marker could not be set")
+        return False
+    _wipe_exec(container_name, "pkill chromium || true")
+    deadline = time.time() + deadline_s
+    confirmed = False
+    while time.time() < deadline:
+        if _wipe_exec(container_name, f"test ! -f {marker}", timeout=10) == 0:
+            confirmed = True
+            break
+        time.sleep(0.5)
+    if not confirmed:
+        _wipe_exec(container_name, f"rm -f {marker}", as_root=True)
+        append_domain_log("webui", "[browser_interactive] verified wipe: marker not consumed in time")
+        return False
+    if cdp_base:
+        try:
+            resolve_cdp_ws_url(cdp_base)
+        except Exception as e:
+            append_domain_log("webui", f"[browser_interactive] verified wipe: relaunch not reachable: {e}")
+            return False
+    append_domain_log("webui", "[browser_interactive] verified wipe: profile wipe confirmed")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +850,15 @@ class InteractiveBrowserManager:
         self._vnc_base_url = vnc_base_url
         self._container_name = container_name
         self._lock = threading.RLock()
+        # Serializes the WHOLE handover sections of start() and
+        # hand_jar_to_run(), which are deliberately not under the state _lock
+        # (they block on docker and CDP for seconds). Without it two
+        # interleaving handovers can each restore their own cookies into the
+        # shared jar and the install-time busy answer cannot undo that: the
+        # winner would browse over the loser's restored cookies. One mutex
+        # makes the busy check, the wipe and the cookie restore one atomic
+        # story; worst-case wait is one profile wipe (~5s), fallback path only.
+        self._handover_mutex = threading.Lock()
         self._lease: Optional[InteractiveLease] = None
         self._agent_active = False
         self._agent_stream: Optional[AgentStream] = None
@@ -929,9 +1050,15 @@ class InteractiveBrowserManager:
         processes (a chat run and a workflow child) can still reach the same
         SHARED container at once. That race predates this lane - it is what
         VAF_BROWSER_MAX_PARALLEL has always been - and the pool is the answer
-        to it: a per-user instance is only ever driven by that user's runs."""
-        try:
-            scope = resolve_browser_scope(user_scope_id)
+        to it: a per-user instance is only ever driven by that user's runs.
+
+        A SCOPE CHANGE is fail-closed: the verified profile wipe either
+        confirms, or this raises BrowserHandoverError and the run must not
+        browse - proceeding would hand it the previous holder's live logins.
+        Same-scope paths stay lenient (a failed clean-start scrub costs the
+        promise, not isolation) and are only logged."""
+        scope = resolve_browser_scope(user_scope_id)
+        with self._handover_mutex:
             with self._lock:
                 jar_scope = self._last_cookie_scope
                 dedicated = self._dedicated_scope
@@ -940,28 +1067,56 @@ class InteractiveBrowserManager:
                 # else's state can be in it. Only the clean-start promise of a
                 # non-persistent run still applies, and never a profile wipe.
                 if not persistent:
-                    _cookie_op(self.cdp_base(), "scrub")
+                    try:
+                        _cookie_op(self.cdp_base(), "scrub")
+                    except Exception as e:
+                        append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
             elif jar_scope != scope:
-                if scrub_mode() == "full":
-                    request_profile_wipe(self._container_name)
-                _cookie_op(self.cdp_base(), "scrub")
-                # Same rule as the interactive handover: a previous holder's
-                # transfer folders never ride into another scope's session.
-                _purge_container_downloads(self._container_name)
-                self._ws_sig = None
+                try:
+                    # Same rule as the interactive handover: a previous
+                    # holder's transfer folders never ride into another
+                    # scope's session.
+                    _purge_container_downloads(self._container_name)
+                    if not verified_profile_wipe(self._container_name, self.cdp_base()):
+                        raise BrowserHandoverError("profile wipe not confirmed")
+                    _cookie_op(self.cdp_base(), "clear_cookies")
+                    with self._lock:
+                        self._ws_sig = None
+                        self._last_cookie_scope = scope
+                except Exception as e:
+                    append_domain_log(
+                        "webui", f"[browser_interactive] agent cross-scope handover refused: {e}")
+                    try:
+                        from vaf.core.security_events import log_security_event
+                        log_security_event("browser_handover_failed",
+                                           username=str(scope or "")[:32],
+                                           detail=str(e)[:200], channel="browser")
+                    except Exception:
+                        pass
+                    if isinstance(e, BrowserHandoverError):
+                        raise
+                    raise BrowserHandoverError(str(e)) from e
             elif not persistent and not continuing:
-                # Same scope, but the run promised a clean start: quick scrub
-                # only - the person's own logins are already exported and come
-                # back on their next interactive lease or persistent run.
+                # Same scope, but the run promised a clean start: quick scrub -
+                # the person's own logins are already exported and come back on
+                # their next interactive lease or persistent run. In full mode
+                # the clean start deepens to a profile wipe (the mode's one
+                # remaining meaning; a scope change wipes regardless).
                 # `continuing` overrides the promise: a run that takes over the
                 # person's LIVE session exists to carry it on, and scrubbing
                 # would log out the very session it was handed.
-                _cookie_op(self.cdp_base(), "scrub")
-            _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
+                try:
+                    if scrub_mode() == "full":
+                        request_profile_wipe(self._container_name)
+                    _cookie_op(self.cdp_base(), "scrub")
+                except Exception as e:
+                    append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
+            try:
+                _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
+            except Exception as e:
+                append_domain_log("webui", f"[browser_interactive] download policy not applied: {e}")
             with self._lock:
                 self._last_cookie_scope = scope
-        except Exception as e:
-            append_domain_log("webui", f"[browser_interactive] agent jar handover failed: {e}")
 
     def sweep_downloads(self, user_scope_id: Optional[str]) -> List[str]:
         """Drain finished downloads to their owner's workspace. Mode-gated,
@@ -1065,6 +1220,16 @@ class InteractiveBrowserManager:
                     return self._agent_payload(stream)
             return self._payload("agent_active", reason="agent_run")
 
+        # One handover at a time: the busy check, the wipe and the cookie
+        # restore below must read as one atomic story, or two interleaving
+        # start() calls can each restore their own cookies into the shared jar
+        # and the later lease install cannot undo the earlier restore.
+        with self._handover_mutex:
+            return self._start_locked(user_scope_id, session_id, save=save,
+                                      session_name=session_name, is_admin=is_admin)
+
+    def _start_locked(self, user_scope_id: str, session_id: str, *, save: bool,
+                      session_name: str, is_admin: bool) -> dict:
         with self._lock:
             prev = self._lease
             if prev and prev.user_scope_id != user_scope_id and not is_admin:
@@ -1076,6 +1241,9 @@ class InteractiveBrowserManager:
         if prev and prev.user_scope_id != user_scope_id:
             # Admin eviction: end the foreign lease properly (its cookies are
             # exported if it asked for that) before the jar changes hands.
+            # If the wipe below then fails, the evicted lease is already gone
+            # and the admin gets the refusal: nobody holds the lease, the
+            # evicted user's cookies are saved, and the fail-closed gate holds.
             self.stop("superseded", force=True)
 
         # The stream is about to be promised to a window: make sure the
@@ -1085,28 +1253,47 @@ class InteractiveBrowserManager:
         except Exception:
             return self._payload("error", reason="browser_unavailable")
 
-        # Jar handover, before the person starts browsing. A scope CHANGE gets
-        # the scrub, not just a cookie clear: the previous holder's
-        # localStorage/IndexedDB carry logins on token-based sites just as
-        # cookies do. On the SHARED browser an unknown owner counts as a change -
-        # after a server restart the tracker is empty while the container may
-        # still hold anyone's state, and trusting that gap is how residue
-        # crosses users. A DEDICATED instance is exempt: only its own user is
-        # ever routed to it, so its profile is theirs to keep.
-        try:
-            with self._lock:
-                jar_scope = self._last_cookie_scope
-                dedicated = self._dedicated_scope
-            if dedicated is None and jar_scope != user_scope_id:
-                if scrub_mode() == "full":
-                    request_profile_wipe(self._container_name)
-                _cookie_op(self.cdp_base(), "scrub")
+        # Jar handover, before the person starts browsing. A scope CHANGE is a
+        # VERIFIED profile wipe, fail-closed: the previous holder's cookies,
+        # localStorage/IndexedDB, history, saved passwords and autofill all
+        # die with the profile, or nobody gets the browser. On the SHARED
+        # browser an unknown owner counts as a change - after a server restart
+        # the tracker is empty while the container may still hold anyone's
+        # state, and trusting that gap is how residue crosses users. A
+        # DEDICATED instance is exempt: only its own user is ever routed to
+        # it, so its profile is theirs to keep.
+        with self._lock:
+            jar_scope = self._last_cookie_scope
+            dedicated = self._dedicated_scope
+        if dedicated is None and jar_scope != user_scope_id:
+            try:
                 # Residue in the transfer folders belongs to the PREVIOUS
                 # holder; delivering it onward (or letting the next person
                 # upload it) would be a cross-user hand-off. It dies here,
                 # and the mirror starts over for the new holder.
                 _purge_container_downloads(self._container_name)
-                self._ws_sig = None
+                if not verified_profile_wipe(self._container_name, self.cdp_base()):
+                    raise BrowserHandoverError("profile wipe not confirmed")
+                _cookie_op(self.cdp_base(), "clear_cookies")
+                with self._lock:
+                    self._ws_sig = None
+                    self._last_cookie_scope = user_scope_id
+            except Exception as e:
+                append_domain_log(
+                    "webui", f"[browser_interactive] cross-scope handover refused: {e}")
+                try:
+                    from vaf.core.security_events import log_security_event
+                    log_security_event("browser_handover_failed",
+                                       username=str(user_scope_id or "")[:32],
+                                       detail=str(e)[:200], channel="browser")
+                except Exception:
+                    pass
+                return self._payload("error", reason="handover_failed")
+
+        # The lenient half: the jar is verifiably the new holder's now, so a
+        # failure here (their own cookie restore, the mirror) costs comfort,
+        # not isolation - grant the lease and say so in the log.
+        try:
             _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
             # The person's files appear in the browser's file picker from the
             # first moment of their session.
@@ -1541,12 +1728,17 @@ def get_manager_for_scope(user_scope_id: Optional[str]) -> InteractiveBrowserMan
 
     Resolves through the pool, which may START the scope's own instance -
     BLOCKING, run in an executor. Every pool failure answers with the shared
-    manager, so the browser degrades to time-sharing instead of vanishing."""
+    manager, so the browser degrades to time-sharing instead of vanishing -
+    EXCEPT under strict mode: PoolExhausted propagates, because handing the
+    shared manager to a strict-pool user is the exact fallback strict
+    forbids; callers surface it as a busy/refusal."""
     try:
-        from vaf.core.browser_pool import get_browser_pool
+        from vaf.core.browser_pool import PoolExhausted, get_browser_pool
         inst = get_browser_pool().resolve(resolve_browser_scope(user_scope_id))
         if inst is not None:
             return _manager_for_instance(inst)
+    except PoolExhausted:
+        raise
     except Exception:
         pass
     return get_interactive_manager()
@@ -1644,13 +1836,14 @@ def hand_jar_to_run(user_scope_id: Optional[str] = None,
                     container_name: Optional[str] = None,
                     continuing: bool = False) -> None:
     """Hook for BrowserAgentTool.run(), AFTER the concurrency gate: hand the
-    browser's jar to this run's scope. Never raises."""
-    try:
-        _manager_for_run(container_name).hand_jar_to_run(
-            user_scope_id=user_scope_id, persistent=persistent,
-            continuing=continuing)
-    except Exception:
-        pass
+    browser's jar to this run's scope.
+
+    Raises BrowserHandoverError when a CROSS-SCOPE handover could not be made
+    safe - the run must refuse instead of browsing over the previous holder's
+    logins. The old "Never raises" contract swallowed exactly that case."""
+    _manager_for_run(container_name).hand_jar_to_run(
+        user_scope_id=user_scope_id, persistent=persistent,
+        continuing=continuing)
 
 
 def take_agent_handover(user_scope_id: Optional[str] = None,

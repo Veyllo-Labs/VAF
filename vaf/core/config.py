@@ -91,6 +91,12 @@ class Config:
         "top_p": 0.95,
         "top_k": 40,
         "max_generation_tokens": 10000,  # per-call output cap on local generation; bounds a runaway loop
+        # The same cap for the API lanes, which had it hardcoded three times over
+        # at a value no setting could reach. A reasoning model spends this budget
+        # on thinking before it writes a word, so a cap sized for an answer cuts
+        # the answer off. A provider that refuses the figure is retried once at a
+        # safe one, so raising this cannot break a model that caps lower.
+        "api_max_response_tokens": 16384,
 
 
         # AI Provider Settings
@@ -185,6 +191,7 @@ class Config:
         "api_timeout_read": 600.0,          # s — KEEP generous: reasoning models stream for minutes
         "api_timeout_pool": 20.0,           # s — connection-pool acquire
         "api_retry_after_max": 30,          # s — cap honored on a 429 Retry-After header (avoid huge sleeps)
+        "api_rate_limit_wait_max": 60,      # s - total wall-clock a 429 (rate limit) may spend waiting+retrying before the error surfaces; 0 disables 429 retries. Distinct from api_retry_attempts, which counts 5xx/timeout retries: a rate-limit window drains on its own schedule, so it is budgeted in seconds, not attempts
 
         # Provider failover (Settings → Advanced → Failover). Off by default → no behaviour change.
         # On a failure BEFORE the first token, the request is retried down a provider chain.
@@ -195,6 +202,8 @@ class Config:
         "failover_timeout_s": 30,           # s — first-token deadline before failing over (0 = no extra deadline)
         "failover_triggers": [],            # subset of ["timeout","rate_limit","server_error"]; [] = any error
         "failover_return_to_primary": True, # prefer the primary again on the next request after a failover
+        "failover_recheck_after_s": 300,     # s - a link that just failed is SKIPPED for this long, then
+                                             # retried once by the next ordinary request (0 = never skip)
 
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
@@ -318,6 +327,16 @@ class Config:
                 "chat_step_wall_clock_seconds": 3600,          # MAIN-loop wall-clock BACKSTOP (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count/provider speed. Deliberately generous — the no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true infinite/zombie loop without ever aborting legitimate long work. Configurable.
                 "max_tool_turns_per_step": 75,                 # Hard stop: tool turns ONE user turn may use before the loop protection ends it. The soft goal-reminder keeps its distance below it (min(50, cap-3)). Admin-only: a tenant must not raise their own budget.
                 "tool_loop_unlimited": False,                  # Switch: disable the hard stop AND the wall-clock backstop entirely (spend budget still applies). Read by the agent loop since the loop-protection round but never registered; registered here so it is documented, admin-only and visible to Settings.
+
+                # WHICH tools the coding agent is offered. The built-in whitelist lives in
+                # vaf/core/coder_tools.py (CODER_ALLOWED_TOOLS) and is what these two keys
+                # tune. Empty allowlist = use the built-in set; a non-empty one REPLACES it.
+                # `_extra` is always added on top. Comma-separated tool names.
+                # Both admin-only: which tools a build step may reach for is a capability
+                # decision (the list deliberately excludes mail, messengers and calendars),
+                # and `coder_` carries no admin gate of its own.
+                "coder_tool_allowlist": "",
+                "coder_tool_allowlist_extra": "",
 
                 # Out-of-order drift nudge: when the agent marks a later task done while an earlier
                 # one is still pending, update_working_memory appends a soft "did you skip it?" hint
@@ -628,6 +647,8 @@ class Config:
         "browser_pool_max": 2,                                     # Concurrently running per-user browsers (0 = off)
         "browser_pool_min_free_mb": 2500,                          # Refuse a NEW instance below this free-memory floor
         "browser_pool_idle_seconds": 900,                          # Stop an unused instance after this long (data kept)
+        "browser_pool_strict": False,                              # Refuse (busy) instead of falling back to the shared browser
+        "browser_image_max_age_days": 14,                          # Rebuild the browser image with a fresh base beyond this age (0 = off)
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { bot_token, enabled, verified?, whitelist: [...] }
@@ -943,6 +964,16 @@ class Config:
         "a2a_room_ping_minutes",
         # Loop-protection budgets: a limit its own subject can raise is not a limit.
         "max_tool_turns_per_step", "tool_loop_unlimited",
+        # Which tools the coding agent may reach for. The built-in list deliberately
+        # leaves out mail, messengers, calendars and contacts; a non-admin LAN user
+        # who could add them back would be granting a build step the ability to act
+        # in the outside world under the instance's credentials. `coder_` is not a
+        # global prefix, so both spellings need an explicit entry.
+        "coder_tool_allowlist", "coder_tool_allowlist_extra",
+        # How long one reply may be is measured in tokens the instance pays for, so
+        # it belongs beside the other spend decisions rather than in a per-user
+        # preference (the api_ prefix carries no admin gate of its own).
+        "api_max_response_tokens",
         # The context budget is the same decision measured in tokens: raising it
         # makes EVERY later round-trip resend more history on the instance's API
         # key. There is one config file, so a non-admin write would not even be
@@ -950,7 +981,7 @@ class Config:
         "context_compress_tokens",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
-        "api_retry_attempts", "api_retry_after_max",
+        "api_retry_attempts", "api_retry_after_max", "api_rate_limit_wait_max",
         # Per-user browser pool: every instance is a container with a 2 GB memory
         # cap, so the count and the free-memory floor ARE the machine's RAM
         # budget - a LAN user raising either (or lowering the floor to zero)
@@ -958,6 +989,11 @@ class Config:
         # long that memory stays committed. browser_ is NOT a global prefix, so
         # these need explicit entries (precedent: the learn_ spend keys below).
         "browser_pool_max", "browser_pool_min_free_mb", "browser_pool_idle_seconds",
+        # Strict mode decides whether users may ever SHARE the fallback
+        # browser; only an admin weighs that isolation-vs-availability trade.
+        # The image-age budget decides how stale the browser ENGINE may run,
+        # and a rebuild costs minutes of shared startup time: admin decisions.
+        "browser_pool_strict", "browser_image_max_age_days",
         # Local vision projector: a llama-server LAUNCH argument (code execution
         # surface) - never user-writable.
         "vision_local_mmproj",

@@ -236,7 +236,7 @@ The agent navigates directly to the page - no login step needed.
     └── banking.json
 ```
 
-Each file is a Playwright `storage_state` JSON - contains cookies, localStorage, and sessionStorage for all domains visited during the session.
+Each file is a Playwright `storage_state` JSON - cookies for all domains visited during the session - encrypted at rest (`VAFENC1` format, see [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md)); a plaintext file from before the change still loads and is encrypted by the startup migration.
 
 ### Per-user session isolation
 
@@ -251,7 +251,7 @@ The resolved value is sanitized to `[A-Za-z0-9_-]` before it is used as the dire
 
 ### Security note
 
-Session files contain login cookies in plain text. They are stored per user under `~/.vaf/browser_sessions/<scope>/`, keyed by user_scope_id, so two VAF users sharing the same OS account cannot read or share each other's saved logins and cookies. OS-user file permissions on `~/.vaf/` remain an additional layer, not the only guard. Do not commit these files to version control.
+Session files contain login cookies - live auth tokens - and are encrypted at rest. They are stored per user under `~/.vaf/browser_sessions/<scope>/`, keyed by user_scope_id, so two VAF users sharing the same OS account cannot read or share each other's saved logins and cookies. During an agent run the state is staged as a decrypted owner-only temp file beside the store (browser_use reads and auto-saves the handed path itself) and folded back encrypted when the run ends; a temp left behind by a crash is deleted unread after an hour. OS-user file permissions on `~/.vaf/` remain an additional layer, not the only guard. Do not commit these files to version control.
 
 ---
 
@@ -362,13 +362,18 @@ and are not:
   and every browser feature living in the toolbar was simply gone. Not `--kiosk` either:
   it hides the UI and also disables the right-click context menu, which is a feature
   here rather than decoration.
-- **`--test-type`** suppresses exactly one thing: the "unsupported command-line flag:
-  --no-sandbox" infobar, which is 56px of the display. The flag cannot simply be
-  dropped - this container may not create the namespaces Chromium's sandbox needs
-  ("Failed to move to new namespace ... Operation not permitted"), and the SUID helper
-  is refused by current Chromium too, so the alternative would be granting the container
-  a capability that weakens the isolation this browser exists to provide. It is not
-  visible to pages: `navigator.webdriver` stays false.
+- **Chromium runs WITH its own sandbox.** The historic blocker was Docker's DEFAULT
+  seccomp profile, which denies unprivileged user namespaces (`clone(CLONE_NEWUSER)`
+  fails with EPERM, "Failed to move to new namespace ... Operation not permitted") -
+  not the container itself. VAF starts the container with
+  `docker/browser/chromium-seccomp.json`, Docker's default profile plus one allow rule
+  for `clone`/`clone3`/`unshare`/`setns`, so the namespace sandbox works with **no
+  added capability** (measured 2026-08-26: renderers run in their own user and PID
+  namespaces). The entrypoint probes for user namespaces at startup (`unshare -U`);
+  a runtime that does not apply the profile gets a loud warning and a
+  `--no-sandbox --test-type` fallback, because an unsandboxed browser still beats a
+  crash-looping one. In the normal deployment neither flag is passed and no warning
+  bar exists to suppress.
 - **A window manager** (matchbox, ~300 KB) keeps the window at the size of the display,
   which changes whenever a viewer asks for its own geometry.
 - **No session restore.** The supervisor kills Chromium with SIGKILL, which marks the
@@ -452,12 +457,13 @@ persistent sessions use (`~/.vaf/browser_sessions/<scope>/default.json`, Playwri
 cookies only), so a login performed by hand is a login the agent has on its next
 `persistent=true` run, and vice versa. The forget-everything mode exists only on the agent
 lane (`persistent=false` runs). On a handover to a DIFFERENT user scope the shared browser
-is SCRUBBED first - cookies plus every site's stored state (localStorage, IndexedDB,
-CacheStorage, service workers) in one CDP sweep, and the same rule fires when the jar
-owner is unknown (fresh server process). `VAF_BROWSER_SCRUB=full` deepens the handover to
-a whole-profile wipe (history, Chromium-saved passwords, autofill, downloads) with a short
-Chromium relaunch; the quick default leaves those plus the HTTP cache as the remaining
-shared state (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
+gets a VERIFIED whole-profile wipe first - cookies, every site's stored state, history,
+Chromium-saved passwords, autofill and downloads all die with the profile, and the wipe
+is confirmed (marker consumed by the container's supervisor) before anyone gets the
+browser. The same rule fires when the jar owner is unknown (fresh server process). The
+handover is fail-closed: a wipe that cannot be confirmed refuses the lease (or the run)
+with a `browser_handover_failed` security event instead of proceeding over a stranger's
+state (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
 **The chat knows where you are.** While a chat's window drives the browser, that chat's
 messages travel WITH browser context: the current page URL and any selected text are
@@ -554,9 +560,21 @@ See [Window Tiling](../web-ui/WINDOW_TILING_DESIGN.md) and [Workflow UI Componen
 
 ### Network isolation
 
-The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to the network or other machines.
+The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to the network or other machines. The trust boundary is the HOST: CDP itself carries no authentication, so any process or OS account on the machine that can dial `127.0.0.1:9222` has full control of the logged-in browser. On a single-tenant machine that is the owner; a multi-account host must treat local users as inside the boundary. This is a named boundary, not an oversight.
 
 The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname - a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
+
+### Container hardening
+
+Both container lanes - the compose service and the per-user pool's `docker run` - start the browser with the same hardening, pinned against each other by `tests/test_browser_entrypoint_supervise.py` and `tests/test_browser_pool.py`:
+
+- `cap_drop: ALL` plus `cap_add: SYS_CHROOT` (Chromium's zygote chroots its sandboxed children; measured to fail without it),
+- `no-new-privileges:true`,
+- `seccomp=docker/browser/chromium-seccomp.json` - Docker's default profile plus the user-namespace syscalls, which is what enables Chromium's own sandbox (see the launch-flags section above).
+
+A renderer exploit therefore lands inside Chromium's namespace sandbox first, and only then inside a capability-stripped container. The profile is read by the docker CLIENT (compose resolves it relative to the repo root; the pool passes an absolute path), so it ships in the checkout, not in the image.
+
+Deliberate: Chromium's password manager stays ENABLED. Login automation and interactive re-login depend on it, and cross-user isolation is carried by the mandatory verified profile wipe on every change of hands (shared container) and by per-user profile volumes (pool), not by disabling the feature. On the shared container a saved password therefore lives only until the next cross-user handover; on a dedicated pool instance it is the user's own to keep.
 
 ### Content blocking and DNS filtering
 
@@ -621,7 +639,7 @@ The practical limits are:
 ### Per-user browser pool (parallel use)
 
 **On by default.** Up to two people at a time get a browser container of their own;
-everyone beyond that shares the fallback container described above. Three config keys
+everyone beyond that shares the fallback container described above. Four config keys
 govern it, all admin-only:
 
 | Config key | Default | What it decides |
@@ -629,6 +647,17 @@ govern it, all admin-only:
 | `browser_pool_max` | `2` | How many per-user browsers may run at once. `0` switches the pool off. |
 | `browser_pool_min_free_mb` | `2500` | Free-memory floor; below it no NEW instance is started. |
 | `browser_pool_idle_seconds` | `900` | When an unused instance is stopped to give its RAM back (data kept). |
+| `browser_pool_strict` | `False` | Strict mode: no dedicated instance means BUSY, never the shared fallback. |
+
+**Fallbacks are visible, and strict mode refuses them.** With the pool active, every
+resolution that ends on the shared container (capacity, memory floor, docker trouble)
+is recorded as a `browser_pool_fallback` security event. With `browser_pool_strict`
+on, the same situation refuses instead: the interactive browser answers busy, an
+agent run returns a clear "no dedicated browser available" error, and `render_check`
+reports the refusal - no lane quietly shares. A pool set to `0` is exempt on both
+counts: sharing IS the configuration then. For a company where two users' sessions
+must never meet (online banking, bookkeeping), strict mode plus a `browser_pool_max`
+sized to the user count is the intended setup.
 
 #### Raising the number of parallel browsers
 
@@ -768,25 +797,32 @@ too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
 
 ### Handover scrub depth
 
+**A change of hands is not configurable.** When the shared browser passes to a DIFFERENT
+user scope (a foreign interactive lease or agent run, or an unknown jar after a server
+restart), the whole Chromium profile is wiped - history, Chromium-saved passwords,
+autofill, bookmarks, downloads, HTTP cache, and every site's stored state - via a marker
+the container's supervisor consumes between Chromium launches, and VAF VERIFIES that
+consumption before granting the browser (cost: one Chromium relaunch, ~3-5 s). The
+handover is fail-closed: a wipe that cannot be confirmed refuses the lease or the run,
+logs a `browser_handover_failed` security event, and leaves the previous state guarded.
+A switch that could turn this off would not be a setting but a defect, so there is none.
+
+What remains configurable is the SAME-SCOPE clean start (a non-persistent
+`browser_agent` run of the same user - a clean start is that lane's documented promise):
+
 ```bash
 # System environment of the process that starts VAF (never a .env file:
 # nothing in the Python runtime loads one)
-VAF_BROWSER_SCRUB=quick   # default; "full" adds the profile wipe
+VAF_BROWSER_SCRUB=quick   # default; "full" deepens same-scope clean starts
 ```
 
-What the shared browser forgets when it changes hands (a different user's interactive
-lease or agent run, or an unknown jar after a server restart):
-
-| Mode | Cleared on handover | Cost |
+| Mode | Cleared on a same-scope clean start | Cost |
 |---|---|---|
-| `quick` (default) | Cookies, localStorage, IndexedDB, CacheStorage, service workers (one CDP sweep) | < 1 s |
-| `full` | Everything in `quick`, plus the whole Chromium profile: history, Chromium-saved passwords, autofill, bookmarks, downloads, HTTP cache | Chromium relaunch, ~3-5 s |
+| `quick` (default) | Cookies, plus stored state (localStorage, IndexedDB, CacheStorage, service workers) of every origin the jar names. An origin that stored data without ever setting a cookie is missed - a same-user residual, accepted because the cross-user path is the full wipe above. | < 1 s |
+| `full` | The whole-profile wipe, same as a change of hands (best-effort here) | Chromium relaunch, ~3-5 s |
 
-`full` needs the same docker access the stop watchdog already uses (it drops a marker in
-the container and relaunches Chromium; the supervisor wipes the profile between
-launches). The content blocker reinstalls itself into the fresh profile automatically.
-A non-persistent `browser_agent` run always gets at least the quick scrub, even for the
-same user - a clean start is that lane's documented promise.
+The wipe needs the same docker access the stop watchdog already uses. The content
+blocker reinstalls itself into the fresh profile automatically.
 
 **When the handover happens** is part of the contract, not an implementation detail: it
 runs after the run has passed the concurrency gate and after its stop watchdog is armed
@@ -873,6 +909,7 @@ someone deliberately takes that on, this stays a local build.
 **Internal port:** `9223` (CDP), exposed as `9222` via socat  
 **Memory limit:** 2 GB (`shm_size: 1gb`)  
 **User:** non-root (`browser:browser`)  
+**Hardening:** `cap_drop ALL` + `cap_add SYS_CHROOT`, `no-new-privileges:true`, and the seccomp profile `docker/browser/chromium-seccomp.json` (Docker's default plus the user-namespace syscalls) - the combination that lets Chromium run WITH its own sandbox; see [Container hardening](#container-hardening)  
 **Health check:** every 10 seconds, and BOTH halves have to answer: CDP on `9222` and the KasmVNC stream on `6901`. They fail apart, so checking one proves nothing about the other. An image built before the stream existed serves CDP perfectly while nothing listens on 6901, and a CDP-only check called that container healthy - the pool then handed it out and the ticket route answered 502 on the first human click. `BrowserPool._wait_healthy` applies the same two-part probe before an instance is handed out, fetching the very path the ticket route serves.
 
 The container runs a **supervised** Chromium process **headed under a virtual X display (KasmVNC's Xkasmvnc)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
@@ -895,6 +932,19 @@ for when the log says the KasmVNC stream did not answer.
 
 ```bash
 docker compose -f docker-compose.memory.yml up -d --build vaf-browser
+```
+
+**Chromium updates are the age gate's job, not `--build`'s.** The apt layer that installs
+Chromium (unpinned, from Debian) only re-runs when the Dockerfile text above it changes; a
+cached `--build` leaves the engine at whatever version the layer was first built with.
+Once the image is older than `browser_image_max_age_days` (default 14), the next stack
+start rebuilds it with `--pull --no-cache`, which refreshes the Debian base and Chromium
+with it; the Security dashboard's firewall card shows the engine version and image age.
+To force the same thing by hand:
+
+```bash
+docker compose -f docker-compose.memory.yml build --pull --no-cache vaf-browser
+docker compose -f docker-compose.memory.yml up -d vaf-browser
 ```
 
 ---

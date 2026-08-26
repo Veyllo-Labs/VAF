@@ -269,6 +269,53 @@ def collect_docker_isolation() -> Optional[Dict[str, Any]]:
     )
 
 
+def derive_browser_engine(age_days: Optional[float], budget_days: int,
+                          browser_version: str) -> Optional[Dict[str, Any]]:
+    """Pure derivation of the browser-engine freshness tile.
+
+    None when the age is unknowable (no container, no docker) - honesty rule,
+    no phantom green. stale means: an age budget is set and exceeded, i.e. the
+    engine runs without current Chromium security fixes.
+    """
+    if age_days is None:
+        return None
+    stale = bool(budget_days > 0 and age_days > budget_days)
+    return {
+        "age_days": round(float(age_days), 1),
+        "budget_days": int(budget_days),
+        "stale": stale,
+        "browser_version": str(browser_version or ""),
+    }
+
+
+def collect_browser_engine() -> Optional[Dict[str, Any]]:
+    """Age and version of the browser engine, for the firewall module.
+
+    The age comes from the same helpers the start-time rebuild gate uses (one
+    truth for 'how old is the browser'); the Chromium version is read from the
+    live CDP endpoint, best-effort - an unreachable browser leaves it empty
+    without hiding the age."""
+    if not _docker_available():
+        return None
+    try:
+        from vaf.core.service_stack import (_browser_image_age_days,
+                                            _browser_image_max_age_days)
+        age = _browser_image_age_days()
+        budget = _browser_image_max_age_days()
+    except Exception:
+        return None
+    version = ""
+    try:
+        import json as _json
+        import urllib.request
+        cdp = os.environ.get("VAF_BROWSER_CDP_URL", "http://127.0.0.1:9222")
+        with urllib.request.urlopen(f"{cdp.rstrip('/')}/json/version", timeout=2) as r:
+            version = str(_json.loads(r.read().decode("utf-8", "replace")).get("Browser", ""))
+    except Exception:
+        pass
+    return derive_browser_engine(age, budget, version)
+
+
 # ── Channel perimeter (messenger ingress) ────────────────────────────────────
 
 _CHANNELS = ("telegram", "whatsapp", "discord")
@@ -939,6 +986,12 @@ async def security_overview(_: Dict[str, Any] = Depends(require_admin)) -> Dict[
         firewall["docker"] = await run_in_threadpool(collect_docker_isolation)
     except Exception:
         firewall["docker"] = None
+    # Browser-engine freshness rides on the firewall module too: an aging
+    # Chromium is a perimeter fact, and this reuses the start-gate's helpers.
+    try:
+        firewall["browser_engine"] = await run_in_threadpool(collect_browser_engine)
+    except Exception:
+        firewall["browser_engine"] = None
     isolation: Optional[Dict[str, Any]] = None
     try:
         from vaf.memory.database import get_admin_isolation_metrics

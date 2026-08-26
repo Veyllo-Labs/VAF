@@ -43,6 +43,7 @@ RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-insta
     socat \
     unzip \
     procps \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # KasmVNC: the X server for the headed Chromium AND the 60fps WebSocket stream

@@ -293,3 +293,97 @@ def test_a_lane_that_finished_normally_still_writes_the_plain_line(monkeypatch):
         "choices": [{"finish_reason": "stop"}],
     })
     assert "cut=" not in seen.get("line", ""), seen
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The cap itself
+# ─────────────────────────────────────────────────────────────────────────────
+# It was 8192, written out three times on lanes no setting could reach, while a
+# fourth lane read a config key. A reasoning model spends that budget on thinking
+# before it writes a word, so a cap sized for an answer truncates the answer.
+
+
+def test_the_chat_lanes_no_longer_hardcode_a_cap():
+    """MUTATION: put the literal back and this goes red. A setting three call
+    sites can ignore is not a setting."""
+    import pathlib
+    src = pathlib.Path("vaf/core/agent.py").read_text(encoding="utf-8")
+    assert "max_tokens=8192" not in src, "a chat lane still hardcodes its output cap"
+
+
+def test_the_cap_comes_from_the_config():
+    from vaf.core.agent import Agent
+    from vaf.core.config import Config
+
+    assert Config.DEFAULTS["api_max_response_tokens"] == 16384
+    agent = Agent.__new__(Agent)
+    assert agent._response_token_cap() == Config.get("api_max_response_tokens", 16384)
+
+
+def test_the_cap_is_admin_only():
+    """It is measured in tokens the instance pays for, so a LAN user must not be
+    able to raise their own. The api_ prefix carries no gate of its own."""
+    from vaf.core.config import Config
+    assert "api_max_response_tokens" in Config.GLOBAL_CONFIG_KEYS
+
+
+@pytest.mark.parametrize("err", [
+    "max_tokens is too large: 32768. This model supports at most 16384 completion tokens",
+    "max_tokens: 32768 > 16384, which is the maximum allowed number of output tokens",
+    "max_output_tokens must not exceed 8192",
+    "This model's maximum context length is 128000 tokens. However, you requested more",
+])
+def test_a_refusal_is_recognised_whatever_the_provider_calls_it(err):
+    """Three providers, three spellings. MUTATION: match one vendor's wording and
+    the other two keep failing every call instead of retrying once."""
+    from vaf.core.api_backend import OpenAIProvider
+    p = OpenAIProvider("openai", "dummy-key")
+    assert p._refused_output_cap(err, 32768) is True
+
+
+@pytest.mark.parametrize("err", [
+    "Rate limit reached for gpt-4o-mini",
+    "401 - Invalid API key",
+    "402 - Insufficient credits. Please top up your balance.",
+    "tool_choice is not supported",
+])
+def test_an_unrelated_failure_is_not_mistaken_for_a_refusal(err):
+    """The dangerous direction: swallowing a real error as a cap problem would
+    hide an empty account behind a silent retry."""
+    from vaf.core.api_backend import OpenAIProvider
+    p = OpenAIProvider("openai", "dummy-key")
+    assert p._refused_output_cap(err, 32768) is False
+
+
+def test_the_retry_cannot_recurse():
+    """The second attempt sends the safe figure, and the test that triggered the
+    retry can never match it. Without this the guard is an infinite loop."""
+    from vaf.core.api_backend import OpenAIProvider
+    p = OpenAIProvider("openai", "dummy-key")
+    too_big = "max_tokens is too large: 8192"
+    assert p._refused_output_cap(too_big, p.SAFE_RESPONSE_TOKENS) is False
+
+
+def test_a_refused_cap_is_retried_once_and_then_remembered():
+    """End to end on the provider: the first call is refused, the second carries
+    the safe figure, and every later call skips the lost round trip."""
+    from vaf.core.api_backend import OpenAIProvider
+
+    sent = []
+    p = OpenAIProvider("openai", "dummy-key")
+
+    def client(kwargs):
+        sent.append(kwargs.get("max_tokens"))
+        if kwargs.get("max_tokens", 0) > p.SAFE_RESPONSE_TOKENS:
+            raise RuntimeError("max_tokens is too large: 32768. This model supports at most 16384")
+        return _Response("stop")
+
+    p._create_with_retry = client
+    out = "".join(str(c) for c in
+                  p.chat_completion(_MSGS, 0.7, 32768, False, "gpt-4o", None))
+    assert sent == [32768, p.SAFE_RESPONSE_TOKENS], sent
+    assert out == _Msg.content, out
+
+    sent.clear()
+    list(p.chat_completion(_MSGS, 0.7, 32768, False, "gpt-4o", None))
+    assert sent == [p.SAFE_RESPONSE_TOKENS], "the lost round trip was paid twice"

@@ -50,6 +50,12 @@ def mgr(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr(bi, "_cookie_op", fake_cookie_op)
+    # The cross-scope handover is a VERIFIED profile wipe now, and every first
+    # start() of a fresh manager IS a scope change (the tracker starts None).
+    # Without this stub the whole lease matrix would shell out to docker.
+    wipes = []
+    monkeypatch.setattr(bi, "verified_profile_wipe",
+                        lambda name, cdp_base="": (wipes.append(name) or True))
     m = bi.InteractiveBrowserManager()
     emitted = []
     m._emit = lambda payload, session_id: emitted.append((dict(payload), session_id))
@@ -61,6 +67,7 @@ def mgr(monkeypatch, tmp_path):
     m._test_dl_sweeps = dl_sweeps
     m._test_ws_syncs = ws_syncs
     m._test_emitted = emitted
+    m._test_wipes = wipes
     return m
 
 
@@ -198,27 +205,31 @@ def test_other_subagent_types_do_not_block(mgr, monkeypatch):
 
 # ── cookie jar handover and the login lane ────────────────────────────────
 
-def test_foreign_handover_scrubs_jar_before_loading(mgr, monkeypatch):
+def test_foreign_handover_wipes_the_profile_before_loading(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     mgr.start("scope-a", "sess-1")
     mgr.stop("user", requester_scope="scope-a")
+    before_wipes = len(mgr._test_wipes)
     before = len(mgr._test_cookie_calls)
     mgr.start("scope-b", "sess-2")
+    # A scope change is a VERIFIED profile wipe (cookies, localStorage,
+    # history, saved passwords all die with the profile) plus the cookie
+    # clear as the belt behind it - never the same-scope quick scrub.
+    assert len(mgr._test_wipes) == before_wipes + 1, \
+        "a scope change must never inherit the previous user's state"
     ops = [op for op, _ in mgr._test_cookie_calls[before:]]
-    # Scrub, not just a cookie clear: localStorage/IndexedDB carry logins on
-    # token-based sites exactly as cookies do.
-    assert "scrub" in ops, "a scope change must never inherit the previous user's state"
+    assert "clear_cookies" in ops
 
 
-def test_first_start_after_process_boot_scrubs_the_unknown_jar(mgr, monkeypatch):
+def test_first_start_after_process_boot_wipes_the_unknown_jar(mgr, monkeypatch):
     """A fresh manager knows nothing about the jar while the container may
     still hold anyone's state; trusting that gap is how residue crosses
     users. The same scope refreshing afterwards keeps its state."""
     _no_ipc_tasks(monkeypatch)
     mgr.start("scope-a", "sess-1")
-    assert [op for op, _ in mgr._test_cookie_calls].count("scrub") == 1
+    assert len(mgr._test_wipes) == 1
     mgr.start("scope-a", "sess-1")
-    assert [op for op, _ in mgr._test_cookie_calls].count("scrub") == 1
+    assert len(mgr._test_wipes) == 1
 
 
 def test_save_exports_to_the_scope_file_on_stop(mgr, monkeypatch, tmp_path):
@@ -226,7 +237,9 @@ def test_save_exports_to_the_scope_file_on_stop(mgr, monkeypatch, tmp_path):
     mgr.start("scope-a", "sess-1", save=True)
     mgr.stop("user", requester_scope="scope-a")
     path = bi.browser_storage_state_path("scope-a", "default")
-    state = json.loads(open(path, encoding="utf-8").read())
+    # Through the at-rest reader: the store is encrypted on disk now.
+    from vaf.core import data_files
+    state = data_files.read_json(path)
     assert [c["name"] for c in state["cookies"]] == ["exported"]
     assert state["origins"] == []
 
@@ -249,7 +262,9 @@ def test_cookie_roundtrip_preserves_the_playwright_shape(tmp_path):
     path = str(tmp_path / "state.json")
     bi._export_storage_cookies(path, cdp_cookies)
 
-    state = json.loads(open(path, encoding="utf-8").read())
+    # Through the at-rest reader: the store is encrypted on disk now.
+    from vaf.core import data_files
+    state = data_files.read_json(path)
     assert set(state.keys()) == {"cookies", "origins"}
     # Exactly the 8 fields the agent lane's export writes, defaults included.
     assert state["cookies"][1] == {
@@ -404,10 +419,13 @@ def test_agent_run_hands_the_jar_to_the_runs_scope(mgr, monkeypatch):
     mgr.start("scope-a", "sess-1", save=True)
     mgr.stop_for_agent_run()                     # exports scope-a's cookies
     before = len(mgr._test_cookie_calls)
+    before_wipes = len(mgr._test_wipes)
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
-    assert "scrub" in [op for op, _ in mgr._test_cookie_calls[before:]]
+    # A scope change is the verified wipe plus the cookie-clear belt.
+    assert len(mgr._test_wipes) == before_wipes + 1
+    assert "clear_cookies" in [op for op, _ in mgr._test_cookie_calls[before:]]
     assert mgr._last_cookie_scope == "scope-b"
-    # Ordering across the two hooks: the export happened before the scrub.
+    # Ordering across the two hooks: the export happened before the wipe.
     all_ops = [op for op, _ in mgr._test_cookie_calls]
     assert all_ops.index("get") < len(all_ops) - 1
     mgr.agent_run_ended()
@@ -427,20 +445,23 @@ def test_non_persistent_run_starts_clean_even_for_the_same_scope(mgr, monkeypatc
     assert "scrub" not in [op for op, _ in mgr._test_cookie_calls[before:]]
 
 
-def test_full_mode_wipes_the_profile_only_on_a_scope_change(mgr, monkeypatch):
-    """VAF_BROWSER_SCRUB=full adds the profile wipe (history, saved passwords,
-    downloads) on a change of hands; a same-scope clean start stays quick."""
+def test_scope_changes_always_wipe_and_full_mode_deepens_same_scope_starts(mgr, monkeypatch):
+    """A change of hands is ALWAYS the verified profile wipe (not a mode).
+    VAF_BROWSER_SCRUB=full's one remaining meaning: a same-scope clean start
+    deepens from the quick scrub to a best-effort profile wipe too."""
     _no_ipc_tasks(monkeypatch)
-    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
-    wipes = []
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: wipes.append(a))
+    soft_wipes = []
+    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: soft_wipes.append(a))
     mgr.start("scope-a", "sess-1")
-    assert len(wipes) == 1                       # unknown jar counts as a change
+    assert len(mgr._test_wipes) == 1             # unknown jar counts as a change
     mgr.stop("user", requester_scope="scope-a")
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
-    assert len(wipes) == 2
+    assert len(mgr._test_wipes) == 2             # verified, mode-independent
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=False)
-    assert len(wipes) == 2                       # same scope: quick scrub only
+    assert len(mgr._test_wipes) == 2 and soft_wipes == []  # same scope: quick
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=False)
+    assert len(soft_wipes) == 1                  # full deepens the clean start
 
 
 def test_takeover_hands_the_persons_page_to_the_runs_scope(mgr, monkeypatch):
@@ -1164,3 +1185,174 @@ def test_a_lease_on_another_manager_still_gets_its_give_back(mgr, monkeypatch):
         "the lease, so neither the holder branch nor the last-session fallback fired"
     )
     assert resumable[0][1] == "sess-1", f"give-back went to the wrong session: {resumable}"
+
+
+# ── fail-closed cross-scope handover (the banking round) ──────────────────
+
+def test_a_failed_wipe_refuses_the_lease_and_emits_a_security_event(mgr, monkeypatch):
+    """The cross-scope handover is fail-closed: no confirmed wipe, no lease.
+    Mutation proof: restoring the old log-and-continue behaviour turns the
+    refusal into an active lease and this test red."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda name, cdp_base="": False)
+    events = []
+    import vaf.core.security_events as sev
+    monkeypatch.setattr(sev, "log_security_event",
+                        lambda kind, **kw: events.append((kind, kw)))
+    res = mgr.start("scope-a", "sess-1")
+    assert res["status"] == "error" and res["reason"] == "handover_failed"
+    assert mgr._lease is None
+    assert [k for k, _ in events] == ["browser_handover_failed"]
+    # The tracker still names the previous (unknown) holder, so the next
+    # attempt re-enters the wipe branch instead of trusting the jar.
+    assert mgr._last_cookie_scope is None
+
+
+def test_a_confirmed_wipe_grants_the_lease_even_if_the_restore_fails(mgr, monkeypatch):
+    """The lenient half stays lenient: once the jar is verifiably clean, a
+    failing cookie restore costs comfort, not isolation."""
+    _no_ipc_tasks(monkeypatch)
+
+    def broken_set(base, op, cookies=None):
+        if op == "set":
+            raise RuntimeError("cdp hiccup")
+        return mgr._test_cookie_calls.append((op, cookies))
+
+    monkeypatch.setattr(bi, "_cookie_op", broken_set)
+    res = mgr.start("scope-a", "sess-1", save=True)
+    assert res["status"] in ("active",)
+    assert mgr._lease is not None
+
+
+def test_agent_cross_scope_wipe_failure_raises_and_is_not_swallowed(mgr, monkeypatch):
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop("user", requester_scope="scope-a")
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda name, cdp_base="": False)
+    import pytest as _pytest
+    with _pytest.raises(bi.BrowserHandoverError):
+        mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
+    # The tracker keeps the OLD scope: the refusal must not claim the jar.
+    assert mgr._last_cookie_scope == "scope-a"
+
+
+def test_module_hand_jar_wrapper_propagates_the_refusal(mgr, monkeypatch):
+    """The old wrapper swallowed every exception ("Never raises"), which is
+    exactly how a refused handover would have turned into a run browsing over
+    a stranger's logins."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop("user", requester_scope="scope-a")
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda name, cdp_base="": False)
+    monkeypatch.setattr(bi, "_manager_for_run", lambda name: mgr)
+    import pytest as _pytest
+    with _pytest.raises(bi.BrowserHandoverError):
+        bi.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
+
+
+def test_same_scope_scrub_never_uses_the_wildcard_origin():
+    """Chromium 151 answers Storage.clearDataForOrigin(origin="*") with
+    -32603 (measured live), so the wildcard must never come back; the quick
+    scrub enumerates origins from the jar instead."""
+    import pathlib
+    src = pathlib.Path(bi.__file__).read_text(encoding="utf-8")
+    assert '"origin": "*"' not in src and "origin='*'" not in src
+
+
+def test_overlapping_starts_are_serialized_by_the_handover_mutex(mgr, monkeypatch):
+    """Two interleaving handovers used to be able to each restore their own
+    cookies into the shared jar; the mutex makes busy-check, wipe and restore
+    one atomic story, so the loser sees the winner's lease and answers busy."""
+    import threading
+
+    _no_ipc_tasks(monkeypatch)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_wipe(name, cdp_base=""):
+        calls.append(name)
+        entered.set()
+        assert release.wait(5), "test wiring: wipe never released"
+        return True
+
+    monkeypatch.setattr(bi, "verified_profile_wipe", slow_wipe)
+    results = {}
+
+    def start_a():
+        results["a"] = mgr.start("scope-a", "sess-1")
+
+    def start_b():
+        results["b"] = mgr.start("scope-b", "sess-2")
+
+    ta = threading.Thread(target=start_a, daemon=True)
+    ta.start()
+    assert entered.wait(5)
+    tb = threading.Thread(target=start_b, daemon=True)
+    tb.start()
+    tb.join(0.3)
+    assert tb.is_alive(), "the second start must wait for the first handover"
+    assert len(calls) == 1
+    release.set()
+    ta.join(5)
+    tb.join(5)
+    assert results["a"]["status"] == "active"
+    assert results["b"]["status"] == "busy" and results["b"]["reason"] == "other_user"
+
+
+# ── verified_profile_wipe unit behaviour (docker seam stubbed) ────────────
+
+class _WipeExecScript:
+    """Scriptable _wipe_exec: answers per command substring, records calls."""
+
+    def __init__(self, marker_set_rc=0, pkill_rc=0, absent_after_polls=1):
+        self.calls = []
+        self.polls = 0
+        self.marker_set_rc = marker_set_rc
+        self.pkill_rc = pkill_rc
+        self.absent_after_polls = absent_after_polls
+
+    def __call__(self, name, cmd, as_root=False, timeout=20):
+        self.calls.append(cmd)
+        if "touch" in cmd:
+            return self.marker_set_rc
+        if "pkill" in cmd:
+            return self.pkill_rc
+        if "test ! -f" in cmd:
+            self.polls += 1
+            return 0 if self.polls >= self.absent_after_polls else 1
+        if "rm -f" in cmd:
+            return 0
+        return 0
+
+
+def test_verified_wipe_confirms_via_the_marker(monkeypatch):
+    script = _WipeExecScript(absent_after_polls=2)
+    monkeypatch.setattr(bi, "_wipe_exec", script)
+    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
+    assert script.polls == 2
+
+
+def test_verified_wipe_tolerates_pkill_rc_1(monkeypatch):
+    """pkill answers 1 when Chromium happened to be down (a crash window);
+    the marker was still dropped and the supervisor still consumes it."""
+    script = _WipeExecScript(pkill_rc=1)
+    monkeypatch.setattr(bi, "_wipe_exec", script)
+    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
+
+
+def test_verified_wipe_refuses_when_the_marker_cannot_be_set(monkeypatch):
+    script = _WipeExecScript(marker_set_rc=1)
+    monkeypatch.setattr(bi, "_wipe_exec", script)
+    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is False
+    assert script.polls == 0
+
+
+def test_verified_wipe_defuses_a_lingering_marker_on_timeout(monkeypatch):
+    """An unconsumed marker would wipe the profile at some unrelated future
+    relaunch, surprising whoever holds the browser then - on failure it is
+    removed best-effort."""
+    script = _WipeExecScript(absent_after_polls=10 ** 6)
+    monkeypatch.setattr(bi, "_wipe_exec", script)
+    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=0.1) is False
+    assert any("rm -f" in c for c in script.calls)

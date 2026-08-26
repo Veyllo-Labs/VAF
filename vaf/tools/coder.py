@@ -262,6 +262,12 @@ _ORIENT_DOC_HEADS = 2
 _ORIENT_DOC_HEAD_BYTES = 1024
 _ORIENT_FRESH = "## EXISTING PROJECT ORIENTATION\nFresh project - no existing files or docs to read.\n"
 
+# How many times a 400 may be answered by compressing the history before the run
+# gives up and reports the provider's own message. The compression ladder has
+# exactly three rungs and the last one is the system prompt plus one sentence, so
+# a fourth attempt sends the same request again and can only repeat the failure.
+_MAX_COMPRESSION_LEVELS = 3
+
 
 def _build_orientation_summary(base_dir: str) -> str:
     """Deterministic scan of an existing project to seed the planner (no LLM, no writes).
@@ -3281,6 +3287,11 @@ Thumbs.db
         # the dispatch loop thousands of lines below needs the answer as locals.
         caller_scope, caller_role = _caller_identity(kwargs)
         caller_allowed = _caller_allowed_tools(caller_scope, caller_role)
+        # WHICH tools a coding agent works with at all, independent of who is asking.
+        # Resolved once per run so a config edit mid-run cannot change the schema
+        # between two loops of the same conversation.
+        from vaf.core.coder_tools import resolve_coder_tools
+        _coder_allowed = resolve_coder_tools()
 
         # ── History/Rollback delegation fast path ────────────────────────────
         # The Main Agent talks to the coder like a tool: a task such as
@@ -4943,6 +4954,42 @@ Task {task_idx + 1}: {current_task}
                             }
                         }
                     },
+                    # The interactive half of the visual verify loop. render_check above
+                    # is one look with no clicking - its own description defers
+                    # multi-step flows here. Advertised in TASK contexts (unlike the
+                    # plug-and-play copy, which is main-context-only) because this is
+                    # where pages get written and therefore where they must be tested.
+                    # Execution rides the generic local_tools fallback: auto-discovery
+                    # registers the instance regardless of context.
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "browser_agent",
+                            "description": (
+                                "Drive a real browser through a page you built: click buttons, fill and "
+                                "submit forms, navigate multi-page flows, and report what happened. Use "
+                                "AFTER render_check passes, when the page has interaction worth testing "
+                                "(a form, a game, navigation). Describe the test in plain language, e.g. "
+                                "'open http://localhost:8000/, fill the contact form with test data, "
+                                "submit, and report what the page shows'. A localhost dev server is "
+                                "reachable only if it listens on 0.0.0.0."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "task": {
+                                        "type": "string",
+                                        "description": "Plain-language browser task: URL, the steps to perform, and what to report back.",
+                                    },
+                                    "max_steps": {
+                                        "type": "integer",
+                                        "description": "Step budget for the browser run (default 15).",
+                                    },
+                                },
+                                "required": ["task"]
+                            }
+                        }
+                    },
                     {
                         "type": "function",
                         "function": {
@@ -5071,18 +5118,38 @@ Task {task_idx + 1}: {current_task}
                     }
                 ] + common_tools
         
+        def _apply_tool_allowlists(schema: List[Dict]) -> List[Dict]:
+            """Both allow-lists, applied wherever a schema is finished.
+
+            TWO filters, answering different questions. The CODER allow-list
+            (vaf/core/coder_tools.py) answers "is this a tool a build step works with
+            at all" - files, code, git, shell, tests, lookups. The ACCOUNT allow-list
+            (caller_allowed) answers the separate question of what THIS user may use.
+
+            It must run at the point the FINAL list exists. Filtering only the
+            context-schema below leaves both lists out of the ~24 tools the loop
+            appends by hand and the 127 auto-discovered ones it extends with, which
+            is how the request reached 130 tools including 11 for mail and 20 for
+            messengers, and how an account-forbidden tool still reached the model's
+            schema (execution was refused by the dispatch backstop, so it read as a
+            hallucinated call rather than as a tool that should never have been
+            offered).
+            """
+            out = [e for e in schema
+                   if e.get("function", {}).get("name") in _coder_allowed]
+            if caller_allowed is None:
+                return out
+            return [e for e in out
+                    if e.get("function", {}).get("name") in caller_allowed]
+
         def get_tools_schema_for_context(is_main_context: bool) -> List[Dict]:
-            """The schema the model sees, minus tools the account may not use.
+            """The schema the model sees, minus tools the coder or the account may not use.
 
             Filtering the SCHEMA is the primary enforcement: a tool the model cannot see is
             a tool it cannot loop on. The dispatch-side refusal below is the backstop for a
             hallucinated call to a hidden name.
             """
-            schema = _tools_schema_unfiltered(is_main_context)
-            if caller_allowed is None:
-                return schema
-            return [e for e in schema
-                    if e.get("function", {}).get("name") in caller_allowed]
+            return _apply_tool_allowlists(_tools_schema_unfiltered(is_main_context))
 
         # Initialize tools_schema (will be rebuilt dynamically in loop)
         tools_schema = []
@@ -5876,7 +5943,10 @@ Task {task_idx + 1}: {current_task}
                 # Plug-and-play tools can be large - keep them out of TASK contexts.
                 tools_schema.extend(plug_and_play_tools)
 
-            tools_schema = _dedupe_tools_schema(tools_schema)
+            # THE chokepoint: everything the loop appended by hand and everything
+            # auto-discovery added is in the list by now, so this is the only place
+            # where filtering sees the whole of it.
+            tools_schema = _apply_tool_allowlists(_dedupe_tools_schema(tools_schema))
             
             # Only clear stream if buffer is empty or only has separator
             # CRITICAL: Do NOT clear if buffer has template selection or other important messages
@@ -5980,13 +6050,23 @@ Task {task_idx + 1}: {current_task}
                 if _provider == "local" and "gemma" not in str(model_name).lower():
                     from vaf.core.api_backend import consolidate_system_messages
                     _messages_for_request = consolidate_system_messages(_messages_for_request)
+                # Per-model parameter shape, from the same implementation the SDK lane
+                # uses (api_backend.openai_request_params): which token-limit key this
+                # model takes, whether it accepts a temperature, and whether it needs
+                # reasoning_effort="none" to be allowed function tools at all. Built by
+                # hand here until now, with a fixed max_tokens and a temperature, which
+                # every gpt-5 model answers with a 400 - the OpenAI coder lane could not
+                # start on that whole family.
+                from vaf.core.api_backend import openai_request_params
                 _req_body = {
                     "model": model_name,
                     "messages": _messages_for_request,
-                    "max_tokens": 32768,
-                    "temperature": current_temp,
                     "stream": True,
                 }
+                _req_body.update(openai_request_params(
+                    _provider, model_name, temperature=current_temp,
+                    max_tokens=32768, has_tools=True,
+                ))
                 _req_body["tools"] = tools_schema
                 _req_body["tool_choice"] = _effective_tool_choice
                 # Debug: Log message structure (roles + field names) for each loop ≥ 2
@@ -6028,8 +6108,26 @@ Task {task_idx + 1}: {current_task}
                     append_with_context(f"[OK] Request successful (Status: {stream_response.status_code}) - Streaming response...")
                     _trace("LLM request successful (200)")
                 else:
-                    append_with_context(f"[WARN] Request returned status {stream_response.status_code}")
+                    # The BODY, not just the number. A run that ends on a 400 is
+                    # diagnosed from events.jsonl, and the status alone says nothing
+                    # about which parameter the provider rejected: a live run spent
+                    # 67 loops on one 400 whose text was never written down anywhere,
+                    # so the artifact could not answer the only question asked of it.
+                    _err_body = ""
+                    try:
+                        _err_body = stream_response.text[:600]
+                    except Exception:
+                        pass
+                    append_with_context(
+                        f"[WARN] Request returned status {stream_response.status_code}: {_err_body[:200]}")
                     _trace(f"LLM request failed ({stream_response.status_code})")
+                    try:
+                        if lg:
+                            lg.event("llm_request_failed", loop=loop.loop_count,
+                                     status=stream_response.status_code,
+                                     model=model_name, provider=_provider, body=_err_body)
+                    except Exception:
+                        pass
                 tui._needs_update = True
                 # CRITICAL: Force immediate update (outside lock, safe)
                 try:
@@ -6042,14 +6140,54 @@ Task {task_idx + 1}: {current_task}
                     try:
                         error_data = stream_response.json()
                         error_msg = str(error_data) # Convert full JSON to string to search
-                        
-                        # Only compress for actual context-size errors, not other 400s
+
+                        # A model family released after the seed table was written can
+                        # refuse function tools unless reasoning_effort is "none". Record
+                        # it and rebuild the body on the next pass; without this the run
+                        # ends on the generic 400 below, having done nothing. The recorder
+                        # answers True only the first time per model, so this cannot loop.
+                        from vaf.core.api_backend import note_openai_tools_effort_refusal
+                        if note_openai_tools_effort_refusal(model_name, error_msg):
+                            append_with_context(
+                                f"[WARN] {model_name} refuses tools with reasoning; "
+                                "retrying with reasoning_effort=none")
+                            tui.set_action("Adjusting request shape...")
+                            live.update(tui.render())
+                            continue
+
+                        # Only compress for actual context-size errors, not other 400s.
+                        # The word test is a heuristic and it OVER-matches: several
+                        # parameter refusals also contain "token", "length" or "maximum"
+                        # without the history having anything to do with it. That is
+                        # survivable only because the retry is bounded below.
                         if "context" in error_msg.lower() or "length" in error_msg.lower() or "token" in error_msg.lower() or "maximum" in error_msg.lower():
                             # Track consecutive 400 errors
                             if not hasattr(loop, 'consecutive_400'):
                                 loop.consecutive_400 = 0
                             loop.consecutive_400 += 1
-                            
+
+                            # Three levels exist and the third one is already system
+                            # prompt plus a single sentence. A 400 that survives THAT
+                            # was never about the context, so compressing again cannot
+                            # help and the loop would run until something else stops
+                            # it: a live run re-sent the identical 75-character request
+                            # 64 times, each one a paid API call, and ended with the
+                            # cause still unreported. Past the last level, fall through
+                            # to the error return so the run stops on the real message.
+                            if loop.consecutive_400 > _MAX_COMPRESSION_LEVELS:
+                                append_with_context(
+                                    f"[ERROR] Still 400 after {_MAX_COMPRESSION_LEVELS} compression "
+                                    f"levels - this is not a context error. Giving up: {error_msg[:200]}")
+                                try:
+                                    if lg:
+                                        lg.event("compression_exhausted", loop=loop.loop_count,
+                                                 levels=_MAX_COMPRESSION_LEVELS, body=error_msg[:600])
+                                except Exception:
+                                    pass
+                                return (f"Error: the provider rejected the request {loop.consecutive_400} times "
+                                        f"and compressing the history did not help, so it was not a context "
+                                        f"problem. Provider said: {error_msg[:400]}")
+
                             tui.set_action(f"Context error (400). Compression Level {loop.consecutive_400}...")
                             append_with_context(f"[WARN] Context limit reached (Level {loop.consecutive_400}). Compressing...")
                             live.update(tui.render())
@@ -6113,6 +6251,42 @@ Task {task_idx + 1}: {current_task}
                         tui.append_stream(f"[ERROR] Failed to handle 400 error: {e}")
                         pass
                 
+                # Rate limit (429): the provider names its own wait - a Retry-After
+                # header, or "Please try again in 186ms" in the body - and the coder is
+                # the heaviest spender against a per-org TPM window it shares with the
+                # chat lane. Same parser as the SDK lane, same wall-clock budget: wait,
+                # then re-enter the loop; past the budget, surface the provider's own
+                # message. Without this branch a 429 fell through to the generic
+                # non-200 return below and the whole run died on a wait of milliseconds.
+                if stream_response.status_code == 429:
+                    from vaf.core.api_backend import rate_limit_wait_seconds
+                    _rl_budget = max(0.0, float(Config.get("api_rate_limit_wait_max", 60) or 0))
+                    _rl_waited = getattr(loop, "rate_limit_waited", 0.0)
+                    _wait = rate_limit_wait_seconds(stream_response.headers,
+                                                    stream_response.text or "")
+                    if _wait is None:
+                        _wait = 2.0
+                    _wait = min(_wait + 0.25, float(Config.get("api_retry_after_max", 30) or 30))
+                    if _rl_waited + _wait <= _rl_budget:
+                        loop.rate_limit_waited = _rl_waited + _wait
+                        tui.set_action(f"Rate limited - waiting {_wait:.1f}s...")
+                        append_with_context(
+                            f"[WARN] Rate limit (429) - waiting {_wait:.1f}s "
+                            f"({loop.rate_limit_waited:.0f}s/{_rl_budget:.0f}s used)")
+                        live.update(tui.render())
+                        time.sleep(_wait)
+                        continue
+                    _rl_text = (stream_response.text or "")[:300]
+                    append_with_context(f"[ERROR] Rate limit persisted past {_rl_budget:.0f}s: {_rl_text}")
+                    try:
+                        if lg:
+                            lg.event("rate_limit_exhausted", loop=loop.loop_count,
+                                     budget=_rl_budget, body=_rl_text)
+                    except Exception:
+                        pass
+                    return (f"Error: the provider rate-limited every request for {_rl_budget:.0f}s. "
+                            f"Provider said: {_rl_text}")
+
                 # Reset consecutive 400 counter on success
                 if stream_response.status_code == 200:
                     if hasattr(loop, 'consecutive_400'):
@@ -6120,7 +6294,10 @@ Task {task_idx + 1}: {current_task}
                     # Reset stream-retry counter on any successful connection
                     if hasattr(loop, '_stream_retries'):
                         loop._stream_retries = 0
-                
+                    # A successful request means the window drained: give the next 429
+                    # a fresh budget instead of bleeding this one across the whole run.
+                    loop.rate_limit_waited = 0.0
+
                 if stream_response.status_code != 200:
                     error_text = stream_response.text[:200] if stream_response.text else "No error details"
                     append_with_context(f"[ERROR] Server returned {stream_response.status_code}: {error_text}")

@@ -36,6 +36,7 @@ this module's logger.
 import logging
 import os
 import platform
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -424,6 +425,95 @@ def _harden(path) -> None:
         pass
 
 
+def _browser_image_max_age_days() -> int:
+    """The browser image's freshness budget in days; 0 disables the age gate.
+
+    Env override first (VAF_BROWSER_IMAGE_MAX_AGE_DAYS), then the admin-only
+    config key, then the default - the browser pool's setting order. Lazy and
+    forgiving on purpose: this runs at stack start, before much of VAF is up.
+    """
+    default = 14
+    try:
+        raw = os.environ.get("VAF_BROWSER_IMAGE_MAX_AGE_DAYS")
+        if raw is None or not str(raw).strip():
+            from vaf.core.config import Config
+            raw = Config.get("browser_image_max_age_days")
+        return default if raw is None else max(0, int(raw))
+    except Exception:
+        return default
+
+
+def _browser_image_age_days() -> Optional[float]:
+    """Age of the browser IMAGE in days, or None when it cannot be known.
+
+    The compose service has no image: key, so the built image's name is
+    project-dependent (v2 `<project>-vaf-browser`, legacy `<project>_vaf-browser`);
+    it is resolved through the PINNED container name instead - the same route
+    browser_pool takes for its template. A missing container answers None: an
+    absent container usually means an absent image, and nothing can be stale
+    that does not exist. None also on any parse or docker trouble - the gate
+    then stands down rather than rebuilding on a guess.
+    """
+    try:
+        docker = resolve_docker_exe()
+        r = subprocess.run([docker, "inspect", "vaf-browser", "--format", "{{.Config.Image}}"],
+                           capture_output=True, text=True, timeout=20)
+        image = (r.stdout or "").strip()
+        if r.returncode != 0 or not image:
+            return None
+        r = subprocess.run([docker, "image", "inspect", image, "--format", "{{.Created}}"],
+                           capture_output=True, text=True, timeout=20)
+        created_raw = (r.stdout or "").strip()
+        if r.returncode != 0 or not created_raw:
+            return None
+        from datetime import datetime, timezone
+        # Docker prints RFC3339 with nanoseconds; fromisoformat wants at most
+        # microseconds, so the fractional part is trimmed.
+        created_raw = re.sub(r"\.(\d{6})\d*", r".\1", created_raw.replace("Z", "+00:00"))
+        created = datetime.fromisoformat(created_raw)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400.0)
+    except Exception:
+        return None
+
+
+def _maybe_rebuild_stale_browser_image(base, kwargs, log=None) -> None:
+    """The age gate: one cache-less, base-pulling browser rebuild when the
+    image is older than the budget. Never raises, never blocks the start; a
+    failed fresh build is a security event (`browser_image_stale`) because the
+    stack then keeps serving a browser engine without current security fixes.
+    """
+    try:
+        budget = _browser_image_max_age_days()
+        if budget <= 0:
+            return
+        age = _browser_image_age_days()
+        if age is None or age <= budget:
+            return
+        _say(log, f"browser image is {age:.0f} days old (budget {budget}); "
+                  "rebuilding with a fresh base")
+        # `base` already carries `up -d ...`; the build command is derived by
+        # cutting at "up" so both loop variants (docker compose / legacy
+        # docker-compose) stay valid.
+        build_cmd = base[:base.index("up")] + ["build", "--pull", "--no-cache", "vaf-browser"]
+        r = subprocess.run(build_cmd, timeout=900, **kwargs)
+        if r.returncode != 0:
+            tail = ((r.stderr or "") or (r.stdout or "")).strip().splitlines()
+            detail = tail[-1].strip()[:200] if tail else "no output"
+            _say(log, f"stale-browser rebuild failed; the old image keeps serving. "
+                      f"Last line: {detail}")
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("browser_image_stale",
+                                   detail=f"image {age:.0f}d old, rebuild failed: {detail}"[:200],
+                                   channel="browser")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _warn_about_default_db_password(log=None) -> bool:
     """Say it out loud when the published default database password is still in use.
 
@@ -549,6 +639,16 @@ def ensure_service_stack(log: Optional[Callable[[str], None]] = None) -> bool:
                         # the code had moved on. An unchanged context is a cache hit and
                         # costs seconds; a changed one is exactly the rebuild that was
                         # missing.
+                        #
+                        # The cache hit has a second face: the browser's apt layer
+                        # (unpinned Debian Chromium) never re-runs while the
+                        # Dockerfile text above it is unchanged, so the ENGINE ages
+                        # silently no matter how often --build runs. The age gate
+                        # forces one cache-less, base-pulling rebuild once the image
+                        # is older than browser_image_max_age_days; its failure is
+                        # loud (security event) but never blocks the start - the old
+                        # browser still beats none.
+                        _maybe_rebuild_stale_browser_image(base, kwargs, log)
                         opt = subprocess.run(base + ["--build"] + list(OPTIONAL_SERVICES),
                                              timeout=600, **kwargs)
                         if opt.returncode != 0:

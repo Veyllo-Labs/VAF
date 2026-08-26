@@ -234,6 +234,10 @@ services:
       dockerfile: Dockerfile
     container_name: vaf-browser
     restart: unless-stopped
+    # docker-init as PID 1: the supervisor script cannot reap orphans that
+    # crashed Chromium re-parents onto PID 1, and a long-lived container
+    # would collect zombies across crash-relaunch cycles.
+    init: true
     # Headed Chromium needs more shared memory than headless to avoid
     # renderer crashes on heavy pages.
     shm_size: "1gb"

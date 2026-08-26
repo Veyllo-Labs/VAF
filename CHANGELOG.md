@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Security
+- **The browser's launch line now has its own alarm, and its crashes leave no
+  residue.** The flag that hides Chromium's warning bar would also hide it for a
+  genuinely dangerous flag, so a CI guard now forbids the dangerous ones outright;
+  and both browser container lanes run under docker-init, so a crashing Chromium can
+  no longer accumulate zombie processes in a long-lived container.
 - **Saved browser logins are now encrypted on disk.** The per-user cookie store held
   live login tokens for every site a session was saved for, online banking included, in
   readable files. Those files now use the same encryption as chats and memories; stores

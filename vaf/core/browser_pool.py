@@ -367,7 +367,7 @@ class BrowserPool:
             return None
         args = [
             "run", "-d", "--name", name,
-            "--restart", "no",
+            "--restart", "no", "--init",
             "--shm-size", "1g", "--memory", "2g",
             "--network", network,
             # The shared container gets these from compose; a pooled instance is

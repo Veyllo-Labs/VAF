@@ -378,7 +378,13 @@ and are not:
   `--no-sandbox` brought the bar straight back, now naming the load-bearing anti-bot
   flag `--disable-blink-features=AutomationControlled` (measured live). The wording is
   Chromium boilerplate about non-standard flags, not a statement about this setup.
-  `--test-type` is not visible to pages: `navigator.webdriver` stays false.
+  `--test-type` is not visible to pages: `navigator.webdriver` stays false. The cost of
+  the suppressor is that it would ALSO silence the warning for a genuinely dangerous
+  flag, so the launch line carries a guard-test denylist (`--disable-web-security`,
+  `--disable-site-isolation-trials` and friends may never appear in the entrypoint) -
+  the alarm lives in CI instead of the browser chrome. Both container lanes also run
+  under docker-init (`init: true` / `--init`): crashed Chromium re-parents orphans
+  onto PID 1, which the supervisor script cannot reap.
 - **A window manager** (matchbox, ~300 KB) keeps the window at the size of the display,
   which changes whenever a viewer asks for its own geometry.
 - **No session restore.** The supervisor kills Chromium with SIGKILL, which marks the

@@ -205,6 +205,32 @@ def test_both_container_lanes_carry_the_hardening():
     assert "chromium-seccomp.json" in pool_src
 
 
+def test_no_security_disabling_flag_can_ride_in_under_test_type():
+    """--test-type suppresses Chromium's warning bar for EVERY non-standard
+    flag, not only cosmetic ones - so a security-disabling flag added to the
+    launch line would run silently. The launch line is repo-pinned, and this
+    denylist is the alarm --test-type turned off."""
+    code = "\n".join(ln for ln in _script().splitlines() if not ln.lstrip().startswith("#"))
+    for forbidden in ("--disable-web-security",
+                      "--disable-site-isolation-trials",
+                      "--allow-running-insecure-content",
+                      "--ignore-certificate-errors",
+                      "--unsafely-treat-insecure-origin-as-secure"):
+        assert forbidden not in code, f"security-disabling flag in the launch line: {forbidden}"
+
+
+def test_both_lanes_run_docker_init_for_zombie_reaping():
+    """Crashed Chromium re-parents orphans onto PID 1, and the supervisor
+    script cannot reap them - docker-init can, in both container lanes."""
+    compose = "\n".join(ln for ln in COMPOSE.read_text(encoding="utf-8").splitlines()
+                        if not ln.lstrip().startswith("#"))
+    browser_block = compose.split("vaf-browser:", 1)[1].split("\nvolumes:", 1)[0]
+    assert "init: true" in browser_block
+    pool_src = (ENTRYPOINT.parent.parent.parent / "vaf" / "core" / "browser_pool.py").read_text(
+        encoding="utf-8")
+    assert '"--init"' in pool_src
+
+
 def test_the_seccomp_profile_is_default_deny_plus_userns():
     """The profile is Docker's default (deny by default) plus one allow rule for
     the user-namespace syscalls Chromium's sandbox needs. A profile that lost

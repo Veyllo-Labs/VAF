@@ -272,12 +272,47 @@ class BrowserPool:
             raise PoolExhausted(reason)
         return None
 
+    def _image_is_stale(self, name: str) -> bool:
+        """True when this container runs an image the shared browser no longer uses.
+
+        A container is pinned to the image ID it was created from, for life.
+        The shared browser is rebuilt and recreated (the stack start's --build,
+        and the age gate's --pull --no-cache), but a pooled instance would keep
+        serving the old binary forever - so the per-user browsers, the ones a
+        person actually banks in, would be the LAST to receive a Chromium
+        security fix instead of the first. Compared by image ID, not tag: both
+        sides are :latest, and the tag is exactly what a rebuild moves."""
+        try:
+            template = self._resolve_template()
+            if template is None:
+                return False
+            r = _docker(["inspect", template[0], "--format", "{{.Id}}"], timeout=20)
+            want = (r.stdout or "").strip() if r.returncode == 0 else ""
+            r = _docker(["inspect", name, "--format", "{{.Image}}"], timeout=20)
+            have = (r.stdout or "").strip() if r.returncode == 0 else ""
+            return bool(want and have and want != have)
+        except Exception:
+            return False
+
     def _resolve_inner(self, scope: str) -> Optional[BrowserInstance]:
         with self._lock:
             inst = self._instances.get(scope)
         name = _NAME_PREFIX + _scope_hash(scope)
 
         state = self._container_state(name)
+        if state in ("running", "exited") and self._image_is_stale(name):
+            # Recreate rather than adopt. The PROFILE VOLUME is untouched by
+            # this (it is named and mounted afresh), so the person's logins,
+            # history and bookmarks come back with the new container; only the
+            # stale binary is thrown away.
+            append_domain_log("webui", f"[browser_pool] instance for scope hash {_scope_hash(scope)} "
+                                       "runs an outdated image; recreating on the current one")
+            _docker(["rm", "-f", name], timeout=60)
+            with self._lock:
+                self._instances.pop(scope, None)
+            state = None
+            inst = None
+
         if inst is not None and state == "running":
             inst.last_used = time.time()
             self._ensure_reaper()
@@ -402,6 +437,11 @@ class BrowserPool:
         proxy = os.environ.get("VAF_BROWSER_PROXY", "").strip()
         if proxy:
             args += ["-e", f"VAF_BROWSER_PROXY={proxy}"]
+        # Same Safe Browsing key the compose service gets: a pooled instance
+        # must not be the lane with weaker phishing protection.
+        gkey = os.environ.get("VAF_BROWSER_GOOGLE_API_KEY", "").strip()
+        if gkey:
+            args += ["-e", f"VAF_BROWSER_GOOGLE_API_KEY={gkey}"]
         args.append(image)
         r = _docker(args, timeout=120)
         if r.returncode != 0:

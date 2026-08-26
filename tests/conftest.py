@@ -218,6 +218,37 @@ def _isolated_store_dirs(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_container_wipe():
+    """No test may shell out to DOCKER for the cross-user profile wipe.
+
+    Sibling of `_browser_pool_off` below: that one is about what the suite
+    STARTS, this one about what it TALKS TO. Since the handover became a
+    verified profile wipe, `verified_profile_wipe` runs `docker exec` against
+    the browser container and the handover is fail-CLOSED, so a test that
+    builds its own manager outside the `mgr` fixture silently depends on
+    whether a vaf-browser container happens to be running on the developer's
+    machine: green while the app is up, red minutes later once the tray has
+    idle-stopped the stack. Two tests did exactly that, and they were green
+    for the wrong reason - the wipe really did run against the live container.
+    The stub answers True (the wipe "succeeded"), which is the state every
+    test that is not about the wipe itself assumes; the tests that ARE about
+    it override this on the module they exercise.
+    """
+    import vaf.core.browser_interactive as bi
+
+    previous = bi.verified_profile_wipe
+    # The real one stays reachable under a second name, for the handful of
+    # tests that exercise the wipe protocol itself against a stubbed docker
+    # seam rather than assuming its outcome.
+    bi._real_verified_profile_wipe = previous
+    bi.verified_profile_wipe = lambda *a, **k: True
+    try:
+        yield
+    finally:
+        bi.verified_profile_wipe = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _browser_pool_off():
     """No test may start a browser CONTAINER, so the pool is switched off for the
     whole suite.

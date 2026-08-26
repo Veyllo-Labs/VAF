@@ -158,6 +158,20 @@ RUN mkdir -p /etc/chromium/policies/managed && \
     printf '{\n  "DnsOverHttpsMode": "automatic",\n  "DnsOverHttpsTemplates": "https://security.cloudflare-dns.com/dns-query"\n}\n' \
       > /etc/chromium/policies/managed/vaf-dns.json
 
+# Safe Browsing, STANDARD protection (level 1), pinned by policy so no profile
+# state can turn it off and a profile wipe cannot lose it. This browser is
+# positioned for banking and business mail, i.e. exactly the traffic phishing
+# aims at, and it had no phishing protection at all: the launch line disabled
+# the list updates and the background fetches, and Debian's API keys never
+# reached the process (see docker/browser/entrypoint.sh). The privacy price is
+# named rather than hidden: standard protection sends URL hash PREFIXES to
+# Google's Safe Browsing service, never full URLs, and level 2 (Enhanced,
+# which does send full URLs and page contents) is deliberately NOT set.
+# Removing this file is how an operator opts out; the DNS filtering and the
+# content blocker keep working either way.
+RUN printf '{\n  "SafeBrowsingProtectionLevel": 1,\n  "SafeBrowsingExtendedReportingEnabled": false\n}\n' \
+      > /etc/chromium/policies/managed/vaf-security.json
+
 # Non-root user for security
 RUN groupadd -r browser && useradd -r -g browser -m browser
 

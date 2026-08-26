@@ -1334,7 +1334,7 @@ class _WipeExecScript:
 def test_verified_wipe_confirms_via_the_marker(monkeypatch):
     script = _WipeExecScript(absent_after_polls=2)
     monkeypatch.setattr(bi, "_wipe_exec", script)
-    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
+    assert bi._real_verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
     assert script.polls == 2
 
 
@@ -1343,13 +1343,13 @@ def test_verified_wipe_tolerates_pkill_rc_1(monkeypatch):
     the marker was still dropped and the supervisor still consumes it."""
     script = _WipeExecScript(pkill_rc=1)
     monkeypatch.setattr(bi, "_wipe_exec", script)
-    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
+    assert bi._real_verified_profile_wipe("vaf-browser", "", deadline_s=5) is True
 
 
 def test_verified_wipe_refuses_when_the_marker_cannot_be_set(monkeypatch):
     script = _WipeExecScript(marker_set_rc=1)
     monkeypatch.setattr(bi, "_wipe_exec", script)
-    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=5) is False
+    assert bi._real_verified_profile_wipe("vaf-browser", "", deadline_s=5) is False
     assert script.polls == 0
 
 
@@ -1359,5 +1359,5 @@ def test_verified_wipe_defuses_a_lingering_marker_on_timeout(monkeypatch):
     removed best-effort."""
     script = _WipeExecScript(absent_after_polls=10 ** 6)
     monkeypatch.setattr(bi, "_wipe_exec", script)
-    assert bi.verified_profile_wipe("vaf-browser", "", deadline_s=0.1) is False
+    assert bi._real_verified_profile_wipe("vaf-browser", "", deadline_s=0.1) is False
     assert any("rm -f" in c for c in script.calls)

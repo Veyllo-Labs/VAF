@@ -254,3 +254,30 @@ def test_the_seccomp_profile_is_default_deny_plus_userns():
         and "includes" not in r and "excludes" not in r and "args" not in r
     ]
     assert userns_rules, "unconditional userns allow rule missing from the profile"
+
+
+def test_safe_browsing_is_actually_reachable_not_just_configured():
+    """Three independent things had to be true before the phishing list could
+    work, and all three were false: Debian exports Chromium's API keys from
+    /etc/chromium.d/apikeys through the /usr/bin/chromium WRAPPER, which this
+    entrypoint bypasses by launching the binary directly; the launch line
+    disabled the list auto-update; and --disable-background-networking
+    switched off the fetch lane those updates (and the component updater's
+    CRLSets) ride on. A policy alone would have been decoration."""
+    src = _script()
+    code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    assert "/etc/chromium.d/apikeys" in code, "the API keys never reach the process"
+    assert "--safebrowsing-disable-auto-update" not in code
+    assert "--disable-background-networking" not in code
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    assert '"SafeBrowsingProtectionLevel": 1' in docker
+    # Level 2 (Enhanced) sends full URLs and page content to Google - never here.
+    assert '"SafeBrowsingProtectionLevel": 2' not in docker
+    # An operator's own key must reach BOTH lanes, or the pooled browser (the
+    # one people actually bank in) would be the weaker of the two.
+    assert "VAF_BROWSER_GOOGLE_API_KEY" in code
+    compose = COMPOSE.read_text(encoding="utf-8")
+    assert "VAF_BROWSER_GOOGLE_API_KEY" in compose
+    pool = (ENTRYPOINT.parent.parent.parent / "vaf" / "core" / "browser_pool.py").read_text(
+        encoding="utf-8")
+    assert "VAF_BROWSER_GOOGLE_API_KEY" in pool

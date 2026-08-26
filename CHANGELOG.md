@@ -81,6 +81,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **The browser's phishing protection is switched on, and says when it cannot work.**
+  Safe Browsing was dead three times over: the launch line disabled both the list
+  updates and the background fetches they ride on, and Chromium's API keys never
+  reached the process because the browser is started directly instead of through
+  Debian's wrapper. All three are fixed, and the protection level is now pinned by
+  policy so no profile reset can lose it. One honest limit remains, measured rather
+  than assumed: Google refuses the shared key Debian ships, so the lists still do not
+  arrive - set your own key (`VAF_BROWSER_GOOGLE_API_KEY`) and it works, and the
+  container log says on every start which of the two states it is in. Until then
+  phishing protection comes, as before, from the filtering DNS and the content
+  blocker. Removing those flags also restored certificate-revocation updates.
+- **A personal browser no longer keeps an outdated engine forever.** Each per-user
+  browser was pinned for life to the image it was first created from, so the browsers
+  people actually work in were the last to receive a security fix, while the shared
+  one was rebuilt. A personal browser whose image has moved on is now replaced on next
+  use; the saved logins and history live in a separate volume and come back with it.
 - **A browser user change now also erases the cache and the certificate store.** The
   cleanup between two people wiped the browser profile but left two neighbouring
   folders untouched: the page cache, which still held the previous person's browsed

@@ -618,3 +618,50 @@ def test_every_resolve_caller_names_the_strict_refusal():
                 "vaf/core/web_server.py"):
         src = (root / rel).read_text(encoding="utf-8")
         assert "PoolExhausted" in src, f"{rel} lost its strict-pool handling"
+
+
+def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
+    """A container is pinned to its image ID for life, so the browser people
+    actually bank in would be the LAST to get a Chromium security fix: the
+    stack start rebuilds and recreates the SHARED browser, and the pooled
+    instance kept serving the old binary forever. The profile volume is named
+    and remounted, so logins survive the recreate - only the binary is
+    thrown away."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    first = pool.resolve("scope-a")
+    assert first is not None
+    name = first.container_name
+
+    # The shared browser has been rebuilt: same tag, new image ID.
+    real = pool._test_docker.__call__
+
+    def aged(args, timeout=60):
+        if args[0] == "inspect" and args[-1] == "{{.Image}}":
+            return types.SimpleNamespace(returncode=0, stdout="sha256:OLD\n", stderr="")
+        if args[0] == "inspect" and args[-1] == "{{.Id}}":
+            return types.SimpleNamespace(returncode=0, stdout="sha256:NEW\n", stderr="")
+        return real(args, timeout=timeout)
+
+    monkeypatch.setattr(pool._test_docker, "__call__", aged, raising=False)
+    monkeypatch.setattr(bp, "_docker", aged)
+    again = pool.resolve("scope-a")
+    assert again is not None
+    calls = [c for c in pool._test_docker.calls if c[0] == "rm"]
+    assert any(name in c for c in calls), "the outdated container was adopted instead of recreated"
+
+
+def test_a_pooled_instance_on_the_current_image_is_adopted(pool, monkeypatch):
+    """The counter-proof: matching image IDs must NOT trigger a recreate, or
+    every resolve would throw the user's browser away."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    assert pool.resolve("scope-a") is not None
+    real = pool._test_docker.__call__
+
+    def same(args, timeout=60):
+        if args[0] == "inspect" and args[-1] in ("{{.Image}}", "{{.Id}}"):
+            return types.SimpleNamespace(returncode=0, stdout="sha256:SAME\n", stderr="")
+        return real(args, timeout=timeout)
+
+    monkeypatch.setattr(bp, "_docker", same)
+    assert pool.resolve("scope-a") is not None
+    assert not [c for c in pool._test_docker.calls if c[0] == "rm"]

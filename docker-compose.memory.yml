@@ -279,6 +279,11 @@ services:
       # socks5://...). Empty = direct connection. When set, the entrypoint adds
       # --proxy-server and WebRTC leak protection.
       VAF_BROWSER_PROXY: "${VAF_BROWSER_PROXY:-}"
+      # Your own Google API key, if you want Safe Browsing. Debian's shared key
+      # is not entitled for it (measured: the list update is refused and no
+      # list ever arrives), so without this the browser's phishing defence is
+      # the filtering DNS resolver plus the content blocker.
+      VAF_BROWSER_GOOGLE_API_KEY: "${VAF_BROWSER_GOOGLE_API_KEY:-}"
     ports:
       - "127.0.0.1:${BROWSER_CDP_PORT:-9222}:9222"
       # KasmVNC stream of the browser display (interactive browser in the web

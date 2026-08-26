@@ -117,6 +117,41 @@ fi
 # all, and a crash-looping browser helps nobody - so the fallback keeps the
 # browser alive and says loudly what it gave up. The if-form matters: a bare
 # probe line would abort the script under set -e.
+# ── Google API keys (Safe Browsing, and the other Google-backed services) ───
+# Debian assigns Chromium its own API keys and exports them from
+# /etc/chromium.d/apikeys, which the /usr/bin/chromium WRAPPER sources before
+# exec'ing the binary ("Any files placed in this directory will be sourced
+# prior to executing chromium", /etc/chromium.d/README). This entrypoint
+# launches /usr/lib/chromium/chromium DIRECTLY - deliberately, because the
+# wrapper also injects flags of its own - so the keys never reached the
+# process and Safe Browsing could not have worked whatever the policy said.
+# Sourcing exactly this one file takes the keys and nothing else: the
+# wrapper's default-flags file stays untouched, so our launch line remains the
+# only source of flags.
+#
+# MEASURED, and the reason the log below is worded the way it is: Debian's
+# key is assigned "for access to their services like sync and gmail"
+# (/etc/chromium.d/apikeys) and is NOT entitled for Safe Browsing. With it in
+# place Chromium really does call safebrowsing.googleapis.com/v4/
+# threatListUpdates - the request appears in a net-log - but the answer is
+# refused, no list store is ever written, and Google's own phishing test page
+# loads without an interstitial. So the key alone buys nothing: an operator
+# who wants real Safe Browsing has to bring their own Google API key, which
+# VAF_BROWSER_GOOGLE_API_KEY passes in. Until then the phishing defence is
+# the filtering DNS resolver plus the content blocker, and the log says so
+# rather than implying a protection that is not there.
+if [ -n "$VAF_BROWSER_GOOGLE_API_KEY" ]; then
+    export GOOGLE_API_KEY="$VAF_BROWSER_GOOGLE_API_KEY"
+    [ -n "$VAF_BROWSER_GOOGLE_CLIENT_ID" ] && export GOOGLE_DEFAULT_CLIENT_ID="$VAF_BROWSER_GOOGLE_CLIENT_ID"
+    [ -n "$VAF_BROWSER_GOOGLE_CLIENT_SECRET" ] && export GOOGLE_DEFAULT_CLIENT_SECRET="$VAF_BROWSER_GOOGLE_CLIENT_SECRET"
+    echo "Safe Browsing: using the operator's own Google API key"
+else
+    [ -r /etc/chromium.d/apikeys ] && . /etc/chromium.d/apikeys
+    echo "Safe Browsing: INACTIVE - Debian's shared API key is not entitled for it." \
+         "Phishing protection comes from the filtering DNS resolver and the content" \
+         "blocker; set VAF_BROWSER_GOOGLE_API_KEY to activate Safe Browsing."
+fi
+
 SANDBOX_ARGS=""
 if unshare -U true 2>/dev/null; then
     echo "User namespaces available: Chromium sandbox ENABLED"
@@ -162,6 +197,18 @@ echo "UA: $USER_AGENT"
 # stays, so the suppressor stays with it. Not visible to pages:
 # navigator.webdriver stays false, verified in this container.
 #
+# TWO FLAGS ARE DELIBERATELY GONE, and both were load-bearing for the wrong
+# thing. --safebrowsing-disable-auto-update stopped Chromium from refreshing
+# the Safe Browsing lists, and --disable-background-networking switched off
+# the whole class of background fetches those lists ride on - together with
+# the component updater, which is also how CRLSets (certificate revocation)
+# arrive. A browser positioned for banking with no phishing list and no
+# revocation updates was the wrong trade. What comes back with them is
+# Chromium's ordinary background traffic to Google; Safe Browsing standard
+# mode sends URL hash PREFIXES, not URLs, and the level is pinned by policy
+# (see the Dockerfile). Removing the flags is only two thirds of the fix: the
+# API keys above are the third.
+
 # NOT --kiosk. It hides the browser UI and ALSO disables the right-click context
 # menu - and that menu is a feature here, not decoration: it is where "save as",
 # "print" and VAF's own "send this to your agent" live.
@@ -268,14 +315,12 @@ start_chromium() {
         --window-position=0,0 \
         --window-size=1920,1080 \
         --force-dark-mode \
-        --disable-background-networking \
         --disable-sync \
         --disable-translate \
         --metrics-recording-only \
         --no-default-browser-check \
         --disable-search-engine-choice-screen \
         --search-engine-choice-country=US \
-        --safebrowsing-disable-auto-update \
         --disable-quic \
         --use-gl=angle \
         --use-angle=swiftshader \

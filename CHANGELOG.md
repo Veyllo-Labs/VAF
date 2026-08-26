@@ -81,6 +81,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **Saved logins survive again, so an agent can carry a session on.** Whether the
+  browser offers to remember a password was a setting inside the browser, and that
+  turned out to be no place for it: a single stray toggle had switched it off in the
+  running browser, and since every change of hands now wipes the profile, the setting
+  would be lost at each handover anyway. It is now fixed at the container level, where
+  neither can reach it, together with address autofill. This is what lets an agent get
+  past a login form when a session has expired, instead of stopping there. Card
+  autofill stays off on purpose: a browser an agent can drive should not fill payment
+  data into whatever form it opens. Note where saved passwords belong: on a personal
+  browser, whose profile is that one person's - on the shared browser they are erased
+  at every change of hands, by design.
 - **The browser's phishing protection is switched on, and says when it cannot work.**
   Safe Browsing was dead three times over: the launch line disabled both the list
   updates and the background fetches they ride on, and Chromium's API keys never

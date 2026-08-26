@@ -560,10 +560,15 @@ partition:
   passwords, autofill, bookmarks and the HTTP disk cache used to survive a quick-mode
   handover on the shared container; the mandatory verified wipe above deletes them with
   the profile on every change of hands, so the next holder inherits nothing. The
-  password manager itself STAYS ENABLED - deliberate: login automation and interactive
-  re-login depend on it, and cross-user isolation is carried by the mandatory
-  scope-change wipe (shared container) and per-user profile volumes (pool), not by
-  disabling the feature. Its saved passwords therefore live only until the next
+  password manager itself is pinned ON by managed policy - deliberate: agent runs and
+  interactive re-login depend on it, and cross-user isolation is carried by the
+  mandatory scope-change wipe (shared container) and per-user profile volumes (pool),
+  not by disabling the feature. A policy rather than a profile preference, because the
+  wipe now deletes preferences at every change of hands, and because a stray toggle in
+  the browser's own settings had silenced it once already. Note the at-rest weakness
+  underneath: with no keyring in the container Chromium uses its `basic` password
+  store, so saved passwords belong on a dedicated per-user instance, never on the
+  shared fallback. Its saved passwords therefore live only until the next
   cross-user handover on the shared container, and indefinitely on a dedicated pool
   instance. What remains on the shared container is the cross-process boundary named
   in `hand_jar_to_run`: the concurrency gate is per-process, so two VAF processes can

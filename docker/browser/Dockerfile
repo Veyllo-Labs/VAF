@@ -169,7 +169,24 @@ RUN mkdir -p /etc/chromium/policies/managed && \
 # which does send full URLs and page contents) is deliberately NOT set.
 # Removing this file is how an operator opts out; the DNS filtering and the
 # content blocker keep working either way.
-RUN printf '{\n  "SafeBrowsingProtectionLevel": 1,\n  "SafeBrowsingExtendedReportingEnabled": false\n}\n' \
+#
+# PasswordManagerEnabled and AutofillAddressEnabled are pinned ON in the same
+# file, and pinned is the point: a login the person saved by hand is what lets
+# an AGENT run carry on in that session - it re-enters credentials when a
+# cookie has expired and a login form appears, which VAF's own per-scope
+# cookie store cannot do. As a profile PREFERENCE this was fragile twice
+# over: a stray toggle in the browser's own settings silenced it (measured -
+# the shared container's profile carried credentials_enable_service:false
+# while the image default is on), and every cross-user handover wipes the
+# profile, taking preferences with it. A managed policy survives both.
+# The price, named: without a keyring in the container Chromium falls back to
+# its "basic" password store, which is weak at rest - so saved passwords
+# belong on a DEDICATED per-user instance, whose profile volume is that one
+# person's, and not on the shared fallback container.
+# AutofillCreditCardEnabled is the one deliberately left OFF: a browser an
+# agent can drive should not be able to auto-fill payment data into any form
+# it happens to open. Flip it here if that trade is wanted.
+RUN printf '{\n  "SafeBrowsingProtectionLevel": 1,\n  "SafeBrowsingExtendedReportingEnabled": false,\n  "PasswordManagerEnabled": true,\n  "AutofillAddressEnabled": true,\n  "AutofillCreditCardEnabled": false\n}\n' \
       > /etc/chromium/policies/managed/vaf-security.json
 
 # Non-root user for security

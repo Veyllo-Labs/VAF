@@ -273,6 +273,13 @@ def test_safe_browsing_is_actually_reachable_not_just_configured():
     assert '"SafeBrowsingProtectionLevel": 1' in docker
     # Level 2 (Enhanced) sends full URLs and page content to Google - never here.
     assert '"SafeBrowsingProtectionLevel": 2' not in docker
+    # The password manager is pinned ON by the same policy: an agent taking
+    # over a session needs the saved login when a cookie has expired, and a
+    # profile preference could not survive either a stray toggle or the
+    # cross-user profile wipe. Card autofill stays OFF on purpose.
+    assert '"PasswordManagerEnabled": true' in docker
+    assert '"AutofillAddressEnabled": true' in docker
+    assert '"AutofillCreditCardEnabled": false' in docker
     # An operator's own key must reach BOTH lanes, or the pooled browser (the
     # one people actually bank in) would be the weaker of the two.
     assert "VAF_BROWSER_GOOGLE_API_KEY" in code

@@ -90,6 +90,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **A file path that names a root is refused everywhere now, not just where the host
+  happens to notice.** A path handed in from outside - an upload, a folder to browse, a
+  peer's file push - was checked for being absolute with the rule of the machine VAF runs
+  on. A Windows-style path arriving at a Linux VAF was not recognised, and since Python
+  3.13 a Unix-style path arriving at a Windows VAF is not recognised either, so instead
+  of a clear refusal the name was quietly reinterpreted as a relative one: asking to
+  write `\etc\notes.txt` created `etc/notes.txt` inside the folder. Nothing ever left
+  the folder it was allowed to touch, so no file was exposed, but the caller was handed a
+  different target than the one they named. Both spellings are now refused on every
+  platform and Python version.
 - **A browser container that cannot start now says why.** Setting the stream password
   to something shorter than six characters made the container stop with an entirely
   empty log: the tool that writes the password file refused, and its complaint went

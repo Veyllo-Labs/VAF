@@ -8,6 +8,26 @@ and macOS and wrong on Windows, so no local run can ever fail on it and the
 27-minute Windows leg is the only thing that says so. Each is made to fail
 HERE, on any OS.
 
+## 4. `os.path.isabs` alone never decides whether a fragment is rooted.
+
+`os.path.isabs` answers for the HOST, and on Windows the answer changed:
+Python 3.13 stopped calling a driveless rooted path ("/etc/x") absolute there,
+where 3.10 to 3.12 called it absolute. A containment check built on that call
+alone therefore reads an explicitly rooted target as ordinary relative text on
+a Windows 3.13 runner and joins it onto the root instead of refusing it. The
+nightly Windows leg found exactly that in `vaf.contained_path`, on 3.13 only,
+while the same job on 3.12 stayed green - the pair of results IS the diagnosis.
+
+The mirror case needs no Windows at all and is what makes this guard local: on
+POSIX, `os.path.isabs("\\etc\\x")` is False too, and the separator
+normalisation inside the helper then turns that fragment into a plain relative
+path. Measured before the fix: `contained_path(root, "\\etc\\escape.txt")`
+returned `<root>/etc/escape.txt` on Linux instead of refusing.
+
+Nothing escapes the root in either case - the resolve step still contains the
+target - but the caller is handed a DIFFERENT path than the one they named,
+which is precisely what the primitive promises never to do.
+
 ## 1. No OS-dependent path separators in serialized relative paths.
 
 `str(PurePath)` renders with the HOST's separator: `sub/a.bin` becomes
@@ -83,8 +103,11 @@ import os
 import posixpath
 import re
 import subprocess
+import sys
 from pathlib import Path, PureWindowsPath
 from unittest import mock
+
+import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -427,3 +450,33 @@ def test_no_posix_only_subprocess_env():
         "            env[keep] = os.environ[keep]\n"
         + "\n".join(hits)
     )
+
+
+def test_the_isabs_class_is_real():
+    """Why the section above exists, demonstrated on this very interpreter.
+
+    Both directions in one place: the POSIX flavour cannot see a Windows root,
+    and (from 3.13) the Windows flavour cannot see a POSIX one.
+    """
+    assert not posixpath.isabs("\\etc\\x")
+    assert PureWindowsPath("/etc/x").root == "\\"      # rooted, and yet:
+    if sys.version_info >= (3, 13):
+        assert not ntpath.isabs("/etc/x")               # ... not "absolute"
+    assert ntpath.isabs("C:\\x") and ntpath.isabs("\\\\srv\\share\\x")
+
+
+def test_contained_path_refuses_a_rooted_fragment_under_windows_semantics(tmp_path):
+    """The 3.13 Windows failure, executed on this host.
+
+    `os.path` is swapped for `ntpath`, which is what the check faces on a
+    Windows runner. The assertion is on the REASON, not just on the refusal:
+    before the fix this raised too, but from the containment step further down
+    with "must stay inside the root", which is an artefact of the simulation
+    rather than the guard doing its job. Matching the message is what makes
+    this test fail when the rootedness check is taken back out.
+    """
+    import vaf
+
+    with mock.patch.object(os, "path", ntpath):
+        with pytest.raises(vaf.PathEscape, match="must be relative"):
+            vaf.contained_path(tmp_path, "/etc/escape.txt")

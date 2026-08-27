@@ -1528,7 +1528,11 @@ Stable public surface (safe to build on):
   you can decide BEFORE creating; `must_exist=True` adds the existing-directory
   requirement a listing needs. Both raise `PathEscape` (a `ValueError`), and
   refuse rather than trim: silently rewriting `a/b` to `b` hands the caller a
-  different target than the one they named.
+  different target than the one they named. A ROOTED fragment is refused in either
+  separator convention, whatever the host runs: `os.path.isabs` answers only for the
+  host, and its answer for a driveless rooted path changed in Python 3.13 on Windows,
+  so a fragment carrying the SENDER's convention would otherwise be read as plain
+  relative text and joined onto your root.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

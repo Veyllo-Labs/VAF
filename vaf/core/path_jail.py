@@ -33,7 +33,7 @@ import os
 import unicodedata
 from pathlib import Path
 
-__all__ = ["PathEscape", "contained_path", "safe_entry_name"]
+__all__ = ["PathEscape", "contained_path", "is_rooted", "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -45,10 +45,40 @@ class PathEscape(ValueError):
     """
 
 
+def is_rooted(fragment: str) -> bool:
+    """True if the fragment names a root of ANY flavour, whatever the host.
+
+    `os.path.isabs` answers for the host, and it does not answer the same
+    thing everywhere: Python 3.13 stopped calling a driveless rooted path
+    ("/etc/x") absolute on Windows, where 3.10 to 3.12 called it absolute. A
+    check built on that call alone therefore lets exactly that fragment past
+    on a Windows 3.13 host. The mirror case is just as real on POSIX, where
+    "\\etc\\x" is not absolute either and the separator normalisation below
+    then turns it into a plain relative path - measured, both of them.
+
+    A fragment reaches these helpers from a JSON body, a tool argument or a
+    peer, so it carries the SENDER's convention rather than the host's, and
+    both flavours have to be answered here. `os.path.splitroot` would say it
+    in one call and is 3.12+, so it cannot be used while 3.10 is supported.
+
+    The twin of this decision lives in `vaf/workflows/engine.py`
+    (`_inject_workflow_paths`), which skips rather than refuses; it is correct
+    as it stands, so it is a follow-up conversion and not a drive-by here.
+    """
+    if not fragment:
+        return False
+    if os.path.isabs(fragment):
+        return True
+    if fragment[0] in ("/", "\\"):
+        return True
+    return len(fragment) > 1 and fragment[1] == ":"
+
+
 def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Path:
     """The absolute, resolved path ``relative`` names inside ``root``.
 
-    Raises `PathEscape` if the fragment is absolute, walks upwards, or resolves
+    Raises `PathEscape` if the fragment is rooted (absolute or drive-anchored,
+    in either separator convention - see `is_rooted`), walks upwards, or resolves
     to somewhere outside ``root`` - including by way of a symlink that lives
     inside the root and points out of it, which is exactly the case a prefix
     comparison cannot see.
@@ -79,7 +109,7 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
             raise PathEscape("path must not contain a null byte")
     else:
         parts = []
-    if os.path.isabs(fragment) or (len(fragment) > 1 and fragment[1] == ":"):
+    if is_rooted(fragment):
         raise PathEscape("path must be relative")
 
     root_resolved = Path(root).resolve()

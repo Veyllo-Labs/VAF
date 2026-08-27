@@ -50,6 +50,36 @@ def test_upward_walks_and_absolute_paths_are_refused(tmp_path):
         vaf.contained_path(tmp_path, os.sep + "etc")
 
 
+def test_a_rooted_fragment_is_refused_in_EITHER_convention(tmp_path):
+    """The promise is refusal, and refusal must not depend on the host.
+
+    A fragment arrives from a request body, a tool argument or a peer, so it
+    carries the SENDER's convention. `os.path.isabs` only ever answers for the
+    host, so a check built on it alone reads a Windows-rooted fragment on
+    POSIX (and, since Python 3.13 stopped calling a driveless rooted path
+    absolute on Windows, a POSIX-rooted one there) as plain relative text.
+    Nothing escapes when that happens - the resolve step below still holds the
+    target inside the root - but the caller is handed a DIFFERENT path than
+    the one they named, which is the one thing docs/EMBEDDING.md promises
+    these helpers never do.
+
+    MEASURED before the fix, on Linux: "\\etc\\escape.txt" was accepted and
+    became <root>/etc/escape.txt, and "\\\\srv\\share\\x" became
+    <root>/srv/share/x.
+    """
+    for bad in ("/etc/escape.txt", "\\etc\\escape.txt",
+                "C:/escape.txt", "C:\\escape.txt",
+                "//srv/share/escape.txt", "\\\\srv\\share\\escape.txt"):
+        with pytest.raises(vaf.PathEscape, match="must be relative"):
+            vaf.contained_path(tmp_path, bad)
+
+    # And the other direction, so the guard cannot be satisfied by refusing
+    # everything: an ordinary fragment still resolves, in both conventions.
+    (tmp_path / "sub").mkdir()
+    assert vaf.contained_path(tmp_path, "sub/ok.txt") == tmp_path.resolve() / "sub" / "ok.txt"
+    assert vaf.contained_path(tmp_path, "sub\\ok.txt") == tmp_path.resolve() / "sub" / "ok.txt"
+
+
 def test_a_path_that_does_not_exist_yet_still_gets_an_answer(tmp_path):
     """Callers create through this - a new folder, an uploaded file - so the
     answer must come BEFORE the write, when the target is still absent."""

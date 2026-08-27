@@ -12,7 +12,7 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
 | TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install; local speech lane only) |
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
-| **Browser** | `vaf-browser` | 9222, 6901 | Headed Chromium under KasmVNC's X server (CDP on 9222, anti-bot hardened) for the `browser_agent` tool, plus the KasmVNC WebSocket stream of the display on 6901 for the web UI's interactive browser - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
+| **Browser** | `vaf-browser` | 9222, 6901 | Headed Chromium under KasmVNC's X server (CDP on 9222, anti-bot hardened) for the `browser_agent` tool, plus the KasmVNC WebSocket stream of the display on 6901 for the web UI's interactive browser, which requires a credential VAF holds (`VAF_BROWSER_VNC_SECRET`, minted into the keyring and delivered through `compose.env`) - see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
 All services start by default when you run `docker compose up -d`.
 

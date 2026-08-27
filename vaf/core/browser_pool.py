@@ -164,11 +164,20 @@ def _seccomp_profile_path() -> Optional[str]:
         return None
 
 
-def _http_ok(url: str, timeout: float = 3.0) -> bool:
-    """One HTTP readiness probe. The single seam the tests stub."""
+def _http_ok(url: str, timeout: float = 3.0, headers: Optional[dict] = None) -> bool:
+    """One HTTP readiness probe. The single seam the tests stub.
+
+    `headers` carries the stream port's credential. Optional with a default so
+    the seam's signature stays backward compatible for the stubs, but the
+    stream probe MUST pass it: without the header the container answers 401,
+    the instance is declared unhealthy and every user is silently handed the
+    shared browser instead - a security-relevant downgrade that looks like a
+    switched-off pool.
+    """
     import urllib.request
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return 200 <= int(getattr(r, "status", 200)) < 400
     except Exception:
         return False
@@ -387,10 +396,11 @@ class BrowserPool:
         image, _shared_network = template
         volume = _VOLUME_PREFIX + _scope_hash(scope)
         # ONE NETWORK PER INSTANCE, never the shared browser's. Inside the
-        # container Chromium's CDP proxy listens on 0.0.0.0:9222 and KasmVNC on
-        # 0.0.0.0:6901 with authentication deliberately switched off - both are
-        # safe only because the host publishes them on loopback and the VAF
-        # server is the only reachable door. On a SHARED bridge network that
+        # container Chromium's CDP proxy listens on 0.0.0.0:9222 with NO
+        # authentication - safe only because the host publishes it on loopback
+        # and the VAF server is the only reachable door. (KasmVNC on 0.0.0.0:6901
+        # carries a credential now, but the network isolation is still load-bearing
+        # for the CDP half.) On a SHARED bridge network that
         # stops being true between containers: a page in user A's browser can
         # dial user B's container IP directly and drive it, which is exactly
         # the isolation the pool exists to provide. A per-instance network
@@ -442,6 +452,15 @@ class BrowserPool:
         gkey = os.environ.get("VAF_BROWSER_GOOGLE_API_KEY", "").strip()
         if gkey:
             args += ["-e", f"VAF_BROWSER_GOOGLE_API_KEY={gkey}"]
+        # The stream port's credential, the same one the compose service gets
+        # through compose.env. Without it the container mints its own, nobody
+        # can watch the stream, the health probe fails and this instance is
+        # never handed out - fail-closed and visible, never a silent downgrade
+        # to an unauthenticated stream.
+        from vaf.core.browser_interactive import browser_vnc_secret
+        vnc_secret = browser_vnc_secret()
+        if vnc_secret:
+            args += ["-e", f"VAF_BROWSER_VNC_SECRET={vnc_secret}"]
         args.append(image)
         r = _docker(args, timeout=120)
         if r.returncode != 0:
@@ -509,9 +528,11 @@ class BrowserPool:
         except Exception:
             append_domain_log("webui", f"[browser_pool] {inst.container_name}: CDP did not answer")
             return False
+        from vaf.core.browser_interactive import vnc_auth_headers
+        stream_auth = vnc_auth_headers()
         deadline = time.monotonic() + _vnc_wait_s()
         while True:
-            if _http_ok(inst.vnc_base.rstrip("/") + "/index.html"):
+            if _http_ok(inst.vnc_base.rstrip("/") + "/index.html", headers=stream_auth):
                 return True
             if time.monotonic() >= deadline:
                 append_domain_log("webui", f"[browser_pool] {inst.container_name}: CDP is up but the "

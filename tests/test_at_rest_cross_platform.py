@@ -355,7 +355,11 @@ def test_a_repo_env_file_that_was_only_ours_is_removed(tmp_path, monkeypatch):
 
 def test_an_unreadable_keyring_removes_the_password_file(tmp_path, monkeypatch):
     """A stale line would start Redis WITH a password while the client sends
-    none - NOAUTH on every cache call, with only a warning in a log."""
+    none - NOAUTH on every cache call, with only a warning in a log.
+
+    BOTH secrets have to be unreadable for the file to go: it carries the
+    browser stream credential too now, and the writer works per key so an
+    unreadable keyring drops only the line it could not produce."""
     from vaf.core import service_stack
     from vaf.core.config import Config
 
@@ -363,6 +367,7 @@ def test_an_unreadable_keyring_removes_the_password_file(tmp_path, monkeypatch):
     (tmp_path / "home_vaf").mkdir()
     (tmp_path / "home_vaf" / "compose.env").write_text("REDIS_PASSWORD=stale\n")
     monkeypatch.setattr("vaf.memory.cache.redis_password", lambda: "")
+    monkeypatch.setattr("vaf.core.browser_interactive.browser_vnc_secret", lambda: "")
     project = tmp_path / "checkout"
     project.mkdir()
 

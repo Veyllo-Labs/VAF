@@ -325,6 +325,13 @@ def _compose_env() -> dict:
             env["REDIS_PASSWORD"] = password
     except Exception:
         pass
+    try:
+        from vaf.core.browser_interactive import browser_vnc_secret
+        secret = browser_vnc_secret()
+        if secret:
+            env["VAF_BROWSER_VNC_SECRET"] = secret
+    except Exception:
+        pass
     return env
 
 
@@ -384,7 +391,7 @@ def _retire_repo_env_file(project_root, log=None) -> None:
 
 
 def _write_compose_env_file(project_root, log=None) -> None:
-    """Put REDIS_PASSWORD where `docker compose` itself will read it.
+    """Put the compose secrets where `docker compose` itself will read them.
 
     Passing it through this process's environment only covers the runs VAF
     starts. `start_vaf.sh`, `run_vaf.sh` and `install.sh` all call compose
@@ -394,19 +401,30 @@ def _write_compose_env_file(project_root, log=None) -> None:
     anything: it holds the password.
     """
     try:
+        from vaf.core.browser_interactive import browser_vnc_secret
         from vaf.memory.cache import redis_password
         password = redis_password()
+        vnc_secret = browser_vnc_secret()
         env_path = compose_env_file()
         _retire_repo_env_file(project_root, log)
-        if not password:
-            # An unreadable keyring answers "" here. Leaving a stale line behind
-            # would start Redis WITH a password while the client sends none, and
-            # the only trace would be NOAUTH on every cache call.
+        # Per KEY, not whole-file: the browser's stream credential joined Redis
+        # here, and an unreadable keyring must drop only the line it could not
+        # produce. Dropping the file wholesale would start the browser WITH a
+        # password while VAF sends none, whose only trace is a blank panel.
+        lines = []
+        if password:
+            lines.append(f"REDIS_PASSWORD={password}")
+        if vnc_secret:
+            lines.append(f"VAF_BROWSER_VNC_SECRET={vnc_secret}")
+        if not lines:
+            # An unreadable keyring answers "" for both. Leaving a stale line
+            # behind would start Redis WITH a password while the client sends
+            # none, and the only trace would be NOAUTH on every cache call.
             if env_path.exists():
                 env_path.unlink()
             return
         env_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_secret_write(env_path, f"REDIS_PASSWORD={password}\n".encode("utf-8"))
+        _atomic_secret_write(env_path, ("\n".join(lines) + "\n").encode("utf-8"))
         _harden(env_path)
     except Exception as e:
         _say(log, f"Could not write the compose env file: {e}")

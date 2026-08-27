@@ -284,6 +284,12 @@ services:
       # list ever arrives), so without this the browser's phishing defence is
       # the filtering DNS resolver plus the content blocker.
       VAF_BROWSER_GOOGLE_API_KEY: "${VAF_BROWSER_GOOGLE_API_KEY:-}"
+      # The stream port's credential, minted once into VAF's keyring and
+      # delivered through ~/.vaf/compose.env (like REDIS_PASSWORD). Empty when
+      # compose runs without that env file: the container then mints its own
+      # random one, stays fully functional, and only the stream viewer is shut -
+      # VAF's next start writes the file and recreates the container.
+      VAF_BROWSER_VNC_SECRET: "${VAF_BROWSER_VNC_SECRET:-}"
     ports:
       - "127.0.0.1:${BROWSER_CDP_PORT:-9222}:9222"
       # KasmVNC stream of the browser display (interactive browser in the web
@@ -295,7 +301,9 @@ services:
     healthcheck:
       # Both halves: CDP on 9222 and the KasmVNC stream on 6901. A CDP-only check
       # calls a container without a stream server healthy (see docker/browser/Dockerfile).
-      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version >/dev/null && curl -sf -o /dev/null http://localhost:6901/ || exit 1"]
+      # $$ so compose passes a literal $( through to the container shell: the
+      # stream half must authenticate now, or every container reports unhealthy.
+      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version >/dev/null && curl -sf -o /dev/null -u \"vaf:$$(cat /tmp/kasmvnc.secret)\" http://localhost:6901/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

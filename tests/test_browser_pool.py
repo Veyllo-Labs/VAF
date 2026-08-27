@@ -523,7 +523,7 @@ def test_a_browser_without_its_stream_is_refused(live_health_pool, monkeypatch):
     monkeypatch.setattr(bp, "_vnc_wait_s", lambda: 0.0)                       # no waiting in a unit test
     probed = []
 
-    def _dead_stream(url, timeout=3.0):
+    def _dead_stream(url, timeout=3.0, headers=None):
         probed.append(url)
         return False
 
@@ -539,7 +539,7 @@ def test_a_browser_without_its_stream_is_refused(live_health_pool, monkeypatch):
 def test_both_halves_up_is_healthy(live_health_pool, monkeypatch):
     """Counterpart: with a live stream the same path hands out the instance."""
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub")
-    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0: True)
+    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0, headers=None: True)
     inst = live_health_pool.resolve("scope-a")
     assert inst is not None
     assert inst.vnc_base.startswith("http://127.0.0.1:")
@@ -553,7 +553,7 @@ def test_a_dead_cdp_is_refused_before_the_stream_is_probed(live_health_pool, mon
 
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", _no_cdp)
     probed = []
-    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0: (probed.append(url), True)[1])
+    monkeypatch.setattr(bp, "_http_ok", lambda url, timeout=3.0, headers=None: (probed.append((url, headers)), True)[1])
     assert live_health_pool.resolve("scope-a") is None
     assert probed == [], "the stream was probed even though CDP was already dead"
 
@@ -665,3 +665,41 @@ def test_a_pooled_instance_on_the_current_image_is_adopted(pool, monkeypatch):
     monkeypatch.setattr(bp, "_docker", same)
     assert pool.resolve("scope-a") is not None
     assert not [c for c in pool._test_docker.calls if c[0] == "rm"]
+
+
+def test_the_health_probe_authenticates_or_the_pool_dies_silently(live_health_pool, monkeypatch):
+    """The stream port carries a credential now, and the probe fetches the very
+    path the ticket route serves. Without the header the container answers 401,
+    the instance is declared unhealthy, and every user is handed the SHARED
+    browser instead - a security-relevant downgrade that presents as a
+    switched-off pool rather than as a broken probe.
+
+    MUTATION: drop `headers=` from the _http_ok call in _wait_healthy and this
+    is the only test that says so."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub")
+    monkeypatch.setattr(bi, "browser_vnc_secret", lambda: "probe-secret")
+    seen = []
+
+    def _record(url, timeout=3.0, headers=None):
+        seen.append((url, dict(headers or {})))
+        return True
+
+    monkeypatch.setattr(bp, "_http_ok", _record)
+    assert live_health_pool.resolve("scope-a") is not None
+    assert seen, "the stream half was never probed"
+    url, headers = seen[0]
+    assert url.endswith("/index.html")
+    assert headers.get("Authorization", "").startswith("Basic "), (
+        "the health probe asks the stream port without the credential; every "
+        "instance would report unhealthy and the pool would fall back silently")
+
+
+def test_a_pooled_container_is_created_with_the_stream_credential(pool, monkeypatch):
+    """The pooled instance must get the same secret the compose service gets,
+    or nobody can watch its stream and it never passes its own health probe."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    monkeypatch.setattr(bi, "browser_vnc_secret", lambda: "pool-secret")
+    assert pool.resolve("scope-a") is not None
+    run_call = next(c for c in pool._test_docker.calls if c[0] == "run")
+    assert "VAF_BROWSER_VNC_SECRET=pool-secret" in run_call

@@ -288,3 +288,50 @@ def test_safe_browsing_is_actually_reachable_not_just_configured():
     pool = (ENTRYPOINT.parent.parent.parent / "vaf" / "core" / "browser_pool.py").read_text(
         encoding="utf-8")
     assert "VAF_BROWSER_GOOGLE_API_KEY" in pool
+
+
+def test_the_stream_port_is_never_launched_without_a_credential():
+    """The stream port used to run with -disableBasicAuth, and that was the
+    hole: CDP answers 403 to any request carrying an Origin header, while
+    KasmVNC only required Origin to be PRESENT and accepted any value - so a
+    page in the user's ordinary browser could open ws://127.0.0.1:6901 and get
+    framebuffer out plus key and pointer events in (measured live, and measured
+    again as 401 after this change).
+
+    Every branch must reach the launch WITH a password file: the standalone
+    branch mints a random secret rather than falling open, because a
+    no-auth escape hatch is one more thing a guard has to police."""
+    src = _script()
+    code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    assert "-disableBasicAuth" not in code, "the stream port is unauthenticated again"
+    assert "-KasmPasswordFile" in code
+    assert "kasmvncpasswd" in code, "no password file is ever written"
+    # The mint-if-missing branch: without it a container started without the
+    # secret would launch with an EMPTY password file, which KasmVNC refuses -
+    # or worse, a future edit could make it skip auth instead.
+    assert "VAF_BROWSER_VNC_SECRET" in code
+    assert "/dev/urandom" in code, "the standalone fallback does not mint a secret"
+    # The RFB layer stays open on purpose: the gate is the websocket layer,
+    # because VncAuth would mean shipping a password into the page.
+    assert "-SecurityTypes None" in code
+    # Docker's published port makes every host connection look like one peer,
+    # so the default lockout would lock out VAF's own proxy for everyone.
+    assert "-BlacklistThreshold 0" in code
+
+
+def test_both_health_checks_authenticate_against_the_stream():
+    """Two copies of the same probe (Rule 2), and if either forgets the
+    credential its container reports unhealthy forever: the pool then hands
+    every user the shared browser instead, which looks like a switched-off
+    pool rather than a broken probe."""
+    docker = DOCKERFILE.read_text(encoding="utf-8")
+    probe = docker.split("HEALTHCHECK", 1)[1].split("\n\n", 1)[0]
+    assert "kasmvnc.secret" in probe, "the Dockerfile stream probe does not authenticate"
+    compose = COMPOSE.read_text(encoding="utf-8")
+    browser_block = compose.split("vaf-browser:", 1)[1].split("\nvolumes:", 1)[0]
+    assert "kasmvnc.secret" in browser_block, "the compose stream probe does not authenticate"
+    # Compose interpolates $, so a literal $( has to arrive as $$( - a single
+    # dollar here is the classic way this ships broken.
+    assert "$$(cat /tmp/kasmvnc.secret)" in browser_block
+    # And the credential has to reach the container in the first place.
+    assert "VAF_BROWSER_VNC_SECRET" in browser_block

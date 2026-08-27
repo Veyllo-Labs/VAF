@@ -336,7 +336,9 @@ person instead of the model. Closing the window (or clicking the marked globe ag
 
 **The stream path.** The KasmVNC client is loaded from the container THROUGH the VAF web
 server (`/api/browser-vnc/t/<ticket>/...`), never directly: the container port
-(127.0.0.1:6901, loopback-only like CDP) is reachable for LAN users only via that proxy.
+(127.0.0.1:6901, loopback-only like CDP, and credentialed since the stream gained basic
+auth) is reachable for LAN users only via that proxy. "Never directly" is a security
+property, not a routing preference - see the stream-port section under Security.
 The ticket in the path is the credential, validated against the current lease on every
 request; a stopped or superseded lease kills its ticket immediately. The two halves of
 the stream carry that ticket differently, and it is worth knowing which is which: ASSETS
@@ -615,29 +617,50 @@ The CDP port (`9222`) is bound to `127.0.0.1` only - it is **never exposed** to 
 
 The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. This means the browser container cannot reach `postgres` or `redis` by hostname - a compromised browser (e.g. via SSRF or a malicious page) has no direct path to VAF's database.
 
-### The stream port is the weaker twin of the CDP port
+### The stream port carries a credential
 
-Named because it is measured, not because it is comfortable. KasmVNC on `6901` runs with
-`-disableBasicAuth -SecurityTypes None` (see `docker/browser/entrypoint.sh`) and is published on
-`127.0.0.1` exactly like CDP - but the two are NOT equally defended, and the difference runs the
-wrong way:
+The two loopback ports are NOT defended alike, and until this round the weaker one
+was the stream. Measured, both before and after:
 
-- **CDP refuses a browser page.** Measured: its WebSocket endpoint answers `403` to any request
-  carrying an `Origin` header at all, `/json/*` sends no CORS header, and arbitrary DNS names are
-  rejected in the `Host` header. A page in the user's ordinary browser cannot drive it.
-- **The stream accepts one.** KasmVNC requires an `Origin` header to be PRESENT and then accepts
-  any value. A page's WebSocket API always sends `Origin` and cannot suppress it, so a page open
-  in the user's normal browser can complete the handshake against `ws://127.0.0.1:6901` and get a
-  bidirectional RFB channel: framebuffer out, `KeyEvent`/`PointerEvent` in. That is read AND
-  control of whatever session is logged in.
-- **Both are open to any local process** under the host trust boundary described above. For the
-  stream that is the same class as CDP; the page vector is the part CDP does not have.
+- **CDP refuses a browser page.** Its WebSocket endpoint answers `403` to any request
+  carrying an `Origin` header at all, `/json/*` sends no CORS header, and arbitrary DNS
+  names are rejected in the `Host` header.
+- **The stream used to accept one.** KasmVNC requires `Origin` to be PRESENT and then
+  accepts any value. A page's WebSocket API always sends `Origin` and cannot suppress
+  it, so a page open in the user's ordinary browser completed the handshake against
+  `ws://127.0.0.1:6901/websockify` and got a bidirectional RFB channel: framebuffer
+  out, `KeyEvent`/`PointerEvent` in. Reproduced live with a real Chromium.
 
-The loopback publish is what keeps the LAN out, and the ticketed proxy
-(`/api/browser-vnc/t/<ticket>/`) is what gates the intended path - neither is an access control on
-the port itself. Until this is closed, treat a machine that browses the ordinary web in another
-browser while a sensitive session is open in the sandbox browser as a machine where those two can
-meet.
+**What closes it:** KasmVNC's own HTTP basic auth, which the image had all along and
+the entrypoint switched off. The container now starts with `-KasmPasswordFile` instead
+of `-disableBasicAuth`, and VAF sends the credential on both proxy legs. The same page
+attack now answers `401` before RFB is spoken, because a page's WebSocket constructor
+cannot set an `Authorization` header and credentials in a URL are not converted into
+one (both measured). The gate sits at the websocket layer on purpose: `-SecurityTypes
+None` stays, since VncAuth would mean shipping a password into the page.
+
+**Where the credential comes from.** `browser_vnc_secret()` mints it once into the data
+keyring, exactly like the Redis password, and never into `config.json`. It reaches the
+shared container through `~/.vaf/compose.env` as `VAF_BROWSER_VNC_SECRET` and a pooled
+instance through `-e`. It is deliberately STABLE: the pool adopts containers created by
+an earlier VAF process, and a container keeps its creation environment for life, so a
+rotating value would answer 401 on every adopted instance.
+
+**It must stay server-side**, and that is load-bearing rather than tidy: a browser that
+once authenticated to the raw port caches the credentials for that origin and would
+attach them to a later cross-origin WebSocket handshake, handing the page vector back
+(measured). VAF's ticketed proxy is what keeps the person's browser away from the port,
+so it has to remain the only door.
+
+**Running the image standalone** (no VAF, no `-e VAF_BROWSER_VNC_SECRET`): the container
+mints a random secret nobody knows and says so in its log. Everything else works - CDP,
+Chromium, the health check - and only the stream viewer is shut. Secure by default; there
+is deliberately no no-auth switch, because passing your own secret already is one.
+
+**What this does NOT change:** CDP on `9222` stays unauthenticated. It has no page vector,
+but any local process still owns the browser through it - the named host boundary above.
+The local vector on the stream is reduced rather than removed: it is now "must be able to
+read VAF's secret" instead of "anything on the machine".
 
 ### Container hardening
 
@@ -803,9 +826,10 @@ never says who uses the machine. The stream ticket names the instance: the VNC p
 routes each window to the browser that issued its ticket.
 
 **Each instance gets a network of its own**, never the shared browser's. Inside the
-container Chromium's CDP proxy listens on `0.0.0.0:9222` and KasmVNC on `0.0.0.0:6901`
-with authentication deliberately off - safe only because the host publishes them on
-loopback and the VAF server is the only door. On a shared bridge network that stops
+container Chromium's CDP proxy listens on `0.0.0.0:9222` with NO authentication - safe
+only because the host publishes it on loopback and the VAF server is the only door.
+(KasmVNC on `0.0.0.0:6901` carries a credential now, but the network isolation below is
+still load-bearing for the CDP half.) On a shared bridge network that stops
 being true between containers: a page in one user's browser could dial another user's
 container IP and drive it. A per-instance network leaves each browser with no peer at
 all. The filtering DNS resolvers compose gives the shared container are passed to each

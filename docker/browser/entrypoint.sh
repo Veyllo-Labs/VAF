@@ -24,7 +24,35 @@ CHROMIUM=/usr/lib/chromium/chromium
 # ── Virtual display (headed mode) ───────────────────────────────────────────
 export DISPLAY=:99
 
+KASM_PASSWD_FILE=/tmp/kasmvnc.passwd
+
+write_stream_password() {
+    # VAF hands the secret in as VAF_BROWSER_VNC_SECRET (compose.env for the
+    # shared container, -e for a pooled instance). Standalone runs of this image
+    # get a random one nobody knows: the container is then fully functional -
+    # CDP, Chromium, the health check - and only the stream viewer is closed.
+    # Secure by default rather than secure-when-configured, and there is
+    # deliberately NO no-auth escape hatch: passing your own secret IS the
+    # escape hatch, and a branch whose only job is to restore the hole is one
+    # more thing a guard has to police.
+    if [ -z "$VAF_BROWSER_VNC_SECRET" ]; then
+        VAF_BROWSER_VNC_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        echo "Stream port: no VAF_BROWSER_VNC_SECRET given, generated a random one." \
+             "Pass -e VAF_BROWSER_VNC_SECRET=<secret> to watch the stream (user 'vaf')."
+    fi
+    printf '%s\n%s\n' "$VAF_BROWSER_VNC_SECRET" "$VAF_BROWSER_VNC_SECRET" \
+        | kasmvncpasswd -u vaf -w -o "$KASM_PASSWD_FILE" >/dev/null 2>&1
+    if [ ! -s "$KASM_PASSWD_FILE" ]; then
+        echo "FATAL: could not write the stream password file $KASM_PASSWD_FILE" >&2
+        exit 1
+    fi
+    # The health check reads it back; nothing else in the container needs it.
+    printf '%s' "$VAF_BROWSER_VNC_SECRET" > /tmp/kasmvnc.secret
+    chmod 600 "$KASM_PASSWD_FILE" /tmp/kasmvnc.secret 2>/dev/null || true
+}
+
 start_xvfb() {
+    write_stream_password
     # Remove a stale lock/socket left by a previous (crashed) X server, otherwise it aborts with
     # "Server is already active for display 99", the leftover socket makes the readiness check below
     # pass anyway, and Chromium then launches against a dead display ("Missing X server"). This bit us
@@ -48,14 +76,35 @@ start_xvfb() {
     # Xkasmvnc IS the X server (Xvnc lineage), launched directly rather than via the
     # kasmvncserver perl wrapper, which insists on interactive user setup. The flags
     # mirror /etc/kasmvnc/kasmvnc.yaml on purpose: whichever of the two this build
-    # reads first, the answer is the same. Plain WS + no basic auth is the same
-    # threat model as the unauthenticated CDP port: both leave this container only
-    # through loopback-published ports, and user-facing auth lives in the VAF web
-    # server that proxies the stream.
+    # reads first, the answer is the same.
+    #
+    # THE STREAM PORT CARRIES A CREDENTIAL, and the sentence that used to stand
+    # here ("same threat model as the unauthenticated CDP port") was measurably
+    # false, which is what made this hole look intentional. The two ports differ
+    # where it matters: CDP answers 403 to any request carrying an Origin header,
+    # so a web page cannot drive it, while KasmVNC only requires Origin to be
+    # PRESENT and accepts any value. Measured live: a page on an unrelated origin
+    # opened ws://127.0.0.1:6901/websockify and got a bidirectional RFB channel -
+    # framebuffer out, key and pointer events in. Basic auth closes exactly that,
+    # because a page's WebSocket constructor cannot set an Authorization header
+    # and credentials in the URL are not converted into one (both measured).
+    # The gate sits at the websocket layer, not the RFB layer: -SecurityTypes None
+    # STAYS, because VncAuth would mean shipping a password into the page, which
+    # is the thing that must not happen. The secret must stay server-side inside
+    # VAF's proxy for the same reason: a browser that once authenticated to this
+    # port caches the credentials for the origin and would attach them to a later
+    # cross-origin handshake, handing the page vector straight back.
+    #
+    # -BlacklistThreshold 0 is not hygiene. The default locks out a peer after 5
+    # failed attempts, and through Docker's published port every connection from
+    # the host arrives as the same bridge address - so five failures from anything
+    # on the machine would lock out VAF's own proxy for everyone. Brute force is
+    # not the threat it would defend against: the secret is 43 URL-safe characters.
     Xkasmvnc :99 -geometry 1920x1080 -depth 24 \
         -websocketPort 6901 -interface 0.0.0.0 \
         -httpd /usr/share/kasmvnc/www \
-        -disableBasicAuth -SecurityTypes None \
+        -KasmPasswordFile "$KASM_PASSWD_FILE" -BlacklistThreshold 0 \
+        -SecurityTypes None \
         -AlwaysShared -FrameRate 60 \
         -CompareFB 1 \
         -VideoTime 600 -VideoArea 100 \

@@ -18,6 +18,13 @@
 # The entrypoint passes the same choices as Xkasmvnc command-line flags, so the
 # behaviour does not depend on which of the two mechanisms this KasmVNC build
 # reads first.
+#
+# AUTHENTICATION IS DELIBERATELY NOT MIRRORED HERE. The stream port carries a
+# credential now (basic auth against a password file the entrypoint writes from
+# VAF_BROWSER_VNC_SECRET), and that lives in the launch flags ALONE. Do not
+# "complete" the mirror by adding auth keys to this file: a second source for
+# the same decision is how one of them silently ends up in charge, and the
+# password file's path is generated per container start.
 desktop:
   resolution:
     width: 1920

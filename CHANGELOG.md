@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Security
+- **The browser's live picture is no longer open to any page on your machine.** The port
+  that carries the browser's screen accepted a connection from anything on the computer,
+  and unlike the browser's control port it did not even check where that connection came
+  from, so a web page open in your ordinary browser could have watched along and typed
+  into the sandbox browser's session. It now requires a password that only VAF knows,
+  minted once and kept in the same protected store as the database password. The same
+  attack was reproduced before and after: it connected before, and is refused now.
+  Takes effect after a rebuild of the browser image; an existing container keeps running
+  without the password until it is recreated, and the log says which of the two it is.
 - **The browser's launch line now has its own alarm, and its crashes leave no
   residue.** The flag that hides Chromium's warning bar would also hide it for a
   genuinely dangerous flag, so a CI guard now forbids the dangerous ones outright;

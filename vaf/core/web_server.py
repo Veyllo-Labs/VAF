@@ -2120,7 +2120,7 @@ async def browser_vnc_asset(ticket: str, path: str):
     # The ticket names the browser: with the per-user pool on there is more
     # than one instance, and the manager that issued the ticket knows which
     # vnc endpoint its stream lives on.
-    from vaf.core.browser_interactive import get_manager_by_ticket
+    from vaf.core.browser_interactive import get_manager_by_ticket, vnc_auth_headers
     mgr = get_manager_by_ticket(ticket)
     if mgr is None:
         return JSONResponse(status_code=403, content={"detail": "Invalid or expired stream ticket"})
@@ -2133,11 +2133,22 @@ async def browser_vnc_asset(ticket: str, path: str):
         # so a 3xx would reach the browser WITHOUT its Location header - a redirect
         # to nowhere, which presents as an empty response. Resolving it here keeps
         # the answer a real body.
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        # The stream port requires a credential (see vnc_auth_headers). On the
+        # CLIENT rather than per request, so the header survives the redirect
+        # hop that follow_redirects takes.
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True,
+                                     headers=vnc_auth_headers()) as client:
             upstream = await client.get(url)
     except Exception as e:
         append_domain_log("webui", f"[browser-vnc] asset fetch failed: {e}")
         return JSONResponse(status_code=502, content={"detail": "Browser stream backend unreachable"})
+    if upstream.status_code == 401:
+        # Names the one cause, because this failure is invisible in tests and
+        # shows up only as a blank panel: the container was created before the
+        # credential existed, or without it.
+        append_domain_log("webui", "[browser-vnc] the stream backend refused our credential: this "
+                                   "container was created without VAF_BROWSER_VNC_SECRET. Recreate it "
+                                   "(docker compose -f docker-compose.memory.yml up -d --build vaf-browser).")
     headers = {}
     for h in ("content-type", "cache-control"):
         if h in upstream.headers:
@@ -2152,7 +2163,8 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
     Every open pipe counts as viewer presence for the lease janitor; the last
     disconnect starts the grace timer that eventually releases the lease.
     """
-    from vaf.core.browser_interactive import get_manager_by_ticket, AgentStream
+    from vaf.core.browser_interactive import (AgentStream, get_manager_by_ticket,
+                                              vnc_auth_headers as _vnc_auth_headers)
     mgr = get_manager_by_ticket(ticket)
     if mgr is None:
         # Accept-then-close: a close before accept surfaces as a handshake
@@ -2190,9 +2202,13 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
         # disconnection" 07:14:52). The VNC protocol has its own liveness, and the
         # lease janitor already notices a dead container, so nothing is lost by
         # switching this off.
+        # additional_headers carries the stream port's credential. NOT userinfo
+        # in the URI: the except handler below logs the exception, which can
+        # carry the URI with it.
         async with _ws_connect(target, subprotocols=[chosen] if chosen else None,
                                origin=mgr.vnc_base(), max_size=None,
-                               ping_interval=None) as upstream:
+                               ping_interval=None,
+                               additional_headers=_vnc_auth_headers()) as upstream:
             await websocket.accept(subprotocol=chosen)
             if not mgr.stream_connected(ticket):
                 await websocket.close(code=4403)

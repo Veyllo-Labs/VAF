@@ -134,6 +134,79 @@ def browser_storage_state_path(user_scope_id: Optional[str] = None,
     return os.path.join(sessions_dir, f"{safe_name}.json")
 
 
+# ---------------------------------------------------------------------------
+# The stream port's credential
+# ---------------------------------------------------------------------------
+
+_VNC_SECRET_CACHE = ""
+
+
+def browser_vnc_secret() -> str:
+    """The KasmVNC stream port's password, from the data keyring, minted on first use.
+
+    Why the port needs one at all: CDP and the stream are both published on
+    loopback, but they are NOT equally defended. CDP answers 403 to any request
+    carrying an Origin header, so a web page cannot drive it. KasmVNC only
+    requires Origin to be PRESENT and accepts any value, and a page's WebSocket
+    always sends one and cannot suppress it - measured live: a page on an
+    unrelated origin opened ws://127.0.0.1:6901/websockify and got a
+    bidirectional RFB channel, framebuffer out and key/pointer events in. Basic
+    auth closes exactly that, because the WebSocket constructor has no way to
+    set an Authorization header (also measured: with auth on, the same page is
+    refused, and credentials in the URL are not converted into a header).
+
+    Modelled on `redis_password()` (vaf/memory/cache.py): a secret belongs in
+    the keyring, never in config.json, and it is assembled where it is used.
+
+    STABLE BY DESIGN, not by accident: BrowserPool ADOPTS containers created by
+    an earlier VAF process, and a container keeps the environment it was
+    CREATED with for life - a rotating value would answer 401 on every adopted
+    instance and present to the person as a blank window.
+
+    Answers "" when the keyring cannot be read. That is deliberately not a
+    fallback to no-auth: the container has no unauthenticated mode any more, so
+    an empty secret makes the stream fail loudly instead of quietly opening it.
+    """
+    global _VNC_SECRET_CACHE
+    if _VNC_SECRET_CACHE:
+        return _VNC_SECRET_CACHE
+    try:
+        from vaf.core.data_keyring import get_data_secret
+        # Memoized because the asset lane asks once per fetched file and every
+        # call decrypts the keyring from disk. Only a NON-empty answer is
+        # cached, so a briefly unreadable keyring is retried rather than frozen.
+        secret = get_data_secret("browser_vnc_secret", min_length=16)
+        if secret:
+            _VNC_SECRET_CACHE = secret
+        return secret
+    except Exception as e:
+        append_domain_log("webui", f"[browser_interactive] stream credential unavailable: {e}")
+        return ""
+
+
+def vnc_auth_headers() -> dict:
+    """Authorization header for every VAF lane that reaches the stream port.
+
+    One home for the three call sites (the asset proxy, the websocket relay and
+    the pool's health probe), so a lane cannot be forgotten silently - a
+    forgotten one does not fail in tests, it shows up as a blank panel.
+
+    The credential stays SERVER-SIDE, and that is load-bearing rather than
+    tidy: if the person's own browser ever authenticated to the raw port, it
+    caches the credentials for that origin and would attach them to a later
+    cross-origin WebSocket handshake, which hands the page vector straight back
+    (measured). VAF's ticketed proxy is what keeps the person's browser away
+    from the port, so it must stay the only door.
+    """
+    import base64
+
+    secret = browser_vnc_secret()
+    if not secret:
+        return {}
+    token = base64.b64encode(f"vaf:{secret}".encode("utf-8")).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
 def park_browser_idle(cdp_base: str) -> None:
     """Leave the shared browser on one blank tab when a run or session ends.
 

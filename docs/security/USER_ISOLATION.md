@@ -594,10 +594,15 @@ partition:
   security event, and `browser_pool_strict` (admin-only) turns the fallback into a
   refusal: no dedicated instance means busy, on every lane - the setup for
   deployments where two users' sessions must never meet. The per-instance network is load-bearing
-  rather than tidiness: inside the container CDP and the KasmVNC socket listen on
-  0.0.0.0 without authentication (safe only because the host publishes them on loopback),
-  so on one shared bridge a page in user A's browser could dial user B's container
-  directly. Container, volume and network names carry a scope hash, never the scope.
+  rather than tidiness: inside the container CDP listens on 0.0.0.0 with NO
+  authentication (safe only because the host publishes it on loopback), so on one
+  shared bridge a page in user A's browser could dial user B's container directly.
+  The KasmVNC stream on the same container now requires a credential VAF holds in
+  its keyring, which closed a real gap: it accepted any Origin, so a page in the
+  user's ordinary browser could read the framebuffer AND inject key and pointer
+  events (measured, and measured again as refused afterwards). CDP has no such
+  page vector - it rejects any Origin - so for THAT half the network isolation is
+  the whole defence. Container, volume and network names carry a scope hash, never the scope.
 - **Container hardening, both lanes:** the compose service and every pool instance
   start with `cap_drop ALL` + `cap_add SYS_CHROOT`, `no-new-privileges:true`, and the
   seccomp profile `docker/browser/chromium-seccomp.json` (Docker's default plus the

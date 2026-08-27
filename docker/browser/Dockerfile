@@ -227,7 +227,7 @@ WORKDIR /home/browser
 # that container out and the ticket route answered 502 on the first human click.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
     CMD curl -sf http://localhost:9222/json/version >/dev/null \
-        && curl -sf -o /dev/null http://localhost:6901/ || exit 1
+        && curl -sf -o /dev/null -u "vaf:$(cat /tmp/kasmvnc.secret)" http://localhost:6901/ || exit 1
 
 EXPOSE 9222 6901
 

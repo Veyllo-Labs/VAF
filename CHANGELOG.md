@@ -90,6 +90,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **A browser container that cannot start now says why.** Setting the stream password
+  to something shorter than six characters made the container stop with an entirely
+  empty log: the tool that writes the password file refused, and its complaint went
+  nowhere. It now names the problem and the minimum before it tries, and any other
+  failure of that step is printed instead of discarded.
 - **Saved logins survive again, so an agent can carry a session on.** Whether the
   browser offers to remember a password was a setting inside the browser, and that
   turned out to be no place for it: a single stray toggle had switched it off in the

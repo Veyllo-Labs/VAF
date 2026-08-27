@@ -40,10 +40,26 @@ write_stream_password() {
         echo "Stream port: no VAF_BROWSER_VNC_SECRET given, generated a random one." \
              "Pass -e VAF_BROWSER_VNC_SECRET=<secret> to watch the stream (user 'vaf')."
     fi
-    printf '%s\n%s\n' "$VAF_BROWSER_VNC_SECRET" "$VAF_BROWSER_VNC_SECRET" \
-        | kasmvncpasswd -u vaf -w -o "$KASM_PASSWD_FILE" >/dev/null 2>&1
+    # kasmvncpasswd refuses anything shorter than 6 characters. Checked HERE so
+    # the operator gets a sentence instead of a container that dies wordlessly:
+    # the tool writes its complaint to stderr, and with `set -e` the script
+    # would abort on the failed pipeline before any message of ours could run.
+    # Measured: a 4-character secret produced an EMPTY log and exit 1.
+    if [ "${#VAF_BROWSER_VNC_SECRET}" -lt 6 ]; then
+        echo "FATAL: VAF_BROWSER_VNC_SECRET is too short (${#VAF_BROWSER_VNC_SECRET} characters)." >&2
+        echo "       KasmVNC requires at least 6; VAF's own generated secret is 43." >&2
+        exit 1
+    fi
+    # `if !` rather than a bare pipeline: under `set -e` a non-zero exit here
+    # would end the script silently, and the output is KEPT so the reason is in
+    # the container log rather than in /dev/null.
+    if ! printf '%s\n%s\n' "$VAF_BROWSER_VNC_SECRET" "$VAF_BROWSER_VNC_SECRET" \
+            | kasmvncpasswd -u vaf -w -o "$KASM_PASSWD_FILE" 2>&1; then
+        echo "FATAL: kasmvncpasswd refused to write $KASM_PASSWD_FILE (see its message above)" >&2
+        exit 1
+    fi
     if [ ! -s "$KASM_PASSWD_FILE" ]; then
-        echo "FATAL: could not write the stream password file $KASM_PASSWD_FILE" >&2
+        echo "FATAL: the stream password file $KASM_PASSWD_FILE stayed empty" >&2
         exit 1
     fi
     # The health check reads it back; nothing else in the container needs it.

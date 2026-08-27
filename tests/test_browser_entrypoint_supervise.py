@@ -317,6 +317,13 @@ def test_the_stream_port_is_never_launched_without_a_credential():
     # Docker's published port makes every host connection look like one peer,
     # so the default lockout would lock out VAF's own proxy for everyone.
     assert "-BlacklistThreshold 0" in code
+    # A container that dies must SAY why. Measured: a 4-character secret made
+    # kasmvncpasswd refuse, `set -e` ended the script before any message of
+    # ours could run, and the tool's own complaint was in /dev/null - an empty
+    # log and exit 1, which is the worst possible thing to hand an operator.
+    assert "-lt 6" in code, "no length check before kasmvncpasswd refuses"
+    assert "kasmvncpasswd" in code and ">/dev/null 2>&1" not in code.split("kasmvncpasswd")[1][:80], (
+        "kasmvncpasswd's own error message is being swallowed again")
 
 
 def test_both_health_checks_authenticate_against_the_stream():

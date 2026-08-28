@@ -120,10 +120,18 @@ _ALLOWED = {
         "get_context_info feeds the LLM prompt on THIS host; an agent working "
         "a Windows machine is told Windows paths, which is the truth there"
     ),
+    "tests/test_windows_path_hygiene.py": (
+        "the guard names the banned spelling in its own prose and regex; "
+        "nothing here serializes a path"
+    ),
 }
 
 
-def _tracked_python_files(roots=("vaf/", "scripts/")):
+# tests/ joined the scan on 2026-08-28: two ratchet guards in the i18n suite
+# keyed their debt dicts on str(relative_to(...)), so on a Windows checkout
+# every hit file read as NEW and the leg went red 45 minutes in - the exact
+# class this file pins, sitting in the one tree it did not scan.
+def _tracked_python_files(roots=("vaf/", "scripts/", "tests/")):
     out = subprocess.run(
         ["git", "ls-files", "-z", *roots],
         cwd=_REPO, capture_output=True, check=True,

@@ -267,7 +267,7 @@ def test_identity_is_bound_through_the_primitive_everywhere_else() -> None:
     for path in sorted((ROOT / "vaf").rglob("*.py")):
         count = _direct_identity_writes(path)
         if count:
-            found[str(path.relative_to(ROOT)).replace("\\", "/")] = count
+            found[path.relative_to(ROOT).as_posix()] = count
 
     new = {f: n for f, n in found.items() if f not in ALLOWED_DIRECT_WRITERS}
     assert not new, (

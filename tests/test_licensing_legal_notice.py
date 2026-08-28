@@ -124,7 +124,7 @@ def test_reference_is_not_hardcoded_in_the_codebase():
         if path.name == Path(__file__).name:
             continue
         if NOTICE_REFERENCE in path.read_bytes().decode("utf-8", "replace"):
-            offenders.append(str(path.relative_to(ROOT)))
+            offenders.append(path.relative_to(ROOT).as_posix())
     assert not offenders, f"notice reference must not live in code: {offenders}"
 
 

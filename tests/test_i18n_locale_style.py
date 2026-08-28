@@ -317,7 +317,7 @@ def test_a_hardcoded_gap_before_a_translated_word_never_spreads():
             continue
         hits = len(_HARDCODED_GAP.findall(path.read_text(encoding="utf-8")))
         if hits:
-            counts[str(path.relative_to(_WEB.parent))] = hits
+            counts[path.relative_to(_WEB.parent).as_posix()] = hits
     new_files = sorted(set(counts) - set(_GAP_DEBT))
     assert not new_files, (
         "a hard space in front of a translated word; use common.unitSeparator so the gap\n"
@@ -390,7 +390,7 @@ def test_a_hardcoded_locale_never_spreads():
             continue
         hits = len(_HARDCODED_LOCALE.findall(path.read_text(encoding="utf-8")))
         if hits:
-            counts[str(path.relative_to(_WEB.parent))] = hits
+            counts[path.relative_to(_WEB.parent).as_posix()] = hits
     new_files = sorted(set(counts) - set(_HARDCODED_LOCALE_DEBT))
     assert not new_files, (
         "a formatting call hardcodes a locale tag; pass the active locale instead:\n"

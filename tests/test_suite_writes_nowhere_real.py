@@ -329,7 +329,7 @@ def test_a_real_pytest_run_delivers_nothing_into_the_callers_home(tmp_path):
     # POSIX - macOS honours a SET variable now - LOCALAPPDATA/APPDATA on Windows) into
     # pytest's temp area, so a clean scratch home IS the proof.
     escaped = sorted(
-        str(p.relative_to(scratch_home))
+        p.relative_to(scratch_home).as_posix()
         for p in scratch_home.rglob("*")
         if p.is_file() and ".vaf" not in p.relative_to(scratch_home).parts[:1]
     )

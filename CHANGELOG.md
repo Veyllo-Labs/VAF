@@ -54,6 +54,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   refusing to start.
 
 ### Changed
+- **The agent's own style sheet no longer teaches it the long dash.** The system prompt
+  carried dozens of em and en dashes, and a model mirrors the typography it reads, so
+  replies inherited them. The prompt is now dash-free, and a mangled umlaut in one of
+  its German example sentences is repaired along the way.
+- **Picking the interface language is now a search, not a scroll.** The language control
+  under Settings, Interface used to be the browser's plain dropdown, which stops being
+  comfortable the moment the list grows past a handful of entries. It now opens a popup
+  in the middle of the screen with a search field: every language is listed with its own
+  name and its English name, the active one carries a check mark, and typing narrows the
+  list, accents not required, so "turkce" still finds Türkçe. The popup follows the light
+  and dark theme like every other control, and arrow keys, Enter and Escape work as they
+  do in a menu. The timezone under Date & time opens in the same popup, where searching
+  earns its keep against the long list of zone names.
 - **A reply may now be twice as long, and the limit is a setting.** How many tokens one
   answer could use was fixed at 8192, written into the code in three places, and no
   setting could reach it. That figure was sized for an answer, but a model that reasons
@@ -65,6 +78,51 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rest of the session, so no model can be broken by the setting.
 
 ### Added
+- **Embedders can keep the memory lane and the grounded capability answer under their
+  own persona.** A `system_prompt` override replaces the built-in persona wholesale and
+  by design drops the two code-owned addenda that ride it. Both are now part of the
+  public facade (`SOUL_CONTINUITY_ADDENDUM`, `build_capability_addendum`), so a support
+  bot with its own voice and a trimmed tool set can re-add either one, with the
+  capability text generated truthfully for exactly the tools it ships.
+- **"What can you do?" now gets a real answer instead of a brochure.** Asked about its
+  abilities, the agent used to be told only what NOT to say (no generic assistant
+  self-description), so it often undersold itself. It now turns the question around:
+  it asks what YOU want, says plainly that it adapts to you, and backs that up with
+  what is actually true in the running session - the real number of tools it holds,
+  that it can build a missing tool or skill itself, put a team of agents on one
+  problem, and take standing orders that keep working without being asked again.
+  Each of those claims is only made when the ability is really registered, so the
+  answer never promises what the system would refuse.
+- **The interface now speaks Korean.** All 1747 message keys carry a Korean value, and 한국어
+  can be picked in the onboarding language step and under Settings, Interface, Language. Korean
+  needed a rule the other languages did not: its particles are chosen by the last sound of the
+  word in front of them, so a particle after a name or a count that is only known while the app
+  is running cannot be picked in advance. Those places now carry both forms the way Korean
+  products write them, and everywhere the word IS known, the single correct form is used
+  instead. The build checks this, because it is invisible to anyone who does not read Korean.
+- **The interface now speaks Japanese.** All 1747 message keys carry a Japanese value, and
+  日本語 can be picked in the onboarding language step and under Settings, Interface,
+  Language. As with Chinese, the wording is sourced per term from vendors that ship it, and
+  the contested calls are written down with their reasons. Japanese needed its own typography
+  rules rather than an adaptation of the Chinese ones, because on the rule that matters most
+  the two are opposites: Chinese puts a space at every Latin boundary and Japanese forbids it.
+  The one long-vowel policy that decides サーバー against サーバ is applied to every katakana
+  term and checked by the build.
+- **The interface now speaks Simplified Chinese.** All 1747 message keys carry a Chinese
+  value, and 简体中文 can be picked in the onboarding language step and under Settings,
+  Interface, Language; a browser set to Chinese selects it on its own. The wording is not a
+  literal translation: every recurring term was taken from a vendor that actually ships it,
+  weighting Chinese-native AI products over translated enterprise documentation, and the
+  contested calls are written down with their reasons in a companion document. One of them
+  is worth stating here: the audit chain is described as detecting tampering, not preventing
+  it, because the standard Chinese term claims prevention and would have overstated what the
+  chain does.
+- **The interface now speaks Turkish.** Chat, settings, the security dashboard, mail and
+  the first-run setup were available in German and English only. All 1747 message keys now
+  carry a Turkish value as well, and Turkish can be picked in the onboarding language step
+  and under Settings, Interface, Language; a browser set to Turkish selects it on its own.
+  A guard fails the build if a key or a placeholder ever exists in one language and not the
+  others, so the three catalogues cannot drift apart again.
 - **The browser now keeps itself up to date.** The browser engine comes from Debian and
   was only ever as new as the day its image was first built; nothing afterwards would
   refresh it, so it silently aged, security fixes included. The stack start now rebuilds
@@ -90,6 +148,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **Japanese and Chinese kanji are drawn in the right shapes from the first frame.** The page
+  declared German until the interface finished loading, and because the same character can be
+  drawn differently in Japanese, Chinese and Korean, a machine carrying a Chinese font painted
+  Japanese text in Chinese letterforms for that moment. The page now states its language before
+  it paints, alongside the theme it already restored there.
+- **A label's colon now follows the language it is written in.** Seven places built a line by
+  gluing an ASCII colon onto a translated label, so a Chinese screen read `最近出现: ` with the
+  Western colon and spacing that Chinese typography does not use. The separator now comes from
+  the message catalogue like any other string, and a guard fails the build if a component ever
+  hardcodes one beside a translated string again.
 - **A file path that names a root is refused everywhere now, not just where the host
   happens to notice.** A path handed in from outside - an upload, a folder to browse, a
   peer's file push - was checked for being absolute with the rule of the machine VAF runs

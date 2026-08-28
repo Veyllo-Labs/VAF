@@ -25,8 +25,8 @@ This document describes the design, behaviour, and maintenance of the Web UI tra
 
 **Data flow.**
 
-- **Locale list:** Defined once in `web/lib/languages.ts` (array of `{ code, name, flag }`). Used by the language switcher UI and by the store to validate stored or browser-derived codes. Adding a new language requires an entry here and a corresponding message file and provider mapping (see below).
-- **Messages:** One JSON file per locale under `web/messages/`, e.g. `de.json`, `en.json`. Each file has the same key structure; only the values differ. The German file is the reference (master): new keys are added there first, then copied or translated into other locale files.
+- **Locale list:** Defined once in `web/lib/languages.ts` (array of `{ code, name, englishName, flag }`). Used by the language picker UI and by the store to validate stored or browser-derived codes. Adding a new language requires an entry here and a corresponding message file and provider mapping (see below).
+- **Messages:** One JSON file per locale under `web/messages/`: `de.json`, `en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`. Each file has the same key structure; only the values differ. The German file is the authoring reference (master): new keys are added there first, then copied or translated into other locale files. The CI guard `tests/test_i18n_catalog_parity.py` enforces that structure, comparing every locale against `en.json`.
 - **Persistence:** Only the chosen locale code is persisted, in `localStorage` under `ui_locale`. No server round-trip is used. The choice applies to the current browser only.
 
 **Libraries.**
@@ -39,10 +39,10 @@ This document describes the design, behaviour, and maintenance of the Web UI tra
 
 | Path | Responsibility |
 |------|----------------|
-| `web/lib/languages.ts` | Defines the list of supported locales (`languages`), their codes, display names, and flags. Exposes `localeCodes`, `defaultLocale`, `isSupportedLocale()`, and `resolveBrowserLocale()`. No message content. |
+| `web/lib/languages.ts` | Defines the list of supported locales (`languages`): code, endonym (`name`), English exonym (`englishName`), and flag. Exposes `localeCodes`, `defaultLocale`, `isSupportedLocale()`, and `resolveBrowserLocale()`. No message content. |
 | `web/lib/localeStore.ts` | Zustand store holding the current `locale`. On mount, `init()` runs once: it reads `ui_locale` from `localStorage`, validates it with `isSupportedLocale()`, and falls back to `resolveBrowserLocale()` or `defaultLocale`. `setLocale(code)` updates the store and writes back to `localStorage`. |
 | `web/components/IntlProviderWrapper.tsx` | Client component that subscribes to the locale store, loads the message object for that locale from a static map, and renders `NextIntlClientProvider` with `locale` and `messages`. Also sets `document.documentElement.lang` when the locale changes. |
-| `web/messages/*.json` | One file per locale. Flat or nested key structure; next-intl resolves dotted keys (e.g. `settings.general`). Keys must be kept in sync across all locale files. |
+| `web/messages/*.json` | One file per locale. Flat or nested key structure; next-intl resolves dotted keys (e.g. `settings.general`). Keys must be kept in sync across all locale files; `tests/test_i18n_catalog_parity.py` fails the build when they drift, and also when a locale takes different ICU placeholders than `en.json` (a missing one throws at render time). |
 | `web/scripts/generate-locales.js` | Node script that copies `web/messages/de.json` to one or more other locale files (e.g. `node scripts/generate-locales.js fr`). Used when adding a new language to create an initial file with the same keys as the master; values are then translated or left as placeholders. |
 
 **Where the locale is not stored.** The backend does not store or return the UI language. Session and user identity are separate from this; the translation system is entirely client-side and storage is local.
@@ -63,7 +63,7 @@ This document describes the design, behaviour, and maintenance of the Web UI tra
 
 ## 5. Adding a new language
 
-1. **Extend the locale list.** In `web/lib/languages.ts`, add an object to the `languages` array: `{ code: "xx", name: "Language name", flag: "🇺🇺" }`. The type `LocaleCode` and `localeCodes` will include the new code automatically.
+1. **Extend the locale list.** In `web/lib/languages.ts`, add an object to the `languages` array: `{ code: "xx", name: "Endonym", englishName: "English name", flag: "🇺🇺" }`. The type `LocaleCode` and `localeCodes` will include the new code automatically.
 
 2. **Create the message file.** From the project root, run from `web/`:  
    `node scripts/generate-locales.js xx`  
@@ -82,7 +82,7 @@ No change is required in `localeStore.ts`: it uses `isSupportedLocale()`, which 
 **Adding a key.**
 
 1. Edit `web/messages/de.json`. Insert the key in the appropriate namespace (e.g. under `main`, `settings`, `common`). Use a short, stable key name (e.g. `newFeatureLabel`, not a full sentence).
-2. Add the same key to every other locale file under `web/messages/` (e.g. `en.json`). Value can be the same as the master initially, then translated.
+2. Add the same key to every other locale file under `web/messages/` (`en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`). Value can be the same as the master initially, then translated.
 3. In the component, call `useTranslations('namespace')` (where `namespace` matches the top-level key in the JSON) and then `t('newFeatureLabel')`.
 
 **Interpolation.** If the string contains a variable (e.g. count, name), use a placeholder in the JSON, e.g. `"ragHits": "RAG: {count} Treffer"`. In code, call `t('ragHits', { count: ragResults.sources.length })`. next-intl replaces `{count}` with the value.
@@ -131,7 +131,7 @@ No change is required in `localeStore.ts`: it uses `isSupportedLocale()`, which 
 
 ## 9. Language switcher
 
-The user changes the UI language in **Settings → Interface**. The first section in that tab is “Language” (or the equivalent in the current locale). The dropdown is built from the `languages` array in `languages.ts`; each option shows the flag and the name. On change, the store’s `setLocale(code)` is called, which updates the Zustand state and `localStorage`. The wrapper component re-renders with the new locale and message set, so the rest of the UI updates without a full reload.
+The user changes the UI language in **Settings → Interface**. The first section in that tab is “Language” (or the equivalent in the current locale). The control is the searchable popup in `web/components/settings/LanguagePicker.tsx`, built from the `languages` array in `languages.ts`: a trigger button opens a centered dialog (the shared picker primitive `web/components/ui/PickerDialog.tsx`) with a search field; each row shows the flag, the endonym and the English exonym, and the active locale carries a check mark. The search folds case and diacritics and also matches the locale code, so the list stays usable as locales are added. On selection, the store’s `setLocale(code)` is called, which updates the Zustand state and `localStorage`. The wrapper component re-renders with the new locale and message set, so the rest of the UI updates without a full reload.
 
 ---
 
@@ -151,6 +151,9 @@ The user changes the UI language in **Settings → Interface**. The first sectio
 ## 11. Related documentation
 
 - **I18N.md** - Short reference for adding languages and keys, and for the generator script.
+- **I18N_ZH_GLOSSARY.md** - Simplified Chinese terminology and typography, and the guard that enforces it.
+- **I18N_JA_GLOSSARY.md** - Japanese terminology and typography, and the same guard's Japanese half.
+- **I18N_KO_GLOSSARY.md** - Korean terminology, register and the particle-after-placeholder rule.
 - **WEB_UI.md** - Overview of the Web UI and its stack; references the translation system.
 - **context-check rule** - For UI or translation changes, the rule instructs to check I18N.md and to use translation keys for any new user-visible text.
 

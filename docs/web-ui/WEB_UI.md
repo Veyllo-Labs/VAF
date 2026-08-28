@@ -378,10 +378,10 @@ A proactive backend message can carry a `kind` tag: `emit_agent_message_append(c
 
 Under **Settings → Interface** you can set:
 
-- **Language** - UI language (e.g. German, English). Stored in the browser only (`localStorage`). See [I18N.md](../platform/I18N.md) for how translations and new languages are managed.
+- **Language** - UI language (German, English, Turkish, Simplified Chinese, Japanese, Korean), chosen in a searchable centered popup (`web/components/settings/LanguagePicker.tsx` over the shared `web/components/ui/PickerDialog.tsx`): each row shows the flag, the language's own name and its English name, with a check mark on the active one; the search field filters as you type and works in both themes. Stored in the browser only (`localStorage`). See [I18N.md](../platform/I18N.md) for how translations and new languages are managed.
 - **Appearance → Dark mode** - a neutral `#181818` dark theme (default off/light). Stored in the browser only (`localStorage.vaf_theme`). For the exact colors of every surface, control and the agent avatar in each theme, see [LIGHTMODE.md](LIGHTMODE.md) and [DARKMODE.md](DARKMODE.md) (design tokens in [DESIGN.md](DESIGN.md)).
 - **Custom cursor** - VAF's custom dot cursor vs. the system pointer.
-- **Date & Time** - Timezone, date format, and time format (24h/12h). Stored in your user identity and used in the system prompt and when the agent shows dates and times.
+- **Date & Time** - Timezone, date format, and time format (24h/12h). The timezone opens in the same searchable centered popup as the language (`PickerSelect` in `web/components/ui/PickerDialog.tsx`); date and time format stay native dropdowns because their lists are short and closed. Stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
 **Settings → AI & Model:** the main provider and model, **Context effort**, the optional Vision model, and - grouped with them as model/provider settings - **Sub-Agents** (run in separate terminals, provider, the **Tool / Workflow model**, timeout) and **Thinker (background)**. For both you can pick a separate provider; the model is a dropdown of that provider's models that defaults to "same as main chat" (for the Thinker the model picker shows only when a non-inherit provider is selected). See [Thinking-Mode.md](../agents/Thinking-Mode.md).
 

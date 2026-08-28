@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- 我是一个助手…\n- 我的优先事项是…（按 Ctrl+Enter 继续）",
     "soulPlaceholder2": "- 我绝不会…\n- 我被禁止…（按 Ctrl+Enter 继续）",
     "soulPlaceholder3": "- 用技术性的语气说话…\n- 保持简洁…（按 Ctrl+Enter 继续）",
-    "soulPlaceholder4": "- 从代码库中学习…\n- 记住用户的偏好…（按 Ctrl+Enter 继续）"
+    "soulPlaceholder4": "- 从代码库中学习…\n- 记住用户的偏好…（按 Ctrl+Enter 继续）",
+    "connectionFailed": "连接失败。服务端可以访问吗？"
   },
   "auth": {
     "checkingSession": "正在检查会话…",

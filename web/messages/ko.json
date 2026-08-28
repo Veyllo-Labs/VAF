@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- 저는 돕는 존재예요…\n- 제가 우선하는 것은… (Ctrl+Enter로 계속)",
     "soulPlaceholder2": "- 저는 절대 하지 않아요…\n- 제게 금지된 것은… (Ctrl+Enter로 계속)",
     "soulPlaceholder3": "- 기술적인 말투로 말해요…\n- 간결하게 해요… (Ctrl+Enter로 계속)",
-    "soulPlaceholder4": "- 코드베이스에서 배워요…\n- 사용자의 선호를 기억해요… (Ctrl+Enter로 계속)"
+    "soulPlaceholder4": "- 코드베이스에서 배워요…\n- 사용자의 선호를 기억해요… (Ctrl+Enter로 계속)",
+    "connectionFailed": "연결하지 못했어요. 서버가 실행 중인가요?"
   },
   "auth": {
     "checkingSession": "세션을 확인하는 중…",

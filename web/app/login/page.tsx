@@ -382,7 +382,7 @@ export default function LoginPage() {
             }
         } catch (err) {
             const msg = typeof err === 'object' && err && 'message' in err ? String((err as Error).message) : '';
-            setBootstrapError(`Connection failed. Is the backend reachable?${msg ? ` (${msg})` : ''}`);
+            setBootstrapError(`${t('connectionFailed')}${msg ? ` (${msg})` : ''}`);
         }
         setIsLoading(false);
     };
@@ -468,7 +468,7 @@ export default function LoginPage() {
                 return;
             }
         } catch {
-            setLoginError('Network error');
+            setLoginError(tAuth('networkError'));
             setBackendUnreachable(true);
         }
         setIsLoading(false);
@@ -491,7 +491,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setTwoFAError((data?.detail as string) || 'Invalid code');
+                setTwoFAError((data?.detail as string) || tAuth('invalidCode'));
                 setIsLoading(false);
                 return;
             }
@@ -500,7 +500,7 @@ export default function LoginPage() {
             }
             router.push('/');
         } catch {
-            setTwoFAError('Network error');
+            setTwoFAError(tAuth('networkError'));
             setBackendUnreachable(true);
         }
         setIsLoading(false);

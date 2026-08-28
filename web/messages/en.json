@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- I am a helper…\n- My priority is… (Ctrl+Enter to continue)",
     "soulPlaceholder2": "- I will never…\n- I am forbidden from… (Ctrl+Enter to continue)",
     "soulPlaceholder3": "- Speak in a technical tone…\n- Be concise… (Ctrl+Enter to continue)",
-    "soulPlaceholder4": "- Learn from codebase…\n- Remember user preferences… (Ctrl+Enter to continue)"
+    "soulPlaceholder4": "- Learn from codebase…\n- Remember user preferences… (Ctrl+Enter to continue)",
+    "connectionFailed": "Connection failed. Is the backend reachable?"
   },
   "auth": {
     "checkingSession": "Checking session…",

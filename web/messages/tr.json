@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- Ben bir yardımcıyım…\n- Önceliğim… (Ctrl+Enter ile devam)",
     "soulPlaceholder2": "- Asla…\n- Şunu yapmam yasak… (Ctrl+Enter ile devam)",
     "soulPlaceholder3": "- Teknik bir dille konuş…\n- Kısa tut… (Ctrl+Enter ile devam)",
-    "soulPlaceholder4": "- Kod tabanından öğren…\n- Kullanıcı tercihlerini hatırla… (Ctrl+Enter ile devam)"
+    "soulPlaceholder4": "- Kod tabanından öğren…\n- Kullanıcı tercihlerini hatırla… (Ctrl+Enter ile devam)",
+    "connectionFailed": "Bağlantı kurulamadı. Sunucuya ulaşılabiliyor mu?"
   },
   "auth": {
     "checkingSession": "Oturum kontrol ediliyor…",

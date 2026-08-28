@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- 私は助け手です…\n- 私が優先するのは…（Ctrl+Enterで続行）",
     "soulPlaceholder2": "- 私は決して…\n- 禁じられているのは…（Ctrl+Enterで続行）",
     "soulPlaceholder3": "- 技術的な口調で話す…\n- 簡潔にする…（Ctrl+Enterで続行）",
-    "soulPlaceholder4": "- コードベースから学ぶ…\n- ユーザーの好みを覚える…（Ctrl+Enterで続行）"
+    "soulPlaceholder4": "- コードベースから学ぶ…\n- ユーザーの好みを覚える…（Ctrl+Enterで続行）",
+    "connectionFailed": "接続できませんでした。サーバーは動いていますか？"
   },
   "auth": {
     "checkingSession": "セッションを確認しています…",

@@ -669,10 +669,11 @@ def _hardcoded_copy(path):
 def test_the_sign_in_and_first_run_path_has_no_hardcoded_copy(surface):
     path = _WEB.parent / surface
     assert path.is_file(), f"{surface} moved; point this guard at its new home"
-    assert not _hardcoded_copy(path), (
-        f"{surface} carries copy that is not in a catalogue. This surface renders\n"
-        "before and just after the language step, so an untranslated string here is\n"
-        "the first thing a reader in another language notices. Add the key to\n"
+    left = _hardcoded_copy(path) + _hardcoded_error_text(path)
+    assert not left, (
+        f"{surface} carries {left} string(s) that are not in a catalogue. This surface\n"
+        "renders before and just after the language step, so an untranslated string\n"
+        "here is the first thing a reader in another language notices. Add the key to\n"
         "auth.* or onboarding.* in every catalogue instead."
     )
 
@@ -696,6 +697,75 @@ def test_hardcoded_copy_never_spreads():
     shrunk = [f"{f}: {_HARDCODED_COPY_DEBT[f]} -> {counts.get(f, 0)}"
               for f in _HARDCODED_COPY_DEBT if counts.get(f, 0) < _HARDCODED_COPY_DEBT[f]]
     assert not shrunk, ("debt was paid down; lower the numbers in _HARDCODED_COPY_DEBT:\n"
+                        + "\n".join(shrunk))
+
+
+# An error message assembled in a handler is the same defect one layer down: it
+# never appears in JSX, so the scan above cannot see it, and it fires exactly
+# when the reader is least able to guess what happened. The sign-in path had
+# four of these left after its JSX was cleaned, because the login flow and the
+# setup flow each carry their own handler and only one of each pair was caught.
+
+_ERROR_SETTER = re.compile(r"\bset[A-Za-z]*Error\(([^;]{0,400}?)\)\s*;", re.S)
+_TRANSLATOR_CALL = re.compile(r"\bt[A-Za-z0-9_]*\(\s*(['\"`])[^'\"`]*\1[^)]*\)")
+_TEMPLATE_HOLE = re.compile(r"\$\{[^{}]*\}")
+_SENTENCE_LITERAL = re.compile(r"(['\"`])([^'\"`\n]*[a-z]{2}[^'\"`\n]*\s[^'\"`\n]*)\1")
+
+_HARDCODED_ERROR_DEBT = {
+    "web/app/page.tsx": 4,
+    "web/components/DocumentEditor.tsx": 3,
+    "web/components/DocumentViewer.tsx": 2,
+    "web/components/NativeDocxEditor.tsx": 4,
+    "web/components/NotificationsModal.tsx": 2,
+    "web/components/connections/CalendarDashboard.tsx": 2,
+    "web/components/connections/CalendarSetupWizard.tsx": 2,
+    "web/components/connections/CloudDashboard.tsx": 6,
+    "web/components/connections/CloudSetupWizard.tsx": 8,
+    "web/components/connections/GitHubDashboard.tsx": 1,
+    "web/components/connections/TelegramSetupWizard.tsx": 1,
+    "web/components/connections/WhatsAppDashboard.tsx": 2,
+    "web/components/connections/WhatsAppSetupWizard.tsx": 2,
+    "web/components/settings/SkillsEditor.tsx": 4,
+    "web/components/settings/UpdateRepairModal.tsx": 1,
+    "web/components/settings/WorkflowCreator.tsx": 4,
+}
+
+
+def _hardcoded_error_text(path):
+    source = path.read_text(encoding="utf-8", errors="ignore")
+    found = 0
+    for match in _ERROR_SETTER.finditer(source):
+        argument = _TRANSLATOR_CALL.sub("T", match.group(1))
+        # A template's own holes are code, not copy; strip them before looking.
+        for _ in range(6):
+            stripped = _TEMPLATE_HOLE.sub("V", argument)
+            if stripped == argument:
+                break
+            argument = stripped
+        if _SENTENCE_LITERAL.search(argument):
+            found += 1
+    return found
+
+
+def test_hardcoded_error_text_never_spreads():
+    counts = {}
+    for path in sorted(_WEB.glob("**/*.ts*")):
+        if "node_modules" in path.parts:
+            continue
+        found = _hardcoded_error_text(path)
+        if found:
+            counts[path.relative_to(_WEB.parent).as_posix()] = found
+    new_files = sorted(set(counts) - set(_HARDCODED_ERROR_DEBT))
+    assert not new_files, (
+        "an error message written as a literal; it reaches the reader in one language\n"
+        "only, at the moment they most need to understand it:\n" + "\n".join(new_files)
+    )
+    grew = [f"{f}: {n} (was {_HARDCODED_ERROR_DEBT[f]})"
+            for f, n in counts.items() if n > _HARDCODED_ERROR_DEBT[f]]
+    assert not grew, "known hardcoded-error debt grew:\n" + "\n".join(grew)
+    shrunk = [f"{f}: {_HARDCODED_ERROR_DEBT[f]} -> {counts.get(f, 0)}"
+              for f in _HARDCODED_ERROR_DEBT if counts.get(f, 0) < _HARDCODED_ERROR_DEBT[f]]
+    assert not shrunk, ("debt was paid down; lower the numbers in _HARDCODED_ERROR_DEBT:\n"
                         + "\n".join(shrunk))
 
 _SIMPLIFIED_ONLY = "记忆说门车东马见认识设备时间网络页级别务现产权护习开关闭题项类样传输错误连线组织统计划"

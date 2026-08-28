@@ -101,7 +101,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   from the catalogue in every one of the seven languages, and the boot screen follows the
   browser's language since no choice has been made yet. The password eye buttons also had no
   name at all for a screen reader, and now do. The build refuses new untranslated text on
-  this path, and holds the rest of the interface to the amount it already has.
+  this path, and holds the rest of the interface to the amount it already has, both for text
+  on screen and for the error messages a handler builds when something goes wrong.
 - **The interface now speaks Thai.** All 1747 message keys carry a Thai value, and ไทย can be
   picked in the onboarding language step and under Settings, Interface, Language. Thai needed
   the opposite of the rule Japanese needed: Thai is written without spaces between words, so a

@@ -83,7 +83,8 @@
     "soulPlaceholder1": "- Ich bin ein Helfer…\n- Meine Priorität ist… (Strg+Enter zum Fortfahren)",
     "soulPlaceholder2": "- Ich werde niemals…\n- Mir ist untersagt… (Strg+Enter zum Fortfahren)",
     "soulPlaceholder3": "- Sprich in einem technischen Ton…\n- Fasse dich kurz… (Strg+Enter zum Fortfahren)",
-    "soulPlaceholder4": "- Lerne aus der Codebasis…\n- Merke dir Vorlieben der Nutzer… (Strg+Enter zum Fortfahren)"
+    "soulPlaceholder4": "- Lerne aus der Codebasis…\n- Merke dir Vorlieben der Nutzer… (Strg+Enter zum Fortfahren)",
+    "connectionFailed": "Verbindung fehlgeschlagen. Ist der Server erreichbar?"
   },
   "auth": {
     "checkingSession": "Sitzung wird geprüft…",

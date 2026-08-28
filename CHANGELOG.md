@@ -164,6 +164,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rather than a guess.
 
 ### Fixed
+- **The agent now understands "yes" and "no" in the languages it is set to.** When the agent
+  asks whether it was really you speaking, it matches the answer against a word list per
+  language. Thai, Chinese and Korean had no list of affirmations at all, Japanese had no list
+  of denials, and the Thai and Chinese denial lists held the English words under their own
+  language key, so they reported as translated while matching nothing anyone would actually
+  write. In those languages the answer was quietly treated as ordinary chat and the question
+  stayed open. All four are filled in and checked against the live parser, including that an
+  ordinary sentence merely starting with the same syllables is still not taken as an answer.
+  The build now refuses a shipped interface language that can say only one of the two.
 - **Japanese and Chinese kanji are drawn in the right shapes from the first frame.** The page
   declared German until the interface finished loading, and because the same character can be
   drawn differently in Japanese, Chinese and Korean, a machine carrying a Chinese font painted

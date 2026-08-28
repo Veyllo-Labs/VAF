@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .core.log_helper import install_thread_excepthook
     from .core.pdf_extract import extract_pdf_markdown
+    from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.tool_dispatch import ToolCaller, ToolRequest, set_account_allowlist_resolver, set_confirmation_bypass_resolver
     from .framework import Agent, CoreAgent
@@ -21,9 +22,11 @@ if TYPE_CHECKING:
 __all__ = ["__version__", "Agent", "BOOKKEEPING_KINDS", "BaseTool", "CoreAgent",
            "PathEscape", "RemoteRefused",
            "RemoteRoom", "Room", "RoomError",
+           "SOUL_CONTINUITY_ADDENDUM",
            "StoreError", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
-           "account_allows_tool", "contained_path", "derive_peer_id",
+           "account_allows_tool", "build_capability_addendum", "contained_path",
+           "derive_peer_id",
            "describe_room_entry", "extract_pdf_markdown",
            "fold_room_tasks", "fold_room_votes", "inspect_upload",
            "install_thread_excepthook", "joined_rooms", "markers",
@@ -214,6 +217,20 @@ def __getattr__(name):
         # Imports websockets only on first touch, so the slim base is unaffected.
         from .core.a2a.client import RemoteRefused, RemoteRoom
         return {"RemoteRoom": RemoteRoom, "RemoteRefused": RemoteRefused}[name]
+    if name in ("SOUL_CONTINUITY_ADDENDUM", "build_capability_addendum"):
+        # The two code-owned persona addenda. Without a system_prompt override the
+        # engine appends both to the persona: the memory lane (Continuity) and the
+        # grounded "what can you do" answer. An override replaces the persona
+        # wholesale and drops them BY DESIGN - which left an embedder who wants
+        # their own persona (a support bot) PLUS one of these behaviors copying
+        # prompt text out of this tree, a doc sentence with no primitive behind
+        # it. The constant is the exact continuity text; the builder is a pure
+        # function over (tool_names, tool_count), so the capability claims stay
+        # grounded in whatever registry the embedder actually ships. Stdlib-only
+        # underneath, so the slim base is unaffected. See docs/EMBEDDING.md.
+        from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
+        return {"SOUL_CONTINUITY_ADDENDUM": SOUL_CONTINUITY_ADDENDUM,
+                "build_capability_addendum": build_capability_addendum}[name]
     if name == "markers":
         # importlib, not `from . import`: the latter re-enters this
         # __getattr__ while the submodule is being set and recurses.

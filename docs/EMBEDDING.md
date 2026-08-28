@@ -184,6 +184,46 @@ last resort when that load fails). For an embedded app you almost always want
 to set `system_prompt` explicitly, so your agent's voice does not depend on
 machine-local state.
 
+### The two code-owned persona addenda
+
+When you do NOT override, the engine appends two code-owned blocks to the
+persona, on the Soul path and the fallback path alike. **Continuity** tells the
+model its long-term memory is real and lives in its tools: recall with
+`memory_search` before guessing, save new facts with `memory_save`, correct an
+existing one with `memory_update`. **The capability answer** tells it how to
+answer "what can you do?": turn the question around, ask what the user needs,
+and claim only what this session's registry really holds - the live tool count,
+and each ability line (build a missing tool or skill, delegate to sub-agents
+and workflows, standing orders) only when the tools behind it are registered.
+
+A `system_prompt` override replaces the persona wholesale and drops both, by
+design: your support bot decides for itself whether and how it speaks about
+memory or capabilities. To keep either behavior under your own persona, both
+are exported on the facade:
+
+```python
+from vaf import Agent, SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
+
+tool_names = {"kb_search", "create_ticket", "escalate_to_human"}
+agent = Agent(
+    config={...},
+    system_prompt=(
+        MY_SUPPORT_PERSONA
+        + SOUL_CONTINUITY_ADDENDUM                                 # keep the memory lane
+        + build_capability_addendum(tool_names, len(tool_names))   # grounded "what can you do"
+    ),
+)
+```
+
+`build_capability_addendum(tool_names, tool_count)` is a pure function: it
+writes an ability line only for tools present in `tool_names`, so a trimmed
+support-bot registry yields a truthful, smaller answer instead of promises the
+runtime would refuse - and you may of course write your own text instead; the
+addenda are building blocks, not obligations. The engine-side behavior is
+pinned by `tests/test_embedder_system_prompt.py` and
+`tests/test_capability_answer_prompt.py`; the exported shapes by
+`tests/contract/test_contract_persona_addenda.py`.
+
 ### Encryption at rest, and the two modes you can ship
 
 VAF encrypts what it stores - chats, context archives, sub-agent payloads,

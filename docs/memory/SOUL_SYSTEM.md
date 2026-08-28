@@ -79,6 +79,12 @@ sub-agents and `create_agent_workflow`, standing orders via `create_automation`)
 appears only when those tools are actually registered, so the prompt cannot promise
 what the runtime would refuse. Guard: `tests/test_capability_answer_prompt.py`.
 
+Both addenda are part of the public facade (`vaf.SOUL_CONTINUITY_ADDENDUM`,
+`vaf.build_capability_addendum`), so an embedder whose `system_prompt` override
+replaces the persona can re-add or adapt either under their own voice; the
+embedder-facing half is documented in [EMBEDDING.md](../EMBEDDING.md) and pinned by
+`tests/contract/test_contract_persona_addenda.py`.
+
 ---
 
 ## 4. API Specifications

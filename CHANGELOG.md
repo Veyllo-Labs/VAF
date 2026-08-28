@@ -93,6 +93,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   problem, and take standing orders that keep working without being asked again.
   Each of those claims is only made when the ability is really registered, so the
   answer never promises what the system would refuse.
+- **The interface now speaks Thai.** All 1747 message keys carry a Thai value, and ไทย can be
+  picked in the onboarding language step and under Settings, Interface, Language. Thai needed
+  the opposite of the rule Japanese needed: Thai is written without spaces between words, so a
+  space is punctuation there rather than a word boundary, and it is required around anything
+  written in another script. The build now checks that boundary, along with the politeness
+  register, because Thai marks politeness structurally and the particles that usually carry it
+  would make the app pick a gender for whoever is typing.
+- **The Thai wording says where it is not certain.** As with the other language packs the
+  terms are sourced per term from vendors that ship them, but Thai has far less of that to
+  draw on: Microsoft does not translate its documentation into Thai at all, its Thai support
+  pages were machine translated in every case checked, and there is no Thai language pack for
+  the editor the other rounds used as evidence. The companion document therefore names six
+  security terms and six counting words as coinages rather than presenting them as vendor
+  practice, so a native reviewer knows exactly where to look first. One thing is left for you
+  to decide: Thai defaults to the Buddhist era, so dates render as 2569 rather than 2026 until
+  that is pinned deliberately.
 - **The interface now speaks Korean.** All 1747 message keys carry a Korean value, and 한국어
   can be picked in the onboarding language step and under Settings, Interface, Language. Korean
   needed a rule the other languages did not: its particles are chosen by the last sound of the

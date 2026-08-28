@@ -26,7 +26,7 @@ This document describes the design, behaviour, and maintenance of the Web UI tra
 **Data flow.**
 
 - **Locale list:** Defined once in `web/lib/languages.ts` (array of `{ code, name, englishName, flag }`). Used by the language picker UI and by the store to validate stored or browser-derived codes. Adding a new language requires an entry here and a corresponding message file and provider mapping (see below).
-- **Messages:** One JSON file per locale under `web/messages/`: `de.json`, `en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`. Each file has the same key structure; only the values differ. The German file is the authoring reference (master): new keys are added there first, then copied or translated into other locale files. The CI guard `tests/test_i18n_catalog_parity.py` enforces that structure, comparing every locale against `en.json`.
+- **Messages:** One JSON file per locale under `web/messages/`: `de.json`, `en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`, `th.json`. Each file has the same key structure; only the values differ. The German file is the authoring reference (master): new keys are added there first, then copied or translated into other locale files. The CI guard `tests/test_i18n_catalog_parity.py` enforces that structure, comparing every locale against `en.json`.
 - **Persistence:** Only the chosen locale code is persisted, in `localStorage` under `ui_locale`. No server round-trip is used. The choice applies to the current browser only.
 
 **Libraries.**
@@ -82,7 +82,7 @@ No change is required in `localeStore.ts`: it uses `isSupportedLocale()`, which 
 **Adding a key.**
 
 1. Edit `web/messages/de.json`. Insert the key in the appropriate namespace (e.g. under `main`, `settings`, `common`). Use a short, stable key name (e.g. `newFeatureLabel`, not a full sentence).
-2. Add the same key to every other locale file under `web/messages/` (`en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`). Value can be the same as the master initially, then translated.
+2. Add the same key to every other locale file under `web/messages/` (`en.json`, `tr.json`, `zh.json`, `ja.json`, `ko.json`, `th.json`). Value can be the same as the master initially, then translated.
 3. In the component, call `useTranslations('namespace')` (where `namespace` matches the top-level key in the JSON) and then `t('newFeatureLabel')`.
 
 **Interpolation.** If the string contains a variable (e.g. count, name), use a placeholder in the JSON, e.g. `"ragHits": "RAG: {count} Treffer"`. In code, call `t('ragHits', { count: ragResults.sources.length })`. next-intl replaces `{count}` with the value.
@@ -154,6 +154,8 @@ The user changes the UI language in **Settings → Interface**. The first sectio
 - **I18N_ZH_GLOSSARY.md** - Simplified Chinese terminology and typography, and the guard that enforces it.
 - **I18N_JA_GLOSSARY.md** - Japanese terminology and typography, and the same guard's Japanese half.
 - **I18N_KO_GLOSSARY.md** - Korean terminology, register and the particle-after-placeholder rule.
+- **I18N_TH_GLOSSARY.md** - Thai terminology, register and the spacing rule, which inverts the
+  Japanese one because a space in Thai is punctuation rather than a word boundary.
 - **WEB_UI.md** - Overview of the Web UI and its stack; references the translation system.
 - **context-check rule** - For UI or translation changes, the rule instructs to check I18N.md and to use translation keys for any new user-visible text.
 

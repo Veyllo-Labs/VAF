@@ -22,6 +22,7 @@ import trMessages from '@/messages/tr.json';
 import zhMessages from '@/messages/zh.json';
 import jaMessages from '@/messages/ja.json';
 import koMessages from '@/messages/ko.json';
+import thMessages from '@/messages/th.json';
 
 const messageMap: Record<string, typeof deMessages> = {
   de: deMessages,
@@ -30,6 +31,7 @@ const messageMap: Record<string, typeof deMessages> = {
   zh: zhMessages,
   ja: jaMessages,
   ko: koMessages,
+  th: thMessages,
 };
 
 export default function IntlProviderWrapper({

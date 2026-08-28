@@ -26,6 +26,7 @@ export const languages: Language[] = [
   { code: 'zh', name: '简体中文', englishName: 'Simplified Chinese', flag: '🇨🇳' },
   { code: 'ja', name: '日本語', englishName: 'Japanese', flag: '🇯🇵' },
   { code: 'ko', name: '한국어', englishName: 'Korean', flag: '🇰🇷' },
+  { code: 'th', name: 'ไทย', englishName: 'Thai', flag: '🇹🇭' },
 ];
 
 /** All supported locale codes, derived from the array above. */

@@ -47,13 +47,21 @@ _REFERENCE = "en"
 
 # Locales authored under the rules below. A new locale joins this list in the
 # same change that adds its catalogue.
-_STYLED_LOCALES = ["tr", "zh", "ja", "ko"]
+_STYLED_LOCALES = ["tr", "zh", "ja", "ko", "th"]
+
+# de is the authoring master and en its translation; both predate the rules
+# above and are exempt from them, but not from the checks that hold for any
+# catalogue at all.
+_ALL_LOCALES = ["de", "en"] + _STYLED_LOCALES
 
 _CJK = r"[一-鿿]"
 # Japanese runs include kana, which Chinese never does.
 _JA = r"[぀-ヿ㐀-鿿]"
 # Hangul syllables. Korean shares none of its letterforms with the other two.
 _KO = r"[가-힣]"
+# The full Thai block, consonants through the currency sign, so that the
+# combining vowels and tone marks are inside the class and never split a match.
+_TH = r"[ก-๛]"
 
 
 def _load(locale):
@@ -153,6 +161,38 @@ def test_no_dash_in_any_form(locale):
 
 
 # --------------------------------------------------------------------------
+# Characters that render as nothing. They survive a copy, a review and a diff
+# without being seen, and they change what a search matches. The temptation is
+# specific to Thai, which has no space between words and where a zero-width
+# space looks like a way to hand the browser a line-break opportunity: the
+# shipped Thai UI strings of the browser this product embeds contain none, and
+# rely on its own dictionary line-breaker instead. Every catalogue is checked,
+# because none of these is a style choice.
+# --------------------------------------------------------------------------
+
+_INVISIBLES = {
+    "\u200b": "zero-width space",
+    "\u200c": "zero-width non-joiner",
+    "\u200d": "zero-width joiner",
+    "\u2060": "word joiner",
+    "\u00ad": "soft hyphen",
+    "\ufeff": "byte order mark",
+}
+
+
+@pytest.mark.parametrize("locale", _ALL_LOCALES)
+def test_no_invisible_characters(locale):
+    hits = []
+    for path, text in _flatten(_load(locale)).items():
+        if not isinstance(text, str):
+            continue
+        for char, name in _INVISIBLES.items():
+            if char in text:
+                hits.append(f"{path}: {name} (U+{ord(char):04X})")
+    assert not hits, f"{locale}.json carries an invisible character:\n" + "\n".join(hits[:10])
+
+
+# --------------------------------------------------------------------------
 # Chinese typography.
 # --------------------------------------------------------------------------
 
@@ -199,6 +239,55 @@ _KO_FULLWIDTH = re.compile(r"[。、？！，．：（）「」『』]")
 _KO_SPACE_BEFORE_ELLIPSIS = re.compile(r"[가-힣]\s+…")
 _KO_HONORIFIC = re.compile(r"하십시오|시기 바랍니다|죄송합니다")
 
+# --------------------------------------------------------------------------
+# Thai typography. Thai is written without spaces between words, so the space
+# is punctuation here rather than a word boundary: it separates clauses, and it
+# is the required gap around anything written in another script. That inverts
+# the Japanese rule in the same file, where a typed space at the same boundary
+# is the defect.
+# --------------------------------------------------------------------------
+
+# A space is required on both sides of Latin text, digits and any placeholder
+# carrying data of either kind. A placeholder that holds a Thai word closes up
+# instead, so the catalogue must not contain one; every placeholder reached
+# from Thai text here is filled from a backend value or a number.
+_TH_MISSING_SPACE = re.compile(rf"(?:{_TH}[A-Za-z0-9{{]|[A-Za-z0-9}}]{_TH})")
+# ครับ and ค่ะ mark the speaker's gender and คะ is their question form, so a
+# product that uses them has to guess who is typing. Anchored on the right,
+# because คะ also opens คะแนน (score) and นะ closes สถานะ (status).
+_TH_PARTICLE = re.compile(r"(?:ครับ|ค่ะ|คะ)(?=$|[\s)\"”])")
+# ท่าน is deferential address, out of register for a personal tool; the lookbehind
+# keeps เท่านั้น and เท่า out of the match, which is the only word in this file
+# that contains the sequence. ผม and ดิฉัน are the gendered first person and the
+# product speaks as ฉัน; เขา and เธอ are the gendered third person the style guide
+# replaces with a role noun; มัน is a colloquial inanimate pronoun that Thai
+# product chrome does not use and that only appears when the English "it" was
+# carried over. The last five need no lookaround: a tone mark separates เขา from
+# the very common เข้า, so the bare substring never collides here.
+_TH_HONORIFIC = re.compile(r"(?<!เ)ท่าน|ผม|ดิฉัน|เขา|เธอ|มัน")
+# โปรด is what shipped Thai software says; กรุณา is the signage register.
+_TH_KARUNA = re.compile(r"กรุณา")
+# Thai running text carries no terminal period and no question or exclamation
+# mark; a question is marked by ไหม or หรือเปล่า instead.
+_TH_SENTENCE_PUNCT = re.compile(r"[?!]|\.\s*$")
+_TH_THAI_DIGITS = re.compile(r"[๐-๙]")
+# SARA AM is one character. Typed as NIKHAHIT plus SARA AA it looks identical,
+# sorts differently and never matches a search for the composed form.
+_TH_DECOMPOSED_AM = re.compile(r"\u0e4d\u0e32")
+# The ellipsis closes up on the word before it, as everywhere else in this file.
+# Only the trailing case is checked: a medial U+2026 stands inside a quoted code
+# fragment, where the spacing belongs to that fragment.
+_TH_SPACE_BEFORE_ELLIPSIS = re.compile(r"\s…$")
+# Thai quotes with the curly pair. Straight quotes around a Latin token are a
+# code fragment and stay, so the rule only fires when Thai sits inside them.
+_TH_STRAIGHT_QUOTES = re.compile(rf'"[^"]*{_TH}[^"]*"')
+# MAIYAMOK repeats the word in front of it and cannot be separated from it.
+_TH_SPACED_MAIYAMOK = re.compile(r"\sๆ")
+# The colon closes up on its label and opens a space after it.
+_TH_SPACED_COLON = re.compile(r"\s:")
+_TH_SPACE_INSIDE_PARENS = re.compile(r"\(\s|\s\)")
+
+
 _LOCALE_RULES = {
     "zh": (
         ("informal address", re.compile("您")),
@@ -233,9 +322,25 @@ _LOCALE_RULES = {
         ("ellipsis that is not a single U+2026", _BAD_ELLIPSIS),
         ("ICU plural 'one' branch (ko has only 'other')", _ICU_ONE_BRANCH),
     ),
+    "th": (
+        ("deferential, gendered or inanimate pronoun", _TH_HONORIFIC),
+        ("gendered sentence particle", _TH_PARTICLE),
+        ("กรุณา where shipped Thai software says โปรด", _TH_KARUNA),
+        ("terminal period, question mark or exclamation mark", _TH_SENTENCE_PUNCT),
+        ("missing space at a Thai/Latin, Thai/digit or Thai/placeholder boundary", _TH_MISSING_SPACE),
+        ("Thai digits where the UI uses Arabic ones", _TH_THAI_DIGITS),
+        ("SARA AM typed as two characters", _TH_DECOMPOSED_AM),
+        ("space before the ellipsis", _TH_SPACE_BEFORE_ELLIPSIS),
+        ("straight quotation marks around Thai text", _TH_STRAIGHT_QUOTES),
+        ("space before MAIYAMOK", _TH_SPACED_MAIYAMOK),
+        ("space before a colon", _TH_SPACED_COLON),
+        ("space inside parentheses", _TH_SPACE_INSIDE_PARENS),
+        ("ellipsis that is not a single U+2026", _BAD_ELLIPSIS),
+        ("ICU plural 'one' branch (th has only 'other')", _ICU_ONE_BRANCH),
+    ),
 }
 
-_SCRIPTS = {"zh": _CJK, "ja": _JA, "ko": _KO}
+_SCRIPTS = {"zh": _CJK, "ja": _JA, "ko": _KO, "th": _TH}
 
 _RULE_CASES = [(loc, label, pattern) for loc, rules in _LOCALE_RULES.items() for label, pattern in rules]
 
@@ -248,7 +353,7 @@ _TRADITIONAL = "帳網資訊預設檔體們來對開關這樣說話點擊選擇�
 @pytest.mark.parametrize(
     "locale,label,pattern", _RULE_CASES, ids=[f"{loc}: {label}" for loc, label, _ in _RULE_CASES]
 )
-def test_cjk_typography(locale, label, pattern):
+def test_locale_typography(locale, label, pattern):
     script = _SCRIPTS[locale]
     offenders = []
     for path, text in _flatten(_load(locale)).items():
@@ -357,6 +462,77 @@ def test_an_apostrophe_never_quotes_a_placeholder(locale):
         f"{locale}.json: an ASCII apostrophe beside a placeholder makes ICU treat it as\n"
         "literal text, so the value never substitutes. Use typographic quotes:\n"
         + "\n".join(offenders[:10])
+    )
+
+
+# ICU reads two things in a message as syntax: an unescaped brace opens an
+# argument, and a <name> opens a rich-text tag that has to close again. A string
+# that shows a JSON snippet or a naming pattern therefore looks like broken ICU,
+# and the whole message fails to parse. Both render correctly today, because
+# next-intl only parses a message when a values argument is passed to it and
+# neither of these is called with one. That makes them a trap rather than a
+# defect: the trap is that the parity check compares placeholder NAMES between
+# catalogues, so it stays green while every catalogue breaks together the moment
+# one of these strings gains a placeholder. Escape the braces as '{' and '}',
+# or close the tag, before adding one.
+_ICU_ARGUMENT = re.compile(r"\{\s*[A-Za-z0-9_]+\s*[,}]")
+_ICU_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9_-]*)\s*>")
+
+
+def _unparsed_braces(text):
+    """Count ICU arguments, and braces that are not part of one."""
+    i, arguments, literals = 0, 0, 0
+    while i < len(text):
+        char = text[i]
+        if char == "{":
+            if _ICU_ARGUMENT.match(text, i):
+                arguments += 1
+                depth = 0
+                while i < len(text):
+                    if text[i] == "{":
+                        depth += 1
+                    elif text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                if depth:
+                    literals += 1
+            else:
+                literals += 1
+        elif char == "}":
+            literals += 1
+        i += 1
+    return arguments, literals
+
+
+def _has_unclosed_tag(text):
+    open_tags = []
+    for match in _ICU_TAG.finditer(text):
+        closing, name = match.group(1), match.group(2)
+        if not closing:
+            open_tags.append(name)
+        elif not open_tags or open_tags.pop() != name:
+            return True
+    return bool(open_tags)
+
+
+@pytest.mark.parametrize("locale", _ALL_LOCALES)
+def test_icu_syntax_never_shares_a_message_with_a_placeholder(locale):
+    offenders = []
+    for path, text in _flatten(_load(locale)).items():
+        if not isinstance(text, str):
+            continue
+        arguments, literals = _unparsed_braces(text)
+        if not arguments:
+            continue
+        if literals:
+            offenders.append(f"{path}: unescaped brace, {ascii(text[:60])}")
+        elif _has_unclosed_tag(text):
+            offenders.append(f"{path}: unclosed tag, {ascii(text[:60])}")
+    assert not offenders, (
+        f"{locale}.json: a literal brace or an unclosed tag beside a placeholder makes\n"
+        "the whole message unparseable for ICU:\n" + "\n".join(offenders[:10])
     )
 
 

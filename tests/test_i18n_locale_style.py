@@ -580,6 +580,124 @@ def test_a_hardcoded_locale_never_spreads():
 
 # Simplified-only forms. Japanese kept the traditional shapes of all of these, so
 # one appearing in ja.json means a Chinese string leaked across.
+
+# --------------------------------------------------------------------------
+# Copy that never reaches a catalogue. A string written straight into JSX is
+# the same defect in every locale at once: it stays in whatever language its
+# author typed, and no translation round can find it, because the parity guard
+# only compares catalogues against each other and this text is in neither.
+#
+# The sign-in and first-run path is held at zero, because it is the first thing
+# every user sees and the one place where the language was just chosen: an
+# error message falling back to English one screen after the language step is
+# the most visible form this defect takes. The rest of the interface carries
+# the debt this scan measured, and those numbers may only go down.
+# --------------------------------------------------------------------------
+
+_JSX_PROP_COPY = re.compile(r'\b(?:placeholder|title|aria-label|alt)\s*=\s*"([^"]{3,})"')
+_JSX_TEXT_COPY = re.compile(r">\s*([A-Z][A-Za-z][^<>{}\n]{2,})\s*<")
+# A token, a path, a class list or an all-caps constant is not user-facing copy.
+_NOT_COPY = re.compile(r"^(?:[\w./#?=&:%+-]+|[A-Z0-9_]+)$")
+# A product name stays literal by definition; no locale can translate it.
+_LITERAL_BY_DESIGN = {"Veyllo Agentic Framework"}
+
+# Held at zero: every string on these surfaces comes from a catalogue.
+_TRANSLATED_SURFACES = ("web/app/login/page.tsx", "web/components/SoulWizard.tsx")
+
+_HARDCODED_COPY_DEBT = {
+    "web/app/memory/page.tsx": 17,
+    "web/app/not-found.tsx": 3,
+    "web/app/page.tsx": 49,
+    "web/app/settings/page.tsx": 1,
+    "web/components/ActiveToolsPanel.tsx": 1,
+    "web/components/AutomationCalendarModal.tsx": 9,
+    "web/components/BrowserLiveTile.tsx": 1,
+    "web/components/CodeViewer.tsx": 3,
+    "web/components/DocumentEditor.tsx": 29,
+    "web/components/DocumentViewer.tsx": 19,
+    "web/components/HtmlViewer.tsx": 3,
+    "web/components/ImageViewer.tsx": 5,
+    "web/components/NativeDocxEditor.tsx": 20,
+    "web/components/NotificationsModal.tsx": 8,
+    "web/components/PdfWithHighlights.tsx": 2,
+    "web/components/SettingsModal.tsx": 31,
+    "web/components/SubAgentWindow.tsx": 50,
+    "web/components/ToolMessage.tsx": 2,
+    "web/components/TrainingDashboard.tsx": 6,
+    "web/components/connections/CalendarDashboard.tsx": 1,
+    "web/components/connections/CalendarSetupWizard.tsx": 5,
+    "web/components/connections/CloudDashboard.tsx": 15,
+    "web/components/connections/CloudSetupWizard.tsx": 26,
+    "web/components/connections/ConnectionsPanel.tsx": 4,
+    "web/components/connections/ContactsDashboard.tsx": 26,
+    "web/components/connections/DiscordDashboard.tsx": 11,
+    "web/components/connections/DiscordSetupWizard.tsx": 47,
+    "web/components/connections/GitHubDashboard.tsx": 3,
+    "web/components/connections/MessagesChart.tsx": 1,
+    "web/components/connections/TelegramDashboard.tsx": 19,
+    "web/components/connections/TelegramSetupWizard.tsx": 32,
+    "web/components/connections/WhatsAppDashboard.tsx": 24,
+    "web/components/connections/WhatsAppSetupWizard.tsx": 12,
+    "web/components/memory/MemoryDetailPanel.tsx": 14,
+    "web/components/memory/MemoryGraph.tsx": 8,
+    "web/components/memory/RagQueryPanel.tsx": 9,
+    "web/components/settings/CustomToolEditor.tsx": 5,
+    "web/components/settings/McpServerEditor.tsx": 1,
+    "web/components/settings/SkillsEditor.tsx": 10,
+    "web/components/settings/TTSSettings.tsx": 10,
+    "web/components/settings/UserVisibilityPicker.tsx": 4,
+    "web/components/settings/WorkflowCreator.tsx": 13,
+    "web/components/workflows/VAFWorkflowRuntime.tsx": 4,
+}
+
+
+def _hardcoded_copy(path):
+    source = path.read_text(encoding="utf-8", errors="ignore")
+    found = 0
+    for pattern in (_JSX_PROP_COPY, _JSX_TEXT_COPY):
+        for match in pattern.finditer(source):
+            text = match.group(1).strip()
+            if text in _LITERAL_BY_DESIGN or _NOT_COPY.match(text):
+                continue
+            if not re.search(r"[a-z]{2}", text):
+                continue
+            found += 1
+    return found
+
+
+@pytest.mark.parametrize("surface", _TRANSLATED_SURFACES)
+def test_the_sign_in_and_first_run_path_has_no_hardcoded_copy(surface):
+    path = _WEB.parent / surface
+    assert path.is_file(), f"{surface} moved; point this guard at its new home"
+    assert not _hardcoded_copy(path), (
+        f"{surface} carries copy that is not in a catalogue. This surface renders\n"
+        "before and just after the language step, so an untranslated string here is\n"
+        "the first thing a reader in another language notices. Add the key to\n"
+        "auth.* or onboarding.* in every catalogue instead."
+    )
+
+
+def test_hardcoded_copy_never_spreads():
+    counts = {}
+    for path in sorted(_WEB.glob("**/*.tsx")):
+        if "node_modules" in path.parts:
+            continue
+        found = _hardcoded_copy(path)
+        if found:
+            counts[path.relative_to(_WEB.parent).as_posix()] = found
+    new_files = sorted(set(counts) - set(_HARDCODED_COPY_DEBT))
+    assert not new_files, (
+        "user-facing text written straight into JSX; put it in a catalogue and read it\n"
+        "with useTranslations instead:\n" + "\n".join(new_files)
+    )
+    grew = [f"{f}: {n} (was {_HARDCODED_COPY_DEBT[f]})"
+            for f, n in counts.items() if n > _HARDCODED_COPY_DEBT[f]]
+    assert not grew, "known hardcoded-copy debt grew:\n" + "\n".join(grew)
+    shrunk = [f"{f}: {_HARDCODED_COPY_DEBT[f]} -> {counts.get(f, 0)}"
+              for f in _HARDCODED_COPY_DEBT if counts.get(f, 0) < _HARDCODED_COPY_DEBT[f]]
+    assert not shrunk, ("debt was paid down; lower the numbers in _HARDCODED_COPY_DEBT:\n"
+                        + "\n".join(shrunk))
+
 _SIMPLIFIED_ONLY = "记忆说门车东马见认识设备时间网络页级别务现产权护习开关闭题项类样传输错误连线组织统计划"
 
 

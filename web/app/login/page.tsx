@@ -80,6 +80,9 @@ export default function LoginPage() {
     const [veylloTesting, setVeylloTesting] = useState(false);
     const [veylloError, setVeylloError] = useState<string | null>(null);
     const t = useTranslations('onboarding');
+    // The login and boot surfaces are their own namespace: they render before a
+    // language has been chosen and long after onboarding is over.
+    const tAuth = useTranslations('auth');
     const setLocale = useLocaleStore((s) => s.setLocale);
     const currentLocale = useLocaleStore((s) => s.locale);
     const theme = useThemeStore((s) => s.theme);
@@ -333,7 +336,7 @@ export default function LoginPage() {
             });
             const bootstrapData = await bootstrapRes.json().catch(() => ({}));
             if (!bootstrapRes.ok) {
-                setBootstrapError((bootstrapData?.detail as string) || 'Account creation failed');
+                setBootstrapError((bootstrapData?.detail as string) || t('accountCreationFailed'));
                 setIsLoading(false);
                 return;
             }
@@ -397,7 +400,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setTwoFAError((data?.detail as string) || 'Invalid code');
+                setTwoFAError((data?.detail as string) || tAuth('invalidCode'));
                 setIsLoading(false);
                 return;
             }
@@ -409,7 +412,7 @@ export default function LoginPage() {
             window.location.replace(`${window.location.origin}/`);
             return;
         } catch {
-            setTwoFAError('Network error');
+            setTwoFAError(tAuth('networkError'));
         }
         setIsLoading(false);
     };
@@ -428,7 +431,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setLoginError((data?.detail as string) || 'Login failed');
+                setLoginError((data?.detail as string) || tAuth('loginFailed'));
                 setIsLoading(false);
                 return;
             }
@@ -474,7 +477,7 @@ export default function LoginPage() {
     const handle2FAComplete = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!twoFACode.trim()) {
-            setTwoFAError('Enter code');
+            setTwoFAError(tAuth('enterCode'));
             return;
         }
         setIsLoading(true);
@@ -540,9 +543,9 @@ export default function LoginPage() {
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
             {step !== 'setup_2fa' && (
                 <div className="mb-8 text-center">
-                    {step === '2fa' ? <WakingAvatar /> : <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />}
+                    {step === '2fa' ? <WakingAvatar /> : <img src="/logo.png" alt={tAuth('logoAlt')} className="w-20 h-20 mx-auto mb-4 object-contain" />}
                     <h1 className="text-2xl font-bold text-gray-900">Veyllo Agentic Framework</h1>
-                    <p className="text-sm text-gray-500 mt-1">{isSetupStep ? t('headerSetup') : 'User Login'}</p>
+                    <p className="text-sm text-gray-500 mt-1">{isSetupStep ? t('headerSetup') : tAuth('appSubtitle')}</p>
                 </div>
             )}
             {showOnboardingProgress && (
@@ -590,18 +593,21 @@ export default function LoginPage() {
 
             {backendUnreachable && (
                 <div className="w-full max-w-md mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-                    <p className="font-medium mb-1">Backend unreachable</p>
+                    <p className="font-medium mb-1">{tAuth('backendUnreachable')}</p>
                     <p className="mb-2">
-                        If you just disabled Local Network: wait a few seconds for restart, then reload the page or open <strong>http://localhost:3000</strong> on this PC.
+                        {tAuth.rich('backendUnreachableBody', {
+                            url: 'http://localhost:3000',
+                            b: (chunks) => <strong>{chunks}</strong>,
+                        })}
                     </p>
-                    <p className="mb-3 text-amber-700">You can also restart your VAF app (tray or desktop).</p>
+                    <p className="mb-3 text-amber-700">{tAuth('backendUnreachableRestart')}</p>
                     <button
                         type="button"
-                        title="Reload this page, or restart the VAF app from the tray/desktop"
+                        title={tAuth('reloadPageTitle')}
                         onClick={() => window.location.reload()}
                         className="px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium"
                     >
-                        Reload page
+                        {tAuth('reloadPage')}
                     </button>
                 </div>
             )}
@@ -616,7 +622,7 @@ export default function LoginPage() {
                         className="w-full max-w-md flex flex-col items-center justify-center py-12"
                     >
                         <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin mb-4" />
-                        <p className="text-sm text-gray-500">{dbStarting ? 'Starting the database… the first launch can take a few minutes' : 'Checking setup…'}</p>
+                        <p className="text-sm text-gray-500">{dbStarting ? tAuth('startingDatabase') : tAuth('checkingSetup')}</p>
                     </motion.div>
                 )}
 
@@ -628,10 +634,10 @@ export default function LoginPage() {
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="p-8">
-                                <h2 className="text-lg font-semibold text-gray-900 mb-6">Sign in to your account</h2>
+                                <h2 className="text-lg font-semibold text-gray-900 mb-6">{tAuth('signInTitle')}</h2>
                                 <form onSubmit={handleLogin} className="space-y-5">
                                     <div className="space-y-1.5">
-                                        <label className="text-sm font-medium text-gray-700 ml-1">Username</label>
+                                        <label className="text-sm font-medium text-gray-700 ml-1">{tAuth('username')}</label>
                                         <div className="relative">
                                             <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                                             <input
@@ -639,12 +645,12 @@ export default function LoginPage() {
                                                 value={username}
                                                 onChange={(e) => setUsername(e.target.value)}
                                                 className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
-                                                placeholder="Enter your username"
+                                                placeholder={tAuth('usernamePlaceholder')}
                                             />
                                         </div>
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-sm font-medium text-gray-700 ml-1">Password</label>
+                                        <label className="text-sm font-medium text-gray-700 ml-1">{tAuth('password')}</label>
                                         <div className="relative">
                                             <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                                             <input
@@ -656,6 +662,7 @@ export default function LoginPage() {
                                             />
                                             <button
                                                 type="button"
+                                                aria-label={showPassword ? tAuth('hidePassword') : tAuth('showPassword')}
                                                 onClick={() => setShowPassword(!showPassword)}
                                                 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                                             >
@@ -670,7 +677,7 @@ export default function LoginPage() {
                                             onChange={(e) => setRememberMe(e.target.checked)}
                                             className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 w-4 h-4 accent-gray-900"
                                         />
-                                        <span className="text-sm text-gray-700">Remember me</span>
+                                        <span className="text-sm text-gray-700">{tAuth('rememberMe')}</span>
                                     </label>
                                     {loginError && (
                                         <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{loginError}</p>
@@ -683,13 +690,13 @@ export default function LoginPage() {
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                         ) : (
-                                            <>Sign In <ArrowRight size={18} /></>
+                                            <>{tAuth('signIn')} <ArrowRight size={18} /></>
                                         )}
                                     </button>
                                 </form>
                             </div>
                             <div className="bg-gray-50 px-8 py-4 border-t border-gray-100 flex items-center justify-center">
-                                <span className="text-sm text-gray-500">Need an account? Contact Admin</span>
+                                <span className="text-sm text-gray-500">{tAuth('needAccount')}</span>
                             </div>
                         </div>
                     </motion.div>
@@ -868,7 +875,7 @@ export default function LoginPage() {
                                                         value={username}
                                                         onChange={(e) => { setUsername(e.target.value); setBootstrapError(null); }}
                                                         className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
-                                                        placeholder="admin"
+                                                        placeholder={t('usernamePlaceholder')}
                                                         minLength={2}
                                                         autoFocus
                                                     />
@@ -902,7 +909,7 @@ export default function LoginPage() {
                                                         placeholder="••••••••"
                                                         minLength={8}
                                                     />
-                                                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400">
+                                                    <button type="button" aria-label={showPassword ? tAuth('hidePassword') : tAuth('showPassword')} onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400">
                                                         {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                                                     </button>
                                                 </div>
@@ -964,17 +971,17 @@ export default function LoginPage() {
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
                                 <Smartphone size={18} className="text-gray-600" />
-                                <span className="text-sm font-medium text-gray-700">Two-Factor Authentication</span>
+                                <span className="text-sm font-medium text-gray-700">{tAuth('twoFactorTitle')}</span>
                             </div>
                             <div className="p-8">
                                 {qrCodeBase64 && (
                                     <div className="flex justify-center mb-6">
-                                        <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-40 h-40" />
+                                        <img src={`data:image/png;base64,${qrCodeBase64}`} alt={tAuth('qrAlt')} className="w-40 h-40" />
                                     </div>
                                 )}
                                 <form onSubmit={handle2FAComplete} className="space-y-5">
                                     <div className="space-y-1.5">
-                                        <label className="text-sm font-medium text-gray-700 ml-1">Authenticator code</label>
+                                        <label className="text-sm font-medium text-gray-700 ml-1">{tAuth('authenticatorCode')}</label>
                                         <input
                                             type="text"
                                             value={twoFACode}
@@ -995,7 +1002,7 @@ export default function LoginPage() {
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                         ) : (
-                                            <>Verify and continue <ArrowRight size={18} /></>
+                                            <>{tAuth('verifyAndContinue')} <ArrowRight size={18} /></>
                                         )}
                                     </button>
                                 </form>
@@ -1004,7 +1011,7 @@ export default function LoginPage() {
                                     onClick={() => { setStep('login'); setTwoFACode(''); setTwoFAError(null); }}
                                     className="mt-4 w-full text-sm text-gray-500 hover:text-gray-900"
                                 >
-                                    Back to login
+                                    {tAuth('backToLogin')}
                                 </button>
                             </div>
                         </div>
@@ -1206,7 +1213,7 @@ export default function LoginPage() {
                                         <p className="text-sm text-gray-500 mb-6">{t('scanSubtitle')}</p>
                                         {qrCodeBase64 && (
                                             <div className="flex justify-center mb-6">
-                                                <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-44 h-44 border border-gray-200 rounded-xl p-2" />
+                                                <img src={`data:image/png;base64,${qrCodeBase64}`} alt={tAuth('qrAlt')} className="w-44 h-44 border border-gray-200 rounded-xl p-2" />
                                             </div>
                                         )}
                                         {twoFASecret && (

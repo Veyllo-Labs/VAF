@@ -194,7 +194,7 @@ ${selections.continuity}`;
                                 onChange={(e) => { setSelections({ ...selections, coreTruths: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
-                                placeholder="- I am a helper...\n- My priority is... (Ctrl+Enter to continue)"
+                                placeholder={t('soulPlaceholder1')}
                             />
 
                             <div className="space-y-2">
@@ -237,7 +237,7 @@ ${selections.continuity}`;
                                 onChange={(e) => { setSelections({ ...selections, boundaries: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
-                                placeholder="- I will never...\n- I am forbidden from... (Ctrl+Enter to continue)"
+                                placeholder={t('soulPlaceholder2')}
                             />
 
                             <div className="space-y-2">
@@ -280,7 +280,7 @@ ${selections.continuity}`;
                                 onChange={(e) => { setSelections({ ...selections, vibe: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
-                                placeholder="- Speak in a technical tone...\n- Be concise... (Ctrl+Enter to continue)"
+                                placeholder={t('soulPlaceholder3')}
                             />
 
                             <div className="space-y-2">
@@ -323,7 +323,7 @@ ${selections.continuity}`;
                                 onChange={(e) => { setSelections({ ...selections, continuity: e.target.value }); setErrors(null); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleNext(); } }}
                                 className="w-full h-40 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 transition-all resize-none"
-                                placeholder="- Learn from codebase...\n- Remember user preferences... (Ctrl+Enter to continue)"
+                                placeholder={t('soulPlaceholder4')}
                             />
 
                             <div className="space-y-2">

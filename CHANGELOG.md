@@ -93,6 +93,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   problem, and take standing orders that keep working without being asked again.
   Each of those claims is only made when the ability is really registered, so the
   answer never promises what the system would refuse.
+- **Signing in and first-run setup now speak your language too.** The onboarding wizard was
+  translated, but the screens around it were not: the boot screen, the unreachable-backend
+  notice, the whole login form and the two-factor step were fixed English, and so were the
+  error messages that appear during setup. A reader who had just picked their language in
+  step one was thrown back to English the moment anything went wrong. All of it now comes
+  from the catalogue in every one of the seven languages, and the boot screen follows the
+  browser's language since no choice has been made yet. The password eye buttons also had no
+  name at all for a screen reader, and now do. The build refuses new untranslated text on
+  this path, and holds the rest of the interface to the amount it already has.
 - **The interface now speaks Thai.** All 1747 message keys carry a Thai value, and ไทย can be
   picked in the onboarding language step and under Settings, Interface, Language. Thai needed
   the opposite of the rule Japanese needed: Thai is written without spaces between words, so a

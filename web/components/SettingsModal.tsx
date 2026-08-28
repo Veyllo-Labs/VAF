@@ -29,6 +29,8 @@ import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import SkillsEditor from './settings/SkillsEditor';
 import UpdateRepairModal from './settings/UpdateRepairModal';
+import LanguagePicker from './settings/LanguagePicker';
+import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
 import type { SkillSaveData } from './settings/SkillsEditor';
@@ -58,7 +60,6 @@ import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_default
 import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
-import { languages } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
@@ -4432,15 +4433,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <Section title={tInterface('language')}>
                                     <p className="text-xs text-gray-500 mb-3">{tInterface('preferredLanguage')} (UI)</p>
-                                    <select
-                                        value={uiLocale}
-                                        onChange={(e) => setUiLocale(e.target.value)}
-                                        className="w-full px-3 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                    >
-                                        {languages.map((lang) => (
-                                            <option key={lang.code} value={lang.code}>{lang.flag} {lang.name}</option>
-                                        ))}
-                                    </select>
+                                    <LanguagePicker value={uiLocale} onChange={setUiLocale} />
                                 </Section>
                                 <Section title={tInterface('appearance')}>
                                     {/* Dark mode sits ABOVE Custom Cursor by design (user requirement). */}
@@ -4464,11 +4457,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     ) : (
                                         <>
                                             <div className="grid grid-cols-1 gap-4">
-                                                <Select
+                                                <PickerSelect
                                                     label={tInterface('timezone')}
                                                     value={dateTimeTimezone}
                                                     onChange={(v: string) => setDateTimeTimezone(v)}
                                                     options={DATE_TIME_TIMEZONES}
+                                                    emptyText={tInterface('timezoneNoResults')}
                                                 />
                                                 <Select
                                                     label={tInterface('dateFormat')}

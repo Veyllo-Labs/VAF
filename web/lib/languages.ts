@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 /**
- * Supported UI locales – single source of truth.
+ * Supported UI locales - single source of truth.
  *
  * Adding a language:
  *   1. Add an entry here.
@@ -12,13 +12,20 @@
 
 export interface Language {
   code: string;
+  /** Endonym: the language's own name for itself, the primary label everywhere. */
   name: string;
+  /** English exonym, the secondary label in the language picker so every entry stays readable regardless of the active locale. */
+  englishName: string;
   flag: string;
 }
 
 export const languages: Language[] = [
-  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
-  { code: 'en', name: 'English', flag: '🇺🇸' },
+  { code: 'de', name: 'Deutsch', englishName: 'German', flag: '🇩🇪' },
+  { code: 'en', name: 'English', englishName: 'English', flag: '🇺🇸' },
+  { code: 'tr', name: 'Türkçe', englishName: 'Turkish', flag: '🇹🇷' },
+  { code: 'zh', name: '简体中文', englishName: 'Simplified Chinese', flag: '🇨🇳' },
+  { code: 'ja', name: '日本語', englishName: 'Japanese', flag: '🇯🇵' },
+  { code: 'ko', name: '한국어', englishName: 'Korean', flag: '🇰🇷' },
 ];
 
 /** All supported locale codes, derived from the array above. */

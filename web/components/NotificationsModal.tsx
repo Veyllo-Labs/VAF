@@ -4,7 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import { useState, useEffect, useRef, useCallback, useMemo, memo, type CSSProperties, type ReactNode } from 'react';
-import { useTranslations } from 'next-intl';
+import { useTranslations, useLocale } from 'next-intl';
 import {
   X, RefreshCw, ChevronDown, ChevronRight, Activity, Search,
   GitBranch, ShieldCheck, ShieldAlert, Clock, CheckCircle2,
@@ -1291,7 +1291,7 @@ function OvSectionHeading({ C, title, hint }: { C: OvColors; title: string; hint
 }
 
 function fmtBytes(n: number | null | undefined): string {
-  if (n === null || n === undefined || !isFinite(n)) return '–';
+  if (n === null || n === undefined || !isFinite(n)) return '-';
   if (n < 1024) return `${n} B`;
   if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
@@ -1328,6 +1328,8 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   onOpenUpdateRepair: () => void;
 }) {
   const t = useTranslations('notifications');
+  const tCommon = useTranslations('common');
+  const locale = useLocale();
   const dark = useThemeStore((st) => st.theme) === 'dark';
   const C = tlColors(dark);
   const noData = t('ovNoData');
@@ -1883,9 +1885,9 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
               </div>
               {hasChainData && lastEv && (
                 <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>
-                  {totalRaw?.toLocaleString('de-DE')} {t('ovEventsSecured')} · {t('ovLast')}{' '}
+                  {totalRaw?.toLocaleString(locale)}{tCommon('unitSeparator')}{t('ovEventsSecured')} · {t('ovLast')}{' '}
                   <span style={{ fontFamily: 'monospace' }}>
-                    {new Date(lastEv.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {new Date(lastEv.ts).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     {lastEv.tool ? ` · ${lastEv.tool}` : lastEv.type === 'thinking_run' ? ' · thinking' : ''}
                   </span>
                 </div>
@@ -2451,8 +2453,8 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                   return (
                     <div>
                       {factRow(t('ovChainTitle'), heroState === 'broken' ? t('ovChainBroken') : heroState === 'ok' ? t('ovChainVerified') : noData, heroState === 'ok' ? true : heroState === 'broken' ? false : null)}
-                      {factRow(t('ovEventsSecured'), hasChainData ? String(totalRaw) : '–')}
-                      {lastEv && factRow(t('ovLast'), `${new Date(lastEv.ts).toLocaleTimeString('de-DE')} · ${lastEv.tool ?? lastEv.type}`)}
+                      {factRow(t('ovEventsSecured'), hasChainData ? String(totalRaw) : '-')}
+                      {lastEv && factRow(t('ovLast'), `${new Date(lastEv.ts).toLocaleTimeString(locale)} · ${lastEv.tool ?? lastEv.type}`)}
                       {factRow('GENESIS', t('ovChainAnchor'), true)}
                       {rows.length > 0 && (
                         <>
@@ -2462,7 +2464,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                               <span style={{ flex: 1, color: uid8 === '__local__' ? C.textDim : C.textStrong, fontWeight: uid8 === '__local__' ? 400 : 600 }}>
                                 {uid8 === '__local__' ? t('ovAuditNoScope') : nameFor(uid8)}
                               </span>
-                              <span style={{ color: C.textMid, fontFamily: 'monospace', fontSize: 10.5 }}>{count} {t('ovAuditEventsUnit')}</span>
+                              <span style={{ color: C.textMid, fontFamily: 'monospace', fontSize: 10.5 }}>{count}{tCommon('unitSeparator')}{t('ovAuditEventsUnit')}</span>
                             </div>
                           ))}
                           <div style={{ fontSize: 10.5, color: C.textFaint, lineHeight: 1.5, marginTop: 8 }}>{t('ovAuditSharedChain')}</div>
@@ -2479,11 +2481,11 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                       {sandbox.hardening && (
                         <>
                           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovHardening')}</div>
-                          {factRow(t('ovCapDrop'), sandbox.hardening.cap_drop_all ? 'ALL' : '–', sandbox.hardening.cap_drop_all)}
+                          {factRow(t('ovCapDrop'), sandbox.hardening.cap_drop_all ? 'ALL' : '-', sandbox.hardening.cap_drop_all)}
                           {factRow('no-new-privileges', sandbox.hardening.no_new_privileges ? t('ovOn') : t('ovOff'), sandbox.hardening.no_new_privileges)}
-                          {factRow(t('ovRamLimit'), sandbox.hardening.memory_bytes ? `${Math.round(sandbox.hardening.memory_bytes / 1048576)} MB` : '–')}
-                          {factRow(t('ovCpuLimit'), sandbox.hardening.nano_cpus ? `${(sandbox.hardening.nano_cpus / 1e9).toFixed(1)} CPU` : '–')}
-                          {factRow(t('ovIsolatedNet'), sandbox.hardening.networks.join(', ') || '–', sandbox.hardening.isolated_network)}
+                          {factRow(t('ovRamLimit'), sandbox.hardening.memory_bytes ? `${Math.round(sandbox.hardening.memory_bytes / 1048576)} MB` : '-')}
+                          {factRow(t('ovCpuLimit'), sandbox.hardening.nano_cpus ? `${(sandbox.hardening.nano_cpus / 1e9).toFixed(1)} CPU` : '-')}
+                          {factRow(t('ovIsolatedNet'), sandbox.hardening.networks.join(', ') || '-', sandbox.hardening.isolated_network)}
                         </>
                       )}
                     </div>
@@ -2649,8 +2651,8 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                           ? [
                               ch.mode,
                               `${ch.paired} ${t('ovChPaired')}`,
-                              ch.last_ts ? `${t('ovChLastUsed')} ${new Date(ch.last_ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : null,
-                              ch.rejected_today > 0 ? `${ch.rejected_today} ${t('ovChRejectedUnit')}` : null,
+                              ch.last_ts ? `${t('ovChLastUsed')}${tCommon('labelSeparator')}${new Date(ch.last_ts * 1000).toLocaleString(locale, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : null,
+                              ch.rejected_today > 0 ? `${ch.rejected_today}${tCommon('unitSeparator')}${t('ovChRejectedUnit')}` : null,
                             ].filter(Boolean).join(' · ')
                           : t('ovOff');
                         const okDot = !ch.enabled ? null : ch.mode === 'permissive' ? false : true;
@@ -2791,6 +2793,8 @@ export default function NotificationsModal({
   currentUser,
 }: NotificationsModalProps) {
   const t = useTranslations('notifications');
+  const tCommon = useTranslations('common');
+  const locale = useLocale();
 
   // 'overview' = protection dashboard, 'timeline' = horizontal, 'tooluse' = vertical
   // tool list, 'activity', or filename

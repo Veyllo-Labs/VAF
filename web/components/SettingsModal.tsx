@@ -2613,7 +2613,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 setPwResetTemp(data.temporary_password || null);
             } else {
                 const err = await res.json();
-                alert(`${tModals('editUser.resetPasswordFailed')}: ${err.detail || ''}`);
+                alert(`${tModals('editUser.resetPasswordFailed')}${tCommon('labelSeparator')}${err.detail || ''}`);
             }
         } catch {
             alert(tModals('editUser.resetPasswordFailed'));
@@ -2628,7 +2628,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 setTwoFaResetDone(true);
             } else {
                 const err = await res.json();
-                alert(`${tModals('editUser.resetTwoFaFailed')}: ${err.detail || ''}`);
+                alert(`${tModals('editUser.resetTwoFaFailed')}${tCommon('labelSeparator')}${err.detail || ''}`);
             }
         } catch {
             alert(tModals('editUser.resetTwoFaFailed'));
@@ -4618,7 +4618,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 {apiHost ? (
                                                                     <>
                                                                         <div className="font-mono text-sm text-gray-900 break-all">{apiHost}</div>
-                                                                        {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
+                                                                        {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}{tCommon('labelSeparator')}{portsText}</div>}
                                                                     </>
                                                                 ) : (
                                                                     <div className="font-mono text-sm text-gray-900 break-all">{thisDeviceUrl}</div>
@@ -4813,7 +4813,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     )} />
                                                     <span>
                                                         {networkStatus?.error
-                                                            ? `${tLocalNet('statusError')}: ${networkStatus.error}`
+                                                            ? `${tLocalNet('statusError')}${tCommon('labelSeparator')}${networkStatus.error}`
                                                             : networkStatus?.proxy_bound
                                                                 ? tLocalNet('statusRunning')
                                                                 : tLocalNet('statusStarting')}
@@ -4947,7 +4947,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-5 mb-2">{tAdvanced('failoverChain')}</div>
                                                 <div className="flex items-center flex-wrap gap-1.5">
-                                                    <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverPrimary')}: {primaryLabel}</span>
+                                                    <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverPrimary')}{tCommon('labelSeparator')}{primaryLabel}</span>
                                                     {showBackup && bp && (<>
                                                         <ChevronRight size={14} className="text-gray-300" />
                                                         <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{bpMeta?.label || bp}</span>

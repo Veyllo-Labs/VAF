@@ -18,10 +18,18 @@ import { useLocaleStore } from '@/lib/localeStore';
 // Static imports – keeps bundle simple (one JSON per locale).
 import deMessages from '@/messages/de.json';
 import enMessages from '@/messages/en.json';
+import trMessages from '@/messages/tr.json';
+import zhMessages from '@/messages/zh.json';
+import jaMessages from '@/messages/ja.json';
+import koMessages from '@/messages/ko.json';
 
 const messageMap: Record<string, typeof deMessages> = {
   de: deMessages,
   en: enMessages,
+  tr: trMessages,
+  zh: zhMessages,
+  ja: jaMessages,
+  ko: koMessages,
 };
 
 export default function IntlProviderWrapper({

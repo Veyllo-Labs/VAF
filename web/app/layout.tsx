@@ -29,15 +29,22 @@ export default function RootLayout({
   return (
     <html lang="de" className="light" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-background text-foreground">
-        {/* Theme pre-paint: stamp the persisted dark class BEFORE first paint.
-            Parser-blocking on purpose — globals.css applies a global
+        {/* Theme and language pre-paint, before first paint.
+            Parser-blocking on purpose, because globals.css applies a global
             transition-colors, so a post-hydration class change would visibly
             fade light->dark on every load. App Router forbids a custom <head>,
-            so this runs as the first child of <body> (next-themes pattern). */}
+            so this runs as the first child of <body> (next-themes pattern).
+            The lang stamp matters for CJK: Han unification picks the glyph
+            shapes from the declared language, so painting Japanese or Chinese
+            under lang="de" until hydration shows the wrong forms of shared
+            kanji. IntlProviderWrapper still owns the value; this only gets it
+            right one frame earlier, and a code the app does not support is
+            harmless because the wrapper overwrites it on mount. */}
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{if(localStorage.getItem('vaf_theme')==='dark'){var c=document.documentElement.classList;c.remove('light');c.add('dark')}}catch(e){}",
+              "try{if(localStorage.getItem('vaf_theme')==='dark'){var c=document.documentElement.classList;c.remove('light');c.add('dark')}}catch(e){}"
+              + "try{var l=localStorage.getItem('ui_locale')||(navigator.language||'').split('-')[0].toLowerCase();if(/^[a-z]{2}$/.test(l))document.documentElement.lang=l}catch(e){}",
           }}
         />
         <CustomCursor />

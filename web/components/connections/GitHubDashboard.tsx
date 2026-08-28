@@ -54,6 +54,7 @@ interface GitHubRepo {
 
 export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refreshTrigger = 0 }: GitHubDashboardProps) {
     const t = useTranslations('githubDashboard');
+    const tCommon = useTranslations('common');
 
     const [accounts, setAccounts] = useState<GitHubAccount[]>([]);
     const [activities, setActivities] = useState<GitHubActivity[]>([]);
@@ -467,7 +468,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                                             </span>
                                                         )}
                                                         {repo.updated_at && (
-                                                            <span>{t('updated')}: {new Date(repo.updated_at).toLocaleDateString()}</span>
+                                                            <span>{t('updated')}{tCommon('labelSeparator')}{new Date(repo.updated_at).toLocaleDateString()}</span>
                                                         )}
                                                         {repo.private && <span className="text-amber-600">{t('private')}</span>}
                                                     </div>

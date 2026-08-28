@@ -2126,6 +2126,7 @@ function VAFDashboardContent() {
     const tStatus = useTranslations('status');
     const tMain = useTranslations('main');
     const tNav = useTranslations('nav');
+    const tCommon = useTranslations('common');
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState<any>(null);
@@ -12004,7 +12005,7 @@ function VAFDashboardContent() {
                                                     nobody heartbeats a file-only room, so the bare
                                                     flag reads as a fault where none exists. */}
                                                 {m.lease
-                                                    ? `${tMain('roomInfoLastSeen')}: ${new Date(m.lease * 1000).toLocaleString()}`
+                                                    ? `${tMain('roomInfoLastSeen')}${tCommon('labelSeparator')}${new Date(m.lease * 1000).toLocaleString()}`
                                                     : tMain('roomInfoNeverSeen')}
                                             </div>
                                         </div>

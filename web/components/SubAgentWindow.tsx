@@ -2393,7 +2393,7 @@ export default function SubAgentWindow({
                                     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2 font-mono text-[11px] text-gray-700">
                                         {([
                                             ['Loop', String(coder.loop)],
-                                            ['Tasks', coder.taskProgress || '–'],
+                                            ['Tasks', coder.taskProgress || '-'],
                                             ['Files', `${coder.fileTree.length} (${coder.fileTree.filter(f => f.status === 'A').length} added, ${coder.fileTree.filter(f => f.status === 'M').length} modified)`],
                                             ['Commits', `${coder.git.commits.length}${headSha ? ` (head ${headSha})` : ''}`],
                                             ['Working tree', coder.git.dirty > 0 ? `${coder.git.dirty} uncommitted change(s)` : 'clean'],
@@ -2729,7 +2729,7 @@ export default function SubAgentWindow({
                         <div className="flex h-full items-center bg-blue-600 px-3 font-bold text-white">VAF</div>
                         <div className="flex h-full items-center gap-1 px-2.5">
                             <GitBranch size={9} />
-                            {coder.git.branch || '–'}
+                            {coder.git.branch || '-'}
                         </div>
                         {headSha && <div className="flex h-full items-center px-2.5 font-mono">@ {headSha}</div>}
                         <div className="flex h-full items-center gap-1.5 px-2.5">

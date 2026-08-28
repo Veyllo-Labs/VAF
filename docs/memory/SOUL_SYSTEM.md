@@ -66,6 +66,19 @@ the section the model reads as its identity so it cannot be overlooked. The embe
 persona override deliberately does NOT carry it: an override replaces the persona
 wholesale, and an embedder may not even register these tools.
 
+A second code-owned addendum rides the persona block under the same delivery rule
+(`build_capability_addendum` in `vaf/core/system_prompt.py`, appended on the soul path
+and the fallback path, never on the embedder override): the capability answer. The
+identity text bans the generic assistant self-description when someone asks what the
+agent can do, and this addendum defines the GOOD answer instead - turn the question
+around, ask what the user wants, make clear the agent adapts to them, and offer
+examples that fit this user and channel. Its claims are grounded in the live registry:
+the tool count is the session's real count, and each ability line (build a missing
+tool or skill via `create_agent_tool` / `create_skill`, put a team on a problem via
+sub-agents and `create_agent_workflow`, standing orders via `create_automation`)
+appears only when those tools are actually registered, so the prompt cannot promise
+what the runtime would refuse. Guard: `tests/test_capability_answer_prompt.py`.
+
 ---
 
 ## 4. API Specifications

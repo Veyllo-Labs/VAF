@@ -37,6 +37,52 @@ SOUL_CONTINUITY_ADDENDUM = (
 )
 
 
+# Code-owned capability addendum, appended to the persona block right after the
+# continuity addendum and under the same rules (soul path and no-soul fallback,
+# never the embedder override: an override replaces the persona wholesale, and
+# an embedder may not register these tools). It fills the gap the identity text
+# leaves open: the model is told NOT to give the generic assistant list when
+# asked what it can do, but not what a GOOD answer looks like, so it either
+# undersells itself or falls back to the banned list. The shape: turn the
+# question around (ask what the USER needs, adapt to them), then claim only
+# what this session's registry really holds - the live tool count and only the
+# abilities whose tools are actually registered, so the prompt cannot promise
+# what the runtime would refuse.
+def build_capability_addendum(tool_names: set, tool_count: int) -> str:
+    parts = [
+        "\n### When asked what you can do\n"
+        "Never answer with a feature list or a generic assistant self-description, "
+        "and never invent a capability. Turn the question around in your own voice: "
+        "ask what the USER wants or needs, make clear that you adapt to them, and "
+        "offer two or three concrete examples that fit this user and this channel. "
+        "True in this session:\n"
+    ]
+    if tool_count > 0:
+        line = f"- You command {tool_count} tools."
+        if "search_tools" in tool_names or "list_tools" in tool_names:
+            line += " Find the right one with search_tools, browse them with list_tools."
+        parts.append(line + "\n")
+    if "create_agent_tool" in tool_names or "create_skill" in tool_names:
+        parts.append(
+            "- A missing tool is not a wall: you can build a new tool or skill "
+            "yourself (create_agent_tool, create_skill).\n"
+        )
+    if "create_agent_workflow" in tool_names or any(
+        n in tool_names for n in ("coding_agent", "research_agent", "document_agent", "librarian_agent")
+    ):
+        parts.append(
+            "- You can put a team on a problem: delegate to sub-agents or build "
+            "and run a workflow with create_agent_workflow.\n"
+        )
+    if "create_automation" in tool_names:
+        parts.append(
+            "- You take standing orders: create_automation keeps a task running "
+            "without being asked again.\n"
+        )
+    parts.append("Close with the invitation: they only need to ask, or hand you the task.\n")
+    return "".join(parts)
+
+
 class SystemPromptManager:
     """
     Manages the system prompt with modular components.
@@ -515,6 +561,23 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             return "WhatsApp"
         return "WebUI"
 
+    def _capability_addendum(self) -> str:
+        """Persona addendum grounded in THIS session's registry (build_capability_addendum).
+
+        self.tools is a dict in the early-init window and a list of tool
+        instances after tools load; both carry instances with a .name.
+        """
+        tools = self.tools
+        if isinstance(tools, dict):
+            instances = list(tools.values())
+        else:
+            try:
+                instances = list(tools)
+            except TypeError:
+                instances = []
+        names = {n for n in (getattr(t, "name", None) for t in instances) if isinstance(n, str) and n}
+        return build_capability_addendum(names, len(instances))
+
     def build_prompt(
         self,
         filename: str = None,
@@ -678,6 +741,9 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                 # Always appended, invisible in soul.md and not user-editable:
                 # the memory lane must hold even for a soul that never mentions it.
                 persona_parts.append(SOUL_CONTINUITY_ADDENDUM)
+                # Same delivery rule for the capability answer: grounded in the
+                # live registry, so it holds regardless of what the soul says.
+                persona_parts.append(self._capability_addendum())
                 persona_parts.extend(_technical_instructions())
                 parts.append("<identity>\n" + "\n".join(persona_parts) + "\n</identity>")
                 persona_loaded = True
@@ -696,9 +762,10 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                 _identity = _re.sub(
                     r'\n## Action Declaration \(when you use a tool\)[\s\S]*?Omit it when you reply without using a tool\.',
                     '', _identity)
-            # Same continuity addendum as the soul path: a missing soul.md must
-            # not also cost the persona its memory lane.
-            parts.append("<identity>\n" + _identity + "\n" + SOUL_CONTINUITY_ADDENDUM + "\n</identity>")
+            # Same continuity and capability addenda as the soul path: a missing
+            # soul.md must not also cost the persona its memory lane or its
+            # grounded capability answer.
+            parts.append("<identity>\n" + _identity + "\n" + SOUL_CONTINUITY_ADDENDUM + self._capability_addendum() + "\n</identity>")
 
         # Memory Recall instructions
         parts.append("""

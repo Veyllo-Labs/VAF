@@ -294,3 +294,39 @@ def test_the_attribution_detector_actually_detects():
     assert _attribution_hits("a jail here is the crippling the owner " + "ruled out")
     assert not _attribution_hits("the machine owner's key collapses to the ownerless form")
     assert not _attribution_hits("chmod: restrict permissions (owner only)")
+
+
+# ---------------------------------------------------------------------------
+# Swept files stay dash-free. The dash ban is repo-wide by convention, but most
+# of the tree predates the rule and cannot be pinned wholesale; this is the
+# ratchet's clean end: a file joins the list in the same change that sweeps it.
+# The seed entry is the one file where the characters do active damage - the
+# system prompt teaches the model its typography, so a dash there propagates
+# into every reply. U+FFFD rides in the same net because the sweep found two of
+# them corrupting a German example sentence the model received verbatim.
+# ---------------------------------------------------------------------------
+
+_DASH_FREE_FILES = ("vaf/core/system_prompt.py",)
+_BANNED_TYPOGRAPHY = {"—": "em dash", "–": "en dash",
+                      "―": "horizontal bar", "�": "replacement character"}
+
+
+def test_a_swept_file_stays_dash_free():
+    offenders = []
+    for rel in _DASH_FREE_FILES:
+        text = (_REPO / rel).read_bytes().decode("utf-8")
+        for char, name in _BANNED_TYPOGRAPHY.items():
+            count = text.count(char)
+            if count:
+                offenders.append(f"{rel}: {count}x {name} (U+{ord(char):04X})")
+    assert not offenders, (
+        "banned typography crept back into a swept file; write ' - ' (or a comma):\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_the_typography_detector_actually_detects():
+    """The detector's own floor, so an empty result means clean rather than blind."""
+    assert "—" in _BANNED_TYPOGRAPHY and "�" in _BANNED_TYPOGRAPHY
+    probe = "a–b — c�"
+    assert sum(probe.count(c) for c in _BANNED_TYPOGRAPHY) == 3

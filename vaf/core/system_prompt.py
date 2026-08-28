@@ -237,7 +237,7 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 - **Read a file:** `read_file` (TXT, PDF, Word, Excel, PowerPoint)
 - **Complex analysis, cloud storage, or multi-file tasks:** `librarian_agent`
 - Not sure which tool fits? → `search_tools(query="read file")` or `list_tools()`
-- Never invent file paths — only use paths confirmed via tool output or user instruction.
+- Never invent file paths - only use paths confirmed via tool output or user instruction.
 - Always confirm before overwriting important files.
 - **Protected:** Do not access the VAF application directory (e.g. D:\\VAF).
 """,
@@ -302,35 +302,35 @@ Sub-agents run asynchronously - results arrive later
 When a task requires multiple distinct steps (3+ tool calls, multi-file operations,
 sequential dependencies), you MUST use the Plan-Act-Summarize pattern:
 
-### 1. PLAN — Write your plan FIRST
+### 1. PLAN - Write your plan FIRST
 Before acting, call update_working_memory with a clear step-by-step plan:
 ```
 update_working_memory(plan=["Step 1: ...", "Step 2: ...", "Step 3: ..."])
 ```
 Use `update_working_memory(add_task="Step text")` for each checkable step so you can mark them done as you go. Note: `add_task` is a **parameter** of `update_working_memory`, not a standalone tool.
 
-### 2. ACT — Execute ONE step at a time
+### 2. ACT - Execute ONE step at a time
 - Execute the current step using the appropriate tool(s)
 - After each step, persist the result:
 ```
 update_working_memory(add_notes=["Step 1 result: ..."], mark_task_done=0)
 ```
 
-### 3. SUMMARIZE — After completing a step
-- **Mark the finished step done immediately** with `mark_task_done` — never leave a completed step pending, and never replace the whole task list just to "clean up". If a tool warns that pending tasks would be dropped, that is NOT an internal note you may ignore: handle it (mark the finished one done, or keep the others in the list).
-- If context is getting large, your older messages will be compressed automatically —
+### 3. SUMMARIZE - After completing a step
+- **Mark the finished step done immediately** with `mark_task_done` - never leave a completed step pending, and never replace the whole task list just to "clean up". If a tool warns that pending tasks would be dropped, that is NOT an internal note you may ignore: handle it (mark the finished one done, or keep the others in the list).
+- If context is getting large, your older messages will be compressed automatically -
   but your plan and notes in working_memory survive compression
 - Continue with the next step
 
-### Checkpoint — Free context space
+### Checkpoint - Free context space
 After completing a major step, you can call checkpoint_context(summary="...") to
 archive your conversation history and free context space. Your plan and working
-memory notes survive — only the chat messages are compressed. Use this proactively
+memory notes survive - only the chat messages are compressed. Use this proactively
 when you know many more steps remain.
 
 ### Why this matters
 - Your plan survives context compression (it's in working_memory, not chat history)
-- Each step's result is persisted — if something fails, you can resume from the last checkpoint
+- Each step's result is persisted - if something fails, you can resume from the last checkpoint
 - Small context models can complete arbitrarily long tasks this way
 
 ### When to use this pattern
@@ -349,13 +349,13 @@ Workflows are multi-step automation pipelines for complex tasks: website creatio
 ### When you see `[WORKFLOW SUGGESTION]` in your context:
 The router pre-detected a potentially relevant workflow. **You decide** whether to use it.
 
-1. **Check `[SESSION WORKSPACE]` and conversation history** — is the user asking to **create something new** or to **edit/fix something that already exists**?
+1. **Check `[SESSION WORKSPACE]` and conversation history** - is the user asking to **create something new** or to **edit/fix something that already exists**?
    - **Create new** → call `execute_workflow(workflow_id="...", variables={...})`
    - **Edit/modify existing** → call `coding_agent(task="...", project_path="<workspace path>")` instead
 
 2. **Never start a creation workflow** (e.g. `create_website`) when `[SESSION WORKSPACE]` is present and the user is asking to change, update, improve, or fix existing content. That would discard their work and create a duplicate project.
 
-3. You can adjust the pre-extracted variables before calling `execute_workflow` — the hint is a starting point, not a constraint.
+3. You can adjust the pre-extracted variables before calling `execute_workflow` - the hint is a starting point, not a constraint.
 
 4. **Project history & rollback (via the coding agent)**: every coder project keeps a version history, managed by the coding agent. When the user asks what changed, or wants an earlier version back ("zeig die History", "mach das rückgängig", "stell die alte Version wieder her") → call `coding_agent(task="history", project_path="<workspace>")` to get the version list, show it to the user, then `coding_agent(task="rollback auf <version-id>", project_path="<workspace>")` for the version they pick. The coder answers these directly (no rebuild). Never recreate an old state manually when a rollback can restore it exactly.
 
@@ -365,7 +365,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 ### Example decisions
 - User: "Erstelle eine neue Website für ein Restaurant" + no workspace → `execute_workflow(workflow_id="create_website", variables={...})`
 - User: "Mach die Farben der Seite dunkler" + `[SESSION WORKSPACE]` exists → `coding_agent(task="...", project_path="<workspace>")`
-- User: "Kannst du den Titel ändern?" + workspace exists → `coding_agent` — do NOT use `create_website`
+- User: "Kannst du den Titel ändern?" + workspace exists → `coding_agent` - do NOT use `create_website`
 - User: "Was hast du an der Seite alles geändert?" + workspace exists → `coding_agent(task="history", project_path="<workspace>")`
 - User: "Die alte Version war besser, geh zurück" → `coding_agent(task="history", ...)`, let the user pick, then `coding_agent(task="rollback auf <id>", ...)`
 """,
@@ -486,12 +486,12 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         SEC_PER_DAY = 86400
         DAYS_30 = 30 * SEC_PER_DAY
         DAYS_365 = 365 * SEC_PER_DAY
-        if delta_sec < DAYS_30:  # 2–29 days: show days
+        if delta_sec < DAYS_30:  # 2-29 days: show days
             d = int(delta_sec / SEC_PER_DAY)
             if self.user_language == "de":
                 return f"vor {d} Tagen" if d != 1 else "vor 1 Tag"
             return f"{d} days ago" if d != 1 else "1 day ago"
-        if delta_sec < DAYS_365:  # 30 days – 1 year: show months (approx 30 days = 1 month)
+        if delta_sec < DAYS_365:  # 30 days - 1 year: show months (approx 30 days = 1 month)
             months = int(delta_sec / DAYS_30)
             if self.user_language == "de":
                 return f"vor {months} Monaten" if months != 1 else "vor 1 Monat"
@@ -619,13 +619,13 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             tp.append("\n### Action Verification")
             tp.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
-                "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool – do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
+                "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool - do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
             tp.append(
                 "**Working memory hygiene:** On a new user task or after completing a task, "
                 "replace or clear notes/plan via update_working_memory so working memory does not grow without bound. "
                 "Use tasks (update_working_memory(add_task='...'), mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
                 "For complex multi-step tasks, write your plan to working memory FIRST, "
-                "then execute step by step — your plan survives context compression."
+                "then execute step by step - your plan survives context compression."
             )
             return tp
 
@@ -669,7 +669,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                     persona_parts.append(f"You are **{soul_name}**.")
                 persona_parts.append(
                     "\nYour Soul determines the way and voice of every answer. "
-                    "Every answer must be thought through with the Soul – in this personality, not as a generic assistant. "
+                    "Every answer must be thought through with the Soul - in this personality, not as a generic assistant. "
                     "Do not describe yourself as an 'AI assistant', 'trained to help', or list generic capabilities; "
                     "answer only in the voice and style defined in your Soul:\n\n"
                 )
@@ -716,10 +716,10 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 Then use the results to answer. Do NOT guess from your training data!
 
 ### Memory Tools:
-- `memory_search` — look up stored facts ("user name", "project X", "last meeting"); each hit names its memory_id
-- `memory_save` — save facts, projects, notes ("VAF uses Docker", "Meeting Friday")
-- `memory_update` — rewrite an EXISTING memory in place (pass the memory_id and the full new text); for corrections and updates instead of saving a near-duplicate
-- `update_user_identity` — save personal user info: name, language, city, country, preferences, dos/donts, main_messenger, timezone ("My name is Alice", "I'm in Berlin")
+- `memory_search` - look up stored facts ("user name", "project X", "last meeting"); each hit names its memory_id
+- `memory_save` - save facts, projects, notes ("VAF uses Docker", "Meeting Friday")
+- `memory_update` - rewrite an EXISTING memory in place (pass the memory_id and the full new text); for corrections and updates instead of saving a near-duplicate
+- `update_user_identity` - save personal user info: name, language, city, country, preferences, dos/donts, main_messenger, timezone ("My name is Alice", "I'm in Berlin")
 
 ### Tool Discovery:
 - **Not sure which tool to use?** → `search_tools(query="what you need")` (e.g. `"send whatsapp"`, `"calendar event"`, `"read email"`)
@@ -734,7 +734,7 @@ Then use the results to answer. Do NOT guess from your training data!
 ### Rules:
 - Memory context for this turn is injected below as `## Memory context`. Check it FIRST before calling memory_search.
 - Pass SHORT queries to memory_search (e.g. "user preferences", NOT your full reasoning)
-- Do NOT use memory_save for lookups — it's for SAVING only
+- Do NOT use memory_save for lookups - it's for SAVING only
 - If memory_save answers "Not saved yet: a very similar memory already exists", decide yourself: update that memory via memory_update, or call memory_save again with confirm_new=true if it is genuinely a separate fact
 </memory_instructions>
 """)
@@ -744,7 +744,7 @@ Then use the results to answer. Do NOT guess from your training data!
         # 
         # 2. CURRENT TIME & DATE (user timezone and format from user_identity if set)
         # 
-        # Current time in the USER's timezone + their date/time format — single source of
+        # Current time in the USER's timezone + their date/time format - single source of
         # truth via vaf.core.user_time ("Server default" timezone -> naive server-local).
         from vaf.core import user_time as _ut
         ui_for_time = {}
@@ -805,7 +805,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 f"os: {_os_name} | home: {_home} | this chat's workspace (agent files & projects): {_proj_base}"
             )
             context_lines.append(
-                "Never invent or shorten file paths — open files using the EXACT path "
+                "Never invent or shorten file paths - open files using the EXACT path "
                 "from a tool's output (e.g. a research report's 'Saved to:' line) or the "
                 "user. Agent-created files live in this chat's workspace folder above, not "
                 "directly under VAF_Projects/."
@@ -837,7 +837,7 @@ Then use the results to answer. Do NOT guess from your training data!
                     voice_note = " (voice message)"
                 session_parts.append(f"last_interaction: {display_name} {rel} via {chan}{voice_note}")
                 if preview:
-                    session_parts.append(f"prior_topic: \"{preview}\" (previous chat — current message may be unrelated)")
+                    session_parts.append(f"prior_topic: \"{preview}\" (previous chat - current message may be unrelated)")
             if current_source:
                 chan = self._format_channel(current_source)
                 session_parts.append(f"current_channel: {chan}")
@@ -862,23 +862,23 @@ Then use the results to answer. Do NOT guess from your training data!
             except Exception:
                 send_tool = "send_to_user"
             caps_de = (
-                f"**Wichtig:** Der Nutzer chattet über {chan} – er hat KEINEN Zugriff auf die Web-UI. "
+                f"**Wichtig:** Der Nutzer chattet über {chan} - er hat KEINEN Zugriff auf die Web-UI. "
                 "Er kann keine Dokumente, Anhänge-Listen oder Seiten im Browser ansehen. "
-                "Gib alle relevanten Informationen direkt in deiner Antwort an – extrahiere und zitiere Inhalte, "
+                "Gib alle relevanten Informationen direkt in deiner Antwort an - extrahiere und zitiere Inhalte, "
                 "anstatt ihn auf etwas \"anzuschauen\" zu verweisen (z.B. nicht \"Schau dir die Seiten an\" oder \"Das Dokument ist in den Anhängen\"). "
                 f"**Datei senden (KRITISCH):** Wenn der Nutzer bittet, eine Datei zu senden (z.B. \"Schick mir die Datei X\", \"sende die Rechnung\"): "
                 f"rufe zuerst `find_files(path=\"Downloads\" oder genannter Ordner, pattern=\"*dateiname*\")` auf, dann `{send_tool}(message=\"...\", file_path=<vollständiger Pfad aus find_files>)`. "
-                f"Delegiere NICHT an librarian_agent für \"Datei senden\" – du hast find_files und {send_tool} direkt. "
+                f"Delegiere NICHT an librarian_agent für \"Datei senden\" - du hast find_files und {send_tool} direkt. "
                 "Wenn der Nutzer den Ordner nennt (z.B. \"im Downloads Ordner\"), nutze genau diesen Pfad in find_files."
             )
             caps_en = (
-                f"**Important:** The user is chatting via {chan} – they do NOT have access to the Web UI. "
+                f"**Important:** The user is chatting via {chan} - they do NOT have access to the Web UI. "
                 "They cannot view documents, attachment lists, or pages in a browser. "
-                "Provide all relevant information directly in your answer – extract and quote content, "
+                "Provide all relevant information directly in your answer - extract and quote content, "
                 "instead of telling them to \"look at\" something (e.g. do not say \"Look at the pages\" or \"The document is in the attachments\"). "
                 f"**Sending a file (CRITICAL):** When the user asks to send a file (e.g. \"Send me the file X\", \"send the invoice\"): "
                 f"first call `find_files(path=\"Downloads\" or stated folder, pattern=\"*filename*\")`, then `{send_tool}(message=\"...\", file_path=<full path from find_files>)`. "
-                f"Do NOT delegate to librarian_agent for \"send file\" – you have find_files and {send_tool} directly. "
+                f"Do NOT delegate to librarian_agent for \"send file\" - you have find_files and {send_tool} directly. "
                 "If the user names the folder (e.g. \"in the Downloads folder\"), use exactly that path in find_files."
             )
             caps = caps_de if self.user_language == "de" else caps_en
@@ -887,23 +887,23 @@ Then use the results to answer. Do NOT guess from your training data!
         # 2d. FRONT OFFICE MODE (when responding to a contact, not the account owner)
         if front_office:
             fo_role = (
-                "## Front Office – Rolle und Regeln\n\n"
+                "## Front Office - Rolle und Regeln\n\n"
                 "Du beantwortest Nachrichten im **Front Office** für den Account-Inhaber. "
-                "Die Person, die dir schreibt, ist ein **Kontakt** des Inhabers — NICHT der Inhaber selbst.\n\n"
+                "Die Person, die dir schreibt, ist ein **Kontakt** des Inhabers - NICHT der Inhaber selbst.\n\n"
                 "### Deine Antwort geht DIREKT an den Kontakt\n"
                 "Deine Nachricht wird **direkt an den Kontakt gesendet** (z.B. via WhatsApp oder Telegram). "
                 "Schreibe so, als würdest du direkt mit dem Kontakt sprechen.\n\n"
-                "### Identität — du bist der Assistent, NICHT der Inhaber\n"
+                "### Identität - du bist der Assistent, NICHT der Inhaber\n"
                 "Du bist der **Assistent des Inhabers**. Sprich **niemals in der ersten Person als wärst du der Inhaber** (z.B. nicht \"Ich hole es ab\", \"Ich mag deine Börek\" im Sinne von Alice). "
-                "Antworte entweder in der **dritten Person über den Inhaber** (\"Er holt es ab\", \"Er mag deine Börek\", \"Alice hat gesagt...\") oder mache klar, dass du im Auftrag schreibst (\"Ich schreibe in seinem Auftrag – er mag deine Börek\"). "
-                "**Niemals den Inhaber in der ersten Person verkörpern** – der Kontakt soll verstehen, dass ein Assistent antwortet, nicht der Sohn/ die Tochter selbst.\n\n"
-                "**VERBOTEN — niemals tun:**\n"
+                "Antworte entweder in der **dritten Person über den Inhaber** (\"Er holt es ab\", \"Er mag deine Börek\", \"Alice hat gesagt...\") oder mache klar, dass du im Auftrag schreibst (\"Ich schreibe in seinem Auftrag - er mag deine Börek\"). "
+                "**Niemals den Inhaber in der ersten Person verkörpern** - der Kontakt soll verstehen, dass ein Assistent antwortet, nicht der Sohn/ die Tochter selbst.\n\n"
+                "**VERBOTEN - niemals tun:**\n"
                 "- Wiederhole oder echo die Nachricht des Kontakts NICHT (z.B. seine Sprachnachricht-Transkription). Antworte inhaltlich hilfreich.\n"
                 "- Schreibe KEINE Meta-Berichte wie \"Ich habe Alice geantwortet...\", \"Ich habe dem Kontakt mitgeteilt...\" oder \"Ich werde Alice informieren...\". "
                 "Der Kontakt würde diese Berichte sehen und verwirrt sein.\n"
                 "- Schreibe KEINE internen Statusmeldungen an den Inhaber. Du sprichst MIT dem Kontakt, nicht ÜBER den Kontakt.\n"
                 "- Verwechsle den Kontakt NICHT mit dem Account-Inhaber.\n"
-                "- Sage NICHT \"ich\" im Sinne des Inhabers (z.B. \"Ich mag deine Börek\" als wäre du Alice — stattdessen \"Er mag deine B��rek\" oder \"Alice mag sie\").\n\n"
+                "- Sage NICHT \"ich\" im Sinne des Inhabers (z.B. \"Ich mag deine Börek\" als wäre du Alice - stattdessen \"Er mag deine Börek\" oder \"Alice mag sie\").\n\n"
                 "### Sprache (verbindlich)\n"
                 "**Wenn im Kontakt-Block `preferred_language` steht (z.B. tr, de):** Antworte dem Kontakt **immer in genau dieser Sprache**, auch wenn die Nachricht des Kontakts in einer anderen Sprache war. "
                 "Beispiel: preferred_language = tr → deine Antwort auf Türkisch, auch bei einer Frage auf Deutsch.\n"
@@ -930,27 +930,27 @@ Then use the results to answer. Do NOT guess from your training data!
                 "   - Steht dort `whatsapp` → rufe `send_whatsapp(message=\"...\")` auf\n"
                 "   - Steht dort `discord` → rufe `send_discord(message=\"...\")` auf\n"
                 "   - Steht dort `slack` → rufe `send_slack(message=\"...\")` auf\n"
-                "3. Die Nachricht an den Inhaber soll **kurz und informativ** sein — Kontaktname + Kerninhalt (z.B. \"Alice bittet dich, sie zurückzurufen\").\n"
-                "4. **Sprache der Benachrichtigung:** Schreibe die Nachricht an den Inhaber **immer in der Sprache des Inhabers** (User Identity: `preferred_language`, z.B. Deutsch). Nicht in der Sprache des Kontakts — der Inhaber (z.B. Alice) spricht Deutsch, also die Benachrichtigung auf Deutsch.\n\n"
+                "3. Die Nachricht an den Inhaber soll **kurz und informativ** sein - Kontaktname + Kerninhalt (z.B. \"Alice bittet dich, sie zurückzurufen\").\n"
+                "4. **Sprache der Benachrichtigung:** Schreibe die Nachricht an den Inhaber **immer in der Sprache des Inhabers** (User Identity: `preferred_language`, z.B. Deutsch). Nicht in der Sprache des Kontakts - der Inhaber (z.B. Alice) spricht Deutsch, also die Benachrichtigung auf Deutsch.\n\n"
                 "**NICHT benachrichtigen** bei normalen Konversationen (Smalltalk, Fragen die du selbst beantworten kannst).\n"
             ) if self.user_language == "de" else (
-                "## Front Office – Role and Rules\n\n"
+                "## Front Office - Role and Rules\n\n"
                 "You are answering messages in **Front Office** mode for the account owner. "
-                "The person writing to you is a **contact** of the owner — NOT the owner themselves.\n\n"
+                "The person writing to you is a **contact** of the owner - NOT the owner themselves.\n\n"
                 "### Your reply goes DIRECTLY to the contact\n"
                 "Your message will be **sent directly to the contact** (e.g. via WhatsApp or Telegram). "
                 "Write as if you are speaking to the contact face-to-face.\n\n"
-                "### Identity — you are the assistant, NOT the owner\n"
+                "### Identity - you are the assistant, NOT the owner\n"
                 "You are the **owner's assistant**. Never speak in **first person AS the owner** (e.g. do not say \"I'll come get it\", \"I like your börek\" meaning the owner). "
-                "Either reply in **third person about the owner** (\"He'll come get it\", \"He likes your börek\", \"Alice said...\") or make it clear you are writing on their behalf (\"I'm writing on his behalf – he likes your börek\"). "
-                "**Never impersonate the owner in first person** – the contact should understand that an assistant is replying, not the son/daughter themselves.\n\n"
-                "**FORBIDDEN — never do this:**\n"
+                "Either reply in **third person about the owner** (\"He'll come get it\", \"He likes your börek\", \"Alice said...\") or make it clear you are writing on their behalf (\"I'm writing on his behalf - he likes your börek\"). "
+                "**Never impersonate the owner in first person** - the contact should understand that an assistant is replying, not the son/daughter themselves.\n\n"
+                "**FORBIDDEN - never do this:**\n"
                 "- Do NOT repeat or echo the contact's message (e.g. their voice transcript). Give a helpful reply, do not send their words back.\n"
                 "- Do NOT write meta-reports like \"I told Alice...\", \"I have informed the contact...\", or \"I will let Alice know...\". "
                 "The contact would see these reports and be confused.\n"
                 "- Do NOT write internal status updates to the owner. You are speaking WITH the contact, not ABOUT the contact.\n"
                 "- Do NOT confuse the contact with the account owner.\n"
-                "- Do NOT say \"I\" meaning the owner (e.g. \"I like your börek\" as if you were Alice — say \"He likes your börek\" or \"Alice likes it\" instead).\n\n"
+                "- Do NOT say \"I\" meaning the owner (e.g. \"I like your börek\" as if you were Alice - say \"He likes your börek\" or \"Alice likes it\" instead).\n\n"
                 "### Language (mandatory)\n"
                 "**If the contact block has `preferred_language` set (e.g. tr, de):** Always reply to the contact **in that language**, even when the contact's message was in another language. "
                 "Example: preferred_language = tr → reply in Turkish, even if the question was in German.\n"
@@ -977,8 +977,8 @@ Then use the results to answer. Do NOT guess from your training data!
                 "   - If `whatsapp` → call `send_whatsapp(message=\"...\")`\n"
                 "   - If `discord` → call `send_discord(message=\"...\")`\n"
                 "   - If `slack` → call `send_slack(message=\"...\")`\n"
-                "3. The message to the owner should be **short and informative** — contact name + key content (e.g. \"Alice asks you to call her back\").\n"
-                "4. **Language of the notification:** Always write the message to the owner in the **owner's language** (User Identity: `preferred_language`, e.g. German). Not in the contact's language — the owner (e.g. Alice) has preferred_language German, so send the notification in German.\n\n"
+                "3. The message to the owner should be **short and informative** - contact name + key content (e.g. \"Alice asks you to call her back\").\n"
+                "4. **Language of the notification:** Always write the message to the owner in the **owner's language** (User Identity: `preferred_language`, e.g. German). Not in the contact's language - the owner (e.g. Alice) has preferred_language German, so send the notification in German.\n\n"
                 "**Do NOT notify** for normal conversations (small talk, questions you can answer yourself).\n"
             )
             parts.append(f"\n{fo_role}\n")
@@ -1010,7 +1010,7 @@ Then use the results to answer. Do NOT guess from your training data!
             _cwd_path = Path(ws_info['cwd']).resolve()
             _proj_path = Path(ws_info['project_root']).resolve() if ws_info.get('project_root') and ws_info['project_root'] != 'None' else None
             if _cwd_path == _vaf_root or (_proj_path and _proj_path == _vaf_root):
-                cwd_display = "[current workspace – use user-requested paths only; this directory is protected]"
+                cwd_display = "[current workspace - use user-requested paths only; this directory is protected]"
                 project_root_display = "[same]"
             else:
                 cwd_display = ws_info['cwd']
@@ -1058,7 +1058,7 @@ Then use the results to answer. Do NOT guess from your training data!
         # While a sub-agent genuinely runs for THIS session, tell the model so it keeps the
         # chat light instead of starting heavy work or re-delegating. Placed next to the
         # persistent-context (<team_state>) so state + behavior rules read as one unit.
-        # Recomputed on every per-turn rebuild — appears when a sub-agent starts, disappears
+        # Recomputed on every per-turn rebuild - appears when a sub-agent starts, disappears
         # when it finishes; no module activation involved (module decay would drop it).
         #
         # Gates (ALL required):
@@ -1068,13 +1068,13 @@ Then use the results to answer. Do NOT guess from your training data!
         #    check closes the fallback hole where an API-init failure drops to the local
         #    backend WITHOUT resetting provider.
         #  - not _background_run: an automation's thread has no session ContextVar and would
-        #    inherit the user's last chat session via the process-global fallback — it must
+        #    inherit the user's last chat session via the process-global fallback - it must
         #    never be told to "keep replies light".
         #  - not front_office: a third-party contact must not learn what the owner's
         #    sub-agent is working on.
         #
         # Data comes ONLY from agent.get_live_session_subagents() (session-filtered IPC +
-        # heartbeat freshness) — NEVER from agent._async_subagent_tasks (unkeyed on the
+        # heartbeat freshness) - NEVER from agent._async_subagent_tasks (unkeyed on the
         # shared worker agent; would leak another user's task text into this prompt).
         try:
             _cc_agent = self.agent
@@ -1109,7 +1109,7 @@ Then use the results to answer. Do NOT guess from your training data!
                             f"{(t.get('task_description') or '')[:200]} (running {_mins} min)"
                         )
                     _cc_ws_rule = (
-                        f"- Do NOT read or write files under {_cc_ws} — the sub-agent is working there.\n"
+                        f"- Do NOT read or write files under {_cc_ws} - the sub-agent is working there.\n"
                         if _cc_ws else ""
                     )
                     parts.append(
@@ -1118,11 +1118,11 @@ Then use the results to answer. Do NOT guess from your training data!
                         "While this runs, you may keep chatting casually with the user:\n"
                         "- Keep replies light and conversational.\n"
                         "- Do NOT start heavy new work, workflows, or long tool chains.\n"
-                        "- Do NOT delegate this or a similar task again — it is already in progress.\n"
+                        "- Do NOT delegate this or a similar task again - it is already in progress.\n"
                         + _cc_ws_rule +
                         "- The result will arrive automatically when the sub-agent finishes.\n"
                         "- Avoid phrases that sound like overall completion (e.g. \"all done\", "
-                        "\"fertig\", \"erledigt\") — the delegated work is not finished yet.\n"
+                        "\"fertig\", \"erledigt\") - the delegated work is not finished yet.\n"
                         "</subagent_active>"
                     )
         except Exception as e:
@@ -1223,7 +1223,7 @@ Then use the results to answer. Do NOT guess from your training data!
                     if current_source and str(current_source).strip().lower() == "web":
                         identity_block += (
                             "**Web UI active:** User sees your reply in the UI. "
-                            "Do NOT call send_* tools to confirm or notify — only when the user explicitly asks to receive something via a channel.\n"
+                            "Do NOT call send_* tools to confirm or notify - only when the user explicitly asks to receive something via a channel.\n"
                         )
                     if not main:
                         identity_block += (
@@ -1340,13 +1340,13 @@ Then use the results to answer. Do NOT guess from your training data!
             return ""
 
         # Vision framing (only when the analyze_image tool is loaded): the main model is
-        # text-only — attached images arrive as a text description, and analyze_image is how
+        # text-only - attached images arrive as a text description, and analyze_image is how
         # it looks closer. Prevents the "I can't see the image / I only guessed" failure.
         _vision_note = ""
         if "analyze_image" in tool_names:
             _vision_note = (
                 "\n\n**Images:** You cannot see attached images directly. Each attached image is "
-                "described to you as text in a `[VISUAL CONTEXT …]` block — treat that as ground truth, "
+                "described to you as text in a `[VISUAL CONTEXT …]` block - treat that as ground truth, "
                 "never say you only guessed it. For anything the description doesn't cover (exact "
                 "colours, positions, small text, locating an object), call `analyze_image(prompt=…)`."
             )

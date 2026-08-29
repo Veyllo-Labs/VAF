@@ -92,6 +92,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   start, standard output stayed redirected into a pipe nobody read, and the tray plus all
   its children would block forever once that pipe filled. Output is only redirected once
   the reader is running, and an explicit `2>file` redirect is left alone.
+- **A damaged activity record can no longer switch off proactive thinking for good.**
+  If `last_interaction.json` was ever left truncated (for example by an interrupted
+  write), every later attempt to record user activity silently failed and thinking
+  mode stopped seeing idle users entirely, on every platform. The store now treats
+  a corrupt file as empty and heals it with the next recorded interaction.
 - **Windows: a failed firewall setup no longer retries into repeated error dialogs.**
   The guard meant to skip further `netsh` attempts after the first failure never
   actually engaged.

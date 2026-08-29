@@ -61,11 +61,20 @@ def update_last_interaction(
     try:
         path = _store_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A corrupt or truncated store must be treated as empty here, NOT abort the
+        # update: the overwrite below is the only thing that ever heals the file.
+        # With the parse inside the outer try, one truncated write permanently
+        # silenced both interaction recording and thinking-mode idle detection.
         data: Dict[str, Dict[str, Any]] = {}
         if path.exists():
-            raw = path.read_text(encoding="utf-8")
-            if raw.strip():
-                data = json.loads(raw)
+            try:
+                raw = path.read_text(encoding="utf-8")
+                if raw.strip():
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, dict):
+                        data = loaded
+            except (json.JSONDecodeError, OSError):
+                data = {}
         key = _key(user_scope_id)
         data[key] = {
             "ts": time.time(),

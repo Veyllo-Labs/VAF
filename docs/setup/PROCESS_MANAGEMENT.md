@@ -72,9 +72,24 @@ atexit.register(self._atexit_cleanup)
 ### 4. **PID File Tracking**
 
 VAF maintains a PID file (`~/.vaf/server.pid`) that:
-- Stores the server process ID
+- Stores the **model server** (llama-server) process ID
 - Allows recovery of orphaned processes on next startup
 - Enables server reuse across multiple VAF instances
+
+Two separate PID files, two separate meanings:
+
+| File | Written by | Holds | Read by |
+|---|---|---|---|
+| `~/.vaf/server.pid` | `vaf/core/backend.py` | the local model server | orphan cleanup on the next start |
+| `~/.vaf/service.pid` | `vaf/cli/cmd/service.py` | the VAF background service (tray) | `vaf start` / `stop` / `status`, the updater |
+
+They must never share a name. The orphan cleanup kills the process recorded in
+`server.pid` when nothing answers the model server's health endpoint, so a
+service PID written into that file made a freshly started VAF kill itself one
+second in (live incident). Since then the cleanup also verifies the recorded
+process really is a model server before killing anything, and skips the record
+otherwise: not killing a stale entry costs a port conflict, killing the wrong
+process costs somebody's work.
 
 ### 5. **Session Management**
 

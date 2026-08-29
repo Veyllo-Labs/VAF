@@ -35,6 +35,19 @@ VAF includes a persistent background service managed by a system tray applicatio
 vaf tray
 ```
 
+In an interactive terminal this splits in two: the tray itself runs as a
+detached child writing the service log, and the terminal shows the live
+dashboard (`vaf top`) following that log. Ctrl+C on the dashboard stops VAF -
+the contract the foreground tray always had - while closing the terminal window
+leaves VAF running (`vaf stop` ends it). Attaching to an already running VAF
+only opens the dashboard and stops nothing on exit.
+
+Every non-interactive lane keeps the classic direct run: no TTY (the shell
+launchers, `vaf start`, the crash supervisor), an explicit `vaf tray --no-top`,
+the macOS native wrapper, or the systemd unit (which declares the journal as
+its log). The child is spawned with `--no-top`, so the wrapper can never
+recurse into itself.
+
 ### Menu Options
 
 - **Open VAF**: Shows the VAF desktop window (brings it to the front if already open).
@@ -248,7 +261,11 @@ covers the renderer child dying while the host survives. Mitigations shipped:
 - `scripts/tray_supervisor.sh`: the Linux shell launchers run the windowed tray
   under a bounded restart supervisor (restart only on abnormal exit; never on
   exit 0/130/143; at most 3 restarts per 10 minutes; waits for the singleton
-  port to free). Two launch paths run WITHOUT this supervision: a direct
+  port to free). It invokes `vaf.main tray --no-top` deliberately: without that
+  flag an interactive terminal would give it the dashboard wrapper to watch
+  instead of the tray itself, and a host-process abort in the real tray - the
+  very crash this supervisor exists for - would go unnoticed. Two launch paths
+  run WITHOUT this supervision: a direct
   `python -m vaf.main tray` invocation, and the freedesktop login-autostart
   entry written by `Platform.set_tray_autostart` (its `Exec` line calls the
   Python module directly). Only the shell launchers (`run_vaf.sh`,

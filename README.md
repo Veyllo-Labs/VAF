@@ -140,13 +140,19 @@ The desktop app: system-tray icon + agent window, web UI at `http://localhost:30
 vaf tray       # Start the desktop app (tray + web UI)
 ```
 
+In a terminal, `vaf tray` runs the app in the background and shows the live
+dashboard (`vaf top`) in that terminal: state, utilization, services and the
+service log. Ctrl+C there stops VAF; closing the window only ends the view.
+`vaf tray --no-top` keeps the plain foreground output.
+
 Or manage it as a background service:
 
 ```bash
-vaf start      # Start in background
+vaf start      # Start in background (opens the dashboard in a terminal)
 vaf stop       # Stop cleanly
 vaf restart    # Restart
 vaf status     # Show status
+vaf top        # Live dashboard (attach any time, Ctrl+C leaves VAF running)
 ```
 
 **LAN access** (other devices on your network):
@@ -269,10 +275,14 @@ vaf stop             # Stop background service
 vaf restart          # Restart background service
 vaf status           # Show service status
 
+vaf top              # Live dashboard: state, utilization, services, log
+vaf top --once       # One snapshot, for scripts and checks
+
 vaf run              # Interactive chat (TUI)
 vaf prompt "..."     # One-shot prompt
-vaf tray             # Background service + web UI (foreground)
+vaf tray             # Desktop app; in a terminal it shows the dashboard
 vaf server on|off|status
+vaf server provision # Re-run server-mode setup (certs, firewall, checks)
 
 vaf update           # Update to the latest release
 vaf update check     # Check if a newer release is available

@@ -101,6 +101,15 @@ Use `vaf.sh` in the project root:
 ./vaf.sh status   # Show what is running
 ```
 
+The `vaf` command offers the same lifecycle with a live view attached: in a
+terminal `vaf start` and `vaf tray` open the dashboard (`vaf top`) after
+starting, showing state, utilization, containers and the service log. Ctrl+C
+there stops VAF only in the `vaf tray` lane; from `vaf start` it just closes the
+view, and `vaf stop` ends the service. Add `--no-watch` / `--no-top` for the
+plain behavior, and note that these commands and `vaf.sh` track the running
+instance differently (`~/.vaf/service.pid` versus `.vaf.pid` in the checkout),
+so pick one lane per machine rather than mixing them.
+
 ### What `vaf.sh` does
 
 **start:**

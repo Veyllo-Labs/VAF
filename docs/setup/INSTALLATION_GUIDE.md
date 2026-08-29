@@ -252,11 +252,18 @@ Once installed, these are the commands you'll use day to day:
 vaf start      # start in the background
 vaf stop       # stop
 vaf status     # show what is running
+vaf top        # live view in the terminal: state, load, services, log
 vaf tray       # desktop tray + dashboard window
 vaf run        # interactive terminal session
 vaf update     # update to the latest release
 vaf repair     # check the Docker services and fix a broken one
 ```
+
+Started from a terminal, `vaf start` and `vaf tray` show that live view right
+away instead of a stream of log lines. Leaving it with Ctrl+C stops VAF only
+when you started it with `vaf tray`; otherwise VAF keeps running and `vaf stop`
+ends it. Add `--no-watch` (start) or `--no-top` (tray) if you prefer the plain
+output.
 
 `vaf repair --check` reports the service status and changes nothing. The same
 command exists inside the terminal app as `/repair`, and in the Web UI under

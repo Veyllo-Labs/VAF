@@ -101,7 +101,9 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
   The shell launchers (`run_vaf.sh`, `start_vaf.sh`) therefore run the windowed
   tray under `scripts/tray_supervisor.sh`: restart only on abnormal exit (never
   on exit 0/130/143), at most 3 restarts per 10 minutes, waiting for the
-  singleton port to free first. On NVIDIA hosts the driver's threaded
+  singleton port to free first. The supervisor passes `--no-top` so it watches
+  the tray itself rather than the terminal dashboard wrapper that `vaf tray`
+  otherwise starts (see [SYSTEM_TRAY.md](./SYSTEM_TRAY.md)). On NVIDIA hosts the driver's threaded
   optimizations are additionally disabled for the process
   (`__GL_THREADED_OPTIMIZATIONS=0`, opt-out by exporting the variable; applied
   via `nvidia_gl_workarounds()` in `vaf/core/display_platform.py` and logged in

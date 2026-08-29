@@ -147,3 +147,25 @@ def test_engine_detection_never_runs_firewall_cmd(monkeypatch):
     assert fw._firewalld_running() is True
     assert all(a[0] != "firewall-cmd" for a in calls), calls
     assert any(a[:2] == ["systemctl", "is-active"] for a in calls)
+
+
+def test_a_failed_netsh_attempt_skips_further_windows_setup(monkeypatch):
+    """The skip flag must actually persist across calls: it is assigned inside the
+    function, which without a global declaration created a function-local and made
+    the documented "no repeated netsh dialogs" guard a no-op. Mutation: drop the
+    global declaration again - red."""
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return type("R", (), {"returncode": 1, "stdout": "", "stderr": "denied"})()
+
+    monkeypatch.setattr(fw, "_windows_firewall_skip", False)
+    monkeypatch.setattr(fw.subprocess, "run", run)
+
+    assert fw._setup_firewall_windows(8443, 8001) is False
+    assert fw._windows_firewall_skip is True
+    first = len(calls)
+    assert first > 0
+    assert fw._setup_firewall_windows(8443, 8001) is False
+    assert len(calls) == first, "the second attempt must short-circuit before any netsh call"

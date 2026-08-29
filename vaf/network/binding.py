@@ -271,6 +271,117 @@ def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optio
     return None
 
 
+def resolve_lan_access_ports(wait_for_proxy: bool = False, timeout_s: float = 10.0) -> Tuple[int, int]:
+    """Return (access_port, frontend_port) that LAN clients actually reach.
+
+    TLS on: the access port is the integrated HTTPS proxy's EFFECTIVE port, which
+    can differ from the configured one because of the 443->8443 fallback in
+    pick_bindable_port. With wait_for_proxy=True the proxy status is polled up to
+    timeout_s for the port it really bound - valid only for callers INSIDE the app
+    process, because runtime_status is per-process state; out-of-process callers
+    (CLI, installer) must leave it False and get the deterministic assumption:
+    configured local_network_https_port, with 443 mapped to 8443. The frontend
+    port is the plain backend port in this mode - with TLS the proxy is the only
+    LAN-facing listener and the backend port is the secondary one the firewall
+    layer handles.
+
+    TLS off: (local_network_port, local_network_port_frontend).
+    """
+    from vaf.core.config import Config
+
+    tls_on = bool(Config.get("local_network_tls_enabled", False))
+    if not tls_on:
+        return (
+            int(Config.get("local_network_port", 8001) or 8001),
+            int(Config.get("local_network_port_frontend", 3000) or 3000),
+        )
+
+    access_port: Optional[int] = None
+    if wait_for_proxy:
+        import time
+        from vaf.network import runtime_status
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() < deadline:
+            st = runtime_status.get_proxy_status()
+            if st.get("bound") and st.get("effective_https_port"):
+                access_port = int(st["effective_https_port"])
+                break
+            time.sleep(0.5)
+    if access_port is None:
+        configured = int(Config.get("local_network_https_port", 443) or 443)
+        access_port = 8443 if configured == 443 else configured
+    return access_port, int(Config.get("local_network_port", 8001) or 8001)
+
+
+# Lease stores of the network managers VAF's supported distros actually ship:
+# NetworkManager (internal client), dhclient, dhcpcd, wicked (openSUSE) and
+# systemd-networkd. Every file in these stores names the leased address in
+# plain text, which is all the probe needs.
+_DHCP_LEASE_GLOBS = (
+    "/var/lib/NetworkManager/*.lease*",
+    "/var/lib/dhcp/dhclient*.lease*",
+    "/var/lib/dhclient/*.lease*",
+    "/var/lib/dhcpcd/*",
+    "/run/wicked/leaseinfo*",
+    "/run/systemd/netif/leases/*",
+)
+
+
+def lan_ip_is_dhcp() -> Optional[bool]:
+    """Best-effort answer to "is the LAN address DHCP-assigned?".
+
+    True = a DHCP lease covers the LAN IP, False = the address is configured
+    manually, None = undetectable. Warn-only by contract: callers use this purely
+    to recommend a static IP or router reservation for server installs, so every
+    probe is wrapped, subprocess calls carry short timeouts, and the function
+    never raises. An answer of None must stay silent at the call site - lease
+    stores can be unreadable for an unprivileged user, and that proves nothing.
+    """
+    import glob
+    import os
+    import shutil
+    import subprocess
+
+    try:
+        lan_ip = get_local_network_ip()
+    except Exception:
+        return None
+
+    # Probe 1: NetworkManager, when it manages the device. A DHCP-assigned
+    # address always carries DHCP4.OPTION entries in `nmcli device show`; a
+    # manual address on the same device has none.
+    try:
+        if shutil.which("nmcli"):
+            result = subprocess.run(
+                ["nmcli", "-t", "device", "show"],
+                capture_output=True, text=True, timeout=5,
+                # Extend, never replace: a bare env would drop the keys a
+                # subprocess needs on other platforms (SystemRoot on Windows).
+                env={**os.environ, "LC_ALL": "C"},
+            )
+            if result.returncode == 0 and result.stdout:
+                for block in result.stdout.split("\n\n"):
+                    if f":{lan_ip}/" in block or f":{lan_ip}\n" in block:
+                        return "DHCP4.OPTION" in block
+    except Exception:
+        pass
+
+    # Probe 2: lease files of the other common clients.
+    for pattern in _DHCP_LEASE_GLOBS:
+        try:
+            for path in glob.glob(pattern):
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        if lan_ip in fh.read(262144):
+                            return True
+                except OSError:
+                    continue
+        except Exception:
+            continue
+
+    return None
+
+
 def get_all_local_ips() -> List[Tuple[str, str]]:
     """
     Get all local network IP addresses.

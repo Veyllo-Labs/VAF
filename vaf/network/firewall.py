@@ -169,9 +169,13 @@ def is_firewall_configured() -> bool:
 def _setup_firewall_windows(port: int, port_frontend: int) -> bool:
     """
     Create Windows Firewall rules for LAN-only access.
-    
+
     Uses netsh advfirewall to create inbound rules.
     """
+    global _windows_firewall_skip
+    if _windows_firewall_skip:
+        logger.info("Skipping Windows Firewall setup - a previous netsh attempt in this process failed")
+        return False
     logger.info("Setting up Windows Firewall rules for local network access")
     
     # First, remove any existing rules

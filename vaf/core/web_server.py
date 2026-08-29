@@ -1529,29 +1529,11 @@ async def startup_event():
     if Config.get("local_network_enabled", False) and Config.get("local_network_firewall_enabled", True):
         def _setup_firewall_bg():
             try:
-                import time as _time
                 from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
-                tls_on = bool(Config.get("local_network_tls_enabled", False))
-                if tls_on:
-                    # Open the port the integrated proxy ACTUALLY bound (e.g. 8443 after the 443→8443
-                    # fallback), NOT the configured 443. Wait briefly for the proxy thread to report it.
-                    from vaf.network import runtime_status
-                    access_port = None
-                    for _ in range(20):  # up to ~10s for the proxy to bind + report
-                        st = runtime_status.get_proxy_status()
-                        if st.get("bound") and st.get("effective_https_port"):
-                            access_port = int(st["effective_https_port"])
-                            break
-                        _time.sleep(0.5)
-                    if access_port is None:
-                        configured = int(Config.get("local_network_https_port", 443) or 443)
-                        # Proxy hasn't reported yet → assume its standard 443→8443 fallback.
-                        access_port = 8443 if configured == 443 else configured
-                    port = access_port
-                    port_frontend = int(Config.get("local_network_port", 8001) or 8001)
-                else:
-                    port = int(Config.get("local_network_port", 8001) or 8001)
-                    port_frontend = int(Config.get("local_network_port_frontend", 3000) or 3000)
+                from vaf.network.binding import resolve_lan_access_ports
+                # In-process caller: wait for the proxy to report the port it ACTUALLY
+                # bound (443->8443 fallback) instead of trusting the configured value.
+                port, port_frontend = resolve_lan_access_ports(wait_for_proxy=True)
 
                 success = setup_firewall(port, port_frontend)
                 if success == "present":

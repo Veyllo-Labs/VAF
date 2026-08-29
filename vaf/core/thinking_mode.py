@@ -2334,9 +2334,11 @@ def relevance_watch_allowed(user_scope_id: Optional[str]) -> tuple:
     not drowning in notes. At the default run cadence that is a dozen chances a day, and an unbounded
     FYI lane is a notification machine, not an assistant.
 
-    SELF-DISABLE, because the only honest measure of this rung is whether the user acted on what it
-    sent. Two ignored or declined notices in the last ten and it stops on its own, rather than waiting
-    for someone to find a setting. The reply classification it reads already exists."""
+    SELF-DISABLE, because the only honest measure of this rung is how the user reacted to what it
+    sent. Two DECLINED notices in the last ten and it stops on its own, rather than waiting for
+    someone to find a setting. Declined specifically, not "unanswered": an FYI is not a question and
+    is never replied to, so treating silence as rejection would switch the rung off for good on
+    exactly the behaviour it is designed for. The reply classification it reads already exists."""
     from vaf.core.config import Config
     from vaf.core import thinking_requests as _treq
     if not Config.get("thinking_relevance_enabled", True):
@@ -2369,10 +2371,14 @@ def relevance_watch_allowed(user_scope_id: Optional[str]) -> tuple:
                     newest = at
             if newest is not None and (_dt.now() - newest).total_seconds() < hours * 3600:
                 return False, "cooldown"
+    # Counts DECLINED only. An FYI is not a question, so it is never replied to and never leaves
+    # status "asked" - counting that as "ignored" would have made the rung disable itself on its
+    # own normal behaviour, permanently, after ten perfectly good notices. What can honestly be
+    # measured is an explicit negative reaction, and that is what this reads.
     last_ten = recent[:10]
     if len(last_ten) >= 10:
-        ignored = sum(1 for r in last_ten if (r.get("status") or "") in ("declined", "asked"))
-        if ignored >= 2:
+        declined = sum(1 for r in last_ten if (r.get("status") or "") == "declined")
+        if declined >= 2:
             return False, "self_disabled"
     return True, "ok"
 

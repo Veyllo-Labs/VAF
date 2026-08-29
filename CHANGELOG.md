@@ -26,8 +26,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   changes something for you - with the source, its date, and the search it ran. Saying nothing is the
   normal outcome, and a news summary is explicitly not one: this is not a digest. Such a notice is
   sent as information rather than a question, so it is never followed up or nudged, there is a
-  three-day gap between notices, and the whole feature switches itself off if two of its last ten
-  notices went ignored. Health is deliberately not one of the things it looks up.
+  three-day gap between notices, and the whole feature switches itself off if you turn down two of
+  its last ten notices. Health is deliberately not one of the things it looks up.
 - **A server install can now be chosen without a keyboard.** `./install.sh --server`
   (and `--desktop`) select the installation mode non-interactively, and the hosted
   one-liner forwards flags (`... | bash -s -- --server`), so provisioning scripts and

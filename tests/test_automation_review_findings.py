@@ -202,3 +202,39 @@ def test_a_single_error_is_not_a_pattern():
     mixed = [{"status": "success", "at": NOW.isoformat(), "seconds": 1},
              {"status": "error", "at": NOW.isoformat(), "seconds": 1}]
     assert review_findings([t], now=NOW, run_logs={"a1": mixed}) == []
+
+
+# ── stored timestamps that are not naive local time ──────────────────────────────────────
+
+def test_an_offset_bearing_timestamp_does_not_take_out_the_whole_pass():
+    """`datetime.fromisoformat` returns an AWARE value for a string carrying an offset, and
+    subtracting that from a naive `datetime.now()` raises rather than answering wrongly - so one
+    such record would kill every finding, not just its own."""
+    aware = _task(id="a1", created_at="2026-07-01T08:00:00+02:00",
+                  last_run="2026-07-02T08:00:00+02:00")
+    findings = review_findings([aware], now=NOW)          # must not raise
+    assert {f["kind"] for f in findings} == {"no_recent_success"}
+
+
+def test_a_mixed_pool_still_reports_the_naive_ones():
+    aware = _task(id="a1", created_at="2026-07-01T08:00:00+02:00", last_run=None)
+    naive = _task(id="a2", last_run=(NOW - timedelta(days=9)).isoformat())
+    kinds = {f["task_id"] for f in review_findings([aware, naive], now=NOW)}
+    assert kinds == {"a1", "a2"}
+
+
+def test_the_workflow_success_path_also_records_a_run():
+    """That branch RETURNS before the run log at the end of run_task, so it needs its own write.
+    Without it every workflow-based automation is invisible to the log, and the findings built on
+    the log would quietly describe only the prompt-based ones.
+
+    Checked statically: exercising it for real would mean running an automation end to end."""
+    import re
+    from pathlib import Path as _P
+    import vaf.core.automation as automation
+
+    src = _P(automation.__file__).read_text(encoding="utf-8")
+    m = re.search(r"if workflow_saved_file:(.*?)\n                    return result", src, re.S)
+    assert m, "the workflow-saved-file branch moved - re-anchor this guard"
+    assert "append_run_log(" in m.group(1), \
+        "the workflow success path returns without recording the run"

@@ -1466,6 +1466,23 @@ class Agent:
         """
         return getattr(self, "_run_kind", None) == "thinking"
 
+    def _web_search_user_question(self, arguments) -> str:
+        """What `web_search` is told the user actually wanted, for its per-page analysis.
+
+        In a normal chat turn that is the last thing the user said, which is what makes the deep
+        read answer their real question rather than the bare query. In a BACKGROUND run it must be
+        the query itself: the last "user" message there is a system-authored ladder prompt or, worse,
+        a real chat line the user once wrote to the assistant - and this value is sent onward, into
+        the analysis of fetched pages and into the result cache key.
+        """
+        user_question = (arguments or {}).get("query", "")
+        if self._is_thinking_run():
+            return user_question
+        for msg in reversed(getattr(self, "history", []) or []):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                return msg.get("content", user_question)
+        return user_question
+
     def _forcing_this_generation(self) -> bool:
         """Is THIS generation the one the caller forced a tool call on?
 
@@ -11073,20 +11090,7 @@ class Agent:
                     # Tool fillers are not spoken on host TTS (avoid announcing every tool use).
                     # Extract user question for web_search to enable per-page analysis
                     if function_name == "web_search":
-                        # Find the last user message to get the original question
-                        user_question = arguments.get('query', '')  # Default to query
-                        # NOT in a background run. There the last "user" message is a system-authored
-                        # ladder prompt or, worse, a real chat line the user wrote to the assistant -
-                        # and this value is sent onward: it steers the per-page analysis of fetched
-                        # pages and lands in the result cache key. A background pass has no user
-                        # question, so its search speaks only for itself.
-                        if not self._is_thinking_run():
-                            for msg in reversed(self.history):
-                                if msg.get('role') == 'user':
-                                    user_question = msg.get('content', user_question)
-                                    break
-                        # Add user_question to arguments for web_search
-                        arguments['user_question'] = user_question
+                        arguments['user_question'] = self._web_search_user_question(arguments)
                     
                     # Show spinner while tool works
                     from vaf.cli.ui import UI as UI_Class

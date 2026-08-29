@@ -566,10 +566,19 @@ def _review_grace_hours(task: "AutomationTask") -> Optional[float]:
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse a stored timestamp as NAIVE local time.
+
+    Everything this module compares against is `datetime.now()`, which is naive. A stored value
+    carrying an offset (hand-edited file, an import, a future writer) would come back aware, and
+    subtracting the two raises TypeError rather than returning a wrong answer - so it would take
+    out the whole findings pass, not just one finding. Convert to local and drop the offset."""
     try:
-        return datetime.fromisoformat(str(value)) if value else None
+        dt = datetime.fromisoformat(str(value)) if value else None
     except (ValueError, TypeError):
         return None
+    if dt is not None and dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 def _prompt_overlap(a: str, b: str) -> float:
@@ -1717,6 +1726,17 @@ vaf automation delete <id>   # Delete task
                     # Workflow's write_file step already saved the output.
                     _stamp_successful_run(task)
                     self._save_task(task)
+                    # This branch RETURNS below, so the run log at the end of run_task is never
+                    # reached from here. Without this line every workflow-based automation would be
+                    # invisible to the log, and the findings built on it would quietly describe only
+                    # the prompt-based ones.
+                    append_run_log(
+                        self._path_for_task(task),
+                        status="success",
+                        started_at=_run_started.isoformat(),
+                        duration_seconds=(datetime.now() - _run_started).total_seconds(),
+                        summary=(result or "")[:200],
+                    )
                     self._sync_workspace_automation_state(
                         task,
                         run_status="success",

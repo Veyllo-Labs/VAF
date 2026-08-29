@@ -64,18 +64,16 @@ def test_no_internal_fallback_returns_honest_emptiness(monkeypatch):
 def _agent_stub(run_kind, history):
     ns = types.SimpleNamespace(_run_kind=run_kind, history=history)
     ns._is_thinking_run = types.MethodType(Agent._is_thinking_run, ns)
+    ns._web_search_user_question = types.MethodType(Agent._web_search_user_question, ns)
     return ns
 
 
 def _resolve_user_question(agent, arguments):
-    """The product's rule, expressed exactly as chat_step applies it."""
-    user_question = arguments.get("query", "")
-    if not agent._is_thinking_run():
-        for msg in reversed(agent.history):
-            if msg.get("role") == "user":
-                user_question = msg.get("content", user_question)
-                break
-    return user_question
+    """The PRODUCT's rule - the same method chat_step calls, never a copy of it.
+
+    A re-implementation here would keep passing after the product's own answer changed, which is
+    the one thing these two tests exist to catch."""
+    return Agent._web_search_user_question(agent, arguments)
 
 
 def test_background_search_does_not_carry_the_last_user_message():

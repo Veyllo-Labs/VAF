@@ -10,7 +10,8 @@ ticker. Four properties hold it in place, all enforced in code:
    re-asked up to three times when nobody replies - one notice would become up to eight touches.
 2. Web results reach the run's evidence pool ONLY on this rung, so "grounded" keeps meaning
    "grounded in the user's own memory" everywhere else.
-3. Two brakes: a cooldown, and a self-disable once its notices are being ignored.
+3. Two brakes: a cooldown, and a self-disable once its notices are being DECLINED (not merely
+   unanswered - an FYI is never answered, so that would switch it off on its normal behaviour).
 4. A memory outage does not silently degrade the assistant to small talk - an empty retrieval and an
    unreachable database mean opposite things and are told apart once per run."""
 import types
@@ -143,22 +144,37 @@ def test_an_old_notice_does_not_block(monkeypatch, tmp_path):
     assert tm.relevance_watch_allowed(scope)[0] is True
 
 
-def test_the_rung_disables_itself_when_its_notices_are_ignored(monkeypatch, tmp_path):
-    """The only honest measure of this rung is whether the user acted. Two ignored out of the last
-    ten and it stops on its own, rather than waiting for someone to find a setting."""
+def test_the_rung_disables_itself_when_its_notices_are_declined(monkeypatch, tmp_path):
+    """Two explicit rejections out of the last ten and it stops on its own, rather than waiting for
+    someone to find a setting."""
     _isolate(monkeypatch, tmp_path)
     _cfg(monkeypatch, thinking_relevance_enabled=True, thinking_relevance_cooldown_hours=0)
     scope = "u-selfoff"
     entries = []
     for i in range(10):
         e = tr.add_request(scope, f"Notiz {i}", run_seq=1, kind="relevance")
-        # eight acted on, two ignored - the threshold
-        e = {**e, "status": "asked" if i < 2 else "done",
+        e = {**e, "status": "declined" if i < 2 else "done",
              "created_at": (datetime.now() - timedelta(hours=10 + i)).isoformat()}
         entries.append(e)
     tr._save(tr._path(scope), entries)
     allowed, why = tm.relevance_watch_allowed(scope)
     assert (allowed, why) == (False, "self_disabled")
+
+
+def test_unanswered_notices_do_not_disable_the_rung(monkeypatch, tmp_path):
+    """The bug this pins: an FYI is never replied to, so it stays at status 'asked' forever. Counting
+    that as rejection would have switched the rung off permanently after ten perfectly good notices -
+    on exactly the behaviour it is designed for."""
+    _isolate(monkeypatch, tmp_path)
+    _cfg(monkeypatch, thinking_relevance_enabled=True, thinking_relevance_cooldown_hours=0)
+    scope = "u-unanswered"
+    entries = []
+    for i in range(10):
+        e = tr.add_request(scope, f"Notiz {i}", run_seq=1, kind="relevance")
+        entries.append({**e, "status": "asked",      # never replied to - the NORMAL case
+                        "created_at": (datetime.now() - timedelta(hours=10 + i)).isoformat()})
+    tr._save(tr._path(scope), entries)
+    assert tm.relevance_watch_allowed(scope)[0] is True
 
 
 def test_it_stays_on_while_its_notices_land(monkeypatch, tmp_path):

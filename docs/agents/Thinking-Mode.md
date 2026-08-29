@@ -220,11 +220,66 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    inventing any detail - the model calls `thinking_done` and the run defers to the get-to-know question.
    Every stated fact must come from the digest/memory; a half-remembered or paraphrased "fact" counts as
    invention and must not be sent.
-5. **Get-to-know question (fact-free fallback):** if the proactive step grounded nothing, the run does
+2. **Automation review (offered, not forced):** once the user has at least
+   `thinking_automation_review_min_automations` (3) enabled automations, the run stops proposing new
+   ones and looks at the ones they have. The findings are computed **in code**
+   (`automation.review_findings`) from the stored record - never ran, no successful run since a date,
+   disabled and forgotten, two automations in the same time slot, near-identical instructions, a dead
+   output path, and once a run log exists, repeated recorded errors. The model's only job is to phrase
+   ONE of them and propose a fix; the findings go into the run's evidence pool, so the proposal passes
+   the existing grounded gate with **no new gate**. Two things are enforced rather than requested:
+   `update_automation` / `create_automation` / `delete_automation` are **refused on this node**
+   (`_THINKING_NODE_MUTATION_BLOCK`) so the rung can only propose, and de-duplication across runs keys
+   on the AUTOMATION, not the phrasing - an unfixed finding is still true next run, and a run stops
+   after one message, so re-sending it would starve every rung below.
+
+   - **What the record cannot support, and the rung therefore never claims.** `last_run` is stamped
+     only on success (`_stamp_successful_run`), so "no successful run since Tuesday" is byte-identical
+     to "VAF was switched off since Tuesday". No finding may say an automation failed, errored, is
+     broken, runs too long or produces bad output. The bounded per-automation **run log**
+     (`append_run_log` / `load_run_log`, format `autorun-1-7c41d9`, last 50 outcomes beside the task
+     file) is what closes that gap going forward: with it, "its last three recorded runs all ended
+     with an error" becomes sayable. Without it the rung stays at the weaker, honest observations.
+
+3. **Relevance watch (offered, not forced):** if there is nothing to improve either, the run asks
+   whether anything *current* CHANGES something the user has actually planned. It builds a watchlist
+   from memory (plans and deadlines with dates, what the user is working on and what matters to them,
+   their interests and the things they own or use - health is deliberately **not** a category),
+   picks ONE item, checks it with `web_search`, and speaks only if the finding changes something
+   concrete, as an impact statement with the source, its date, and the search query that was run.
+   **Falling through silently is its normal outcome**, and the prompt says so: a news summary is a
+   failure of this rung, not a result. Three things make that stick:
+
+   - **It is an FYI, not a question.** The request is recorded with `kind="relevance"`, which skips
+     `set_waiting_for_reply` and excludes it from `get_open_proactive_request`. Without that, a notice
+     nobody replies to arms the 3-minute nudge and is then re-asked up to `thinking_followup_max` (3)
+     times: one warning, up to eight touches.
+   - **Web results enter the evidence pool on THIS rung only.** A web snippet is real retrieved
+     evidence, so the existing grounded gate accepts a message quoting one - but only here, because
+     everywhere else "grounded" must keep meaning "grounded in the user's own memory". The honest
+     limit: the gate accepts ONE verbatim quote from a pool that now holds both halves, so it cannot
+     force a message to quote the finding *and* the plan it affects. The prompt demands both; the
+     mechanism guarantees one.
+   - **Two brakes.** `thinking_relevance_cooldown_hours` (72) between notices, and a self-disable once 2 of the
+     last 10 notices were DECLINED (read from the reply classification that already exists). Declined,
+     not merely unanswered: an FYI is never replied to, so counting silence as rejection would
+     switch the rung off for good on exactly the behaviour it is designed for. The rung stops on
+     its own rather than waiting for someone to find a setting.
+
+   - **The search query is written by the model, under a prompt rule** - name, employer, internal
+     project names and contact details must not enter it, and the query that was actually run is put
+     in the message's `details` so it stays visible. This is a deliberate choice of a prompt rule over
+     a mechanical filter; the trade-off is that a proper name can still reach a third-party search
+     engine. Structurally guaranteed instead: the internal-memory fallback inside `web_search` is
+     **refused** on this rung (or the run would "find" the very memory it is checking against, and the
+     evidence gate would pass perfectly), the last chat message is not attached to a background
+     search, and the result cache is keyed per user.
+
+4. **Get-to-know question (fact-free fallback):** if the proactive step grounded nothing, the run does
    **not** finish silently - it asks ONE specific, friendly question to get to know the user better (their
    focus/work, a routine they'd like automated, an interest), so future runs can help. A question states no
    fact, so it can never be a fabrication; this is the safe way to honour "always ask one question". The
-   completion gate keeps the run from finishing while this is still pending (`_proactive_step < 3`).
+   completion gate keeps the run from finishing while any rung is still pending (`_proactive_step < _STEP_DONE`).
 
    - **Semantic de-duplication (topic breadth):** the text-based recent/declined prompts only block the same
      *wording*, so without a semantic check the model can re-ask the same *topic* reworded. Before a proactive
@@ -257,59 +312,6 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
        `thinking_getto_max_attempts` (3) rejections in a run, the next question is delivered as it stands.
        A budget one rung up counted once per outer loop turn and therefore never fired during the incident
        above. This is what guarantees a run never ends in silence.
-
-3. **Automation review (offered, not forced):** once the user has at least
-   `thinking_automation_review_min_automations` (3) enabled automations, the run stops proposing new
-   ones and looks at the ones they have. The findings are computed **in code**
-   (`automation.review_findings`) from the stored record - never ran, no successful run since a date,
-   disabled and forgotten, two automations in the same time slot, near-identical instructions, a dead
-   output path, and once a run log exists, repeated recorded errors. The model's only job is to phrase
-   ONE of them and propose a fix; the findings go into the run's evidence pool, so the proposal passes
-   the existing grounded gate with **no new gate**. Two things are enforced rather than requested:
-   `update_automation` / `create_automation` / `delete_automation` are **refused on this node**
-   (`_THINKING_NODE_MUTATION_BLOCK`) so the rung can only propose, and de-duplication across runs keys
-   on the AUTOMATION, not the phrasing - an unfixed finding is still true next run, and a run stops
-   after one message, so re-sending it would starve every rung below.
-
-   - **What the record cannot support, and the rung therefore never claims.** `last_run` is stamped
-     only on success (`_stamp_successful_run`), so "no successful run since Tuesday" is byte-identical
-     to "VAF was switched off since Tuesday". No finding may say an automation failed, errored, is
-     broken, runs too long or produces bad output. The bounded per-automation **run log**
-     (`append_run_log` / `load_run_log`, format `autorun-1-7c41d9`, last 50 outcomes beside the task
-     file) is what closes that gap going forward: with it, "its last three recorded runs all ended
-     with an error" becomes sayable. Without it the rung stays at the weaker, honest observations.
-
-4. **Relevance watch (offered, not forced):** if there is nothing to improve either, the run asks
-   whether anything *current* CHANGES something the user has actually planned. It builds a watchlist
-   from memory (plans and deadlines with dates, what the user is working on and what matters to them,
-   their interests and the things they own or use - health is deliberately **not** a category),
-   picks ONE item, checks it with `web_search`, and speaks only if the finding changes something
-   concrete, as an impact statement with the source, its date, and the search query that was run.
-   **Falling through silently is its normal outcome**, and the prompt says so: a news summary is a
-   failure of this rung, not a result. Three things make that stick:
-
-   - **It is an FYI, not a question.** The request is recorded with `kind="relevance"`, which skips
-     `set_waiting_for_reply` and excludes it from `get_open_proactive_request`. Without that, a notice
-     nobody replies to arms the 3-minute nudge and is then re-asked up to `thinking_followup_max` (3)
-     times: one warning, up to eight touches.
-   - **Web results enter the evidence pool on THIS rung only.** A web snippet is real retrieved
-     evidence, so the existing grounded gate accepts a message quoting one - but only here, because
-     everywhere else "grounded" must keep meaning "grounded in the user's own memory". The honest
-     limit: the gate accepts ONE verbatim quote from a pool that now holds both halves, so it cannot
-     force a message to quote the finding *and* the plan it affects. The prompt demands both; the
-     mechanism guarantees one.
-   - **Two brakes.** `thinking_relevance_cooldown_hours` (72) between notices, and a self-disable once
-     2 of the last 10 notices were declined or ignored (read from the reply classification that
-     already exists). The rung stops on its own rather than waiting for someone to find a setting.
-
-   - **The search query is written by the model, under a prompt rule** - name, employer, internal
-     project names and contact details must not enter it, and the query that was actually run is put
-     in the message's `details` so it stays visible. This is a deliberate choice of a prompt rule over
-     a mechanical filter; the trade-off is that a proper name can still reach a third-party search
-     engine. Structurally guaranteed instead: the internal-memory fallback inside `web_search` is
-     **refused** on this rung (or the run would "find" the very memory it is checking against, and the
-     evidence gate would pass perfectly), the last chat message is not attached to a background
-     search, and the result cache is keyed per user.
 
 - **Memory unavailable is not the same as memory empty.** `run_memory_search_sync` returns `""` for a
   genuinely empty store AND for an unreachable pgvector container. Undistinguished, a database outage

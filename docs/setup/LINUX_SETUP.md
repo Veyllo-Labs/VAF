@@ -1,6 +1,6 @@
 # VAF on Linux: Setup & Usage Guide
 
-Supported distributions: **OpenSUSE**, **Fedora**, **Ubuntu/Debian**, **Arch Linux**
+Supported distributions: **Ubuntu / Debian / Mint / Pop!_OS**, **Fedora / RHEL / Rocky / Alma**, **Arch / Manjaro**, and **openSUSE**. Immutable/transactional distributions (openSUSE MicroOS, Leap Micro) are not supported yet; the installer detects them and stops early. Support is planned.
 
 ---
 
@@ -173,17 +173,16 @@ load_backend: loaded Vulkan backend from .../libggml-vulkan.so
 
 ### 2. Desktop window (Qt WebEngine / Chromium)
 
-VAF automatically enables Chromium GPU rasterization for smooth rendering. The following flags are set at startup (Linux only):
-
-```
---disable-frame-rate-limit   → animations run at the monitor's actual refresh rate
---disable-gpu-vsync          → avoids double-vsync latency between Qt and Chromium
---enable-gpu-rasterization   → GPU-based tile rasterization (biggest speedup)
---enable-accelerated-2d-canvas
---num-raster-threads=4
-```
-
-> **Note:** `--enable-zero-copy` is intentionally omitted - it maps GPU texture memory into the process address space, which causes the process to appear to use several GB of additional RAM in system monitors (the memory is GPU-backed and not actually paged, but tools like `top` report it as RSS). Removing it has no visible impact on rendering performance.
+VAF enables Chromium GPU rasterization for smooth rendering but deliberately keeps
+vsync ON: QtWebEngine runs the GPU in-process, and uncapped repaints
+(`--disable-frame-rate-limit` / `--disable-gpu-vsync`) leaked tile/texture RAM into
+the renderer process (RSS measured at ~7 GB). `desktop_window.py` therefore avoids
+those flags and `--enable-accelerated-2d-canvas`, and instead sets
+`--enable-gpu-rasterization`, `--aggressive-cache-discard`,
+`--renderer-process-limit=1`, a disk-cache size and a V8 heap cap; the frontend
+animates only `transform`/`opacity`. Full detail in
+[docs/platform/LINUX.md](../platform/LINUX.md) and the Anti-Leak Notes of
+[SYSTEM_TRAY.md](../platform/SYSTEM_TRAY.md).
 
 No manual configuration needed - these are applied automatically.
 

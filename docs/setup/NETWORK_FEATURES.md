@@ -410,7 +410,7 @@ Changes to network settings trigger an automatic, orchestrated restart of the fr
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless).
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
 The integrated HTTPS proxy is configured for broad client compatibility (`TLS 1.2+`) so older LAN devices do not fail with empty-response errors during TLS negotiation.
-Auto-generated TLS certificates are re-generated when the current LAN IP changes, so the certificate SAN list stays aligned with the active access IP.
+Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SANs plus all local IPs, and are re-generated when the current LAN IP changes, so the IP SANs stay aligned with the active access IP (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only).
 
 ---
 

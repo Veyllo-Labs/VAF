@@ -29,7 +29,7 @@ A detailed, beginner-friendly walkthrough of installing VAF. Each operating syst
 
 ## Linux
 
-Works on Ubuntu / Debian / Mint / Pop!_OS, Fedora / RHEL / Rocky / Alma, Arch / Manjaro, and openSUSE. You need a normal user account that can use `sudo` (the main user on most personal installs already can).
+Works on Ubuntu / Debian / Mint / Pop!_OS, Fedora / RHEL / Rocky / Alma, Arch / Manjaro, and openSUSE. You need a normal user account that can use `sudo` (the main user on most personal installs already can). Immutable/transactional distributions (openSUSE MicroOS, Leap Micro) are not supported yet - the installer detects them and stops early with a clear message. Support is planned; until then, use a standard distribution or run VAF in a container/VM on the immutable host.
 
 ### 1. Install Git
 
@@ -83,6 +83,8 @@ Linux is the one platform where the installer asks, once:
 ```
 
 Press **Enter** for **Desktop** (using VAF on this computer). Choose **Server** only for a home server / NAS / headless box that other devices should reach - see [SERVER_MODE.md](SERVER_MODE.md).
+
+The choice can also be made non-interactively with `./install.sh --server` or `./install.sh --desktop` - required for scripted installs, where there is no prompt and the default is Desktop. A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).
 
 ### 5. Start VAF
 

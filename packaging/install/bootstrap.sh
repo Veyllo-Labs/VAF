@@ -59,10 +59,10 @@ else
 fi
 ok "Repository ready: $INSTALL_DIR"
 
-# 4. hand off to the full installer
+# 4. hand off to the full installer, forwarding flags (e.g. `... | bash -s -- --server`)
 info "Running install.sh ..."
 cd "$INSTALL_DIR"
 chmod +x install.sh 2>/dev/null || true
-bash install.sh
+bash install.sh "$@"
 
 printf '\n== Done. Launch with: %s/run_vaf.sh  (or the desktop entry) ==\n\n' "$INSTALL_DIR"

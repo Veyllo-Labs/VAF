@@ -165,7 +165,7 @@ Users can configure the server to persist across sessions:
 
 ```json
 {
-  "persist_server": true
+  "server_persistence_enabled": true
 }
 ```
 
@@ -217,7 +217,7 @@ To verify process management works correctly:
 
 1. Check if persist mode is enabled:
    ```bash
-   cat ~/.vaf/config.json | grep persist_server
+   cat ~/.vaf/config.json | grep server_persistence_enabled
    ```
 
 2. Check for other VAF instances:

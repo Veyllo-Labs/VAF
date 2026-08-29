@@ -49,6 +49,7 @@ python_version_supported() {
 # Flags
 SKIP_DOCKER=false
 VERBOSE=false
+INSTALL_MODE=""   # "" = undecided; set by --server/--desktop or the interactive prompt
 
 # Colors
 RED='\033[0;31m'
@@ -75,6 +76,22 @@ while [[ $# -gt 0 ]]; do
             SKIP_DOCKER=true
             shift
             ;;
+        --server)
+            if [[ "$INSTALL_MODE" == "desktop" ]]; then
+                echo "Conflicting options: --server and --desktop"
+                exit 1
+            fi
+            INSTALL_MODE="server"
+            shift
+            ;;
+        --desktop)
+            if [[ "$INSTALL_MODE" == "server" ]]; then
+                echo "Conflicting options: --server and --desktop"
+                exit 1
+            fi
+            INSTALL_MODE="desktop"
+            shift
+            ;;
         --verbose|-v)
             VERBOSE=true
             shift
@@ -86,6 +103,8 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --skip-docker    Skip Docker installation/setup"
+            echo "  --server         Server mode: always-on service, LAN via HTTPS, boot autostart (Linux only)"
+            echo "  --desktop        Desktop mode: personal use, local only, system tray (default)"
             echo "  --verbose, -v    Show verbose output"
             echo "  --help, -h       Show this help message"
             echo ""
@@ -208,7 +227,27 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
         OS_NAME="Linux"
         print_warning "Could not detect Linux distribution"
     fi
-    
+
+    # Immutable/transactional distros (MicroOS, Leap Micro) keep the root
+    # filesystem read-only; every package/service step below assumes a mutable
+    # root, so refuse EARLY with a clear message instead of failing mid-run.
+    # Kept narrow (exact os-release IDs, or transactional-update plus an actually
+    # read-only /) so Tumbleweed with the tool merely installed does not match.
+    IMMUTABLE_OS=false
+    case "${ID:-}" in
+        opensuse-microos|opensuse-leap-micro) IMMUTABLE_OS=true ;;
+    esac
+    if [[ "$IMMUTABLE_OS" != "true" ]] && command -v transactional-update >/dev/null 2>&1 \
+        && findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
+        IMMUTABLE_OS=true
+    fi
+    if [[ "$IMMUTABLE_OS" == "true" ]]; then
+        print_error "Immutable/transactional distribution detected (${ID:-unknown})."
+        print_info "This installer does not support it yet: package installs need transactional-update and a reboot."
+        print_info "Support is planned. Until then use a standard distribution (openSUSE Leap/Tumbleweed, Ubuntu, Fedora, Arch) or run VAF in a container/VM."
+        exit 1
+    fi
+
     print_info "$OS_NAME ($ARCH)"
     if [[ "$PKG_MANAGER" != "unknown" ]]; then
         print_success "Package manager: $PKG_MANAGER"
@@ -216,6 +255,46 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
 else
     print_error "Unsupported operating system: $OSTYPE"
     exit 1
+fi
+
+# ============================================================================
+# INSTALLATION MODE (desktop vs server)
+# ============================================================================
+SETUP_AUTOSTART=false
+SETUP_LAN=false
+if [[ "$OS_TYPE" == "linux" ]]; then
+    if [[ -n "$INSTALL_MODE" ]]; then
+        print_success "Installation mode: $INSTALL_MODE (via flag)"
+    elif [[ -t 0 ]]; then
+        echo ""
+        print_step "Installation Mode..."
+        echo ""
+        echo -e "  ${CYAN}[1] Desktop${NC}   personal use, local only, system tray (default)"
+        echo -e "  ${CYAN}[2] Server${NC}    always-on service, LAN accessible via HTTPS, starts at boot"
+        echo ""
+        read -p "  Choose [1/2, default 1]: " _mode_response
+        if [[ "$_mode_response" == "2" ]]; then
+            INSTALL_MODE="server"
+            print_success "Server mode selected"
+        else
+            INSTALL_MODE="desktop"
+            print_success "Desktop mode selected"
+        fi
+    else
+        # Non-interactive without a flag (e.g. curl | bash): desktop is the
+        # safe default; a server install must be requested with --server.
+        INSTALL_MODE="desktop"
+    fi
+    if [[ "$INSTALL_MODE" == "server" ]]; then
+        SETUP_AUTOSTART=true
+        SETUP_LAN=true
+    fi
+else
+    if [[ "$INSTALL_MODE" == "server" ]]; then
+        print_error "Server mode is Linux-only (systemd service). Re-run without --server."
+        exit 1
+    fi
+    INSTALL_MODE="desktop"
 fi
 
 # ============================================================================
@@ -813,7 +892,9 @@ if [[ "$OS_TYPE" == "macos" ]]; then
 fi
 
 # Create desktop entry (Linux)  works the same on Arch/Debian/Fedora (freedesktop std)
-if [[ "$OS_TYPE" == "linux" ]]; then
+# Server installs skip it: the app runs headless as a systemd service, and a menu
+# entry launching the windowed tray would fight the service for the same ports.
+if [[ "$OS_TYPE" == "linux" ]] && [[ "$INSTALL_MODE" != "server" ]]; then
     DESKTOP_FILE="$HOME/.local/share/applications/vaf.desktop"
     mkdir -p "$(dirname "$DESKTOP_FILE")"
 
@@ -849,53 +930,94 @@ EOF
 fi
 
 # ============================================================================
-# 11. SERVER SETUP (Linux only)
+# 11. SERVER SETUP (Linux only; mode was decided right after system detection)
 # ============================================================================
 
-SETUP_AUTOSTART=false
-SETUP_LAN=false
-INSTALL_MODE="desktop"
-
-if [[ "$OS_TYPE" == "linux" ]] && [[ -t 0 ]]; then
-    echo ""
-    print_step "Installation Mode..."
-    echo ""
-    echo -e "  ${CYAN}[1] Desktop${NC}   personal use, local only, system tray (default)"
-    echo -e "  ${CYAN}[2] Server${NC}    always-on service, LAN accessible via HTTPS, starts at boot"
-    echo ""
-    read -p "  Choose [1/2, default 1]: " _mode_response
-    if [[ "$_mode_response" == "2" ]]; then
-        INSTALL_MODE="server"
-        SETUP_AUTOSTART=true
-        SETUP_LAN=true
-        print_success "Server mode selected"
-    else
-        INSTALL_MODE="desktop"
-        print_success "Desktop mode selected"
-    fi
-fi
-
-# --- Server mode: write config ---
+# --- Server mode: provision via the CLI (config keys, TLS certs, firewall, DHCP check) ---
 if [[ "$SETUP_LAN" == "true" ]]; then
-    print_info "Writing server mode config..."
+    print_step "Provisioning Server Mode..."
+
+    # Elevation up front: provisioning opens the OS firewall. In a desktop session
+    # this can show a native password dialog (pkexec); headless it relies on the
+    # sudo timestamp refreshed here (the CLI itself only ever calls sudo -n).
+    print_info "Server provisioning may ask for your password (firewall rule)."
+    sudo -v 2>/dev/null || print_warning "sudo unavailable - firewall/docker/sleep steps may be skipped"
+
+    # Optional master passphrase for headless credential encryption. Headless
+    # servers have no OS keyring; with a passphrase the encryption key is derived
+    # from it and never written to disk (see docs/setup/SERVER_MODE.md).
+    SERVICE_ENV="$HOME/.vaf/service.env"
     mkdir -p "$HOME/.vaf"
-    INSTALL_MODE_VAR="$INSTALL_MODE"
-    "$PROJECT_ROOT/venv/bin/python3" - << PYEOF
-import json, os
-p = os.path.expanduser("~/.vaf/config.json")
-try:
-    cfg = json.loads(open(p).read()) if os.path.exists(p) else {}
-except Exception:
-    cfg = {}
-cfg["server_mode"] = True
-cfg["local_network_enabled"] = True
-cfg["local_network_tls_enabled"] = True
-open(p, "w").write(json.dumps(cfg, indent=2))
-PYEOF
-    print_success "Server mode enabled in config"
-    print_success "LAN access enabled (HTTPS, port 8443)"
-    print_info "A self-signed TLS certificate is auto-generated on first start."
-    print_warning "Browsers will show a certificate warning  expected for local networks."
+    _pp=""
+    if [[ -n "${VAF_MASTER_PASSPHRASE:-}" ]]; then
+        _pp="$VAF_MASTER_PASSPHRASE"
+        print_info "Using master passphrase from the environment."
+    elif [[ -f "$SERVICE_ENV" ]] && grep -q '^VAF_MASTER_PASSPHRASE=' "$SERVICE_ENV" 2>/dev/null; then
+        print_success "Existing master passphrase kept ($SERVICE_ENV)"
+    elif [[ -t 0 ]]; then
+        echo ""
+        print_info "A master passphrase encrypts stored credentials (mail, OAuth) on this server."
+        print_info "If it is lost, those credentials are unrecoverable and must be re-linked."
+        read -rs -p "  Master passphrase (Enter to skip): " _pp1 || _pp1=""
+        echo ""
+        if [[ -n "$_pp1" ]]; then
+            read -rs -p "  Repeat passphrase: " _pp2 || _pp2=""
+            echo ""
+            if [[ "$_pp1" == "$_pp2" ]]; then
+                _pp="$_pp1"
+            else
+                print_warning "Passphrases do not match - skipped (set it later, see docs/setup/SERVER_MODE.md)"
+            fi
+        else
+            print_info "No passphrase set - the encryption key stays in ~/.vaf/secure_store.kek (owner-only file)."
+        fi
+        unset _pp1 _pp2
+    fi
+    if [[ -n "$_pp" ]]; then
+        # systemd EnvironmentFile syntax; leading/trailing whitespace would be trimmed.
+        if ( umask 077; printf 'VAF_MASTER_PASSPHRASE=%s\n' "$_pp" > "$SERVICE_ENV" ) \
+            && chmod 600 "$SERVICE_ENV" 2>/dev/null; then
+            print_success "Master passphrase stored for the service ($SERVICE_ENV, owner-only)"
+        else
+            print_warning "Could not write $SERVICE_ENV"
+        fi
+    fi
+    unset _pp
+
+    # Config keys, TLS certificates, firewall opening and the DHCP warning all
+    # live in the CLI so every lane provisions identically: vaf server provision.
+    "$PROJECT_ROOT/venv/bin/python3" -m vaf.main server provision \
+        || print_warning "Provisioning reported a problem - see docs/setup/SERVER_MODE.md for manual steps"
+
+    # Reboot safety: the memory stack needs the Docker daemon at boot. The engine
+    # bootstrap earlier only enables it when the daemon was DOWN at install time,
+    # so a box with dockerd already running would boot without it.
+    if [[ "$SKIP_DOCKER" != "true" ]] && command -v systemctl >/dev/null 2>&1; then
+        if sudo -n systemctl enable docker >/dev/null 2>&1; then
+            print_success "Docker enabled at boot"
+        else
+            print_warning "Could not enable Docker at boot - run: sudo systemctl enable docker"
+        fi
+    fi
+
+    # An always-on server must not suspend (a repurposed desktop/laptop would).
+    if command -v systemctl >/dev/null 2>&1; then
+        if sudo -n systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1; then
+            print_success "Sleep/suspend disabled (server stays reachable)"
+            print_info "Revert with: sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target"
+        else
+            print_warning "Could not disable sleep/suspend - run: sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target"
+        fi
+    fi
+
+    # TLS validation and OAuth sign-ins depend on a correct clock.
+    if command -v timedatectl >/dev/null 2>&1; then
+        _ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+        if [[ "$_ntp_sync" != "yes" ]]; then
+            print_warning "System clock is not NTP-synced - TLS and sign-ins depend on correct time."
+            print_info "Enable with: sudo timedatectl set-ntp true"
+        fi
+    fi
 fi
 
 # --- Autostart: install systemd user service ---
@@ -919,6 +1041,13 @@ Type=simple
 WorkingDirectory=$PROJECT_ROOT
 Environment=PYTHONPATH=$PROJECT_ROOT
 Environment=VAF_NATIVE_WRAPPER=1
+# The journal is this unit's canonical log; tells the tray not to tee its
+# stdio into ~/.vaf/logs/vaf_run.log on top of it (vaf/core/stdio_tee.py).
+Environment=VAF_LOG_TO_JOURNAL=1
+# Optional headless secrets (e.g. VAF_MASTER_PASSPHRASE for the encrypted
+# credential stores). %h is the user's home; the leading '-' makes a missing
+# file harmless. install.sh creates it only when a passphrase was provided.
+EnvironmentFile=-%h/.vaf/service.env
 ExecStart=$PROJECT_ROOT/venv/bin/python3 -m vaf.main tray
 ExecStop=/bin/kill -s TERM \$MAINPID
 Restart=on-failure
@@ -938,8 +1067,8 @@ SyslogIdentifier=vaf
 WantedBy=default.target
 EOF
 
-        systemctl --user daemon-reload
-        systemctl --user enable vaf
+        systemctl --user daemon-reload || print_warning "systemd user daemon-reload failed - run: systemctl --user daemon-reload"
+        systemctl --user enable vaf || print_warning "Could not enable the vaf service - run: systemctl --user enable vaf"
 
         # Enable linger so the service starts at boot even with no active login session
         if sudo loginctl enable-linger "$USER" 2>/dev/null; then
@@ -1019,6 +1148,7 @@ if [[ "$SETUP_LAN" == "true" ]]; then
     echo -e "  ${CYAN}LAN Access (HTTPS):${NC}"
     echo -e "    - https://${_LAN_IP:-<your-ip>}:8443"
     echo -e "    - localhost: https://127.0.0.1:8443"
+    echo -e "      (8443 is the usual port; VAF serves plain 443 when it can bind it)"
     echo -e "    - Accept the self-signed certificate warning on first visit."
     echo ""
 fi

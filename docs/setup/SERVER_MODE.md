@@ -15,13 +15,20 @@ Server mode is an installation profile for running VAF as a persistent backgroun
 
 ## Installation
 
-Server mode is selected during installation:
+Server mode is selected during installation, either interactively or with a flag:
 
 ```bash
-chmod +x install.sh && ./install.sh
+chmod +x install.sh && ./install.sh    # interactive prompt
+./install.sh --server                  # non-interactive server install
 ```
 
-When prompted:
+The hosted one-liner accepts the same flag (`bash -s --` forwards it):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Veyllo-Labs/VAF/main/packaging/install/bootstrap.sh | bash -s -- --server
+```
+
+When prompted interactively:
 
 ```
 [1] Desktop  - personal use, local only, system tray (default)
@@ -32,11 +39,14 @@ Choose [1/2, default 1]: 2
 
 The installer then:
 
-1. Writes `server_mode: true`, `local_network_enabled: true`, and `local_network_tls_enabled: true` to `~/.vaf/config.json`.
-2. Installs a systemd user service at `~/.config/systemd/user/vaf.service`.
-3. Enables the service (`systemctl --user enable vaf`).
-4. Enables linger so the service starts at boot without an active login session (`loginctl enable-linger`).
-5. Starts the service immediately.
+1. Optionally asks for a master passphrase (see Credential Encryption below); if given, it is stored owner-only in `~/.vaf/service.env` for the service. Unattended installs can pre-set `VAF_MASTER_PASSPHRASE` in the environment instead.
+2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer, generates the TLS certificates, opens the OS firewall for the LAN access port (subnet-scoped), and warns when the LAN IP looks DHCP-assigned.
+3. Enables the Docker daemon at boot (`systemctl enable docker`) so the memory stack comes back after a reboot.
+4. Masks the systemd sleep/suspend targets so a repurposed desktop or laptop stays reachable. Revert with `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
+5. Warns when the system clock is not NTP-synced (TLS validation and OAuth sign-ins depend on correct time).
+6. Installs a systemd user service at `~/.config/systemd/user/vaf.service`, enables it, enables linger so it starts at boot without an active login session (`loginctl enable-linger`), and starts it immediately.
+
+`vaf server provision` is idempotent and can be re-run at any time (for example after moving the machine to another subnet), and re-running `./install.sh --server` upgrades an existing server install in place. Immutable/transactional distributions (openSUSE MicroOS, Leap Micro) are detected early and refused with a clear message. This is a current limitation of the alpha installer, not a design decision: support via `transactional-update` is planned, and exactly these systems are attractive server targets. Until then, run VAF on a standard distribution or inside a container/VM on the immutable host.
 
 ## Service Management
 
@@ -59,9 +69,61 @@ journalctl --user -u vaf -n 100
 systemctl --user disable vaf
 ```
 
+## Live Dashboard (`vaf top`)
+
+For a running overview in the terminal (over SSH included), `vaf top` renders a
+self-refreshing dashboard headed by the Veyllo mark and the hostname: VAF
+version, mode, the active provider with its actual model (API providers show
+their API model, not the local one), the LAN access URLs (hostname first - the
+certificate carries it as a DNS SAN - then the IPs), host OS and uptimes (host
+and service process tree with PID/RSS/CPU), live CPU/RAM/disk/GPU utilization,
+a Network section with the total up/down rates and the connected clients
+(inbound connections grouped per remote IP, with the ports they use), and the
+health of every Docker service. Per-IP byte rates are deliberately absent: they
+would need packet capture (root); connection counts are the honest per-IP
+signal available to an unprivileged process.
+
+```bash
+vaf top              # live view, refresh every 2s (Ctrl+C to exit)
+vaf top -i 5         # slower refresh
+vaf top --once       # print one snapshot and exit (for scripts and checks)
+vaf top --no-logs    # dashboard only, without the log pane
+vaf start            # in a terminal: starts the service, then opens this dashboard
+vaf tray             # in a terminal: tray in the background, dashboard in front
+```
+
+In an interactive terminal the dashboard is the default face of both start
+commands: `vaf start` opens it after starting (suppress with `--no-watch`;
+scripts and pipes never get it), and `vaf tray` runs the real tray as a
+background child writing the service log while the terminal shows the
+dashboard with that log live underneath (`--no-top` restores the raw
+foreground run). Leaving the `vaf tray` dashboard with Ctrl+C stops the tray
+it started - the same contract as the old foreground tray; attaching to an
+already running VAF only detaches on Ctrl+C and stops nothing. Closing the
+terminal window outright leaves VAF running; `vaf stop` ends it.
+
+Below the dashboard, `vaf top` follows the service's live output in a log pane
+that fills the remaining terminal height and resizes with the window. The
+source is picked automatically: the systemd journal in server mode, otherwise
+the most recently written of the known log files (`~/.vaf/logs/vaf_run.log`
+from `vaf start` and from a terminal- or desktop-started tray, which tees its
+own output there; `logs/vaf_run.log` from vaf.sh; `logs/tray_debug.log` from
+start_vaf.sh). A file that does not belong to the current run - older than the
+running service, or untouched for 10 minutes with no service running - is not
+shown at all; only a source that goes quiet after `vaf top` attached is marked
+stale. The pane is skipped entirely when the terminal is too small, and the
+pane appears on its own as soon as a log source shows up.
+
+The Docker probe runs on its own slow cadence in the background, so a stopped
+Docker daemon (its status check can take up to 10 seconds) never freezes the
+view. GPU utilization is live on NVIDIA (`nvidia-smi`); other vendors show the
+detected card with utilization as n/a. VAF-internal queue and session metrics
+are not shown: they exist only inside the service process, and exposing them
+here requires the planned admin API endpoint on the same collector.
+
 ## LAN Access
 
-VAF listens on `https://<LAN-IP>:8443`. To find your LAN IP:
+VAF listens on `https://<LAN-IP>:8443` in the usual case: the configured HTTPS port is 443, and an unprivileged service cannot bind it, so the proxy falls back to 8443. When 443 is bindable (root, `CAP_NET_BIND_SERVICE`), the address is plain `https://<LAN-IP>`. To find your LAN IP:
 
 ```bash
 ip route get 1.1.1.1 | grep -oP 'src \K\S+'
@@ -99,14 +161,14 @@ To change them you must edit `~/.vaf/config.json` directly and restart the servi
 
 Headless servers often have no OS keyring (no Secret Service running), so VAF falls back to an AES-256-GCM encrypted file under the data directory for OAuth tokens and IMAP/SMTP passwords. By default the encryption key is wrapped by a random key stored in its own owner-only (`0600`) file, `secure_store.kek` in `~/.vaf`; no key material is written to `config.json`.
 
-For stronger protection, set a master passphrase so the encryption key is derived from it (scrypt) and never written to disk:
+For stronger protection, set a master passphrase so the encryption key is derived from it (scrypt) and never written to disk. The server installer asks for it during installation (pressing Enter skips it); when given, it is written owner-only to `~/.vaf/service.env`, and the systemd unit loads that file via `EnvironmentFile=-%h/.vaf/service.env`. The passphrase therefore reaches service starts only - an interactive `vaf` shell does not read the file. To set or change it later:
 
 ```bash
-# In the unit's environment (e.g. systemd drop-in or the service's EnvironmentFile)
-VAF_MASTER_PASSPHRASE="<a long, unique passphrase>"
+( umask 077; printf 'VAF_MASTER_PASSPHRASE=%s\n' '<a long, unique passphrase>' > ~/.vaf/service.env )
+systemctl --user restart vaf
 ```
 
-With the passphrase set, the encrypted fallback cannot be opened without it - even by someone who can read the files. Keep it out of `config.json` and shell history; supply it via the service environment. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
+With the passphrase set, the encrypted fallback cannot be opened without it - even by someone who can read the files. Keep it out of `config.json` and shell history. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
 
 ## Memory isolation (Row-Level Security)
 
@@ -184,6 +246,9 @@ nano ~/.vaf/config.json
 
 # Disable linger (optional - only if you don't want any user services at boot)
 sudo loginctl disable-linger $USER
+
+# Re-enable sleep/suspend (the server install masked these)
+sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target
 ```
 
 ## Troubleshooting
@@ -195,12 +260,17 @@ journalctl --user -u vaf -n 50
 Common causes: Python venv path changed after a `git pull` to a different directory, or Docker containers not running (memory system unavailable).
 
 **Port 8443 not reachable from other devices:**
-- Check firewall: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`
-- VAF configures the OS firewall itself via `vaf/network/firewall.py`. On Linux it prefers firewalld when it is running and opens **only** port 8443 for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
+- The server installer opens the firewall during installation. The first fix is to re-run that step - it is idempotent and prints what it did:
+  ```bash
+  cd <VAF-checkout> && sudo -v && venv/bin/python -m vaf.main server provision
+  ```
+  (`sudo -v` refreshes the sudo timestamp the headless elevation relies on; in a desktop session a native password dialog appears instead.)
+- Check firewall state: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`
+- VAF also configures the OS firewall at runtime via `vaf/network/firewall.py`. On Linux it prefers firewalld when it is running and opens **only** the access port for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
 - Elevation differs by environment:
   - **Desktop session:** when hosting is enabled VAF prompts automatically through a native polkit/pkexec password dialog and adds the rule for you.
-  - **Headless/server:** VAF uses non-interactive `sudo -n` (it fails fast rather than hanging on a TTY), so the rule is typically not added automatically - run the manual command below.
-- Manual firewalld command (preferred subnet-scoped rich rule form; replace `<LAN-subnet>` with your network, e.g. `192.168.2.0`):
+  - **Headless/server:** the running service cannot elevate at all (`NoNewPrivileges`, non-interactive `sudo -n`) - that is exactly why the installer and `vaf server provision` own this step.
+- Manual fallback, firewalld (preferred subnet-scoped rich rule form; replace `<LAN-subnet>` with your network, e.g. `192.168.2.0`):
   ```bash
   sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload
   ```
@@ -215,4 +285,4 @@ systemctl --user restart vaf
 VAF regenerates the certificate on the next start.
 
 **LAN IP changed (DHCP):**
-Set a static LAN IP on the server, or use the hostname instead of the IP address.
+The access URL, the certificate's IP SANs and the subnet-scoped firewall rule are all bound to the address. Give the server a static LAN IP, or reserve its address in the router's DHCP settings; `vaf server provision` warns during installation when the address looks DHCP-assigned. After an IP change: regenerate the certificate (`rm -rf ~/.vaf/ssl/` + restart, see above) and re-run `vaf server provision` so the firewall rule matches the new subnet. Alternatively use the hostname instead of the IP: the auto-generated certificate carries the machine's hostname and FQDN as DNS SANs, so a name that resolves on your network keeps working across IP changes (note the certificate is NOT re-issued when the hostname itself changes - only IP changes trigger regeneration).

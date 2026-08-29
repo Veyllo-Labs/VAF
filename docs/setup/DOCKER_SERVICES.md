@@ -281,7 +281,7 @@ When a runtime is present (or has just been set up), the installer manages the s
 1. **Change Detection**: After a `git pull`, the installer checks whether `docker-compose.memory.yml` has changed (via `git diff HEAD~1 HEAD`).
 2. **Auto-Start the Engine**: If the engine is installed but not running, the installer starts it automatically:
    - **macOS**: starts Docker Desktop if present, otherwise `colima start`
-   - **Linux**: `sudo systemctl start docker` (or `sudo service docker start`)
+   - **Linux**: `sudo systemctl enable --now docker` (or `sudo service docker start`); a server-mode install additionally runs `sudo systemctl enable docker` unconditionally, because the bootstrap path is skipped when the daemon is already running and the memory stack must survive a reboot
    - **Windows**: starts Rancher Desktop (and does **not** restart it if it is already running)
 3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
 4. **Apply Changes - two-phase**: it brings up the core registry-image services first

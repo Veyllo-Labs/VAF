@@ -167,7 +167,7 @@ vaf restart    # systemctl --user restart vaf
 vaf status     # systemctl --user status vaf
 ```
 
-LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md).
+LAN access (HTTPS, usually on port 8443 - plain 443 when the service can bind it) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md).
 
 ### Terminal (CLI)
 

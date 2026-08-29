@@ -20,10 +20,19 @@ from vaf.cli.ui import UI
 
 app = typer.Typer(hidden=True)  # commands registered directly on main app, not as subgroup
 
+# The tray's singleton listener (vaf/tray.py check_singleton). Owning this port
+# is what makes a process THE service, whatever its command line looks like.
+TRAY_SINGLETON_PORT = 8002
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _pid_file() -> Path:
-    return Path.home() / ".vaf" / "server.pid"
+    # Deliberate: NOT server.pid. That name belongs to the llama backend
+    # (backend.py pid_file), whose orphan cleanup KILLS any pid found there
+    # when llama's 8080 health does not answer - a tray pid written into it
+    # made the freshly spawned tray clean ITSELF up as an "orphaned server"
+    # (live incident, twice: the vaf tray dashboard child died after one line).
+    return Path.home() / ".vaf" / "service.pid"
 
 def _log_file() -> Path:
     return Path.home() / ".vaf" / "logs" / "vaf_run.log"
@@ -65,16 +74,39 @@ def _find_vaf_processes() -> list:
     starting - the tray, run_vaf.sh, the app bundle - leaves none, so a pid-file
     lookup alone answers "not running" while VAF is plainly running. Never raises.
     """
-    found = []
     try:
         import psutil
-        me = os.getpid()
+    except Exception:
+        return []
+
+    # The tray holds a singleton listener (tray.py check_singleton), so the
+    # process owning that port IS the service - an identity no command line can
+    # fake. Preferred over scanning argv, which cannot tell the service from a
+    # dashboard wrapper watching it (both run "-m vaf.main tray").
+    me = os.getpid()
+    try:
+        for conn in psutil.net_connections(kind="tcp"):
+            if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                    and conn.laddr.port == TRAY_SINGLETON_PORT and conn.pid
+                    and conn.pid != me):
+                return [psutil.Process(conn.pid)]
+    except Exception:
+        pass
+
+    found = []
+    try:
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
                 if proc.info["pid"] == me:
                     continue
-                cmd = " ".join(proc.info["cmdline"] or [])
-                if "vaf.main" in cmd and (" tray" in cmd or " run" in cmd):
+                # Match on exact argv ELEMENTS, not the joined string: a shell
+                # whose -c payload merely QUOTES "vaf.main tray" (a supervisor
+                # line, a grep, a script wrapper) must never count as VAF -
+                # stop would kill it and the dashboard would "attach" to it.
+                # Deliberately tray-only: `vaf run` is somebody's interactive
+                # session, not the background service, and stop must not end it.
+                parts = list(proc.info["cmdline"] or [])
+                if "vaf.main" in parts and "tray" in parts:
                     found.append(proc)
             except Exception:
                 continue
@@ -95,15 +127,45 @@ def _systemctl(action: str):
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
-def cmd_start():
+def _open_dashboard():
+    """Hand the terminal over to the live dashboard (vaf top)."""
+    from vaf.cli.cmd.top import cmd_top
+    # Called directly, so pass real values - typer's Option defaults only
+    # materialize when the function is invoked as a CLI command.
+    cmd_top(interval=2.0, once=False, logs=True)
+
+
+def cmd_start(
+    watch: bool = typer.Option(None, "--watch/--no-watch",
+                               help="Open the live dashboard (vaf top) after starting "
+                                    "(default: on in an interactive terminal)"),
+):
     """Start VAF as a background service."""
+    if watch is None:
+        # Unset flag: a person at a terminal gets the dashboard, scripts and
+        # pipes stay headless.
+        watch = os.isatty(1)
+    elif not isinstance(watch, bool):
+        # Direct callers (cmd_restart, the updater) bypass typer, so the
+        # parameter arrives as typer's truthy OptionInfo default - which would
+        # silently turn every restart into a dashboard takeover.
+        watch = False
     if _is_server_mode():
+        if watch:
+            result = subprocess.run(["systemctl", "--user", "start", "vaf"])
+            if result.returncode != 0:
+                raise typer.Exit(result.returncode)
+            _open_dashboard()
+            return
         _systemctl("start")
         return
 
     pid = _running_pid()
     if pid:
         UI.warning(f"VAF is already running (PID {pid})")
+        if watch:
+            _open_dashboard()
+            return
         raise typer.Exit(0)
 
     log = _log_file()
@@ -125,6 +187,10 @@ def cmd_start():
     UI.success(f"VAF started (PID {proc.pid})")
     UI.info(f"Log:  {log}")
     UI.info("Open: http://localhost:3000")
+    if watch:
+        _open_dashboard()
+    else:
+        UI.info("Watch it live: vaf top")
 
 
 def cmd_stop():

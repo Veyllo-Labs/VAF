@@ -20,6 +20,7 @@ from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
+from vaf.cli.tui import VEYLLO_MARK_ART
 from vaf.cli.tui_app.theme_bridge import WHITE
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -308,25 +309,9 @@ class StartBanner(Vertical):
     reads as "the session started here".
     """
 
-    # The Veyllo mark as terminal art, converted from the logo. It is a line
-    # drawing: the characters trace the mark's edges and the interior stays
-    # open, so it reads as a drawing rather than as a slab, and it carries no
-    # block glyphs at all - which is also why no exporter has to guess how to
-    # tile it.
-    ART = (
-        "          @@@g",
-        " __________@@@i___ _____",
-        "@@@@@@@@@@W@@g@@@@R@@@@@@",
-        ' """8@@@""""""""T@@@D""\'',
-        "     B@@,       @W@@",
-        "     '@@@,     g@@@",
-        "      '@@@B  _@B@W",
-        "        tB@RW@B@F",
-        "         ]@@@@@L",
-        "     _a@@@@@M@@@@@b__",
-        '_@@@@@@@P"     <B@@WW@@@,',
-        "'@@QB+             %Mg@B",
-    )
+    # The Veyllo mark as terminal art - the shared constant in vaf.cli.tui is
+    # the single source, also rendered by the `vaf top` header.
+    ART = VEYLLO_MARK_ART
 
     def __init__(self, rows, hint: str = "") -> None:
         super().__init__()

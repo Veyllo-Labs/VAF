@@ -224,7 +224,9 @@ def _restart_blocker() -> Optional[str]:
         return None
     try:
         from pathlib import Path
-        pid_file = Path.home() / ".vaf" / "server.pid"
+        # The SERVICE pid file (vaf start / the tray dashboard lane). Not
+        # server.pid - that one is the llama backend's and means something else.
+        pid_file = Path.home() / ".vaf" / "service.pid"
         if pid_file.exists():
             return None
     except Exception:

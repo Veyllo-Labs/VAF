@@ -335,7 +335,7 @@ def _a2a_credential_verifier(credential: str):
 _set_credential_verifier(_a2a_credential_verifier)
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, server, security, service, ww, update, memory, secure, setup, a2a, repair, usage, top
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -438,10 +438,119 @@ app.command(name="start",   help="Start VAF as a background service")(service.cm
 app.command(name="stop",    help="Stop the VAF background service")(service.cmd_stop)
 app.command(name="restart", help="Restart the VAF background service")(service.cmd_restart)
 app.command(name="status",  help="Show VAF service status")(service.cmd_status)
+app.command(name="top",     help="Live server dashboard: uptime, config, utilization, services")(top.cmd_top)
+
+def _stop_spawned_tray(proc) -> None:
+    """Stop the tray we spawned for the dashboard - the whole session, so the
+    frontend and supervisor children go down with it (SIGTERM first; the tray's
+    own handlers stop the compose stack, same as a foreground Ctrl+C did)."""
+    import signal
+    from vaf.cli.ui import UI
+    UI.info("Stopping VAF...")
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=15)
+        UI.success("VAF stopped")
+    except Exception:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        UI.warning("VAF did not stop in time - killed")
+    try:
+        from vaf.cli.cmd.service import _pid_file
+        # Only drop the record if it is still OUR child's. Another terminal may
+        # have restarted VAF meanwhile (vaf restart / vaf update); deleting that
+        # newer service's pid file would make `vaf status` lie and let the next
+        # `vaf start` launch a second instance beside it.
+        pf = _pid_file()
+        if pf.read_text().strip() == str(proc.pid):
+            pf.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _run_tray_with_dashboard() -> None:
+    """`vaf tray` in a terminal: the real tray runs as a detached child writing
+    the service log, and THIS process becomes the live dashboard following it.
+
+    Leaving the dashboard with Ctrl+C stops the tray we spawned - the contract
+    of the old foreground tray. Attaching to an ALREADY running VAF opens the
+    dashboard only, and leaving it stops nothing (we did not start that one).
+    Closing the terminal window outright leaves VAF running (own session);
+    `vaf stop` ends it.
+    """
+    from pathlib import Path
+    from vaf.cli.cmd.service import _running_pid, _find_vaf_processes, _pid_file
+    from vaf.cli.cmd.top import cmd_top
+    from vaf.cli.ui import UI
+
+    existing = _running_pid()
+    if not existing:
+        procs = _find_vaf_processes()
+        existing = procs[0].pid if procs else None
+    if existing:
+        UI.info(f"VAF is already running (PID {existing}) - attaching the dashboard "
+                "(Ctrl+C detaches, VAF keeps running).")
+        cmd_top(interval=2.0, once=False, logs=True)
+        return
+
+    log = Path.home() / ".vaf" / "logs" / "vaf_run.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a") as lf:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "vaf.main", "tray", "--no-top"],
+            stdout=lf, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    try:
+        _pid_file().write_text(str(proc.pid))
+    except Exception:
+        pass
+    UI.success(f"VAF tray started (PID {proc.pid}) - dashboard takes over; Ctrl+C stops VAF.")
+    try:
+        cmd_top(interval=2.0, once=False, logs=True)
+    except BaseException:
+        # A broken VIEWER must never take the service down: only the deliberate
+        # exit (Ctrl+C, which cmd_top swallows into a clean return) stops VAF.
+        UI.warning("The dashboard failed - VAF keeps running in the background.")
+        UI.info("Reattach with: vaf top    Stop with: vaf stop")
+        raise
+    else:
+        _stop_spawned_tray(proc)
+
 
 @app.command(name="tray")
-def tray_command():
+def tray_command(
+    show_top: bool = typer.Option(True, "--top/--no-top",
+                                  help="In an interactive terminal: run the tray in the "
+                                       "background and take over the terminal with the "
+                                       "live dashboard (vaf top)"),
+):
     """Start the VAF System Tray application (Persistent Background Service)."""
+    if not isinstance(show_top, bool):
+        show_top = True  # direct callers bypass typer; OptionInfo is not an answer
+
+    # Interactive terminal: the person WATCHES this terminal, so give them the
+    # dashboard with the live log below instead of a raw scrollback. The real
+    # tray runs as a detached child writing the service log; Ctrl+C on the
+    # dashboard stops VAF, matching the old foreground contract. Every
+    # non-interactive lane (systemd, vaf start, vaf.sh, supervisors - all
+    # redirect stdout, so no TTY) keeps the classic direct run below.
+    if show_top and os.isatty(1) and not os.environ.get("VAF_NATIVE_WRAPPER") \
+            and not os.environ.get("VAF_LOG_TO_JOURNAL"):
+        _run_tray_with_dashboard()
+        return
+
     def _log_tray_error(msg: str, err: str = ""):
         """Write to logs/tray_startup_YYYY-MM-DD.txt for diagnostics (works even before tray import)."""
         try:
@@ -460,6 +569,17 @@ def tray_command():
 
     try:
         _log_tray_error("Tray command started (main.py)")
+        # Duplicate stdout/stderr into the service log (fd-level, children
+        # included) so `vaf top` can follow a terminal- or desktop-started tray.
+        # Skipped when a launcher already redirects to a file or systemd owns
+        # the output - see vaf/core/stdio_tee.py for the rule.
+        try:
+            from vaf.core.stdio_tee import should_tee_stdio, tee_stdio_to_file
+            if should_tee_stdio():
+                from pathlib import Path as _Path
+                tee_stdio_to_file(_Path.home() / ".vaf" / "logs" / "vaf_run.log")
+        except Exception:
+            pass
         # Check if launched from native macOS Swift wrapper
         if os.environ.get("VAF_NATIVE_WRAPPER") == "1":
             # Native wrapper handles tray icon - run headless (backend + frontend only)

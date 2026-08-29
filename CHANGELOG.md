@@ -11,6 +11,66 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **A server install can now be chosen without a keyboard.** `./install.sh --server`
+  (and `--desktop`) select the installation mode non-interactively, and the hosted
+  one-liner forwards flags (`... | bash -s -- --server`), so provisioning scripts and
+  remote installs can produce a server setup. Previously the choice existed only as an
+  interactive prompt, which a piped install never saw.
+- **Server installs now finish reachable.** A server install opens the OS firewall for
+  the LAN port itself (scoped to the local subnet), enables Docker at boot so the memory
+  system survives a restart, disables sleep/suspend so a repurposed desktop or laptop
+  stays reachable, warns when the clock is not NTP-synced, and warns when the server's
+  LAN address comes from DHCP (with the advice to give it a static IP or a router
+  reservation). The provisioning lives in the new `vaf server provision` command and can
+  be re-run at any time, for example after moving the server to another network.
+- **Headless credential encryption can be set up during installation.** The server
+  installer offers to set a master passphrase (Enter skips it); it is stored owner-only
+  in `~/.vaf/service.env` and the service loads it automatically at start.
+- **Immutable distributions are detected early.** On openSUSE MicroOS or Leap Micro the
+  installer now stops at the very beginning with a clear message instead of failing
+  halfway through the run. Support for these systems is planned; this only makes the
+  current limitation honest.
+- **`vaf top`: a live server dashboard in the terminal.** One self-refreshing view,
+  headed by the Veyllo mark and hostname, with version, mode, the active provider and
+  its actual model, the LAN addresses (hostname and IP URLs), host OS and uptime, the
+  service process tree (PID, memory, CPU), live CPU/RAM/disk/GPU utilization, a
+  network section with total up/down rates and the connected clients per IP, and the
+  health of every Docker service - what an admin over SSH needs to see what the
+  server is doing. `vaf top --once` prints a single snapshot for scripts.
+- **The dashboard carries the live service log below it.** `vaf top` follows the
+  service's output (the systemd journal in server mode, otherwise the newest known log
+  file) in a pane that fills the rest of the terminal and resizes with the window. A
+  tray started in a terminal or from the desktop entry now tees its own output into
+  the service log so the pane can follow it; leftovers from earlier runs are not shown
+  at all.
+- **`vaf tray` and `vaf start` open the dashboard themselves in a terminal.** `vaf tray`
+  runs the tray in the background and takes over the terminal with the live dashboard
+  (Ctrl+C stops VAF, exactly like the old foreground run; `--no-top` restores the raw
+  output), and `vaf start` opens the dashboard after starting (`--no-watch` suppresses
+  it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
+
+### Fixed
+- **A background-started VAF no longer kills itself one second after starting.** The
+  service's pid file shared its name with the local model backend's pid file, and the
+  backend's orphan cleanup kills whatever pid it finds there when the model server does
+  not answer - so the freshly started tray was "cleaned up" as its own orphan. The two
+  files are separate now, a guard test keeps them that way, and the model backend refuses
+  to kill a recorded process that is not actually a model server - which also protects
+  installs that still carry an old, wrongly written record.
+- **`vaf stop` and the dashboard now recognize the real service.** They identify it by the
+  singleton port it holds instead of by its command line, so a dashboard watching VAF, an
+  interactive `vaf run` session, or an unrelated shell that merely quotes the words can no
+  longer be mistaken for the service (and killed). Leaving a dashboard also no longer
+  deletes the record of a service that was restarted from another terminal meanwhile.
+- **Terminal logging can no longer hang the tray.** If the log-mirroring thread failed to
+  start, standard output stayed redirected into a pipe nobody read, and the tray plus all
+  its children would block forever once that pipe filled. Output is only redirected once
+  the reader is running, and an explicit `2>file` redirect is left alone.
+- **Windows: a failed firewall setup no longer retries into repeated error dialogs.**
+  The guard meant to skip further `netsh` attempts after the first failure never
+  actually engaged.
+
 ### Security
 - **The browser's live picture is no longer open to any page on your machine.** The port
   that carries the browser's screen accepted a connection from anything on the computer,

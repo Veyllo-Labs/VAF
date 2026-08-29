@@ -280,5 +280,5 @@ def test_desktop_mode_with_a_pidfile_is_fine(monkeypatch, tmp_path):
                         staticmethod(lambda k, d=None: False if k == "server_mode" else d))
     monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
     (tmp_path / ".vaf").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".vaf" / "server.pid").write_text("1234")
+    (tmp_path / ".vaf" / "service.pid").write_text("1234")
     assert sr._restart_blocker() is None

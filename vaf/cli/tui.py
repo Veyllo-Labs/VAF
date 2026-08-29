@@ -49,6 +49,42 @@ MODERN_BOX = ROUNDED  # Nice rounded corners
 INPUT_BOX = ROUNDED   # For input fields
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# LOGO ART (single source; color/markup is applied at the call site)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+VAF_LOGO_ART = r"""
+O))         O))       O))))))))
+ O))       O))))      O))
+  O))     O))  O))    O))
+   O))   O))    O))   O))))))
+    O)) O)) )))) O))  O))
+     O))))        O)) O))
+      O))          O))O))
+""".strip("\n")
+
+VAF_LOGO_SUBTITLE = "文 Veyllo Agentic Framework"
+
+# The Veyllo mark as terminal art, converted from the logo. It is a line
+# drawing: the characters trace the mark's edges and the interior stays open,
+# so it reads as a drawing rather than as a slab, and it carries no block
+# glyphs at all - which is also why no exporter has to guess how to tile it.
+# Consumers: the TUI start banner and the `vaf top` header.
+VEYLLO_MARK_ART = (
+    "          @@@g",
+    " __________@@@i___ _____",
+    "@@@@@@@@@@W@@g@@@@R@@@@@@",
+    ' """8@@@""""""""T@@@D""\'',
+    "     B@@,       @W@@",
+    "     '@@@,     g@@@",
+    "      '@@@B  _@B@W",
+    "        tB@RW@B@F",
+    "         ]@@@@@L",
+    "     _a@@@@@M@@@@@b__",
+    '_@@@@@@@P"     <B@@WW@@@,',
+    "'@@QB+             %Mg@B",
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # TUI CLASS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1290,18 +1326,8 @@ class UI:
     @staticmethod
     def logo():
         """Display VAF logo."""
-        logo_text = r"""
-[bold cyan]
-O))         O))       O))))))))
- O))       O))))      O))      
-  O))     O))  O))    O))      
-   O))   O))    O))   O))))))  
-    O)) O)) )))) O))  O))      
-     O))))        O)) O))      
-      O))          O))O))      
-[/bold cyan][dim]文 Veyllo Agentic Framework[/dim]
-        """
-        UI.console.print(Align.center(logo_text.strip()))
+        logo_text = f"[bold cyan]{VAF_LOGO_ART}[/bold cyan]\n[dim]{VAF_LOGO_SUBTITLE}[/dim]"
+        UI.console.print(Align.center(logo_text))
         UI.console.print("\n[dim]Shortcuts: [bold]S[/bold] Settings | [bold]C[/bold] Model | Type [bold]exit[/bold] to Quit[/dim]", justify="center")
         UI.console.print()
 

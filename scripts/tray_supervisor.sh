@@ -42,7 +42,10 @@ restarts=0
 window_start=$(date +%s)
 
 while true; do
-    "$PY" -m vaf.main tray "$@" &
+    # --no-top: the supervisor must watch the REAL tray process. Without it, an
+    # interactive terminal would put the dashboard wrapper here and a GPU abort
+    # in the actual tray (the reason this supervisor exists) went unseen.
+    "$PY" -m vaf.main tray --no-top "$@" &
     child=$!
     wait "$child"
     code=$?

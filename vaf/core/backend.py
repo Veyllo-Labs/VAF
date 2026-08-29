@@ -628,10 +628,21 @@ class ServerManager:
                     # Server läuft, aber antwortet nicht - wirklich orphaned
                     pass
                 
-                # Server läuft, aber antwortet nicht - wirklich orphaned
-                UI.event("System", f"Found orphaned server (PID {old_pid}), cleaning up...", style="yellow")
-                self._kill_process(old_pid)
-                time.sleep(0.5)
+                # Server läuft, aber antwortet nicht - möglicherweise orphaned.
+                # Identität ZUERST prüfen: ein nicht antwortender Health-Endpunkt
+                # beweist nur, dass auf 8080 nichts läuft, NICHT dass diese PID ein
+                # llama-server ist. Eine veraltete pid-Datei (Absturz, Reboot mit
+                # recycelter PID, ältere Version, die hier eine Dienst-PID ablegte)
+                # führte sonst zu einem SIGKILL auf einen unbeteiligten Prozess -
+                # im Extremfall auf VAF selbst, wenige Sekunden nach dem Start.
+                if not self._looks_like_llama_server(old_pid):
+                    UI.event("System",
+                             f"Stale server PID file (PID {old_pid} is not a model server) - ignoring it",
+                             style="dim")
+                else:
+                    UI.event("System", f"Found orphaned server (PID {old_pid}), cleaning up...", style="yellow")
+                    self._kill_process(old_pid)
+                    time.sleep(0.5)
             
             # Remove stale PID file (nur wenn Server nicht mehr läuft oder nicht antwortet)
             try:
@@ -666,6 +677,25 @@ class ServerManager:
             except (OSError, ProcessLookupError):
                 return False
     
+    def _looks_like_llama_server(self, pid: int) -> bool:
+        """True only when `pid` really is a model-server process.
+
+        Guards the orphan cleanup's SIGKILL. Fails CLOSED (returns False) when
+        the identity cannot be established: not killing a stale record costs a
+        port conflict, killing the wrong process costs someone's work. The own
+        pid can never qualify - a pid file naming this very process is always a
+        stale record, never an orphan to clean up.
+        """
+        try:
+            if pid <= 0 or pid == os.getpid():
+                return False
+            import psutil
+            proc = psutil.Process(pid)
+            haystack = " ".join([proc.name() or ""] + list(proc.cmdline() or [])).lower()
+        except Exception:
+            return False
+        return "llama-server" in haystack or "llama_server" in haystack
+
     def _kill_process(self, pid: int):
         """Kill a process by PID (cross-platform)."""
         try:

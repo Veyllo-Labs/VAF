@@ -16,9 +16,17 @@ def _enable_lan_keys() -> None:
 
 
 def _access_port_suffix() -> str:
-    """URL port suffix for the LAN access port, empty when it is plain 443."""
-    from vaf.network.binding import resolve_lan_access_ports
-    access_port, _ = resolve_lan_access_ports(wait_for_proxy=False)
+    """URL port suffix for the LAN access port, empty when it is plain 443.
+
+    Cosmetic by definition, and its callers print it AFTER changing config, so
+    it must never be the reason a command ends in a traceback with no
+    confirmation. An unresolvable port falls back to the usual effective one.
+    """
+    try:
+        from vaf.network.binding import resolve_lan_access_ports
+        access_port, _ = resolve_lan_access_ports(wait_for_proxy=False)
+    except Exception:
+        access_port = 8443
     return "" if access_port == 443 else f":{access_port}"
 
 

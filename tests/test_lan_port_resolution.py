@@ -64,3 +64,34 @@ def test_in_process_wait_times_out_to_the_configured_assumption(monkeypatch):
     monkeypatch.setattr(runtime_status, "get_proxy_status", lambda: {"bound": False})
     # timeout_s=0 skips the poll loop entirely - no sleeping in the suite
     assert binding.resolve_lan_access_ports(wait_for_proxy=True, timeout_s=0) == (8443, 8001)
+
+
+def test_a_hand_edited_config_value_degrades_to_the_default(monkeypatch):
+    """~/.vaf/config.json is documented as hand-editable for server mode, so a
+    typo arrives as a string. Raising here aborted whatever asked - provisioning
+    mid-way, a status line, the firewall thread - over one cosmetic value."""
+    _cfg(monkeypatch, {"local_network_tls_enabled": True,
+                       "local_network_https_port": "abc",
+                       "local_network_port": None})
+    assert binding.resolve_lan_access_ports(wait_for_proxy=False) == (8443, 8001)
+
+    _cfg(monkeypatch, {"local_network_tls_enabled": False,
+                       "local_network_port": "oops",
+                       "local_network_port_frontend": 99999})
+    assert binding.resolve_lan_access_ports() == (8001, 3000)
+
+
+def test_server_on_still_confirms_when_the_port_cannot_be_resolved(monkeypatch):
+    """The command has already written the config keys by then: no traceback
+    may swallow the success message and the restart hint."""
+    from typer.testing import CliRunner
+    import vaf.cli.cmd.server as server_cmd
+
+    monkeypatch.setattr(server_cmd.Config, "set", lambda *a, **k: None)
+    monkeypatch.setattr(binding, "resolve_lan_access_ports",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    result = CliRunner().invoke(server_cmd.app, ["on"])
+    assert result.exit_code == 0, result.output
+    assert "enabled" in result.output
+    assert ":8443" in result.output

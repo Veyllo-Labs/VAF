@@ -271,6 +271,21 @@ def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optio
     return None
 
 
+def _port_or(value, default: int) -> int:
+    """A port from config, or the default when it is not a usable number.
+
+    The server-mode keys are documented as hand-editable in config.json, so a
+    typo reaches this code as a string like "abc". Raising here would abort
+    whatever asked - provisioning mid-way, a status line, the firewall thread -
+    over one cosmetic value, so a bad entry degrades to the default instead.
+    """
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    return port if 0 < port < 65536 else default
+
+
 def resolve_lan_access_ports(wait_for_proxy: bool = False, timeout_s: float = 10.0) -> Tuple[int, int]:
     """Return (access_port, frontend_port) that LAN clients actually reach.
 
@@ -292,8 +307,8 @@ def resolve_lan_access_ports(wait_for_proxy: bool = False, timeout_s: float = 10
     tls_on = bool(Config.get("local_network_tls_enabled", False))
     if not tls_on:
         return (
-            int(Config.get("local_network_port", 8001) or 8001),
-            int(Config.get("local_network_port_frontend", 3000) or 3000),
+            _port_or(Config.get("local_network_port", 8001), 8001),
+            _port_or(Config.get("local_network_port_frontend", 3000), 3000),
         )
 
     access_port: Optional[int] = None
@@ -304,13 +319,13 @@ def resolve_lan_access_ports(wait_for_proxy: bool = False, timeout_s: float = 10
         while time.monotonic() < deadline:
             st = runtime_status.get_proxy_status()
             if st.get("bound") and st.get("effective_https_port"):
-                access_port = int(st["effective_https_port"])
+                access_port = _port_or(st["effective_https_port"], 0) or None
                 break
             time.sleep(0.5)
     if access_port is None:
-        configured = int(Config.get("local_network_https_port", 443) or 443)
+        configured = _port_or(Config.get("local_network_https_port", 443), 443)
         access_port = 8443 if configured == 443 else configured
-    return access_port, int(Config.get("local_network_port", 8001) or 8001)
+    return access_port, _port_or(Config.get("local_network_port", 8001), 8001)
 
 
 # Lease stores of the network managers VAF's supported distros actually ship:

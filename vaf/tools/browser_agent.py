@@ -31,9 +31,16 @@ from vaf.tools.base import BaseTool
 
 
 # ── 0. On-demand vision helpers ───────────────────────────────────────────────
-# Vision is only called when browser-use sends a screenshot (use_vision='auto'),
-# or when the agent explicitly calls describe_page_visually().
-# This avoids paying vision-token cost on every DOM-only step.
+# Vision is NOT implemented here. `vaf/core/vision_infer.py` is the framework's
+# single choke point for "turn this image into text", and a screenshot is just
+# an image: it resolves the backend (explicit vision_provider/vision_model,
+# else the main provider when it can see, else a safe per-provider default),
+# downscales oversized images, drops the providers' "[API Error from ...]"
+# sentinel so a failed call never becomes a description, and labels the call for
+# the usage lane. backend.py and pdf_extract.py already route through it; this
+# lane used to hand-roll the same cascade and had drifted from it in four ways
+# (no default model, no downscale, no sentinel guard, and "not configured"
+# whenever vision_provider was empty - even when the main model could see).
 
 def _model_supports_vision(provider: str, model: str) -> bool:
     """Thin delegation to the shared registry predicate (previously a manual
@@ -44,47 +51,42 @@ def _model_supports_vision(provider: str, model: str) -> bool:
     return model_supports_vision(provider, model, probe_local=False)
 
 
-@usage_lane("browser")
-def _call_vision(image_url: str, prompt: str, max_tokens: int = 512) -> Optional[str]:
+def _shot_image(image) -> dict:
+    """The image dict `vision_infer` takes, from either shape this lane holds.
+
+    Our own actions hold raw screenshot bytes (JPEG, from take_screenshot);
+    browser-use hands the bridge a ``data:`` URL that carries its own media
+    type. `image_to_b64` reads both, so this is a shape declaration and not a
+    conversion - declaring a mime for the URL case would override the true one.
     """
-    Send a screenshot to the configured vision backend with a custom prompt.
-    Returns the response text, or None if no vision backend is available.
+    if isinstance(image, (bytes, bytearray)):
+        return {"data": image, "mime_type": "image/jpeg",
+                "name": "browser-screenshot.jpg"}
+    return {"data": image or "", "name": "browser-screenshot"}
+
+
+def _call_vision(image, prompt: str, max_tokens: int = 512) -> Optional[str]:
+    """Describe a screenshot (raw bytes or a ``data:`` URL) as text.
+
+    Returns None when no vision backend is configured or the call failed - the
+    callers all degrade to DOM-only work rather than surfacing an error string.
     """
     try:
-        from vaf.core.config import Config
-        from vaf.core.api_backend import APIBackendManager
-
-        vision_provider = Config.get("vision_provider", "").strip()
-        vision_model = Config.get("vision_model", "").strip() or None
-
-        if not vision_provider:
-            return None
-
-        backend = APIBackendManager(vision_provider)
-        msgs = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        }]
-        text = ""
-        for chunk in backend.chat_completion(
-            msgs, model=vision_model, temperature=0.1,
-            max_tokens=max_tokens, stream=True,
-        ):
-            if isinstance(chunk, str):
-                text += chunk
-        return text.strip() or None
+        from vaf.core.vision_infer import vision_infer
+        # temperature 0.1, not the primitive's 0.2 default: the CAPTCHA path
+        # parses tile indices out of this answer, and a grid is read the same
+        # way twice or not at all.
+        return vision_infer([_shot_image(image)], prompt,
+                            max_tokens=max_tokens, temperature=0.1)
     except Exception as _e:
         logging.getLogger(__name__).debug("vision call failed: %s", _e)
         return None
 
 
-def _call_vision_for_screenshot(image_url: str) -> Optional[str]:
+def _call_vision_for_screenshot(image) -> Optional[str]:
     """Generic page description — used by describe_page_visually action."""
     return _call_vision(
-        image_url,
+        image,
         prompt=(
             "You are helping a browser automation agent. "
             "Describe what is visible on this screenshot concisely: "
@@ -95,7 +97,7 @@ def _call_vision_for_screenshot(image_url: str) -> Optional[str]:
     )
 
 
-def _call_vision_for_captcha(image_url: str, category: str) -> Optional[str]:
+def _call_vision_for_captcha(image, category: str) -> Optional[str]:
     """
     Analyze a reCAPTCHA grid screenshot and return which tile indices to click.
     Grid size is detected from the image — not assumed.
@@ -111,7 +113,7 @@ def _call_vision_for_captcha(image_url: str, category: str) -> Optional[str]:
         f'{{"tiles": [<matching indices>], "rows": <rows you counted>, '
         f'"cols": <cols you counted>, "confidence": "high"|"medium"|"low"}}'
     )
-    raw = _call_vision(image_url, prompt=prompt, max_tokens=150)
+    raw = _call_vision(image, prompt=prompt, max_tokens=150)
     if not raw:
         return None
 
@@ -155,7 +157,6 @@ def _build_browser_controller():
       solve_captcha_challenge — targeted reCAPTCHA tile analysis → returns click indices
     """
     from browser_use import Controller
-    import base64
 
     controller = Controller()
 
@@ -169,13 +170,20 @@ def _build_browser_controller():
             shot = await browser_session.take_screenshot(
                 format="jpeg", quality=72, full_page=False
             )
-            b64 = base64.b64encode(shot).decode()
-            desc = _call_vision_for_screenshot(f"data:image/jpeg;base64,{b64}")
+            # to_thread: the vision call is a blocking HTTP round trip on the
+            # loop that also drives the ~1.5s live-view screenshots, and a
+            # frozen picture is how "the browser hung" gets reported.
+            desc = await asyncio.to_thread(_call_vision_for_screenshot, shot)
             if desc:
                 return f"[Visual description of current page]\n{desc}"
+            # Two causes, one answer, and the wording must not pick the wrong
+            # one: no vision backend resolves, OR the call failed (the
+            # primitive returns None for a provider error rather than handing
+            # its error text back as a description).
             return (
-                "Vision API not configured. "
-                "Configure a Vision Model in VAF Settings → AI & Model to enable this."
+                "No visual description is available for this page. Either no "
+                "vision backend is configured (Settings -> AI & Model) or the "
+                "vision call failed. Work from the page text instead."
             )
         except Exception as e:
             return f"Screenshot failed: {e}"
@@ -194,13 +202,13 @@ def _build_browser_controller():
             shot = await browser_session.take_screenshot(
                 format="jpeg", quality=88, full_page=False
             )
-            b64 = base64.b64encode(shot).decode()
-            result = _call_vision_for_captcha(f"data:image/jpeg;base64,{b64}", category)
+            result = await asyncio.to_thread(_call_vision_for_captcha, shot, category)
             if result:
                 return result
             return (
-                "Vision API not configured — cannot analyze CAPTCHA tiles. "
-                "Configure a Vision Model in VAF Settings → AI & Model."
+                "The CAPTCHA tiles could not be analyzed: either no vision "
+                "backend is configured (Settings -> AI & Model) or the vision "
+                "call failed."
             )
         except Exception as e:
             return f"CAPTCHA analysis failed: {e}"
@@ -490,7 +498,11 @@ class VAFLLMBridge:
                     self.completion = completion
                     self.usage = usage
 
-        raw = self._to_dicts(messages)
+        # to_thread: _to_dicts is pure bookkeeping until the lane model is
+        # text-only, and then it makes a blocking vision call per screenshot -
+        # on the same loop that drives the ~1.5s live-view frames and the stop
+        # monitor. The other three vision call sites are already off the loop.
+        raw = await asyncio.to_thread(self._to_dicts, messages)
         max_tokens = 8192 if output_format is not None else 4096
 
         if output_format is not None:
@@ -562,15 +574,24 @@ class VAFLLMBridge:
 
                 for p in content:
                     if getattr(p, "type", "") == "image_url":
-                        # Extract URL from various browser-use object shapes
+                        # Extract URL from various browser-use object shapes.
+                        # The library's own shape is a pydantic ImageURL, and its
+                        # __str__ is a LOG line ("Image[image/png, detail=auto]:
+                        # <base64 image/png>") that deliberately hides the
+                        # payload - so str() on it does not fail, it silently
+                        # replaces the screenshot with a description of a
+                        # screenshot. Read .url first, and treat a value that is
+                        # not a usable URL as no image at all rather than
+                        # sending a placeholder to a vision model.
                         img = getattr(p, "image_url", None)
                         if isinstance(img, dict):
                             img_url = img.get("url", "")
                         elif isinstance(img, str):
                             img_url = img
                         else:
-                            img_url = str(img or "")
-                        if img_url:
+                            img_url = getattr(img, "url", "") or ""
+                        if img_url and (img_url.startswith("data:")
+                                        or img_url.startswith("http")):
                             img_urls.append(img_url)
                     else:
                         text_parts.append(getattr(p, "text", str(p)))
@@ -704,16 +725,31 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
     return VAFLLMBridge(model=model, provider_name=provider, session_id=session_id)
 
 
+def _vision_available() -> bool:
+    """Whether ANY vision backend resolves, as the framework decides it.
+
+    `vision_available()` follows the same cascade every other lane uses:
+    an explicit vision_provider, else the main provider when it can see. The
+    former check here read `vision_provider` alone, so a setup whose main model
+    could see - but that had never filled in the optional override - was told
+    it had no vision at all."""
+    from vaf.core.vision_infer import vision_available
+    return vision_available()
+
+
 def _browser_vision_mode(provider: str, model: str):
     """How this run gets to SEE, as (use_vision, tier).
 
-    ('auto', 'native')     - the lane model takes screenshots itself when the
-                             page needs seeing; browser-use's 'auto' hands it
-                             a screenshot tool instead of paying vision tokens
-                             on every step.
-    (False, 'described')   - the lane model is text-only but a vision_provider
-                             is configured: describe_page_visually turns
-                             screenshots into text on demand (today's lane).
+    ('auto', 'native')     - the lane model accepts images; browser-use's
+                             'auto' hands it a screenshot tool instead of
+                             paying vision tokens on every step. Accepting
+                             images is not the same as asking for one, so a
+                             stuck run is shown the page anyway - see
+                             `_make_look_when_stuck`.
+    (False, 'described')   - the lane model is text-only but a vision backend
+                             resolves: describe_page_visually turns screenshots
+                             into text on demand, and a stuck run gets that
+                             description without having to ask for it.
     (False, 'blind')       - no vision anywhere: the run continues DOM-only,
                              and the guidance below tells it not to waste
                              steps asking for pictures nobody can take.
@@ -725,12 +761,160 @@ def _browser_vision_mode(provider: str, model: str):
     except Exception:
         pass
     try:
-        from vaf.core.config import Config
-        if (Config.get("vision_provider", "") or "").strip():
+        if _vision_available():
             return False, "described"
     except Exception:
         pass
     return False, "blind"
+
+
+# How stuck is stuck. browser-use measures both of these for its own text
+# nudges (ActionLoopDetector: identical actions inside a rolling window, and
+# consecutive steps whose page fingerprint does not change), so these read its
+# counters rather than starting a second detector next to one that exists. The
+# thresholds sit below the library's own nudge levels (5) on purpose: by the
+# time it says "you have repeated this 5 times", the run has already spent five
+# steps not looking.
+_STUCK_STAGNANT_PAGES = 3
+_STUCK_REPEATED_ACTIONS = 4
+
+
+def _stuck_reason(agent) -> str:
+    """Why this run needs to look, or '' while it is still making progress.
+
+    Defensive across browser-use versions: a missing counter means "not stuck",
+    never an exception inside the step hook."""
+    try:
+        state = getattr(agent, "state", None)
+        if state is None:
+            return ""
+        failures = int(getattr(state, "consecutive_failures", 0) or 0)
+        if failures > 0:
+            return f"{failures} consecutive failed action(s)"
+        detector = getattr(state, "loop_detector", None)
+        stagnant = int(getattr(detector, "consecutive_stagnant_pages", 0) or 0)
+        if stagnant >= _STUCK_STAGNANT_PAGES:
+            return f"the page has not changed across {stagnant} actions"
+        repeated = int(getattr(detector, "max_repetition_count", 0) or 0)
+        if repeated >= _STUCK_REPEATED_ACTIONS:
+            return f"the same action was repeated {repeated} times"
+    except Exception:
+        pass
+    return ""
+
+
+_STUCK_NOTE = (
+    "Look at what is actually on the screen before repeating that action. "
+    "A value typed into an autocomplete or combo box is NOT committed until "
+    "its suggestion is clicked (or chosen with the arrow keys and Enter) - if "
+    "the field still shows its previous value, that is why. When a field will "
+    "not take a value, drop it and search with the fields that do."
+)
+
+
+# Steps to wait before forcing a second look. The stagnation counters do not
+# reset when a run recovers: max_repetition_count is a MAXIMUM over a rolling
+# 20-action window, so it stays above the threshold until the repeated actions
+# age out of it. Without this gate one stuck moment would attach a screenshot to
+# every one of the next ~20 steps, which is the token cost use_vision='auto'
+# exists to avoid. A look is worth having, and then worth using.
+_LOOK_COOLDOWN_STEPS = 5
+
+# Seconds the whole escalation may take. on_step_start is awaited OUTSIDE
+# browser-use's per-step asyncio.wait_for, so nothing else bounds it: a CDP
+# screenshot on a dead browser and a vision call on an unreachable provider both
+# wait forever, and the run would hang in a hook whose only job is a hint.
+_LOOK_BUDGET_SECONDS = 45.0
+
+
+def _make_look_when_stuck(tier: str):
+    """The step hook that makes a stalled run SEE, or None for a blind run.
+
+    `use_vision='auto'` hands the model a screenshot tool and waits to be
+    asked - and a model that is already looping does not ask. browser-use's own
+    answer at that point is another nudge, which is more text into a context
+    that text has not solved. So the picture arrives unrequested on the step
+    after the run stalls, through the library's own supported channel: an
+    ActionResult carrying `metadata={'include_screenshot': True}` - the exact
+    flag its screenshot action sets, read by the message manager before every
+    step. A text-only lane model cannot receive an image at all, so it receives
+    the description instead, produced by the same vision backend.
+
+    The note travels as `extracted_content` with
+    `include_extracted_content_only_once`, not as `long_term_memory`: that is
+    the one channel the message manager reads out before it decides what to
+    keep, so the note still reaches the prompt in the case that triggered the
+    escalation half the time - a step whose LLM call produced no model output at
+    all, where the history item is replaced by a bare format error and every
+    action result is dropped.
+
+    Never raises: a stuck run that also fails to look simply keeps going."""
+    if tier == "blind":
+        return None
+
+    async def _look(agent, reason: str):
+        """The ActionResult to inject, or None if there is nothing to show."""
+        from browser_use.agent.views import ActionResult
+        if tier == "native":
+            # Deliberately not "a screenshot is attached": the attachment is
+            # conditional two layers down (a failed capture yields no image),
+            # and a model told to look at a picture that is not there spends
+            # its next step explaining that it cannot see one.
+            return ActionResult(
+                metadata={"include_screenshot": True},
+                extracted_content=(
+                    f"Stuck ({reason}). A screenshot of the current page should "
+                    f"be attached to this step. {_STUCK_NOTE}"
+                ),
+                include_extracted_content_only_once=True,
+            )
+        shot = await agent.browser_session.take_screenshot(
+            format="jpeg", quality=72, full_page=False
+        )
+        desc = await asyncio.to_thread(_call_vision_for_screenshot, shot)
+        if not desc:
+            return None
+        return ActionResult(
+            extracted_content=(
+                f"Stuck ({reason}) - this is what the page looks like right "
+                f"now:\n{desc}\n{_STUCK_NOTE}"
+            ),
+            include_extracted_content_only_once=True,
+        )
+
+    async def _look_when_stuck(agent) -> None:
+        try:
+            reason = _stuck_reason(agent)
+            if not reason:
+                return
+            step_no = int(getattr(agent.state, "n_steps", 0) or 0)
+            last_look = getattr(agent, "_vaf_last_look_step", None)
+            if last_look is not None and step_no - last_look < _LOOK_COOLDOWN_STEPS:
+                return
+
+            note = await asyncio.wait_for(_look(agent, reason), _LOOK_BUDGET_SECONDS)
+            if note is None:
+                return
+
+            # The library's own captcha-wait injection uses this exact channel
+            # (agent/service.py: append to state.last_result, or seed it), and
+            # the step reads last_result into the prompt before clearing it.
+            if getattr(agent.state, "last_result", None):
+                agent.state.last_result.append(note)
+            else:
+                agent.state.last_result = [note]
+            agent._vaf_last_look_step = step_no
+            agent._vaf_forced_looks = int(getattr(agent, "_vaf_forced_looks", 0)) + 1
+            logging.getLogger(__name__).info(
+                "[BrowserVision] forced look #%s (%s tier, step %s): %s",
+                agent._vaf_forced_looks, tier, step_no, reason,
+            )
+        except Exception as _e:
+            # on_step_start is awaited inside run()'s own try: an exception here
+            # ends the whole browser task, so a failed look stays a non-event.
+            logging.getLogger(__name__).debug("forced look skipped: %s", _e)
+
+    return _look_when_stuck
 
 
 def _browser_guidance(tier: str) -> str:
@@ -743,17 +927,27 @@ def _browser_guidance(tier: str) -> str:
         "pages=10. To read or summarize a whole page, call collect_page_text "
         "once instead of scrolling viewport by viewport - every scroll costs "
         "a full reasoning step."
+        # The measured failure this line exists for: a run typed a value into
+        # an autocomplete, the widget kept its previous entry, and the model
+        # spent its whole step budget retyping into the same field.
+        " Form fields: a value typed into an autocomplete or combo box is NOT "
+        "committed until its suggestion is clicked (or chosen with the arrow "
+        "keys and Enter). After typing into one, check that the field really "
+        "holds the new value before submitting, and if a field will not take "
+        "it, drop that field and search with the ones that do."
     )
     if tier == "native":
         return base + (
             " You can request a screenshot when layout or visual state "
-            "matters; text-only steps are cheaper, so look only when it helps."
+            "matters; text-only steps are cheaper, so look only when it helps. "
+            "If you get stuck, one is attached for you without asking."
         )
     if tier == "described":
         return base + (
             " You cannot see the page directly. When you are stuck on a "
             "visual question (layout, images, a challenge), call "
-            "describe_page_visually once and work from its description."
+            "describe_page_visually once and work from its description; if you "
+            "stay stuck, a description is added for you without asking."
         )
     return base + (
         " No vision is available in this setup: do NOT call "
@@ -1215,7 +1409,11 @@ class BrowserAgentTool(BaseTool):
         # through describe_page_visually; with no vision anywhere, the run is
         # told so and works the extracted text - never an error, never a stop.
         _bridge = _build_vaf_bridge(session_id=_session_id)
-        _use_vision, _vision_tier = _browser_vision_mode(_bridge.provider, _bridge.model)
+        # to_thread: resolving the backend can probe a local llama server over
+        # HTTP to ask whether it was launched with a projector, and this runs on
+        # the loop the live view and the stop monitor share.
+        _use_vision, _vision_tier = await asyncio.to_thread(
+            _browser_vision_mode, _bridge.provider, _bridge.model)
 
         agent = Agent(
             task=_agent_task,
@@ -1240,6 +1438,10 @@ class BrowserAgentTool(BaseTool):
             use_thinking=False,
             register_new_step_callback=_human_step_pause,
         )
+        # The tier travels with the run so the browser window's dock can say
+        # what this setup can actually see (and, once one happens, that a
+        # forced look occurred) instead of always reporting "auto".
+        agent._vaf_vision_tier = _vision_tier
 
         # ── Browser-use log capture ────────────────────────────────────────────
         log_queue: _queue.Queue = _queue.Queue()
@@ -1248,7 +1450,14 @@ class BrowserAgentTool(BaseTool):
         _bu_logger.addHandler(log_handler)
 
         # ── Wrap agent.run() as a cancellable task ─────────────────────────────
-        agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
+        # on_step_start runs before the step builds its prompt, which is the
+        # only place a picture can still be added to it. It is deliberately NOT
+        # register_new_step_callback (used above for the human pause): that one
+        # fires after the LLM call, so anything it injects lands a step late.
+        agent_task = asyncio.create_task(agent.run(
+            max_steps=max_steps,
+            on_step_start=_make_look_when_stuck(_vision_tier),
+        ))
         stop_screenshots = asyncio.Event()
 
         screenshot_task = asyncio.create_task(
@@ -1507,7 +1716,9 @@ class BrowserAgentTool(BaseTool):
         actions: list = []
         history_urls: list = []
         step_n = 0
-        vision = "auto"
+        # "aus" for a run that has no vision at all - the dock used to report
+        # "auto" there too, which reads as "it looks when it needs to".
+        vision = "aus" if getattr(agent, "_vaf_vision_tier", "") == "blind" else "auto"
         try:
             hist = getattr(agent, "history", None) or getattr(getattr(agent, "state", None), "history", None)
             steps = getattr(hist, "history", None) or []
@@ -1548,6 +1759,9 @@ class BrowserAgentTool(BaseTool):
                                 "status": "active" if i == len(recent) - 1 else "done"})
                 if "describe" in (name or "").lower() or "captcha" in (name or "").lower():
                     vision = "aktiv"
+            # A look the run did not ask for still counts as a look.
+            if int(getattr(agent, "_vaf_forced_looks", 0) or 0) > 0:
+                vision = "aktiv"
         except Exception:
             pass
 

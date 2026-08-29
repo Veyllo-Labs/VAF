@@ -51,6 +51,31 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it). Scripts, pipes, systemd and the crash supervisor keep the classic behavior.
 
 ### Fixed
+- **Screenshots reached the browser agent's model as the words "Image[...]", not as
+  pictures.** Every screenshot the browser agent ever obtained was passed on as a
+  placeholder line describing an image instead of the image itself, so a model that was
+  perfectly able to see never actually saw anything, and a text-only setup sent that
+  same placeholder to the vision model and billed it as a look. Pictures now arrive as
+  pictures, and an image the agent cannot read is dropped instead of being described in
+  words to something that was asked to look at it.
+- **The browser agent now actually looks at the page when it gets stuck.** With a
+  vision-capable model it was handed a screenshot tool and left to ask for a picture
+  itself, which is exactly what a model that has started to loop stops doing: it could
+  retype into the same field for dozens of steps without ever seeing that the field had
+  not taken the value. A run that stalls - a failed action, or the same action and page
+  repeating - is now shown the current page unasked on the very next step, and a
+  text-only browser model gets that page described to it instead. Runs are also told the
+  rule that caused this: a value typed into an autocomplete is not committed until its
+  suggestion is clicked.
+- **The browser agent sees whenever anything else in VAF can see.** Its page
+  descriptions and CAPTCHA reads used to require the optional Vision Model in
+  Settings to be filled in explicitly, and answered "vision is not configured"
+  otherwise - even when the main model accepts images perfectly well. They now use the
+  same vision backend as the rest of VAF, which also means oversized screenshots are
+  downscaled before they are sent, and a failed vision call no longer turns the
+  provider's error text into what the agent believes it saw on the page. Browser
+  screenshot descriptions are billed to the `vision` usage lane from now on, not to
+  `browser`.
 - **A background-started VAF no longer kills itself one second after starting.** The
   service's pid file shared its name with the local model backend's pid file, and the
   backend's orphan cleanup kills whatever pid it finds there when the model server does

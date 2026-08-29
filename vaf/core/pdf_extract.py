@@ -431,8 +431,6 @@ def _ocr_pages_vision(page_iter, cancel, max_pages_budget: int) -> str:
     page, so the per-call budget is a COST guard and its truncation is named
     in the output (the batched learn job never hits it - its batches are
     smaller than the budget)."""
-    import base64
-
     from vaf.core.vision_infer import vision_infer
 
     parts: List[str] = []
@@ -446,8 +444,7 @@ def _ocr_pages_vision(page_iter, cancel, max_pages_budget: int) -> str:
             break
         seen += 1
         text = vision_infer(
-            [{"data": base64.b64encode(raw).decode("ascii"),
-              "mime_type": mime, "name": f"page-{pageno}"}],
+            [{"data": raw, "mime_type": mime, "name": f"page-{pageno}"}],
             _OCR_VISION_PROMPT,
             max_tokens=2048,
         )

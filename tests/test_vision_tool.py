@@ -54,8 +54,29 @@ def test_image_to_b64_reads_legacy_data():
 
 
 def test_image_to_b64_strips_data_uri_prefix():
+    """The URI's own media type wins over the image/jpeg default.
+
+    It used to be dropped, so a PNG data URI was announced as JPEG. That is not
+    cosmetic: a provider that validates media_type against the bytes (Anthropic)
+    rejects the call, and an image small enough to skip the downscale is never
+    re-encoded into the type it was labelled with."""
     got = vinfer.image_to_b64({"data": "data:image/png;base64,QUJD"})
-    assert got == ("QUJD", "image/jpeg")  # default mime when not given
+    assert got == ("QUJD", "image/png")
+
+
+def test_image_to_b64_keeps_an_explicit_mime_over_the_uris():
+    got = vinfer.image_to_b64({"data": "data:image/png;base64,QUJD",
+                               "mime_type": "image/webp"})
+    assert got == ("QUJD", "image/webp")
+
+
+def test_image_to_b64_takes_raw_bytes():
+    """Every producer of a fresh image holds bytes - a rendered PDF page, a
+    browser screenshot - and each one used to base64-encode them at its own
+    call site just to be understood here."""
+    assert vinfer.image_to_b64({"data": b"ABC"}) == ("QUJD", "image/jpeg")
+    assert vinfer.image_to_b64({"data": b"ABC", "mime_type": "image/png"}) == ("QUJD", "image/png")
+    assert vinfer.image_to_b64({"data": b""}) is None
 
 
 def test_image_to_b64_reads_file_path(tmp_path):

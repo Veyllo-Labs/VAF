@@ -13143,6 +13143,16 @@ class Agent:
                     msg["content"] = blocks
                 else:
                     # Non-vision model: try configured vision fallback provider first.
+                    #
+                    # This is the LAST hand-rolled copy of the vision cascade in the
+                    # tree - vision_infer.vision_infer() does all of it (backend
+                    # resolution, downscale, the "[API Error from ...]" sentinel guard
+                    # this copy lacks) and every other lane routes through it. It stays
+                    # hand-rolled only because it is the legacy vision_mode
+                    # "inline_multimodal" branch inside _prepare_messages, i.e. a
+                    # conversion in the main agent loop with its own design doc
+                    # (docs/agents/AGENT_LOOP.md) and its own test surface. Convert it
+                    # there, not from a lane that happens to pass by.
                     _vision_fb_provider = Config.get("vision_provider", "").strip()
                     _vision_fb_model = Config.get("vision_model", "").strip() or None
                     _vision_fb_used = False

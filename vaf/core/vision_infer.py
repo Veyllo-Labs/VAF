@@ -96,27 +96,50 @@ def vision_available() -> bool:
 def image_to_b64(img: Dict) -> Optional[Tuple[str, str]]:
     """Return ``(base64_without_prefix, mime_type)`` for an image dict, or ``None``.
 
-    Source order: inline ``img["data"]`` (legacy base64; a ``data:...;base64,`` prefix is
-    stripped), else the file at ``img["path"]`` (the current on-disk storage). Never raises —
-    returns ``None`` if neither is usable (e.g. the file was removed), so callers degrade
-    gracefully. This is the single accessor every byte consumer should use.
+    Source order: inline ``img["data"]`` (raw ``bytes``, or base64 with an optional
+    ``data:...;base64,`` prefix), else the file at ``img["path"]`` (the current on-disk
+    storage). Never raises - returns ``None`` if neither is usable (e.g. the file was
+    removed), so callers degrade gracefully. This is the single accessor every byte
+    consumer should use.
+
+    Two shapes are accepted that callers used to convert by hand:
+
+    * ``bytes`` in ``data``. Every producer of a fresh image holds bytes (a rendered PDF
+      page, a browser screenshot) and had to base64-encode them just to be understood
+      here, so the encoding lived at each call site instead of once.
+    * a ``data:`` URI, whose media type is now read OUT of the URI when the dict does not
+      declare one. It used to be dropped and replaced by the image/jpeg default, which
+      is not a cosmetic difference: a provider that validates ``media_type`` against the
+      bytes (Anthropic does) rejects a PNG labelled as JPEG, and a small image is passed
+      through without the re-encode that would have made the label true.
+
+    An explicit ``mime_type`` always wins, so no existing caller changes behaviour.
     """
     if not isinstance(img, dict):
         return None
-    mime = img.get("mime_type") or "image/jpeg"
-    raw = img.get("data") or ""
+    import base64
+
+    mime = img.get("mime_type") or ""
+    raw = img.get("data")
+    if isinstance(raw, (bytes, bytearray)):
+        if not raw:
+            return None
+        return base64.b64encode(bytes(raw)).decode("ascii"), (mime or "image/jpeg")
+    raw = raw or ""
     if raw:
         if raw.startswith("data:"):
-            raw = raw.split(",", 1)[1] if "," in raw else raw
-        return raw, mime
+            header, sep, rest = raw.partition(",")
+            if not mime and ":" in header:
+                mime = header.split(":", 1)[1].split(";", 1)[0]
+            raw = rest if sep else raw
+        return raw, (mime or "image/jpeg")
     path = img.get("path")
     if path:
         try:
-            import base64
             from pathlib import Path
             data = Path(path).read_bytes()
             if data:
-                return base64.b64encode(data).decode("ascii"), mime
+                return base64.b64encode(data).decode("ascii"), (mime or "image/jpeg")
         except Exception as e:
             _log.debug("image_to_b64: cannot read %s: %s", path, e)
     return None

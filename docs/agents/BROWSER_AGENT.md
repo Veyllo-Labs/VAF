@@ -113,11 +113,13 @@ Once the agent calls `browser_agent`, the following happens:
 5. browser-use Agent loop starts (vision tier decided from the lane model):
    │
    ├── Capture DOM snapshot of current page
-   ├── If page is unclear / CAPTCHA detected: also attach screenshot
-   ├── Send DOM (+ optional screenshot) to VAFLLMBridge
-   │     ├── Provider supports native vision → image passed directly
-   │     └── Provider has no vision (e.g. DeepSeek) → vision_provider called
-   │           → screenshot described as text → injected into message
+   ├── If the run is stuck (failed action, or the page/action has not moved):
+   │     native tier  → attach this step's screenshot without waiting to be asked
+   │     described tier → describe the page and inject the description as text
+   ├── Send DOM (+ any image parts) to VAFLLMBridge
+   │     ├── Lane model accepts images → image passed directly
+   │     └── Lane model is text-only → the vision backend describes each image
+   │           (reachable because an action's own images bypass use_vision)
    ├── LLM decides next action: navigate / click / fill / extract / done
    │     └── Can also call describe_page_visually() when explicitly stuck
    ├── Execute action on Chromium via CDP
@@ -278,21 +280,58 @@ The bridge (`VAFLLMBridge`) implements browser-use's `BaseChatModel` protocol an
 ### Vision tiers
 
 How a run gets to SEE is decided once at its start (`_browser_vision_mode`), from the
-lane's model, and every tier RUNS - a setup with no vision anywhere degrades to
-DOM-only work instead of failing:
+lane's model and from the vision backend the framework resolves
+(`vision_infer.vision_available()`, the same cascade every other lane uses: an explicit
+`vision_provider`, else the main provider when it accepts images). Every tier RUNS - a
+setup with no vision anywhere degrades to DOM-only work instead of failing:
 
 | Tier | When | Behaviour |
 |---|---|---|
-| `native` | The lane model is vision-capable (provider registry) | `use_vision='auto'`: browser-use hands the model a screenshot tool it calls when the page needs seeing - scroll and layout decisions are spatial, and this is the biggest single jump for them. Text-only steps stay cheap. |
-| `described` | Text-only lane model, but a `vision_provider` is configured | `use_vision=False`; the `describe_page_visually()` action turns a screenshot into text on demand (e.g. a CAPTCHA, an unclear layout). |
-| `blind` | No vision anywhere | `use_vision=False`; the run continues on extracted DOM text, and its guidance tells it NOT to call `describe_page_visually` (it cannot answer) and to lean on `find_text` and `collect_page_text` instead. |
+| `native` | The lane model accepts images (provider registry) | `use_vision='auto'`: browser-use hands the model a screenshot tool, and attaches nothing until the model asks for it. Text-only steps stay cheap - but see the escalation below, because a model that is stuck is exactly the one that stops asking. |
+| `described` | Text-only lane model, but a vision backend resolves | `use_vision=False`; the `describe_page_visually()` action turns a screenshot into text on demand (e.g. a CAPTCHA, an unclear layout), and the escalation injects that description on its own when the run stalls. |
+| `blind` | No vision anywhere | `use_vision=False`; the run continues on extracted DOM text, and its guidance tells it NOT to call `describe_page_visually` (it cannot answer) and to lean on `find_text` and `collect_page_text` instead. No escalation: there is nothing to look with. |
+
+**A stuck run is shown the page, not told about it** (`_make_look_when_stuck`, wired as
+browser-use's `on_step_start` hook). Accepting images is not the same as asking for one:
+under `use_vision='auto'` a model that has begun to loop keeps not asking, and the
+library's own answer at that point is another text nudge - more text into a context that
+text has not solved. So the picture arrives unrequested on the step after the run stalls.
+The stall signals are browser-use's own counters, read rather than reimplemented:
+`state.consecutive_failures`, and the `ActionLoopDetector`'s `consecutive_stagnant_pages`
+(3) and `max_repetition_count` (4), both deliberately below the library's own nudge level
+of 5. The delivery channel is the library's too - an `ActionResult` carrying
+`metadata={'include_screenshot': True}`, the same flag its `screenshot` action sets. A
+text-only lane model cannot receive an image at all, so the `described` tier gets the
+description instead. The escalation never raises: `on_step_start` is awaited inside
+`run()`, so an exception there would abort the whole browser task.
+
+Vision itself is NOT implemented in this lane. Every image-to-text call here -
+`describe_page_visually`, `solve_captcha_challenge`, the bridge's text-only fallback and
+the `described` tier's escalation - goes through
+[vaf/core/vision_infer.py](../../vaf/core/vision_infer.py), the framework's single choke
+point for turning an image into text: it resolves the backend, downscales oversized
+screenshots (`vision_image_max_edge` / `vision_image_jpeg_quality`) and drops the
+providers' `[API Error from ...]` sentinel, so a failed call answers "no description"
+instead of turning an error string into what the model believes it saw. Those calls are
+billed to the `vision` usage lane, not to `browser`. The `native` tier's escalation is
+the exception and makes no vision call at all: the picture goes to the lane model itself,
+so it is part of that step's `browser` cost.
+
+**The bridge must hand over the picture, not a picture of a picture.** browser-use's image
+parts carry a pydantic `ImageURL` whose `__str__` is a log line
+(`Image[image/png, detail=auto]: <base64 image/png>`). Reading it with `str()` does not
+fail - it silently substitutes that sentence for the screenshot, which is what every image
+the lane ever obtained used to become. `VAFLLMBridge._to_dicts` reads `.url`, and treats
+anything that is not a `data:` or `http` URL as no image rather than passing a placeholder
+on to a provider.
 
 Every tier also receives navigation guidance (`extend_system_message`): prefer
-`find_text` over blind scrolling, `scroll pages=10` for the bottom of a page, and the
+`find_text` over blind scrolling, `scroll pages=10` for the bottom of a page, the
 VAF-added `collect_page_text` action - one step that scrolls through the whole page
 (triggering lazy loading) and returns its full visible text, instead of paying a full
-LLM round trip per viewport. Tiers, guidance and wiring are pinned by
-`tests/test_browser_agent_vision_lane.py`.
+LLM round trip per viewport - and the form-field rule that a value typed into an
+autocomplete is not committed until its suggestion is clicked. Tiers, escalation,
+guidance and wiring are pinned by `tests/test_browser_agent_vision_lane.py`.
 
 ### LLM model recommendation
 
@@ -315,7 +354,7 @@ When `browser_agent` is running, the **SubAgent Window** in the WebUI opens auto
 
 **The viewport is the real browser.** At run start the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`): the window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. Watch-only is enforced at the RELAY, not in the page: both of those live in the browser, so the stream proxy drops everything travelling from client to container on an agent grant (the RFB protocol needs no client frames to deliver a picture). Pinned by `tests/test_browser_pool.py`. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run.
 
-**Screenshots stay.** The ~1.5s JPEG screenshot loop keeps running regardless - it feeds vision, the workflow tile, and the fallback view for the lanes without a stream grant (a spawned child validates tickets against the wrong process, so the child lane deliberately makes no grant and keeps the rebuilt chrome bar over screenshots). While the stream draws its first picture, the latest screenshot doubles as the connecting cover.
+**Screenshots stay.** The ~1.5s JPEG screenshot loop keeps running regardless - it feeds the workflow tile and the fallback view for the lanes without a stream grant (a spawned child validates tickets against the wrong process, so the child lane deliberately makes no grant and keeps the rebuilt chrome bar over screenshots). While the stream draws its first picture, the latest screenshot doubles as the connecting cover.
 
 - **Live indicator** - red pulsing dot disappears when the task ends
 - **Dock** - task, actions, history and activity below the viewport
@@ -1142,7 +1181,7 @@ If you still see this error, the site is likely doing TLS fingerprinting (JA3) -
 
 See [Anti-Bot Detection](#anti-bot-detection) for the full hardening (headed Chromium, automation-flag removal, version-matched UA, and the fingerprint supplement). This makes the browser pass common detection checks; a vanilla automated browser does not.
 
-When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session/IP trust - the hardening helps, but a flagged IP remains the hard limit.
+When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`, or `solve_captcha_challenge` for a tile grid) to understand the challenge visually. Both resolve their backend through `vision_infer.select_vision_backend()`, so they work whenever the main provider accepts images - an explicit Vision Model in Settings is an override, not a precondition. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session/IP trust - the hardening helps, but a flagged IP remains the hard limit.
 
 ---
 
@@ -1189,7 +1228,7 @@ instance.
 
 | Limitation | Notes |
 |---|---|
-| **On-demand vision** | A vision-capable browser-lane model takes screenshots itself when needed (see [Vision tiers](#vision-tiers)). For text-only models, configure a Vision Model in Settings → AI & Model; with no vision at all the run continues DOM-only. |
+| **On-demand vision** | A vision-capable browser-lane model takes screenshots when it asks for them, and is shown one anyway once a run stalls (see [Vision tiers](#vision-tiers)). A text-only lane model gets described screenshots through whatever vision backend resolves - the main provider counts, so a Vision Model in Settings → AI & Model is an override rather than a requirement. With no vision at all the run continues DOM-only. |
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |

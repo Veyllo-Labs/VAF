@@ -41,7 +41,8 @@ DIRECT_CALL_SITES = {
     "vaf/core/vision_infer.py": 1,    # vision block arrays + its own sentinel/strip collector
     "vaf/core/voice_agent.py": 1,     # chunk-spanning <think> state machine, latency lane
     "vaf/memory/rag.py": 1,           # _stream_answer: genuinely streaming (SSE), shares the frame predicate
-    "vaf/tools/browser_agent.py": 2,  # vision call + browser-use multi-turn bridge with mid-stream stop
+    "vaf/tools/browser_agent.py": 1,  # browser-use multi-turn bridge with mid-stream stop (the lane's
+                                      # vision call is gone: it routes through vision_infer now)
     "vaf/tools/librarian.py": 1,      # tool-calling agent loop
 }
 
